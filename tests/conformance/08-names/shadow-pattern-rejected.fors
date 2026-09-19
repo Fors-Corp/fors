@@ -1,7 +1,7 @@
 //! name: shadow_pattern_rejected
-//! rule: 08.R18
+//! rule: 08.R25
 //! expect: check-error
-//! detail: one-segment pattern n resolves to a parameter: R25 makes that an R18 error
+//! detail: owner decision 2026-09-19 round 3 (D1) -- one-segment pattern n resolves to a parameter: N0025 directly, since a pattern compares against compile-time entities only
 
 module m;
 

@@ -15,10 +15,10 @@ fn f(let xs: Slice[i32], let n: i32) -> i32 {
     for i in xs { total = total + i; }
     match n {
         0 => 0,
-        k => k,
+        let k => k,
     }
     match total {
         1 => 1,
-        k => k + 1,
+        let k => k + 1,
     }
 }

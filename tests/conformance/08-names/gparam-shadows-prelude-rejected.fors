@@ -1,0 +1,8 @@
+//! name: gparam_shadows_prelude_rejected
+//! rule: 08.R18
+//! expect: check-error
+//! detail: owner decision 2026-09-19 round 3 (D3) -- a generic parameter may NOT shadow a prelude name; only function-local bindings get that exception
+
+module m;
+
+fn f[Str](let x: Str) -> Str { return x; }

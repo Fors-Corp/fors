@@ -1,0 +1,13 @@
+//! name: pattern_let_binding_not_in_sibling_arm_rejected
+//! rule: 08.R26
+//! expect: check-error
+//! detail: round 3 (D1) -- a "let n" pattern binding is in scope in its own arm body only
+
+module m;
+
+fn f(let a: Option[i32]) -> i32 {
+    match a {
+        some(let v) => v,
+        none => v,
+    }
+}

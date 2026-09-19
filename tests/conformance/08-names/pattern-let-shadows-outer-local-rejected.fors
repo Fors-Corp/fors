@@ -1,0 +1,13 @@
+//! name: pattern_let_shadows_outer_local_rejected
+//! rule: 08.R18
+//! expect: check-error
+//! detail: owner decision 2026-09-19 round 3 (D1) -- "let n" pattern binding reuses an outer local still in scope, an ordinary Rule 18 violation
+
+module m;
+
+fn f(let p: i32) -> i32 {
+    let n: i32 = 1;
+    match p {
+        let n => n,
+    }
+}

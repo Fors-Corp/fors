@@ -1,0 +1,15 @@
+//! name: pattern_let_duplicate_across_nested_payload_rejected
+//! rule: 08.R18
+//! expect: check-error
+//! detail: owner decision 2026-09-19 round 3 (D1) -- "let x" bound at the top level and again inside a nested payload of the same pattern is still pairwise-distinct, Rule 18
+
+module m;
+
+enum Opt { Some(i32), None }
+
+fn f(let p: (i32, Opt)) -> i32 {
+    match p {
+        (let x, .Some(let x)) => x,
+        (let x, .None) => x,
+    }
+}

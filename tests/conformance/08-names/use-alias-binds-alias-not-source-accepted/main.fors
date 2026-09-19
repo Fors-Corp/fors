@@ -1,0 +1,9 @@
+//! name: use_alias_binds_alias_not_source_accepted
+//! rule: 08.R4
+//! expect: check-ok
+//! detail: owner decision 2026-09-19 round 3 (D2) -- "use a.b as c;" binds c; the original name (the last segment, or an enclosing module segment) is not bound in the importing module
+
+module main;
+use app.util.Net as N;
+
+fn f() -> N { return N { host: "x" }; }

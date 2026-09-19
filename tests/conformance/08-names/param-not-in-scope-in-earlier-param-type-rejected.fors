@@ -1,0 +1,10 @@
+//! name: param_not_in_scope_in_earlier_param_type_rejected
+//! rule: 08.R26
+//! expect: check-error
+//! detail: round 3 (D3) -- parameters come into scope left to right: a brand named before the parameter that declares it is unresolved (N0014)
+
+module m;
+
+fn f(let x: Own[i32, a], let a: Arena) -> i32 {
+    return 0;
+}

@@ -14,7 +14,7 @@ fn f(let n: i32) -> i32 {
     let y: i32 = g(n);
     let x: i32 = match n {
         0 => 0,
-        k => k,
+        let k => k,
     };
     let k: i32 = x + y;
     return k;

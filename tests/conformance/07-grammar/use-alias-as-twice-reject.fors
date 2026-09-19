@@ -1,0 +1,9 @@
+//! name: use_alias_as_twice_reject
+//! rule: 07.Grammar
+//! expect: parse-error
+//! detail: "as" may appear at most once per use_item (round 3, D2)
+
+module m;
+use app.util as as c;
+
+fn f() -> i32 { return 0; }

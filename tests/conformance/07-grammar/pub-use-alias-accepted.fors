@@ -1,0 +1,9 @@
+//! name: pub_use_alias_accepted
+//! rule: 07.Grammar
+//! expect: parse-ok
+//! detail: "pub use a.b as c;" re-exports under the alias (round 3, D2)
+
+module m;
+pub use app.util as u;
+
+fn f() -> i32 { return 0; }

@@ -1,0 +1,12 @@
+//! name: pattern_let_underscore_rejected
+//! rule: 07.D17
+//! expect: parse-error
+//! detail: "let" in a pattern takes exactly one ident; "_" is its own token, so "let _" does not parse (the wildcard is written "_")
+
+module m;
+
+fn f(let p: i32) -> i32 {
+    match p {
+        let _ => 0,
+    }
+}

@@ -1,7 +1,7 @@
-//! name: shadow_prelude_rejected
+//! name: local_shadows_prelude_type_accepted
 //! rule: 08.R18
-//! expect: check-error
-//! detail: local reuses the prelude name Str
+//! expect: check-ok
+//! detail: owner decision 2026-09-19 round 3 (D3) -- a function-local binding may share a name with a prelude type; within its scope the name denotes the binding
 
 module m;
 

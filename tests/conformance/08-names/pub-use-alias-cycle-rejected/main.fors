@@ -1,0 +1,8 @@
+//! name: pub_use_alias_cycle_rejected
+//! rule: 08.R7
+//! expect: check-error
+//! detail: round 3 (D2) -- aliases do not change edges: "pub use b.Y as X" in a and "pub use a.X as Y" in b is a module cycle a -> b -> a, reported once
+
+module main;
+
+fn f() -> i32 { return 0; }

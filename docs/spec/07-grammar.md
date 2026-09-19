@@ -150,7 +150,8 @@ needs_clause    = "needs" "{" [ needs_item { "," needs_item } [ "," ] ] "}" ";" 
 needs_item      = path | "asm" ;   (* the capability `asm` is spelled with the
                                       reserved word; legal only as a whole item *)
 inputs_clause   = "inputs" "{" [ string_lit { "," string_lit } [ "," ] ] "}" ";" ;
-use_decl        = [ "pub" ] "use" path { "," path } ";" ;
+use_decl        = [ "pub" ] "use" use_item { "," use_item } ";" ;
+use_item        = path [ "as" ident ] ;
 path            = ident { "." ident } ;
 dot_lit         = "." ident ;
 
@@ -269,11 +270,11 @@ asm_item        = "in" "(" ident ")" "=" expr
                 | string_lit ;                  (* Disambiguation 16 *)
 
 pattern         = "_" | [ "-" ] number | string_lit | "true" | "false"
-                | dot_lit [ payload ] | path [ payload ]
+                | dot_lit [ payload ] | path [ payload ] | "let" ident
                 | "(" [ pattern { "," pattern } [ "," ] ] ")" ;
 payload         = "(" pattern { "," pattern } [ "," ] ")"
                 | "{" fpat { "," fpat } [ "," ] "}" ;
-fpat            = ident [ ":" pattern ] ;
+fpat            = ident ":" pattern | "let" ident ;
 
 (* ---- types ---- *)
 type            = { qualifier } type_core ;
@@ -402,6 +403,23 @@ Every choice below is made on the current token plus at most one more
     by `(` (LA 2) selects that item; anything else is the `string_lit`
     item. `in` is already reserved (Keywords — reserved); `out`/`clobber`
     are contextual only here.
+17. **`let` inside a pattern.** `let` is already reserved, so it never
+    starts a `path`/`dot_lit`/tuple pattern; one token of lookahead (the
+    current token) is enough to choose the `"let" ident` alternative of
+    `pattern` and of `fpat`. Inside a `payload`'s `{ }` list an `fpat`
+    starting with `let` is the binding form; anything else must be
+    `ident ":" pattern` (LA 1: the token after the identifier is checked
+    to be `:`, never `,` or `}` — see Error recovery below). `"let"` is
+    followed by exactly one `ident`: `_` is its own token, not an `ident`,
+    so `let _` is a parse error (the wildcard is written `_`), and a
+    pattern binding takes no type annotation, so `let x: T` in a pattern
+    is a parse error at `:` (the token after a pattern must be `=>`, `,`,
+    `)` or `}`).
+18. **`as` in a `use_item`.** A `use_item` is not an expression: `path` is
+    followed by `as`, `,` or `;` only, so the `as` of an import alias can
+    never be confused with the `as` of a `cast_expr` (which occurs only
+    inside `expr`), and the token after `as` must be an `ident` (not a
+    `type`, not `_`). LA 1.
 
 **Largest lookahead:** 2 tokens (rules 2, 4, 6, 7, 15, 16 and the `scoped` /
 closure-`set` slots); lexer, 2 characters past the current one (`..<`,
@@ -430,6 +448,13 @@ per recovery.
   continues without skipping anything.
 - Otherwise tokens are skipped, tracking bracket depth, to the nearest
   member of either set. Lexical error tokens are reported once and skipped.
+- **Removed `fpat` shorthand.** An `fpat` that is a bare `ident` (no `:
+  pattern` and no `let`) is a parse error, reported at the identifier, with
+  the fixed message: `write "let x" to bind the field or "x: pattern"`.
+  This is a dedicated diagnostic, not a fall-through to the declaration or
+  statement sync sets: the parser has already committed to `fpat` (it is
+  inside a `payload`'s `{ }`), so it reports and resumes at the next `,` or
+  the closing `}` like any other `fpat` item, without unwinding further.
 
 ## Coverage
 
@@ -486,10 +511,18 @@ arg, `&buf.slice`, `&out` on a binding named `out`, attributed
   `break`/`continue` (unlabelled), `consume`/`discard` statements (ch01
   Rule 8), `let x: T;` without initialiser (needed for `&out x`), `..=`,
   `true`/`false`, hex/octal/binary and `_` in numbers, unit `()`, tuple
-  and literal patterns, `fpat` shorthand, `[e; n]`, inherent and generic
+  and literal patterns, `[e; n]`, inherent and generic
   `impl`, body-less trait methods, `+`-joined bounds, `dyn T`, `pub`
   fields, `pub use`, `fn` types with conventions and `raises`, closure
   param conventions, struct-level `invariant`.
+- Closed by owner decision 2026-09-19, round 3 (D1/D2): the `fpat`
+  shorthand `ident` alone (bind-by-field-name) is REMOVED; a pattern binds
+  a name only by writing `"let" ident`, in `pattern` directly or as the
+  `fpat` form `"let" ident`. `"var" ident` is NOT a pattern alternative:
+  patterns do not introduce mutable bindings (mutable pattern bindings are
+  an open owner question — this draft recommends "no", see ch08). `use`
+  gained an optional `"as" ident` per `use_item`; `"as"` was already
+  reserved for casts, so no new keyword is needed.
 - Not added: char literals, labels, match guards, `|`-patterns, tuple
   index fields, type aliases, nested `fn`, `spmd`/`kernel` keywords.
 - Attribute args are `[label:] (literal | path)`, never `expr`.
@@ -574,3 +607,22 @@ arg, `&buf.slice`, `&out` on a binding named `out`, attributed
   a parse error.
 - `needs_item_asm` — `needs { asm, syscall };` parses; `needs { asm.x };`
   and `use asm;` are rejected.
+- `pattern_let_binding` — `match p { let n => f(n) }`,
+  `match p { Some(let n) => f(n) }`,
+  `match p { P { let x, y: Q(let z) } => g(x, z) }` accepted. (Rule 17)
+- `pattern_fpat_let` — `match p { P { let x } => x }` accepted;
+  `match p { P { x } => x }` rejected with "write \"let x\" to bind the
+  field or \"x: pattern\"" at `x`.
+- `pattern_bare_shorthand_removed` — a bare `ident` `fpat` (no `let`, no
+  `:`) is a parse error in every position (top level and nested payload).
+- `pattern_var_rejected` — `match p { var n => f(n) }` is a parse error;
+  `var` is not an `fpat`/`pattern` alternative.
+- `use_alias_forms` — `use a.b as c;`, `use a.b as c, d.e;`,
+  `pub use a.b as c;` accepted; `use a.b as;` (missing ident) and
+  `use a.b as as c;` (`as` twice) are rejected; `use a.b as _;` is
+  rejected (`_` is not an `ident`). (Rule 18)
+- `pattern_let_underscore_rejected` — `match p { let _ => 0 }` is a parse
+  error (write `_`). (Rule 17)
+- `pattern_let_typed_rejected` — `match p { let x: i32 => x }` is a parse
+  error at `:`; so is `.Some(let n: i32)` inside a payload
+  (`pattern_let_typed_in_payload_rejected`). (Rule 17)

@@ -1,0 +1,16 @@
+//! name: pattern_let_payload_of_payload_accepted
+//! rule: 07.D17
+//! expect: parse-ok
+//! detail: "let" bindings nest through payload-of-payload (round 3, D1)
+
+module m;
+
+enum Opt { Some(i32), None }
+struct Box { pub v: Opt }
+
+fn f(let b: Box) -> i32 {
+    match b {
+        Box { v: .Some(let n) } => n,
+        Box { v: .None } => 0,
+    }
+}

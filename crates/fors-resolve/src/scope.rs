@@ -93,16 +93,32 @@ impl<'a> BodyCtx<'a> {
     /// scope (locals, params, gparams, `Self`, module scope, prelude) and
     /// against every other binding already declared in that same frame
     /// (pairwise-distinct groups: one `params`, one `generics`, one tuple
-    /// `binding`, one closure's `cparam`s, one match arm's pattern).
+    /// `binding`, one closure's `cparam`s, one match arm's pattern). A
+    /// function-local binding may share a name with a prelude name (owner
+    /// decision 2026-09-19, round 3, D3); every caller of this method
+    /// declares exactly that kind of binding, so the exception always
+    /// applies here. [`Self::declare_gparam`] is the one caller that must
+    /// not get it.
     fn declare(&mut self, name: Symbol, node: usize, range: (u32, u32)) {
-        self.declare_coded(name, node, range, 18)
+        self.declare_coded(name, node, range, 18, true)
     }
 
-    /// Same as [`Self::declare`], but a shadow collision is reported
-    /// under `rule` instead of Rule 18 — used for the `fpat` shorthand
-    /// (ch08 R25: "the shorthand `x` ... also introduces the binding
-    /// `x`"), whose corpus test cites R25 for this same shadow.
-    fn declare_coded(&mut self, name: Symbol, node: usize, range: (u32, u32), rule: u16) {
+    /// Ch08 Rule 18, for a generic parameter: unlike [`Self::declare`],
+    /// shadowing a prelude name is still an error (owner decision
+    /// 2026-09-19, round 3, D3: "a generic parameter MAY NOT shadow a
+    /// prelude name — type-level names stay unambiguous").
+    fn declare_gparam(&mut self, name: Symbol, node: usize, range: (u32, u32)) {
+        self.declare_coded(name, node, range, 18, false)
+    }
+
+    /// Shared implementation of [`Self::declare`]/[`Self::declare_gparam`].
+    /// `allow_prelude_shadow` is round 3's D3 carve-out in Rule 18: true
+    /// for every function-local binding kind (`let`/`var`, `for`, `param`,
+    /// `cparam`, a `"let" ident` pattern binding, a `with arena`/
+    /// `allocator` identifier), false for a generic parameter. Every other
+    /// shadow case (locals, module-scope items/imports, `Self`) is an
+    /// error regardless.
+    fn declare_coded(&mut self, name: Symbol, node: usize, range: (u32, u32), rule: u16, allow_prelude_shadow: bool) {
         if name == self.self_sym {
             self.diags.push(Diagnostic::new(range.0, range.1, Code::N(13), "no item, import or binding may be named `Self`".to_string()));
             return;
@@ -120,7 +136,7 @@ impl<'a> BodyCtx<'a> {
             self.diags.push(Diagnostic::new(range.0, range.1, Code::N(rule), "binding shadows a binding of an enclosing scope".to_string()));
         } else if self.module.lookup(name).is_some() {
             self.diags.push(Diagnostic::new(range.0, range.1, Code::N(rule), "binding shadows a module-scope name (item or import)".to_string()));
-        } else if self.prelude.get(self.module, name).is_some() {
+        } else if !allow_prelude_shadow && self.prelude.get(self.module, name).is_some() {
             self.diags.push(Diagnostic::new(range.0, range.1, Code::N(rule), "binding shadows a prelude name".to_string()));
         }
         if self.frames.is_empty() {
@@ -348,7 +364,7 @@ impl<'a> BodyCtx<'a> {
                     self.pop_frame();
                 }
             }
-            PatWild | PatLit | PatPath | PatDot | PatTuple | FPat | Payload => {
+            PatWild | PatLit | PatLet | PatPath | PatDot | PatTuple | FPat | Payload => {
                 self.walk_pattern(node);
             }
             _ => {
@@ -371,25 +387,51 @@ impl<'a> BodyCtx<'a> {
         }
     }
 
-    /// Ch08 Rule 25: patterns.
+    /// Ch08 Rule 25: patterns. Owner decision 2026-09-19, round 3 (D1):
+    /// the only way a pattern binds is `"let" ident` (`PatLet`, or the
+    /// `FPat` form with no `pattern` child); a bare one-segment `PatPath`
+    /// with no payload is now always a reference.
     fn walk_pattern(&mut self, node: usize) {
         use NodeKind::*;
         match self.tree.kinds[node] {
             PatWild | PatLit => {}
+            PatLet => {
+                if let Some((name, range)) = binder_name(self.tree, self.tokens, self.source, self.interner, node) {
+                    self.declare(name, node, range);
+                }
+            }
             PatPath => {
                 let segs = segments_with_ranges(self.tree, self.tokens, self.source, self.interner, node);
                 let has_payload = self.tree.children(node).any(|c| self.tree.kinds[c] == Payload);
                 if segs.len() == 1 && !has_payload {
                     let (name, range) = segs[0];
                     match self.lookup(name) {
+                        Some(Found::Entity(Entity::Module(_) | Entity::PreludeModule(..), _)) => {
+                            // Rule 16 applies to a pattern path like any
+                            // other: a path that ends on a module is an
+                            // error, not a constant to compare against.
+                            self.diags.push(Diagnostic::new(range.0, range.1, Code::N(16), "the path ends on a module; a module is not a value or a type".to_string()));
+                            self.record(node, ResolvedTarget::Deferred);
+                        }
                         Some(Found::Entity(e, _)) => self.record(node, ResolvedTarget::Entity(e)),
                         Some(Found::Local(_)) => {
-                            // Rule 25: "it MUST be a compile error under
-                            // Rule 18" — same no-shadowing violation as
-                            // any other rebinding, just reached this way.
-                            self.diags.push(Diagnostic::new(range.0, range.1, Code::N(18), "a pattern naming a local binding must be a fresh binding, not a reference (Rule 18)".to_string()));
+                            // Rule 25: a bare pattern name that resolves to
+                            // a local binding, parameter or generic
+                            // parameter is a compile error directly (a
+                            // pattern compares against compile-time
+                            // entities only) — not a fresh binding.
+                            self.diags.push(Diagnostic::new(
+                                range.0,
+                                range.1,
+                                Code::N(25),
+                                "a pattern names a local binding, parameter or generic parameter; write \"let n\" to bind a fresh name instead".to_string(),
+                            ));
+                            self.record(node, ResolvedTarget::Deferred);
                         }
-                        None => self.declare(name, node, range),
+                        None => {
+                            self.diags.push(Diagnostic::new(range.0, range.1, Code::N(14), "unresolved name (to bind, write \"let n\")".to_string()));
+                            self.record(node, ResolvedTarget::Deferred);
+                        }
                     }
                 } else {
                     self.resolve_path(node);
@@ -412,9 +454,13 @@ impl<'a> BodyCtx<'a> {
             FPat => {
                 let children: Vec<usize> = self.tree.children(node).collect();
                 if let Some(&sub) = children.first() {
+                    // `x: pattern` -- `x` is a field name only (Rule 23);
+                    // whatever `pattern` binds is its own affair.
                     self.walk_pattern(sub);
-                } else if let Some((name, range)) = shorthand_fpat_name(self.tree, self.tokens, self.source, self.interner, node) {
-                    self.declare_coded(name, node, range, 25);
+                } else if let Some((name, range)) = fpat_let_name(self.tree, self.tokens, self.source, self.interner, node) {
+                    // `"let" x` -- shorthand for `x: let x` (D1): binds
+                    // `x`, under the same Rule 18 as any other binding.
+                    self.declare(name, node, range);
                 }
             }
             _ => self.walk(node),
@@ -425,7 +471,9 @@ impl<'a> BodyCtx<'a> {
         let gparams: Vec<usize> = self.tree.children(generics).collect();
         for &g in &gparams {
             if let Some((name, range)) = binder_name(self.tree, self.tokens, self.source, self.interner, g) {
-                self.declare(name, g, range);
+                // Round 3, D3: unlike other bindings, a generic parameter
+                // may not shadow a prelude name.
+                self.declare_gparam(name, g, range);
             }
         }
         gparams
@@ -438,9 +486,19 @@ impl<'a> BodyCtx<'a> {
         }
     }
 
+    /// Resolves and declares each parameter in order, one at a time: a
+    /// parameter's own type annotation is walked (and so resolved)
+    /// *before* that parameter is declared, so it cannot see itself in
+    /// scope — owner decision 2026-09-19, round 3 (D3): `fn f(let net:
+    /// net.Net)` resolves the `net.Net` type against the prelude module
+    /// `net`, and only after that is the parameter `net` in scope (for
+    /// later parameters' types and the body).
     pub fn resolve_params(&mut self, params_node: usize) -> Vec<usize> {
         let params: Vec<usize> = self.tree.children(params_node).collect();
         for &p in &params {
+            for c in self.tree.children(p) {
+                self.walk(c);
+            }
             if let Some((name, range)) = binder_name(self.tree, self.tokens, self.source, self.interner, p) {
                 self.declare(name, p, range);
             }
@@ -499,7 +557,9 @@ fn with_ident(tree: &Tree, tokens: &Tokens, source: &[u8], interner: &mut Intern
     None
 }
 
-fn shorthand_fpat_name(tree: &Tree, tokens: &Tokens, source: &[u8], interner: &mut Interner, node: usize) -> Option<(Symbol, (u32, u32))> {
+/// The bound name of an `FPat`'s `"let" ident` form (D1): `binder_name`
+/// already skips the leading `let` looking for the first `Ident`/`_`.
+fn fpat_let_name(tree: &Tree, tokens: &Tokens, source: &[u8], interner: &mut Interner, node: usize) -> Option<(Symbol, (u32, u32))> {
     binder_name(tree, tokens, source, interner, node)
 }
 

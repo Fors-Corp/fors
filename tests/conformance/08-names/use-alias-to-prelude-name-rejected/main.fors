@@ -1,0 +1,9 @@
+//! name: use_alias_to_prelude_name_rejected
+//! rule: 08.R13
+//! expect: check-error
+//! detail: owner decision 2026-09-19 round 3 (D2) -- aliasing to a prelude name is an eager Rule 13 collision, exactly as an unaliased import would be
+
+module main;
+use app.util.Net as Str;
+
+fn f() -> i32 { return 0; }

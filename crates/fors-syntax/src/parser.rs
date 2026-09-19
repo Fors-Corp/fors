@@ -536,6 +536,17 @@ impl<'a> Parser<'a> {
         self.b.finish_node();
     }
 
+    /// `path [ "as" ident ]` (ch07 grammar `use_item`, D2). The alias binds
+    /// only the alias name (ch08 R3-6); resolving is the checker's.
+    fn use_item(&mut self) {
+        self.b.start_node(NodeKind::UseItem);
+        self.path(NodeKind::Path);
+        if self.opt(TokenKind::KwAs) {
+            self.expect(TokenKind::Ident, "expected an identifier after 'as'");
+        }
+        self.b.finish_node();
+    }
+
     /// A single `needs` item. The sealed capability vocabulary is a closed,
     /// single-segment set (`ffi`, `syscall`, `asm`, ...); `asm` also being
     /// reserved (R2-4) would otherwise make it unspellable here, so a lone
@@ -599,9 +610,9 @@ impl<'a> Parser<'a> {
             self.b.start_node(NodeKind::UseDecl);
             self.opt(KwPub);
             self.bump(); // use
-            self.path(NodeKind::Path);
+            self.use_item();
             while self.opt(Comma) {
-                self.path(NodeKind::Path);
+                self.use_item();
             }
             self.expect_semi();
             self.b.finish_node();
@@ -1818,6 +1829,14 @@ impl<'a> Parser<'a> {
     fn pattern(&mut self) {
         use TokenKind::*;
         match self.cur() {
+            KwLet => {
+                // "let" ident: the only way a pattern binds (ch07 grammar,
+                // ch08 R25 -- owner decision 2026-09-19, round 3, D1).
+                self.b.start_node(NodeKind::PatLet);
+                self.bump();
+                self.expect(Ident, "expected an identifier after 'let'");
+                self.b.finish_node();
+            }
             Underscore => {
                 self.b.start_node(NodeKind::PatWild);
                 self.bump();
@@ -1850,9 +1869,28 @@ impl<'a> Parser<'a> {
                     } else {
                         self.delimited(LBrace, RBrace, Some("expected at least one field pattern"), |p| {
                             p.b.start_node(NodeKind::FPat);
-                            p.expect(Ident, "expected field name");
-                            if p.opt(Colon) {
-                                p.pattern();
+                            if p.at(KwLet) {
+                                // "let" ident: binds the field and its name
+                                // together (D1). Shorthand for `x: (let x)`.
+                                p.bump();
+                                p.expect(Ident, "expected an identifier after 'let'");
+                            } else {
+                                let name_range = p.cur_range();
+                                p.expect(Ident, "expected field name");
+                                if p.opt(Colon) {
+                                    p.pattern();
+                                } else {
+                                    // The bare `ident` shorthand is removed
+                                    // (round 3, D1): a bare field name no
+                                    // longer binds. Reported at the
+                                    // identifier, per ch07 Error recovery.
+                                    p.err_at(
+                                        name_range.0,
+                                        name_range.1,
+                                        DiagCode::Expected,
+                                        "write \"let x\" to bind the field or \"x: pattern\"",
+                                    );
+                                }
                             }
                             p.b.finish_node();
                         });

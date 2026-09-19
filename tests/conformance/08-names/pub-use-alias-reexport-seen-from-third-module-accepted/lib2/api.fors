@@ -1,0 +1,2 @@
+module lib2.api;
+pub use lib.inner.Point as P;

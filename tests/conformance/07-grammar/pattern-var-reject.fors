@@ -1,0 +1,12 @@
+//! name: pattern_var_reject
+//! rule: 07.D17
+//! expect: parse-error
+//! detail: "var" is not a pattern or fpat alternative (round 3, drafting decision under D1); patterns never introduce a mutable binding
+
+module m;
+
+fn f(let p: i32) -> i32 {
+    match p {
+        var n => n,
+    }
+}

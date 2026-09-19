@@ -1,0 +1,10 @@
+//! name: pub_use_alias_then_realias_to_original_accepted
+//! rule: 08.R5
+//! expect: check-ok
+//! detail: round 3 (D2) -- m re-exports X as Y; main imports m.Y as X beside the original lib.inner.X: both bind X to the same entity (Rules 5, 13, 15)
+
+module main;
+use m.Y as X;
+use lib.inner.X;
+
+fn f() -> X { return X { v: 0 }; }

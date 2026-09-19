@@ -1,0 +1,9 @@
+//! name: use_alias_list_accepted
+//! rule: 07.Grammar
+//! expect: parse-ok
+//! detail: a use_decl may list plain and aliased use_items together (round 3, D2)
+
+module m;
+use app.util as u, app.other, app.third as t;
+
+fn f() -> i32 { return 0; }

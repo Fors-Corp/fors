@@ -1,0 +1,14 @@
+//! name: pattern_bare_fpat_shorthand_reject
+//! rule: 07.Error recovery
+//! expect: parse-error
+//! detail: the fpat shorthand "x" alone is removed (round 3, D1); the message says to write "let x" or "x: pattern"
+
+module m;
+
+struct P { pub x: i32 }
+
+fn f(let p: P) -> i32 {
+    match p {
+        P { x } => x,
+    }
+}

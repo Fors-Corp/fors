@@ -152,6 +152,17 @@ pub enum NodeKind {
     /// Recovered garbage: a run of skipped tokens, or a construct that
     /// could not be parsed. Always paired with a diagnostic.
     Error,
+
+    // ---- appended, owner decision 2026-09-19 round 3 (D1/D2): additive
+    // only, never reorder or remove anything above. ----
+    /// `path [ "as" ident ]`, one comma-separated item of a `UseDecl`
+    /// (ch07 grammar `use_item`). The `path` is the only child; the
+    /// optional `"as"` and its identifier are tokens the node owns
+    /// directly.
+    UseItem,
+    /// `"let" ident` as a `pattern` alternative (ch07 grammar, D1). Both
+    /// tokens are owned directly; leaf.
+    PatLet,
 }
 
 impl NodeKind {

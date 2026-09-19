@@ -1,0 +1,13 @@
+//! name: pattern_let_named_as_prelude_value_accepted
+//! rule: 08.R18
+//! expect: check-ok
+//! detail: round 3 (D1+D3) -- "let none" binds a fresh name that shadows the prelude value inside its arm only; in the sibling arm a bare none is still the prelude value
+
+module m;
+
+fn f(let a: Option[i32], let b: Option[i32]) -> Option[i32] {
+    match a {
+        none => b,
+        let none => none,
+    }
+}

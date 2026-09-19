@@ -1,0 +1,11 @@
+//! name: local_shadows_prelude_value_accepted
+//! rule: 08.R18
+//! expect: check-ok
+//! detail: owner decision 2026-09-19 round 3 (D3) -- a function-local binding may share a name with a prelude value; within its scope the name denotes the binding
+
+module m;
+
+fn f() -> i32 {
+    let none: i32 = 7;
+    return none;
+}

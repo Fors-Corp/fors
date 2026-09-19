@@ -1,0 +1,12 @@
+//! name: pattern_unresolved_hint_mentions_let_rejected
+//! rule: 08.R25
+//! expect: check-error
+//! detail: owner decision 2026-09-19 round 3 (D1) -- a bare pattern name that resolves to nothing is N0014, whose message adds the hint: to bind, write "let n"
+
+module m;
+
+fn f(let p: i32) -> i32 {
+    match p {
+        nosuchname => 1,
+    }
+}

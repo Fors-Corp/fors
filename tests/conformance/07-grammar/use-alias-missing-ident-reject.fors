@@ -1,0 +1,9 @@
+//! name: use_alias_missing_ident_reject
+//! rule: 07.Grammar
+//! expect: parse-error
+//! detail: "use a.b as;" is missing the alias identifier (round 3, D2)
+
+module m;
+use app.util as;
+
+fn f() -> i32 { return 0; }

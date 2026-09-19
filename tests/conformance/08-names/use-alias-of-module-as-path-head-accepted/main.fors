@@ -1,0 +1,9 @@
+//! name: use_alias_of_module_as_path_head_accepted
+//! rule: 08.R16
+//! expect: check-ok
+//! detail: owner decision 2026-09-19 round 3 (D2) -- an alias of a module is itself a module name; u.Net resolves through it
+
+module main;
+use app.util as u;
+
+fn f() -> u.Net { return u.Net { host: "x" }; }

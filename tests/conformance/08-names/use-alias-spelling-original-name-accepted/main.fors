@@ -1,0 +1,10 @@
+//! name: use_alias_spelling_original_name_accepted
+//! rule: 08.R13
+//! expect: check-ok
+//! detail: round 3 (D2) -- "use app.util; use app.util as util;" binds util twice to the same module: not a collision (Rules 13, 15)
+
+module main;
+use app.util;
+use app.util as util;
+
+fn f() -> util.Net { return util.Net { host: "x" }; }

@@ -1,0 +1,12 @@
+//! name: pattern_let_binding_accepted
+//! rule: 07.D17
+//! expect: parse-ok
+//! detail: "let n" is a pattern alternative (owner decision 2026-09-19, round 3, D1)
+
+module m;
+
+fn f(let p: i32) -> i32 {
+    match p {
+        let n => n,
+    }
+}

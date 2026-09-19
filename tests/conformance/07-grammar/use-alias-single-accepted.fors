@@ -1,0 +1,9 @@
+//! name: use_alias_single_accepted
+//! rule: 07.Grammar
+//! expect: parse-ok
+//! detail: "use a.b as c;" is a use_item with an alias (round 3, D2)
+
+module m;
+use app.util as u;
+
+fn f() -> i32 { return 0; }

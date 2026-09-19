@@ -1,0 +1,8 @@
+//! name: gparam_named_as_prelude_type_rejected
+//! rule: 08.R18
+//! expect: check-error
+//! detail: round 3 (D3) -- a generic parameter of a struct named like a prelude type (Option) is rejected: type-level names stay unambiguous
+
+module m;
+
+struct Box[Option] { pub v: i32 }

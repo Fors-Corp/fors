@@ -1,0 +1,9 @@
+//! name: use_alias_as_underscore_reject
+//! rule: 07.Grammar
+//! expect: parse-error
+//! detail: "_" is not an ident, so "as _" cannot parse as an alias (round 3, D2; the checker rejects it independently if it ever did parse)
+
+module m;
+use app.util as _;
+
+fn f() -> i32 { return 0; }

@@ -1,0 +1,15 @@
+//! name: pattern_variant_through_alias_accepted
+//! rule: 08.R25
+//! expect: check-ok
+//! detail: round 3 (D1+D2) -- a two-segment pattern path through an import alias reaches a unit variant: a reference, never a binding
+
+module main;
+use lib.color.Color as C;
+
+fn f(let c: C) -> i32 {
+    match c {
+        C.Red => 1,
+        C.Rgb(let r, (let g, let b)) => r + g + b,
+        let other => 0,
+    }
+}

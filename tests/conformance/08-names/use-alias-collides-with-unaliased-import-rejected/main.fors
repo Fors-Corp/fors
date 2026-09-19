@@ -1,0 +1,10 @@
+//! name: use_alias_collides_with_unaliased_import_rejected
+//! rule: 08.R15
+//! expect: check-error
+//! detail: round 3 (D2) -- "use app.util; use app2.thing as util;" binds util to two different modules: N0015 at the second use
+
+module main;
+use app.util;
+use app2.thing as util;
+
+fn f() -> i32 { return 0; }

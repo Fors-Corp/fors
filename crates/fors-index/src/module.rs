@@ -118,9 +118,16 @@ pub fn extract_module_facts(tree: &Tree, tokens: &Tokens, source: &[u8], interne
                     }
                 }
                 NodeKind::UseDecl => {
-                    for path_node in tree.children(child) {
-                        let segs = path_segments(tree, tokens, source, interner, path_node);
-                        uses.push((segs, byte_range(tree, tokens, path_node)));
+                    // Each child is a `UseItem` (ch07 grammar, D2); its
+                    // only child is the `path`. An alias ("as" ident) does
+                    // not change the module-graph edge (ch08 R3), so it is
+                    // not read here; the resolver reads it from the tree
+                    // directly to decide the bound name (ch08 R4).
+                    for use_item in tree.children(child) {
+                        if let Some(path_node) = tree.children(use_item).next() {
+                            let segs = path_segments(tree, tokens, source, interner, path_node);
+                            uses.push((segs, byte_range(tree, tokens, path_node)));
+                        }
                     }
                 }
                 _ => {}

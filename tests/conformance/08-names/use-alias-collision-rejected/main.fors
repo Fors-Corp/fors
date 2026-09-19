@@ -1,0 +1,10 @@
+//! name: use_alias_collision_rejected
+//! rule: 08.R15
+//! expect: check-error
+//! detail: owner decision 2026-09-19 round 3 (D2) -- two imports (one aliased) bind the same name N to different entities
+
+module main;
+use app.util.Net as N;
+use app2.thing.Net as N;
+
+fn f() -> N { return N { host: "x" }; }

@@ -1,0 +1,16 @@
+//! name: pattern_let_nested_tuple_in_payload_accepted
+//! rule: 08.R25
+//! expect: check-ok
+//! detail: round 3 (D1) -- let bindings nest at any depth: tuple inside payload inside struct payload; all four are in scope in the arm body
+
+module m;
+
+enum Shape { Dot, Pair(i32, (i32, i32)) }
+struct Wrap { pub s: Shape, pub k: i32 }
+
+fn f(let w: Wrap) -> i32 {
+    match w {
+        Wrap { s: Shape.Pair(let a, (let b, let c)), let k } => a + b + c + k,
+        Wrap { s: .Dot, k: _ } => 0,
+    }
+}

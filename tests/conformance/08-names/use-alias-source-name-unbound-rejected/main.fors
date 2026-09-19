@@ -1,0 +1,9 @@
+//! name: use_alias_source_name_unbound_rejected
+//! rule: 08.R14
+//! expect: check-error
+//! detail: round 3 (D2) -- "use app.util as u;" does not bind util: util.Net is an unresolved name
+
+module main;
+use app.util as u;
+
+fn f() -> util.Net { return u.Net { host: "x" }; }

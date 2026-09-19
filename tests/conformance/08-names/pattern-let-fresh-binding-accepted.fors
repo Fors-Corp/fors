@@ -1,13 +1,13 @@
-//! name: pattern_fresh_binding_accepted
+//! name: pattern_let_fresh_binding_accepted
 //! rule: 08.R25
 //! expect: check-ok
-//! detail: `other` resolves to nothing, so it is a new binding, visible in its arm
+//! detail: owner decision 2026-09-19 round 3 (D1) -- "let other" introduces a fresh binding, visible in its arm; the bare-name shorthand no longer binds
 
 module m;
 
 fn f(let n: i32) -> i32 {
     match n {
         0 => 0,
-        other => other + 1,
+        let other => other + 1,
     }
 }

@@ -1,0 +1,14 @@
+//! name: pattern_bare_name_of_shadowing_local_rejected
+//! rule: 08.R25
+//! expect: check-error
+//! detail: round 3 (D1+D3) -- once a local named none shadows the prelude value, a bare none pattern in its scope names a local: N0025
+
+module m;
+
+fn f(let a: Option[i32]) -> i32 {
+    let none: i32 = 0;
+    match a {
+        none => 1,
+        _ => 2,
+    }
+}

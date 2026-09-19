@@ -308,6 +308,8 @@ fn resolve_fn_sig_and_body(ctx: &mut scope::BodyCtx, fn_node: usize) {
         ctx.resolve_generics(g);
     }
     let Some(params_node) = sig_children.iter().copied().find(|&c| tree.kinds[c] == NodeKind::Params) else { return };
+    // `resolve_params` already walks each parameter's own type before
+    // declaring it (round 3, D3), so it is not repeated here.
     let params = ctx.resolve_params(params_node);
     let param_syms = ctx.param_symbols(&params);
 
@@ -316,11 +318,6 @@ fn resolve_fn_sig_and_body(ctx: &mut scope::BodyCtx, fn_node: usize) {
             for bound in tree.children(gp) {
                 ctx.walk(bound);
             }
-        }
-    }
-    for &p in &params {
-        for c in tree.children(p) {
-            ctx.walk(c);
         }
     }
     let saved = ctx.set_fn_params(param_syms);

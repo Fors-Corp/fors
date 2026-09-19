@@ -1,0 +1,13 @@
+//! name: local_shadows_prelude_module_path_head_accepted
+//! rule: 08.R18
+//! expect: check-ok
+//! detail: round 3 (D3) -- a parameter named io shadows the prelude module; io.inner.fd has the parameter as head and two deferred segments (Rule 16), and io.Stdout in the signature before it still means the module
+
+module m;
+
+struct Inner { pub fd: i32 }
+struct Conn { pub inner: Inner }
+
+fn f(inout out: io.Stdout, let io: Conn) -> i32 {
+    return io.inner.fd;
+}

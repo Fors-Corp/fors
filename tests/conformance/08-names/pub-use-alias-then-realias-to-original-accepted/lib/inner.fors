@@ -1,0 +1,3 @@
+module lib.inner;
+
+pub struct X { pub v: i32 }

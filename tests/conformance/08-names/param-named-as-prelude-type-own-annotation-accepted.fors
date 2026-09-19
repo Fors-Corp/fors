@@ -1,0 +1,13 @@
+//! name: param_named_as_prelude_type_own_annotation_accepted
+//! rule: 08.R26
+//! expect: check-ok
+//! detail: round 3 (D3) -- a parameter is not in scope in its own type annotation, so "let Option: Option[i32]" resolves the type to the prelude and then binds the parameter
+
+module m;
+
+fn f(let Option: Option[i32]) -> i32 {
+    match Option {
+        some(let v) => v,
+        none => 0,
+    }
+}

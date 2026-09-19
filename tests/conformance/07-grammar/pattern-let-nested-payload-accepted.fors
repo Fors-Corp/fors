@@ -1,0 +1,15 @@
+//! name: pattern_let_nested_payload_accepted
+//! rule: 07.D17
+//! expect: parse-ok
+//! detail: "let n" nested inside a payload binds inside the constructor (round 3, D1)
+
+module m;
+
+enum Opt { Some(i32), None }
+
+fn f(let p: Opt) -> i32 {
+    match p {
+        .Some(let n) => n,
+        .None => 0,
+    }
+}

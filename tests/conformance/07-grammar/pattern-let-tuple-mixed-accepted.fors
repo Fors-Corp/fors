@@ -1,0 +1,14 @@
+//! name: pattern_let_tuple_mixed_accepted
+//! rule: 07.D17
+//! expect: parse-ok
+//! detail: a tuple pattern may mix "let" bindings, wildcards and references (round 3, D1)
+
+module m;
+
+const LIMIT: i32 = 10;
+
+fn f(let a: i32, let b: i32, let c: i32) -> i32 {
+    match (a, b, c) {
+        (let x, _, LIMIT) => x,
+    }
+}

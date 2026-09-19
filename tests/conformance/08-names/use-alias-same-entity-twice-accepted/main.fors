@@ -1,0 +1,9 @@
+//! name: use_alias_same_entity_twice_accepted
+//! rule: 08.R13
+//! expect: check-ok
+//! detail: owner decision 2026-09-19 round 3 (D2) -- two use_items aliasing the same entity to the same name is not a collision
+
+module main;
+use app.util.Net as N, app.util.Net as N;
+
+fn f() -> N { return N { host: "x" }; }

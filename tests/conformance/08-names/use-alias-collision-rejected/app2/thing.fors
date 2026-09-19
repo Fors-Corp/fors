@@ -1,0 +1,3 @@
+module app2.thing;
+
+pub struct Net { pub host: Str }

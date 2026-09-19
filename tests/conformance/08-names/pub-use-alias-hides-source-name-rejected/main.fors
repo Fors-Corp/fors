@@ -1,0 +1,9 @@
+//! name: pub_use_alias_hides_source_name_rejected
+//! rule: 08.R4
+//! expect: check-error
+//! detail: round 3 (D2) -- m re-exports X under the name Y only; "use m.X;" names nothing pub in m
+
+module main;
+use m.X;
+
+fn f() -> i32 { return 0; }

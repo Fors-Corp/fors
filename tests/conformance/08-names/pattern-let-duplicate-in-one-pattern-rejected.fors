@@ -1,12 +1,12 @@
-//! name: duplicate_in_one_pattern_rejected
+//! name: pattern_let_duplicate_in_one_pattern_rejected
 //! rule: 08.R18
 //! expect: check-error
-//! detail: x is bound twice inside one pattern
+//! detail: owner decision 2026-09-19 round 3 (D1) -- "let x" is bound twice inside one pattern; Rule 18's pairwise-distinct requirement applies to "let" pattern bindings exactly as it did to the old implicit ones
 
 module m;
 
 fn f(let a: i32, let b: i32) -> i32 {
     match (a, b) {
-        (x, x) => 1,
+        (let x, let x) => 1,
     }
 }

@@ -1,0 +1,2 @@
+module m;
+pub use lib.inner.X as Y;

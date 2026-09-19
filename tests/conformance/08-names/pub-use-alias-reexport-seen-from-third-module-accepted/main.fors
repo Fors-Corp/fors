@@ -1,0 +1,9 @@
+//! name: pub_use_alias_reexport_seen_from_third_module_accepted
+//! rule: 08.R5
+//! expect: check-ok
+//! detail: owner decision 2026-09-19 round 3 (D2) -- "pub use a.b as c;" re-exports under c; a third module sees the alias name P, not Point
+
+module main;
+use lib2.api.P;
+
+fn origin() -> P { return P { x: 0, y: 0 }; }

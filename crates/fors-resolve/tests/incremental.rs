@@ -88,7 +88,7 @@ fn body_only_edit_in_a_changes_nothing_for_b() {
     let a1 = "module a;\n\nfn hidden() -> i32 { return 1; }\npub fn area(let s: Shape) -> i32 { return hidden(); }\npub enum Shape { dot, line }\n";
     // Bodies rewritten: more statements, locals, closures, a different
     // node count ahead of `Shape` — signatures and item order untouched.
-    let a2 = "module a;\n\nfn hidden() -> i32 {\n    let k: i32 = 41;\n    let g = |q: i32| q + k;\n    return g(1);\n}\npub fn area(let s: Shape) -> i32 {\n    match s {\n        Shape.dot => { return 0; },\n        other => { return hidden(); },\n    }\n}\npub enum Shape { dot, line }\n";
+    let a2 = "module a;\n\nfn hidden() -> i32 {\n    let k: i32 = 41;\n    let g = |q: i32| q + k;\n    return g(1);\n}\npub fn area(let s: Shape) -> i32 {\n    match s {\n        Shape.dot => { return 0; },\n        let other => { return hidden(); },\n    }\n}\npub enum Shape { dot, line }\n";
     let (o1, i1) = resolve_pkg(&[("a", a1), ("b", MOD_B)]);
     let (o2, i2) = resolve_pkg(&[("a", a2), ("b", MOD_B)]);
     assert!(o1.files[0].diagnostics.is_empty() && o2.files[0].diagnostics.is_empty(), "module a must be clean");
@@ -105,6 +105,41 @@ fn signature_edit_in_a_shows_in_its_export_table() {
     let (o1, i1) = resolve_pkg(&[("a", a1)]);
     let (o2, i2) = resolve_pkg(&[("a", a2)]);
     assert_ne!(o1.export_signature(0, &i1), o2.export_signature(0, &i2));
+}
+
+/// Round 3 (D2): the alias of a `pub use` is part of the re-exporting
+/// module's export table (a signature-level change for its importers);
+/// a private alias, and a body edit beside aliases, are not.
+#[test]
+fn pub_use_alias_is_signature_level_and_body_edits_stay_local() {
+    let inner = "module inner;\npub struct Point { pub x: i32 }\n";
+    let api_p = "module api;\npub use inner.Point as P;\n";
+    let api_q = "module api;\npub use inner.Point as Q;\n";
+    let main = "module main;\nuse api.P as Pt;\nfn f(let p: Pt) -> i32 { return 0; }\n";
+    let (o1, i1) = resolve_pkg(&[("inner", inner), ("api", api_p), ("main", main)]);
+    assert!(o1.files.iter().all(|f| f.diagnostics.is_empty()), "aliased re-export chain must be clean");
+    // Renaming the re-export alias changes api's export table and breaks
+    // the importer -- in the importer's file, with Rule 4's code.
+    let (o2, i2) = resolve_pkg(&[("inner", inner), ("api", api_q), ("main", main)]);
+    assert_ne!(o1.export_signature(1, &i1), o2.export_signature(1, &i2), "a pub use alias rename must change the export table");
+    assert_eq!(o1.export_signature(0, &i1), o2.export_signature(0, &i2), "inner is untouched by api's alias");
+    assert!(o2.files[1].diagnostics.is_empty());
+    assert_eq!(o2.files[2].diagnostics.iter().map(|d| d.code).collect::<Vec<_>>(), vec![Code::N(4)]);
+    // A private alias rename in main is invisible outside main.
+    let main_b = "module main;\nuse api.P as Other;\nfn f(let p: Other) -> i32 { return 0; }\n";
+    let (o3, i3) = resolve_pkg(&[("inner", inner), ("api", api_p), ("main", main_b)]);
+    assert!(o3.files.iter().all(|f| f.diagnostics.is_empty()));
+    assert_eq!(o1.export_signature(2, &i1), o3.export_signature(2, &i3), "a private alias is not exported");
+    // A body-only edit in main (using `let` patterns and a local that
+    // shadows a prelude name) changes nothing for inner or api.
+    let main_c = "module main;\nuse api.P as Pt;\nfn f(let p: Pt) -> i32 {\n    let io: i32 = 1;\n    match io {\n        let n => { return n; },\n    }\n}\n";
+    let (o4, i4) = resolve_pkg(&[("inner", inner), ("api", api_p), ("main", main_c)]);
+    assert!(o4.files.iter().all(|f| f.diagnostics.is_empty()));
+    for m in 0..3 {
+        assert_eq!(o1.export_signature(m, &i1), o4.export_signature(m, &i4), "a body edit changed module {m}'s export table");
+    }
+    assert_eq!(file_result_text(&o1, 0), file_result_text(&o4, 0));
+    assert_eq!(file_result_text(&o1, 1), file_result_text(&o4, 1));
 }
 
 #[test]
@@ -132,11 +167,14 @@ fn diagnostics_land_in_the_file_that_caused_them() {
 
 #[test]
 fn one_diagnostic_per_root_cause() {
+    // `let io` no longer shadows the prelude module `io` (owner decision
+    // 2026-09-19, round 3, D3): a function-local binding may now do that,
+    // so this is down to the three `use` root causes only.
     let main = "module main;\nuse nowhere.thing, lib.hid, lib.gone;\nfn f() -> i32 { return thing() + hid() + gone() + thing.x; }\nfn g(let t: thing) -> gone { let io: i32 = 1; return io + io; }\n";
     let lib = "module lib;\nfn hid() -> i32 { return 1; }\n";
     let (out, _) = resolve_pkg(&[("main", main), ("lib", lib)]);
     let codes: Vec<Code> = out.files[0].diagnostics.iter().map(|d| d.code).collect();
-    assert_eq!(codes, vec![Code::N(4), Code::N(4), Code::N(4), Code::N(18)], "{:?}", out.files[0].diagnostics);
+    assert_eq!(codes, vec![Code::N(4), Code::N(4), Code::N(4)], "{:?}", out.files[0].diagnostics);
 }
 
 #[test]

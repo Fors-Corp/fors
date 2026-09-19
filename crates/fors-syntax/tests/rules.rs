@@ -212,7 +212,12 @@ fn rule13_rule14_rule15_paths_fn_types_pub() {
         body_shape("let f: fn() -> fn(let A) -> T raises E;"),
         "LetStmt(Binding FnType(FnType(FParam(TypeApp) TypeApp Raises(TypeApp))))"
     );
-    assert_eq!(file_shape("pub use a.b, c; pub fn f() { }"), "UseDecl(Path Path) FnDecl(FnSig(Params) Block)");
+    assert_eq!(
+        file_shape("pub use a.b, c; pub fn f() { }"),
+        "UseDecl(UseItem(Path) UseItem(Path)) FnDecl(FnSig(Params) Block)"
+    );
+    assert_eq!(file_shape("use a.b as c;"), "UseDecl(UseItem(Path))");
+    rejects("use a.b as;");
     assert!(!codes("fn f() { } use a;").is_empty());
 }
 
@@ -225,10 +230,17 @@ fn minimum_list_lengths_and_patterns() {
     rejects("match x { a { } => 1 }");
     rejects("match x { a => 1 b => 2 }");
     assert_eq!(
-        body_shape("match x { .a => 1, m.B(y, _) => { } .c { f, g: -1 } => 2, (a, \"s\") => 3 }"),
+        body_shape(
+            "match x { .a => 1, m.B(y, _) => { } .c { let f, g: -1 } => 2, (a, \"s\") => 3 }"
+        ),
         "MatchExpr(NameExpr Arm(PatDot Literal) Arm(PatPath(Payload(PatPath PatWild)) Block) \
          Arm(PatDot(Payload(FPat FPat(PatLit))) Literal) Arm(PatTuple(PatPath PatLit) Literal))"
     );
+    // round 3, D1: the bare fpat shorthand is removed, "let" is the only
+    // way a pattern binds, and "var" is not a pattern alternative.
+    assert_eq!(body_shape("match x { let n => n }"), "MatchExpr(NameExpr Arm(PatLet NameExpr))");
+    rejects("match x { P { f } => f }");
+    rejects("match x { var n => n }");
 }
 
 #[test]

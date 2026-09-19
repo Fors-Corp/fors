@@ -54,18 +54,18 @@ other document (chapter, design doc, comment, test) MAY only cite it
 | Trap-kind identifier set (closed); `nesting-limit` is not a trap | ch02 R15 |
 | Comptime file-read declaration (`inputs { ... };` header clause) | ch04 R13 |
 | File-to-module mapping, optional `module` header must match, legal (lowercase) file names, case-insensitive file systems | ch08 R1, R24 |
-| What a `use` path binds (module or `pub` item, never a member), `pub use` re-export, imports not transitive | ch08 R3-6 |
+| What a `use` path binds (module or `pub` item, never a member), optional `"as" ident` alias (binds the alias only), `pub use` re-export, imports not transitive | ch08 R3-6 |
 | Module-graph edge set (explicit `use` edges, implicit prelude-module edges), acyclicity, cycle diagnostic (capability flow along edges stays ch04 R2-2a) | ch08 R7-8, R17 |
 | Order-independent module scope; order-dependent bindings; scope of every binding form; implicit `Self` | ch08 R9, R19, R26 |
 | Visibility: `pub` items, fields, variants, inherent and trait-impl methods; private item in a public signature | ch08 R10-12 |
 | One namespace per module scope; item/import/prelude collisions are eager errors | ch08 R13, R15 |
 | Lookup, segment-by-segment path resolution, deferred (type-directed) segments | ch08 R14, R16 |
 | Prelude: closed list of types, values (`some none reduce`) and modules (`io fs net proc time rand env gpu`) | ch08 R17 |
-| No shadowing (total, prelude included); pairwise-distinct bindings | ch08 R18 |
+| No shadowing (total, except a function-local binding may shadow a prelude name; generic parameters excepted from the exception); pairwise-distinct bindings | ch08 R18 |
 | `scoped(p)` names a parameter only | ch08 R20 (semantics: ch01 R19) |
 | Orphan rule; impls are not names | ch08 R21 |
 | Resolver/checker boundary: what needs a type; identifiers that are not names | ch08 R22-23 |
-| Binding versus reference in patterns | ch08 R25 |
+| Binding versus reference in patterns (`"let" ident` binds; a bare one-segment name is always a reference) | ch08 R25 |
 | Member tables (fields, variants, methods) and their duplicate rule | ch08 R27 |
 
 ## Closed by owner decision 2026-09-19
@@ -85,6 +85,24 @@ trap-kind identifiers enumerated (ch02 R15); comptime budget constants
 named, values still unset (ch04 R14); comptime file reads declared via an
 `inputs { ... };` header clause (ch04 R13, ch07 grammar).
 
+## Closed by owner decision 2026-09-19, round 3
+
+D1 pattern bindings: a pattern binds a name only via `"let" ident` (ch07
+grammar: `pattern`/`fpat` gain `"let" ident`; the bare `fpat` shorthand
+is removed, a parse error); a bare one-segment pattern name is always a
+reference (ch08 R25, N0025/N0014). `"var" ident` is not a pattern form
+(mutable pattern bindings stay open, recommendation "no"). D2 import
+aliases: `use p as c;` / `pub use p as c;` (ch07 grammar `use_item`; ch08
+R3-6) bind `c` only, not any earlier segment; participate in R13/R15
+collisions; `"as" "_"` is a parse error (`_` is not an `ident`) and
+aliasing to a prelude name is an R13 error. D3
+prelude shadowing: a function-local binding (not a generic parameter, not
+an item or import) may shadow a prelude name (ch08 R18); the implicit
+prelude-module edge scan (ch08 R17) may over-approximate harmlessly when
+a local shadows a prelude module. Consequence recorded in ch08 R26:
+parameters come into scope left to right, so a parameter's own type
+annotation (and earlier ones) never see it.
+
 ## Open owner questions (most blocking first)
 
 1. Syntax calls of PLAN §4.3(3), drafted in ch07 and needed before the
@@ -100,9 +118,8 @@ named, values still unset (ch04 R14); comptime file reads declared via an
    contents — `Buffer`, `Vec`, `PageAllocator`, `Copyable` are used
    unqualified in ch04 and the corpus but defined nowhere — and prelude
    modules (`io.Stdout` with no `use`) versus mandatory `use std.io;`
-   (ch08 Q1); total no-shadowing, which makes `io fs net proc time rand
-   env gpu some none reduce` unusable as local names (ch08 Q2); the
-   manifest must define package name and source root (ch08 Q3). The
+   (ch08 Q1); the manifest must define package name and source root
+   (ch08 Q3, now Q3). (ch08 Q2, no-shadowing, closed round 3 above.) The
    resolver can start on the drafted answers; Q1 changes one list.
 4. Self-referential brand in the `with` header, `Arena[Node[nodes]]`
    (ch01 Q3; ch08 R19 scopes the name over the header accordingly).
@@ -126,6 +143,9 @@ named, values still unset (ch04 R14); comptime file reads declared via an
     whether `main` may be called by user code. Blocks nothing: the
     checker can start on the drafted answers.
 14. Measurement: Tier A additions, Tier B order, canary `N`, FLOP calibration, blocked `matmul` (ch06 Q1-5).
-15. No import aliases, globs or package-level visibility, so two modules
-    with the same last segment cannot both be imported; variant versus
-    associated-function name clash (ch08 Q4-5). Blocks nothing yet.
+15. Globs and package-level visibility still open (ch08 Q4; aliases
+    closed round 3 above — two modules with the same last segment can
+    now both be imported, under different aliases); variant versus
+    associated-function name clash (ch08 Q5). Blocks nothing yet.
+16. Mutable pattern bindings (`"var" ident` in a pattern): round 3's D1
+    recommends "no" but leaves it open (ch08 Q6).

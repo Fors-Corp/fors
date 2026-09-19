@@ -125,8 +125,12 @@ class P:
         if s.isid("needs"): s.i+=1;s.eat("{");s.clist(s.needs_item,"}");s.eat(";")
         if s.isid("inputs"): s.i+=1;s.eat("{");s.clist(lambda:s.strlit(),"}");s.eat(";")
         while s.isp("use") or (s.isp("pub") and s.isp("use",1)):
-            s.opt("pub");s.eat("use");s.path()
-            while s.opt(","): s.path()
+            s.opt("pub");s.eat("use")
+            def use_item():
+                s.path()
+                if s.opt("as"): s.ident()
+            use_item()
+            while s.opt(","): use_item()
             s.eat(";")
         while s.k()[0]!="eof": s.decl()
     def attr(s):
@@ -437,6 +441,7 @@ class P:
         s.eat("}")
     def pattern(s):
         a=s.k()
+        if s.opt("let"): s.ident();return
         if s.opt("_") or s.opt("true") or s.opt("false"): return
         if a[0]=="str": s.i+=1;return
         if s.isp("-") and s.k(1)[0]=="num": s.i+=2;return
@@ -449,8 +454,10 @@ class P:
         if s.opt("("): s.clist(s.pattern,")",1)
         elif s.opt("{"):
             def fp():
-                s.ident()
+                if s.opt("let"): s.ident();return
+                nm=s.ident()
                 if s.opt(":"): s.pattern()
+                else: s.err('write "let %s" to bind the field or "%s: pattern"'%(nm,nm))
             s.clist(fp,"}",1)
 def isplace(e): return e[0] in("path","pl")
 def check(src):

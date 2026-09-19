@@ -309,6 +309,27 @@ fn use_decl_is_pub(tree: &Tree, tokens: &Tokens, node: usize) -> bool {
     false
 }
 
+/// A `UseItem`'s `"as" ident` alias, if it has one (ch07 grammar; ch08
+/// R3-6 -- owner decision 2026-09-19, round 3, D2). The `"as"` and the
+/// alias identifier are tokens `UseItem` owns directly, after its one
+/// `Path` child.
+fn use_item_alias(tree: &Tree, tokens: &Tokens, source: &[u8], interner: &mut Interner, node: usize) -> Option<Symbol> {
+    let (first, end) = tree.token_range(node);
+    let mut saw_as = false;
+    for i in first as usize..end as usize {
+        if !is_sig(tokens, i) {
+            continue;
+        }
+        if saw_as {
+            return if tokens.kinds[i] == TokenKind::Ident { Some(interner.intern(tokens.text(i, source))) } else { None };
+        }
+        if tokens.kinds[i] == TokenKind::KwAs {
+            saw_as = true;
+        }
+    }
+    None
+}
+
 pub struct FileCtx<'a> {
     pub tree: &'a Tree,
     pub tokens: &'a Tokens,
@@ -575,8 +596,11 @@ pub fn build_universe(
         if !f.tree.is_empty() {
             for use_decl in f.tree.children(0) {
                 if f.tree.kinds[use_decl] == NodeKind::UseDecl && use_decl_is_pub(f.tree, f.tokens, use_decl) {
-                    for path_node in f.tree.children(use_decl).filter(|&c| f.tree.kinds[c] == NodeKind::Path) {
-                        if let Some(&(last, _)) = segments_with_ranges(f.tree, f.tokens, f.source, interner, path_node).last() {
+                    for use_item in f.tree.children(use_decl).filter(|&c| f.tree.kinds[c] == NodeKind::UseItem) {
+                        let Some(path_node) = f.tree.children(use_item).find(|&c| f.tree.kinds[c] == NodeKind::Path) else { continue };
+                        let alias = use_item_alias(f.tree, f.tokens, f.source, interner, use_item);
+                        let last = alias.or_else(|| segments_with_ranges(f.tree, f.tokens, f.source, interner, path_node).last().map(|&(s, _)| s));
+                        if let Some(last) = last {
                             scope.pub_use_names.push(last);
                         }
                     }
@@ -598,14 +622,16 @@ pub fn build_universe(
                 continue;
             }
             let is_pub = use_decl_is_pub(f.tree, f.tokens, use_decl);
-            for path_node in f.tree.children(use_decl) {
-                if f.tree.kinds[path_node] != NodeKind::Path {
+            for use_item in f.tree.children(use_decl) {
+                if f.tree.kinds[use_item] != NodeKind::UseItem {
                     continue; // an `Error` child: the parser reported it
                 }
+                let Some(path_node) = f.tree.children(use_item).find(|&c| f.tree.kinds[c] == NodeKind::Path) else { continue };
                 let segs_ranges = segments_with_ranges(f.tree, f.tokens, f.source, interner, path_node);
                 let segs: Segments = segs_ranges.iter().map(|(s, _)| *s).collect();
                 let whole_range = byte_range(f.tree, f.tokens, path_node);
-                resolve_use_path(interner, modules, &mut universe, m, &segs, whole_range, is_pub, &mut diags);
+                let alias = use_item_alias(f.tree, f.tokens, f.source, interner, use_item);
+                resolve_use_path(interner, modules, &mut universe, edges, m, &segs, alias, whole_range, is_pub, &mut diags);
             }
         }
     }
@@ -613,13 +639,32 @@ pub fn build_universe(
     (universe, diags)
 }
 
+/// Whether module `src` reaches module `dst` along "uses" edges. Only
+/// called on an import-error path, so a plain DFS per call is fine.
+fn reaches(edges: &[(ModuleId, ModuleId)], src: usize, dst: usize) -> bool {
+    let mut seen = std::collections::HashSet::new();
+    let mut stack = vec![src];
+    while let Some(u) = stack.pop() {
+        if u == dst {
+            return true;
+        }
+        if !seen.insert(u) {
+            continue;
+        }
+        stack.extend(edges.iter().filter(|(f, _)| f.index() == u).map(|(_, t)| t.index()));
+    }
+    false
+}
+
 #[allow(clippy::too_many_arguments)]
 fn resolve_use_path(
     interner: &mut Interner,
     modules: &ModuleTable,
     universe: &mut Universe,
+    edges: &[(ModuleId, ModuleId)],
     from: usize,
     segs: &[Symbol],
+    alias: Option<Symbol>,
     range: (u32, u32),
     is_pub: bool,
     diags: &mut Vec<(usize, Diagnostic)>,
@@ -627,8 +672,12 @@ fn resolve_use_path(
     let Some(&sn) = segs.last() else { return };
     let prefix = &segs[..segs.len() - 1];
     let std_sym = interner.intern(b"std");
+    // ch08 R3-6, owner decision 2026-09-19 round 3 (D2): "as" c" binds c,
+    // not sn; sn (and every other path segment) is used only to resolve
+    // the path itself, never as the bound name once an alias is given.
+    let bound_name = alias.unwrap_or(sn);
     let bind = |universe: &mut Universe, entity: Entity, kind: RowKind, sig: u128, variants: &[Symbol], diags: &mut Vec<(usize, Diagnostic)>| {
-        bind_use_name(universe, from, entity, kind, sig, variants, sn, range, is_pub, diags);
+        bind_use_name(universe, from, entity, kind, sig, variants, bound_name, range, is_pub, diags);
     };
 
     // `use std.<name>;` for one of Rule 17's prelude modules denotes that
@@ -685,6 +734,7 @@ fn resolve_use_path(
         return; // Rule 8, already reported by `fors_index`.
     }
     let mname = fors_index::module::join_dotted(interner, prefix);
+    let absent = universe.scopes[pm.index()].export(sn).is_none();
     let found = match universe.scopes[pm.index()].export(sn) {
         Some(Export::Public(row)) => {
             let i = universe.scopes[pm.index()].index.get(&sn).map_or(0, |&i| i as usize);
@@ -696,7 +746,15 @@ fn resolve_use_path(
     match found {
         Ok((entity, kind, sig, variants)) => bind(universe, entity, kind, sig, &variants, diags),
         Err((code, msg)) => {
-            diags.push((from, Diagnostic::new(range.0, range.1, code, msg)));
+            // Rule 7: the cycle check precedes every other rule. When the
+            // target module imports (transitively) the importer, its
+            // `pub use` names are not complete yet by construction -- e.g.
+            // `pub use b.Y as X;` in `a` beside `pub use a.X as Y;` in `b`
+            // -- so a missing name there is a consequence of the cycle
+            // `fors_index` already reported, not a second error.
+            if !(absent && reaches(edges, pm.index(), from)) {
+                diags.push((from, Diagnostic::new(range.0, range.1, code, msg)));
+            }
             bind(universe, Entity::Poisoned, RowKind::Poisoned, 0, &[], diags);
         }
     }

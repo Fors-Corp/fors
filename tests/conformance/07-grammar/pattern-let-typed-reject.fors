@@ -1,0 +1,12 @@
+//! name: pattern_let_typed_rejected
+//! rule: 07.D17
+//! expect: parse-error
+//! detail: a pattern binding takes no type annotation: after "let x" the next token must be "=>", ",", ")" or "}", never ":"
+
+module m;
+
+fn f(let p: i32) -> i32 {
+    match p {
+        let x: i32 => x,
+    }
+}

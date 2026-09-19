@@ -1,0 +1,14 @@
+//! name: local_shadows_item_still_rejected
+//! rule: 08.R18
+//! expect: check-error
+//! detail: round 3 (D3) -- the prelude exception does not extend to module-scope names: a "let n" pattern binding named like an item is still N0018
+
+module m;
+
+const LIMIT: i32 = 10;
+
+fn f(let a: i32) -> i32 {
+    match a {
+        let LIMIT => LIMIT,
+    }
+}
