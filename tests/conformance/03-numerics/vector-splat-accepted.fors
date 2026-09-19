@@ -1,0 +1,12 @@
+//! name: vector_and_mask_splat_accepted
+//! rule: 03.R23
+//! expect: parse-ok
+//! detail: vector[T, N].splat(x) and mask[N].splat(b) broadcast a single value
+
+module m;
+needs { };
+
+fn f() {
+    let v: vector[f32, 4] = vector[f32, 4].splat(1.0);
+    let msk: mask[8] = mask[8].splat(true);
+}

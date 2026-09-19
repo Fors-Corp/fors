@@ -1,0 +1,9 @@
+//! name: shared_atomic_field_without_shared_impl_rejected
+//! rule: 01.R21
+//! expect: check-error
+//! detail: atomic[i64] used as a field with no `impl Shared for Counter` must be diagnosed; atomic[U] fields are legal only inside a type that implements Shared
+
+module app;
+needs { };
+
+struct Counter { n: atomic[i64] }

@@ -1,0 +1,12 @@
+//! name: inputs_clause_parse_ok
+//! rule: 07.Grammar
+//! expect: parse-ok
+//! detail: an inputs clause after needs and before use must parse
+
+module app;
+needs { };
+inputs { "seed.json", "config.toml" };
+use std.io;
+
+fn f() {
+}

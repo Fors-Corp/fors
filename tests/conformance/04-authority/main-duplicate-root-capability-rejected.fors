@@ -1,0 +1,10 @@
+//! name: main_duplicate_root_capability_rejected
+//! rule: 04.R8
+//! expect: check-error
+//! detail: two main parameters of the same root-capability type (io.Stdout) must be diagnosed; each root type may appear at most once in main's parameter list
+
+module app;
+needs { io.stdout };
+
+fn main(inout out1: io.Stdout, inout out2: io.Stdout) {
+}

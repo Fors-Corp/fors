@@ -1,0 +1,10 @@
+//! name: main_trait_typed_param_rejected
+//! rule: 04.R8
+//! expect: check-error
+//! detail: dyn io.Writer is not a root-capability type; the runtime supplies arguments by nominal type only, so Stdout/Stderr are never ambiguous
+
+module app;
+needs { io.stdout };
+
+fn main(inout out: dyn io.Writer) {
+}

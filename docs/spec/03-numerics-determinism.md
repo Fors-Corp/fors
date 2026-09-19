@@ -42,6 +42,51 @@ Not owned: conventions/aliasing (ch01), `raises`/`?`/`raise` and what a trap doe
 18. `@specialize` is compiler-enforced inside `simd`/`spmd`/`kernel` regions: an unspecialized witness-table call there MUST be a compile error with its own diagnostic code, never a silent indirect call.
 19. `vector[T,N]` (fixed, comptime power-of-two `N`) and `mask[N]` are distinct types; masked-off lanes MUST NOT fault or trap regardless of underlying data.
 20. `SVec[T]` is reserved: rejected as a struct/tuple field, heap element type, or generic container argument; legal only as a local/parameter inside `simd`/`spmd` bodies, and only where hardware support is enabled — otherwise a compile error, never a silent scalar fallback.
+21. An array literal (`array_lit`, ch07) is typed by the expected type
+    (CHECK mode) when there is one: against `vector[T, N]`, `mask[N]`, or
+    `Array[T, N]`, the literal's element count MUST equal `N` — a mismatch
+    MUST be a compile error naming both counts — and each element MUST
+    then check against the element type (`T`, or `bool` for `mask[N]`).
+22. With no expected type (SYNTH mode), an array literal is typed
+    `Array[T, N]`: `T` is synthesised from the first element and every
+    other element MUST check against that `T`; `N` is the element count.
+    An empty literal `[]` in SYNTH mode MUST be a compile error (no `T` to
+    synthesise).
+23. `vector[T, N].splat(x)` and `mask[N].splat(b)` MUST construct a value
+    with every lane equal to `x` (resp. every bit equal to `b`); these are
+    the broadcast constructors this chapter names.
+24. A `Slice[T]` value MUST be obtainable only by range-indexing an array
+    or another slice (`data[0 ..< 3]`); no other constructor for `Slice[T]`
+    exists. A `Slice[T]` so produced is a scoped value under ch01's rules
+    (ch01 Rules 19-19b): it MUST NOT outlive the borrow of the array or
+    slice it was indexed from. In particular an array literal never checks
+    against `Slice[T]`: bind the array, then range-index it.
+24a. The repeat form `[x; n]` follows Rules 21-22 with element count `n`,
+    which MUST be a comptime-constant `usize`; `x` is checked against the
+    element type (CHECK) or synthesises `T` (SYNTH) and MUST be `Copyable`.
+25. Modes. Every expression is typed in exactly one of two modes, fixed by
+    its syntactic position, never by search. CHECK mode (the expected type
+    is complete — it contains no undetermined type or const parameter —
+    before the expression is examined): the initializer of a
+    `let`/`var`/`const` that has a type annotation; the right side of an
+    assignment; a `return` operand; a struct-literal field initializer; a
+    call argument whose parameter type, after the call's explicit generic
+    arguments are substituted, mentions no type or const parameter; an
+    element of a CHECK-mode array literal, and every element after the
+    first of a SYNTH-mode one; the tail expression or arm of a CHECK-mode
+    block, `if` or `match`; an `asm_expr` used as an expression statement
+    (ch04 Rule 27). Every other position is SYNTH mode — in particular an
+    un-annotated `let`, a method receiver, an operand, and a call argument
+    whose parameter type still mentions a generic parameter (the argument
+    is synthesised first and the parameter is then matched against the
+    result, one-way). Consequently no inference variable is created by, or
+    outlives, an array literal: nested literals recurse with the same rule
+    (`[[1, 2], [3, 4]]` in SYNTH mode synthesises `Array[T, 2]` from the
+    first row and checks the second against it), and a literal passed to
+    `fn f[T, N: usize](let a: Array[T, N])` is synthesised, then
+    `T`/`N` are read off its type. If the first element of a SYNTH-mode
+    literal does not itself synthesise a type, the literal MUST be a
+    compile error asking for an annotation.
 
 ## Examples
 
@@ -86,6 +131,20 @@ fn max_lane[T: Ord](let v: vector[T, 8], let m: mask[8]) -> T {
     for i in 1 ..< 8 { if m.lane(i) { best = if v[i] > best { v[i] } else { best }; } }
     return best;
 }
+
+fn build_vec() -> vector[f64, 4] {
+    return [1.0, 2.0, 3.0, 4.0];      // CHECK mode against vector[f64,4], Rule 21
+}
+
+fn ones() -> vector[f64, 4] { return vector[f64, 4].splat(1.0); }  // Rule 23
+
+fn head(let xs: Slice[i32]) -> scoped(xs) Slice[i32] {
+    return xs[0 ..< 3];                // Slice by range-index, scoped to xs, Rule 24
+}
+
+fn synth_array() {
+    let a = [1, 2, 3];                 // SYNTH mode: Array[i32, 3], Rule 22
+}
 ```
 
 ## Rejected alternatives
@@ -106,6 +165,16 @@ fn max_lane[T: Ord](let v: vector[T, 8], let m: mask[8]) -> T {
 - `MONOMORPHIZE_INSTR_THRESHOLD` is named as a single constant here; its numeric value is deferred to whoever first writes std against it (a tuning, not semantics, decision).
 - Verifier additions: the combine tree is now spelled out (adjacent pairing, odd partial carried) because "balanced tree" is not unique for non-power-of-two `k`; `n = 0` traps unless an `identity:` is supplied (Rule 11a), which is the only closure that never changes a non-empty result; `B` is named `REDUCE_BLOCK` and the 16-byte bound `MONOMORPHIZE_SIZE_MAX`.
 - `reduce.serial`/`.fast`/`.exact` kept from parallel-heterogeneous.md as they don't conflict with R5.
+- Owner decision 2026-09-19, round 2 (R2-3): array literals had no typing
+  rule; the draft left `vector`/`mask`/`Array` construction from `[...]`
+  unspecified. Resolved as: expected-type-driven in CHECK mode (Rule 21),
+  first-element-driven `Array[T,N]` in SYNTH mode (Rule 22, empty rejected
+  there), `.splat` as the only broadcast form (Rule 23), and `Slice[T]`
+  obtainable only by range-indexing, always scoped (Rule 24, ch01
+  Rules 19-19b). Verifier additions: the CHECK/SYNTH positions were used
+  but defined nowhere, so Rule 25 enumerates them (generic-parameter
+  arguments are SYNTH, keeping literal typing local with no inference
+  variable); Rule 24a covers the `[x; n]` form.
 
 ## Open questions for the owner
 
@@ -134,3 +203,23 @@ fn max_lane[T: Ord](let v: vector[T, 8], let m: mask[8]) -> T {
 - `mask_lane_never_faults`: masked-off lane over unmapped memory MUST NOT fault.
 - `svec_rejected_in_struct_field`: `SVec[T]` struct field MUST be a compile error.
 - `svec_rejected_without_hardware`: `SVec[T]` on unsupported hardware MUST be a compile error, not scalar fallback.
+- `array_lit_check_mode_sized`: `[1.0, 2.0, 3.0, 4.0]` against expected
+  `vector[f64, 4]` MUST type-check; against `vector[f64, 3]` MUST fail
+  naming both counts (4 and 3).
+- `array_lit_synth_mode_infers`: `let a = [1, 2, 3];` with no expected type
+  MUST yield `Array[i32, 3]`.
+- `array_lit_nested_and_generic_arg`: `[[1, 2], [3, 4]]` un-annotated is
+  `Array[Array[T, 2], 2]`; `[[1, 2], [3]]` fails naming counts 1 and 2; a
+  literal passed to a parameter `Array[T, N]` with generic `T`, `N` is
+  synthesised first (Rule 25).
+- `array_lit_to_slice_rejected`: `let s: Slice[f64] = [1.0, 2.0];` fails
+  (Rule 24).
+- `array_lit_empty_synth_rejected`: `let a = [];` with no expected type
+  MUST be a compile error.
+- `vector_mask_splat_broadcasts`: `vector[f64, 4].splat(1.0)` MUST yield
+  four equal lanes; `mask[4].splat(true)` MUST yield four set bits.
+- `slice_only_from_range_index`: `Slice[T]` has no constructor other than
+  range-indexing an array or slice.
+- `slice_is_scoped_to_source`: a `Slice[T]` from `xs[0 ..< 3]` returned
+  without `scoped(xs)`, or outliving `xs`'s borrow, MUST be rejected (ch01
+  Rules 19-19b).

@@ -1,5 +1,5 @@
 import sys,re,os
-RES=set("module use pub fn struct enum trait impl const extern let var inout sink if else match for in while break continue return raise raises with parallel simd spawn comptime move consume discard as and or not true false iso imm secret dyn import recover".split())
+RES=set("module use pub fn struct enum trait impl const extern let var inout sink if else match for in while break continue return raise raises with parallel simd spawn comptime move consume discard as and or not true false iso imm secret dyn asm import recover".split())
 SUF=set("i8 i16 i32 i64 u8 u16 u32 u64 isize usize f32 f64".split())
 ISUF=SUF-{"f32","f64"}
 PUN=sorted("( ) [ ] { } , ; : . @ ? -> => = == != < > <= >= + - * / % & | ^ << >> ..< ..= += -= *= /= %= &= |= ^= <<= >>=".split(),key=len,reverse=True)
@@ -114,10 +114,16 @@ class P:
         p=[s.ident()]
         while s.isp(".") and s.isid(o=1): s.i+=1;p.append(s.ident())
         return p
+    def needs_item(s):
+        # closed single-segment sealed-capability vocabulary: "asm" is also
+        # reserved (R2-4), so accept it bare as this one item.
+        if s.isp("asm"): s.i+=1;return ["asm"]
+        return s.path()
     def file(s):
         if s.opt("module"): s.path();s.eat(";")
         if s.isid("contracts"): s.i+=1;s.eat(":");s.eat(".");s.ident();s.eat(";")
-        if s.isid("needs"): s.i+=1;s.eat("{");s.clist(s.path,"}");s.eat(";")
+        if s.isid("needs"): s.i+=1;s.eat("{");s.clist(s.needs_item,"}");s.eat(";")
+        if s.isid("inputs"): s.i+=1;s.eat("{");s.clist(lambda:s.strlit(),"}");s.eat(";")
         while s.isp("use") or (s.isp("pub") and s.isp("use",1)):
             s.opt("pub");s.eat("use");s.path()
             while s.opt(","): s.path()
@@ -136,6 +142,9 @@ class P:
         if a[0] in("num","str","mstr") or s.isp("true") or s.isp("false"): s.i+=1;return True
         if s.isp(".") and s.isid(o=1): s.i+=2;return True
         return False
+    def strlit(s):
+        if s.k()[0] not in("str","mstr"): s.err("expected a string")
+        s.i+=1
     def decl(s):
         while s.isp("@"): s.attr()
         s.opt("pub")
@@ -397,7 +406,21 @@ class P:
         if s.isp("if"): s.ifexpr();return ("o",)
         if s.isp("match"): s.matchexpr();return ("o",)
         if s.opt("comptime"): s.block();return ("o",)
+        if s.opt("asm"): s.asmexpr();return ("o",)
         s.err("expected expression")
+    def asmexpr(s):
+        s.eat("(");s.ident();s.eat(")")
+        s.eat("{")
+        nstr=[0]
+        def item():
+            if s.k()[0] in("str","mstr"): s.i+=1;nstr[0]+=1;return
+            if s.opt("in"):
+                s.eat("(");s.ident();s.eat(")");s.eat("=");s.expr();return
+            if s.isid("out"): s.i+=1;s.eat("(");s.ident();s.eat(")");return
+            if s.isid("clobber"): s.i+=1;s.eat("(");s.clist(s.ident,")",1);return
+            s.err("expected 'in', 'out', 'clobber', or a string")
+        s.clist(item,"}",1)
+        if nstr[0]<1: s.err("asm block requires at least one string instruction")
     def ifexpr(s):
         s.eat("if");s.expr(True);s.block()
         if s.opt("else"):

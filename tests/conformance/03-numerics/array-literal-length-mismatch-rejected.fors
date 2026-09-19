@@ -1,0 +1,11 @@
+//! name: array_literal_length_mismatch_rejected
+//! rule: 03.R21
+//! expect: check-error
+//! detail: a 3-element literal against vector[f32, 4] must be diagnosed naming both counts (3 and 4)
+
+module m;
+needs { };
+
+fn f() {
+    let v: vector[f32, 4] = [1.0, 2.0, 3.0];
+}

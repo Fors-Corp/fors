@@ -5,7 +5,7 @@
 
 needs { };
 
-fn main(sink w: World) {
+fn main() {
     var buf: Buffer[i64] = Buffer.fixed(4);
     buf.slice[10] = 1;
 }

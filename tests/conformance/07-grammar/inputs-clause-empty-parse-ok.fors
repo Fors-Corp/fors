@@ -1,0 +1,11 @@
+//! name: inputs_clause_empty
+//! rule: 07.Grammar
+//! expect: parse-ok
+//! detail: an empty inputs clause parses, like an empty needs clause
+
+module app;
+needs { };
+inputs { };
+
+fn f() {
+}

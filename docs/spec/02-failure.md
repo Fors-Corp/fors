@@ -23,9 +23,10 @@ chapters).
 ## Definitions
 
 - **Trap**: unrecoverable, non-catchable termination from a contract,
-  bounds, overflow, division, shift, checked-conversion (ch03), empty
-  `reduce` (ch03) or arena-generation (ch01) violation. Other chapters
-  name trap *conditions*; only this chapter defines what a trap *does*.
+  bounds, overflow, div-zero, shift, checked-conversion (ch03), arena-
+  generation (ch01), or empty-reduce (ch03) violation (Rule 15's closed
+  list). Other chapters name trap *conditions*; only this chapter defines
+  what a trap *does* and the closed set of trap-kind identifiers.
 - **Raise**: returning an error from a function declared `raises E`.
 - **Classifier**: the pure `(payload_size) -> ClassResult` function both
   backends and the interpreter must compute identically, where
@@ -95,6 +96,13 @@ chapters).
     there; catching it, if enabled, MUST happen only inside a separately
     prebuilt `@catches_cxx` C++ object file — the Fors compiler itself MUST
     NOT emit a personality routine, landing pad, or unwind table, ever.
+15. The trap-kind identifier set is exactly: `contract`, `bounds`,
+    `overflow`, `div-zero`, `shift`, `checked-conversion`,
+    `arena-generation`, `empty-reduce`. Every Rule 6 side-table entry MUST
+    record one of these eight strings as its kind; no other identifier MUST
+    appear there. `nesting-limit` (any recursion- or nesting-depth guard)
+    is NOT a trap kind: a nesting-limit violation MUST NOT lower via Rule 6
+    or carry a trap-kind identifier.
 
 ## Examples
 
@@ -179,6 +187,10 @@ fn take(let s: Str, let n: usize) -> Str raises app.Error {
   path.
 - Sentinel frame fields fixed to (parent fiber id, parent fp, spawn-site
   pc) per reviews.md's proposed fix; no design doc specified fields.
+- Owner decision 2026-09-19, round 2: the corpus audit found trap-kind
+  identifiers scattered across chapters with no closed list; Rule 15 names
+  the eight canonical strings verbatim and states that a nesting-limit
+  violation is a distinct, non-trap failure mode.
 
 ## Open questions for the owner
 
@@ -229,3 +241,7 @@ fn take(let s: Str, let n: usize) -> Str raises app.Error {
 - `extern-c-no-raises`: `extern "c"` with `raises` is rejected.
 - `cxx-shim-external-only`: no compiler-emitted object has an unwind table;
   a linked `@catches_cxx` object may.
+- `trap-kind-identifiers-closed`: every trap site's side-table kind is one
+  of the eight Rule 15 strings; any other string is a spec violation.
+- `nesting-limit-not-a-trap`: a nesting/recursion-limit violation does not
+  lower via Rule 6 and carries no trap-kind identifier.

@@ -1,0 +1,11 @@
+//! name: array_literal_synth_mode_accepted
+//! rule: 03.R22
+//! expect: parse-ok
+//! detail: with no expected type, [1, 2, 3] synthesises Array[T, 3] with T from the first element, every other element checked against T
+
+module m;
+needs { };
+
+fn f() {
+    let xs = [1, 2, 3];
+}

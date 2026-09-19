@@ -1,0 +1,8 @@
+//! name: asm_out_without_parens_parse_error
+//! rule: 07.D16
+//! expect: parse-error
+//! detail: "out" without its "(" IDENT ")" register must be a syntax error
+
+fn f() {
+    let x: i64 = asm(aarch64) { out x1, "nop" };
+}

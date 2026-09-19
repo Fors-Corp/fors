@@ -1,0 +1,11 @@
+//! name: array_lit_nested_count_mismatch
+//! rule: 03.R25
+//! expect: check-error
+//! detail: SYNTH mode: the first row synthesises Array[T, 2], the second row is checked against it and has 1 element (counts 1 and 2)
+
+module m;
+needs { };
+
+fn f() {
+    let xs = [[1, 2], [3]];
+}

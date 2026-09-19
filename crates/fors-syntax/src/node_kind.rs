@@ -17,6 +17,9 @@ pub enum NodeKind {
     ModuleHdr,
     ContractsClause,
     NeedsClause,
+    /// `"inputs" "{" STRING { "," STRING } [ "," ] "}" ";"`, after `needs`
+    /// and before `use` (ch07 grammar).
+    InputsClause,
     UseDecl,
     /// `ident { "." ident }` outside expressions and types. Leaf.
     Path,
@@ -104,6 +107,15 @@ pub enum NodeKind {
     FInit,
     TupleOrParen,
     ArrayLit,
+    /// `"asm" "(" IDENT ")" "{" AsmItem { "," AsmItem } [ "," ] "}"` (ch07
+    /// grammar / R2-4). The architecture `IDENT` is a token the node owns
+    /// directly; children are the `AsmItem`s.
+    AsmExpr,
+    /// One `in "(" IDENT ")" "=" expr`, `out "(" IDENT ")"`,
+    /// `clobber "(" IDENT { "," IDENT } ")"`, or a bare `STRING`. The
+    /// `expr` (for `in`) is the item's only child; the rest are tokens the
+    /// node owns directly.
+    AsmItem,
     Closure,
     CParam,
     /// Flat `else if` chain: `cond Block { cond Block } [ Block ]`, so a

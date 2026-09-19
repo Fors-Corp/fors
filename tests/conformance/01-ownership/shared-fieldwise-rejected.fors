@@ -1,0 +1,12 @@
+//! name: shared_fieldwise_check_rejected
+//! rule: 01.R21a
+//! detail: field `label: MutableLabel` is neither atomic[U], imm, nor itself Shared, so the field-wise check must reject
+//! expect: check-error
+
+module app;
+needs { };
+
+struct MutableLabel { s: i64 }
+struct Counter { n: atomic[i64], label: MutableLabel }
+
+impl Shared for Counter {}

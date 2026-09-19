@@ -1,0 +1,12 @@
+//! name: inputs_clause_after_use_parse_error
+//! rule: 07.Grammar
+//! expect: parse-error
+//! detail: "inputs" is recognised only in the slot after needs and before use; after a use decl it is not a valid declaration start
+
+module app;
+needs { };
+use std.io;
+inputs { "seed.json" };
+
+fn f() {
+}

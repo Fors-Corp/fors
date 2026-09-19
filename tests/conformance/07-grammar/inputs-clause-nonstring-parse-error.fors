@@ -1,0 +1,11 @@
+//! name: inputs_clause_nonstring_rejected
+//! rule: 07.Grammar
+//! expect: parse-error
+//! detail: inputs items are string literals only
+
+module app;
+needs { };
+inputs { 1 };
+
+fn f() {
+}

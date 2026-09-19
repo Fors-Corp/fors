@@ -1,0 +1,11 @@
+//! name: array_literal_empty_synth_rejected
+//! rule: 03.R22
+//! expect: check-error
+//! detail: an empty literal [] in synth mode (no expected type to draw T or N from) is a compile error
+
+module m;
+needs { };
+
+fn f() {
+    let xs = [];
+}

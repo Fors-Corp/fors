@@ -1,0 +1,10 @@
+//! name: needs_item_asm_dotted_rejected
+//! rule: 07.Grammar
+//! expect: parse-error
+//! detail: asm is reserved: it is a needs item only as a whole, never a path segment
+
+module drv;
+needs { asm.x };
+
+fn f() {
+}

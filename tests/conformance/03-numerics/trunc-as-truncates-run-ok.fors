@@ -6,8 +6,7 @@
 module m;
 needs { io.stdout };
 
-fn main(sink w: World) {
-    var out: io.Writer = move w.stdout;
+fn main(inout out: io.Stdout) {
     var f: f64 = 3.9;
     var i: i32 = f.trunc_as[i32]();
     if i == 3 {

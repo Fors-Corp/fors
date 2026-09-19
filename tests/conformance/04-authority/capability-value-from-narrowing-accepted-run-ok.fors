@@ -1,13 +1,11 @@
-//! name: capability_value_from_narrowing_accepted
+//! name: capability_value_as_main_parameter_accepted
 //! rule: 04.R7
 //! expect: run-ok
-//! detail: ok  -- accepted counterpart of capability-value-constructed-directly-rejected.fors using the chapter's own `move w.net` narrowing
+//! detail: ok  -- accepted counterpart of capability-value-constructed-directly-rejected.fors: net.Net obtained the only legal way, as a root capability handed to main by type (R2-1), not constructed
 
 module app;
 needs { net, io.stdout };
 
-fn main(sink w: World) {
-    var client: net.Client = move w.net;
-    var out: io.Writer = move w.stdout;
+fn main(inout client: net.Net, inout out: io.Stdout) {
     out.write_line("ok");
 }

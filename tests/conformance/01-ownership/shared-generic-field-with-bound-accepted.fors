@@ -1,0 +1,10 @@
+//! name: shared_impl_generic_field_with_bound
+//! rule: 01.R21a
+//! expect: parse-ok
+//! detail: the impl declares P: Shared, so field v: P conforms
+
+module app;
+needs { };
+
+struct Cell[P] { n: atomic[u64], v: P }
+impl[P: Shared] Shared for Cell[P] {}

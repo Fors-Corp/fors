@@ -14,6 +14,10 @@ Owns: the IR level sequence (tokens → AST → FIR → FMIR → OIR → LIR →
 atoms) and which level is source-of-truth for which fact; mandatory
 verifier-checked fields (alias class + disjointness set; secret bit +
 `ct_region`; the allocator's secret spill class; `detach` capture lists);
+the opaque-region IR contract for an inline-`asm` block (its declared
+effects, and the `unknown` alias class for pointers it receives as
+inputs) and the constant-time inventory entry a `@ct_audited` asm block
+adds (ch04 owns whether the block is authorized to exist at all);
 FMIR→OIR lowering of `spawn`/`sync` to Tapir `detach`/`reattach`/`sync`
 and serial-elision legality; `tile.*`'s FMIR-only placement and the
 FMIR→OIR device-pipeline fork point; the optimizer's shape (CFG-SSA,
@@ -57,10 +61,11 @@ chapters) — this chapter pins only where their compiled facts live.
    operand; `--verify-each` MUST reject any lacking one.
 5. An alias class MUST derive only from parameter convention, affine
    ownership, arena brand id, split-token provenance, or SoA field
-   identity; one untraceable to these five MUST fail verification.
-   Brands are erased before lowering (ch01 Rule 15e); "arena brand id"
-   is compile-time IR metadata only. Two distinct fresh brands are
-   disjoint; two distinct brand *parameters* MUST NOT be assumed
+   identity; one untraceable to these five MUST fail verification, except
+   the `unknown` class Rule 19 assigns to a pointer an asm block receives
+   as input. Brands are erased before lowering (ch01 Rule 15e); "arena
+   brand id" is compile-time IR metadata only. Two distinct fresh brands
+   are disjoint; two distinct brand *parameters* MUST NOT be assumed
    disjoint, since one call may instantiate both with the same brand.
 6. Every FMIR/OIR/LIR value MUST carry a secret bit and `ct_region` id as
    non-optional fields; `--verify-each` MUST reject any lacking them.
@@ -118,6 +123,35 @@ chapters) — this chapter pins only where their compiled facts live.
 18. Dev-tier debug info MUST live only in an unsigned companion artifact;
     a debug-info-only edit MUST NOT change the signed image's
     CodeDirectory hash.
+19. To every optimizer pass, an inline-`asm` block (ch07 `asm_expr`, ch04
+    Rules 22-27) MUST be an opaque region: it reads exactly its `in`
+    operands, writes exactly its `out` operands, and clobbers exactly its
+    declared `clobber` set, plus memory reachable only through pointers
+    passed as `in` operands. Such a pointer's alias class MUST be
+    `unknown`, distinct from the five sources of Rule 5. No pass MUST
+    reorder a memory operation across the block, constant-fold through it,
+    or assume any effect beyond those declared.
+20. An asm block whose enclosing declaration carries
+    `@ct_audited(by: "...")` (ch04 Rule 26) MUST be entered in the
+    constant-time inventory, keyed by declaration and architecture,
+    alongside the CT-verified code the inventory already lists (Rule 15).
+20a. Secret taint through an asm block is register-syntactic, like Rule
+    7's spill class. If any `in` operand has its secret bit set, then (a)
+    every `out` value MUST carry the secret bit — the expected type (ch04
+    Rule 27) MUST be `secret`-qualified, else a compile error; removing it
+    needs `@declassify`; (b) every `in`, `out` and `clobber` register of
+    the block MUST be treated as holding a secret from the block's end
+    until it is next overwritten: a save/restore or spill of it MUST use
+    the secret spill class (Rules 7-8), and each `in`/`clobber` register
+    MUST be zeroized before the epilogue unless overwritten first; (c) the
+    register allocator MUST NOT keep a live non-input value in a register
+    the block names, so no declared register can leak a value into or out
+    of the block undeclared. A block that writes a register it does not
+    declare violates its `@unsafe` invariant (ch04 Rule 22); the verifier
+    cannot see it, which is why the block is in the inventories. Memory
+    written through an `in` pointer is outside secret tracking: a block
+    with a secret `in` operand and a pointer `in` operand MUST be listed
+    in the constant-time inventory with that fact noted.
 
 ## Examples
 
@@ -194,6 +228,12 @@ drafting decision below.
   class whenever its secret bit is set at the spill decision.
 - **`--serial-elide` is mandatory, not optional, in rule 17**: it is the
   cheapest available oracle.
+- Owner decision 2026-09-19, round 2 (R2-4): inline asm needed an IR
+  contract before v0.1 could ship it. An opaque region (Rule 19) reuses
+  the existing alias-class machinery with one new source, `unknown`,
+  rather than inventing a separate escape-analysis story for hand-written
+  assembly; the constant-time inventory entry (Rule 20) reuses ch04's
+  `@ct_audited` gate instead of a second audit mechanism.
 
 ## Open questions for the owner
 
@@ -241,3 +281,14 @@ drafting decision below.
   byte-identical on the differential corpus.
 - `dwarf_companion_unsigned` — debug-only edit leaves the signed image's
   CodeDirectory hash unchanged.
+- `asm_opaque_region_effects` — an optimizer pass observes only an asm
+  block's declared `in`/`out`/`clobber` effects, nothing else.
+- `asm_input_pointer_unknown_alias` — a pointer passed as an asm `in`
+  operand carries alias class `unknown`.
+- `asm_no_reorder_across_block` — a memory op is not hoisted or sunk
+  across an asm block by any optimizer pass.
+- `asm_secret_input_taints_outputs` — an audited asm block with a secret
+  `in` and a non-`secret` expected type fails; its clobbered registers are
+  zeroized or secret-spilled, else the CT verifier fails.
+- `asm_ct_audited_enters_inventory` — an `@ct_audited` asm block appears in
+  the constant-time inventory, keyed by declaration and architecture.

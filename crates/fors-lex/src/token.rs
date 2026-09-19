@@ -70,6 +70,8 @@ pub enum TokenKind {
     KwImm,
     KwSecret,
     KwDyn,
+    /// `asm` (ch07 R2-4 / grammar): reserved from v0.1.
+    KwAsm,
     /// Reserved, no production yet (ch07 "Reserved without a production").
     KwImport,
     /// Reserved, no production yet (ch07 "Reserved without a production").
@@ -190,6 +192,7 @@ pub fn keyword_kind(word: &[u8]) -> Option<TokenKind> {
         b"imm" => KwImm,
         b"secret" => KwSecret,
         b"dyn" => KwDyn,
+        b"asm" => KwAsm,
         b"import" => KwImport,
         b"recover" => KwRecover,
         _ => return None,

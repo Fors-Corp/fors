@@ -6,7 +6,8 @@
 module m;
 needs { };
 
-fn main(sink w: World) {
-    var xs: Slice[f64] = [];
+fn main() {
+    var data: Array[f64, 0] = [];
+    let xs: Slice[f64] = data[0 ..< 0];   // ch03 Rule 24
     var r: f64 = reduce(+, xs);
 }

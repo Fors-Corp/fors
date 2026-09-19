@@ -1,0 +1,10 @@
+//! name: needs_item_asm
+//! rule: 07.Grammar
+//! expect: parse-ok
+//! detail: the reserved word asm is a legal whole needs item
+
+module drv;
+needs { asm, syscall, };
+
+fn f() {
+}

@@ -1,0 +1,10 @@
+//! name: shared_impl_outside_defining_module_rejected
+//! rule: 01.R21a
+//! expect: check-error
+//! detail: `impl Shared for Counter` outside the module that defines Counter must be diagnosed (private fields must stay visible to the field-wise check)
+
+module app;
+needs { };
+use lib.counter;
+
+impl Shared for lib.counter.Counter {}

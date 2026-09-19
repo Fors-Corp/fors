@@ -1,0 +1,12 @@
+//! name: asm_svc_without_syscall_capability_rejected
+//! rule: 04.R23
+//! expect: check-error
+//! detail: a syscall-class instruction (svc) needs the sealed "syscall" capability in addition to "asm"; holding only "asm" must be diagnosed
+
+module app;
+needs { asm };
+
+@unsafe(invariant: "single syscall, arguments validated by caller")
+fn f() {
+    let x: () = asm(aarch64) { "svc #0" };
+}

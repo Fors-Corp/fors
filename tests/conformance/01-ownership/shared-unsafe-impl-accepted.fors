@@ -1,0 +1,12 @@
+//! name: shared_unsafe_impl_form_accepted
+//! rule: 01.R21c
+//! expect: parse-ok
+//! detail: the `@unsafe(invariant: "...") impl Shared for T {}` escape hatch skips the field-wise check and is listed in the published unsafe inventory
+
+module app;
+needs { };
+
+struct Handle { ptr: rawptr[i64] }
+
+@unsafe(invariant: "ptr is only ever touched under the caller's external lock")
+impl Shared for Handle {}

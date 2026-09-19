@@ -13,8 +13,7 @@ fn f() -> i32 {
     return x;
 }
 
-fn main(sink w: World) {
-    var out: io.Writer = move w.stdout;
+fn main(inout out: io.Stdout) {
     var r: i32 = f();
     if r == 5 {
         out.write_line("ok");

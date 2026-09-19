@@ -1,0 +1,10 @@
+//! name: main_scalar_param_type_rejected
+//! rule: 04.R8
+//! expect: check-error
+//! detail: fn main(let w: i32) must be diagnosed: R2-1 permits only the closed list of root-capability types as main's parameters
+
+module app;
+needs { };
+
+fn main(let w: i32) {
+}

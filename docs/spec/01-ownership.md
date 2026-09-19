@@ -35,6 +35,10 @@ manifests belong to other chapters.
   arguments (`Ref[Node, A]`, `Vec[Ref[Node, A]]`, a closure capturing one).
 - **Scoped value**: a non-owning projection that cannot outlive the call
   that produced it, except under the scoped-return rule.
+- **`Shared`**: a marker trait with no methods and no runtime
+  representation. `impl Shared for T {}` is accepted only when every field
+  of `T` is `atomic[U]`, `imm`, or itself a type implementing `Shared`
+  (Rule 21a); it is otherwise an ordinary trait, usable as a generic bound.
 
 ## Rules
 
@@ -156,8 +160,38 @@ manifests belong to other chapters.
 20. The safe sequential subset MUST NOT provide interior mutability:
     mutating through a `let` or `imm` path MUST be rejected outside arena
     subscripts.
-21. `atomic[T]` MUST appear only as a field of a `Shared`-marked type; on
-    any other type it MUST be a compile error.
+21. `atomic[T]` MUST appear only as a field of a type implementing
+    `Shared` (Rule 21a); on any other type it MUST be a compile error.
+21a. `impl Shared for T {}` MUST be checked field-wise: every field of `T`
+    MUST be `atomic[U]`, `imm`, or a type that itself implements `Shared`;
+    otherwise it MUST be a compile error naming the first non-conforming
+    field. The `impl` MUST appear in the module that defines `T`, so every
+    private field is visible to the check; an `impl Shared for T {}`
+    written in any other module MUST be rejected. "Field" means every
+    struct field and every component of every enum variant payload; a
+    tuple- or `Array[U, N]`-typed field conforms iff each component type
+    does; a `dyn`, function-typed or closure-typed field conforms only if
+    `imm`. The implemented type MUST be a struct or enum named by its
+    declaration (`impl Shared for Counter`, `impl[P: Shared] Shared for
+    Box[P]`), never a type parameter, so a blanket `impl[T] Shared for T
+    {}` MUST be rejected. A field whose type mentions a type parameter `P`
+    of `T` conforms only if the field is `imm` or the `impl` declares
+    `P: Shared`; the check runs once on the declaration, never per
+    instantiation, so `Box[NotShared]` simply does not implement `Shared`.
+21b. `Shared` MAY be used as a generic trait bound
+    (`fn bump[T: Shared](let c: T)`), restricting instantiation to types
+    that implement it, exactly like any other trait bound.
+21c. The Rule 21a field check MAY be skipped only by
+    `@unsafe(invariant: "...") impl Shared for T {}` (ch04 Rule 10's
+    attribute form), which MUST appear in the published unsafe inventory
+    (ch04 Rule 9's ledger). The defining-module requirement of Rule 21a
+    still applies to it.
+21d. `atomic[U]`'s operations take the cell by `let` and are the only
+    exception to Rules 11 and 20: an `imm` or `let` path to a `Shared`
+    value still reaches its atomic cells mutably, and reaches nothing else
+    mutably — which is what the Rule 21a field check guarantees. `Shared`
+    does not change Rule 13: a `Shared` value crosses a task boundary only
+    as `imm`, as `iso` by `move`, or as a structured-`spawn` capture.
 
 ## Examples
 
@@ -230,6 +264,22 @@ fn scatter_bad(inout out: Slice[f64], let idx: Slice[usize]) {
 ```fors
 needs { };
 
+struct Counter { n: atomic[u64] }
+impl Shared for Counter {}          // accepted: field is atomic[u64], Rule 21a
+
+fn bump[T: Shared](let c: T) { }    // Shared as a generic bound, Rule 21b
+
+struct Cell[P] { n: atomic[u64], v: P }
+impl[P: Shared] Shared for Cell[P] {}   // generic field needs the bound, Rule 21a
+
+struct Cache { n: atomic[u64], buf: rawptr[u8] }
+@unsafe(invariant: "buf is written only before publication, read-only after")
+impl Shared for Cache {}            // escape hatch, Rule 21c: buf skips the field check
+```
+
+```fors
+needs { };
+
 fn spawn_work(sink data: iso Buffer[u8], let key: secret u64) raises Error {
     parallel {
         spawn process(move data);       // legal: iso moved, Rule 13
@@ -260,7 +310,12 @@ fn spawn_work(sink data: iso Buffer[u8], let key: secret u64) raises Error {
    `safety-security.md`'s "debug-checked" wording.
 3. No `recover` keyword: with only two qualifiers there is nothing to
    promote from — `iso` comes only from `move`.
-4. `Shared` is a library marker type, not a fourth qualifier.
+4. `Shared` is a library marker trait, not a fourth qualifier. Owner
+   decision 2026-09-19, round 2 (R2-2): the marker is checked, not
+   declarative — `impl Shared for T {}` is accepted only field-wise
+   (Rule 21a), the `impl` must live beside `T` so private fields stay
+   visible to the check, and `@unsafe(invariant: "...")` is the sole
+   escape hatch (Rule 21c), listed in the unsafe inventory.
 5. Scoped-return marker: `scoped(p)` prefix on the return type naming the
    designated parameter explicitly (verifier change: the earlier implicit
    "first scoped-eligible parameter" was not a checkable definition). The
@@ -371,3 +426,19 @@ fn spawn_work(sink data: iso Buffer[u8], let key: secret u64) raises Error {
   rejected.
 - `atomic_inside_shared_accepted` — `atomic[T]` on `Shared` type
   type-checks.
+- `shared_impl_field_check_rejected` — `impl Shared for T {}` with a
+  non-`atomic`/non-`imm`/non-`Shared` field rejected.
+- `shared_impl_field_check_accepted` — `impl Shared for T {}` with every
+  field `atomic`, `imm` or `Shared` accepted.
+- `shared_impl_generic_field_needs_bound` — `impl[P] Shared for Cell[P] {}`
+  with a field `v: P` rejected; with `P: Shared` accepted; blanket
+  `impl[T] Shared for T {}` rejected.
+- `shared_impl_enum_payload_checked` — an enum with a variant payload of a
+  non-`Shared`, non-`imm` type fails the field check.
+- `shared_impl_foreign_module_rejected` — `impl Shared for T {}` written
+  outside `T`'s defining module rejected.
+- `shared_bound_generic_accepted` — `fn bump[T: Shared]` accepts a
+  `Shared`-implementing argument type, rejects a non-`Shared` one.
+- `shared_unsafe_escape_hatch_listed` — `@unsafe(invariant: "...") impl
+  Shared for T {}` skips the field check and appears in the unsafe
+  inventory.

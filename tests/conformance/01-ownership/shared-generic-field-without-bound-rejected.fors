@@ -1,0 +1,10 @@
+//! name: shared_impl_generic_field_needs_bound
+//! rule: 01.R21a
+//! expect: check-error
+//! detail: field v: P mentions type parameter P and the impl does not declare P: Shared
+
+module app;
+needs { };
+
+struct Cell[P] { n: atomic[u64], v: P }
+impl[P] Shared for Cell[P] {}

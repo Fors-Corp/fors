@@ -21,19 +21,20 @@ directives (siblings are the build's other modules).
 - `run-ok`: exits 0, stdout equals `detail` (`(no output)` = empty).
 - `trap`: aborts with the trap kind in `detail`.
 
-Run tests assume `io.Writer.write_line` and array-literal-to-`Slice`
-coercion, which no chapter defines.
+Run tests assume `io.Writer.write_line`, which no chapter defines. A
+`Slice[T]` is obtained only by range-indexing a bound array (ch03 Rule 24);
+`main` takes root capabilities by type (ch04 Rules 8, 21).
 
-## Counts: 227 tests, 230 files
+## Counts: 270 tests, 274 files
 
 | Dir | parse-ok | parse-error | check-error | run-ok | trap |
 |---|---|---|---|---|---|
-| 01-ownership (48) | 20 | 2 | 25 | 0 | 1 |
+| 01-ownership (58) | 24 | 2 | 31 | 0 | 1 |
 | 02-failure (25) | 8 | 2 | 9 | 1 | 5 |
-| 03-numerics (38) | 3 | 0 | 9 | 19 | 7 |
-| 04-authority (24) | 8 | 0 | 13 | 3 | 0 |
-| 07-grammar (92) | 42 | 50 | 0 | 0 | 0 |
-| total | 81 | 54 | 56 | 23 | 13 |
+| 03-numerics (46) | 7 | 0 | 13 | 19 | 7 |
+| 04-authority (32) | 9 | 0 | 20 | 3 | 0 |
+| 07-grammar (109) | 48 | 57 | 4 | 0 | 0 |
+| total | 96 | 61 | 77 | 23 | 13 |
 
 ## Change rule
 

@@ -1,0 +1,15 @@
+//! name: library_fn_stdout_as_ordinary_parameter_accepted
+//! rule: 04.R8
+//! expect: parse-ok
+//! detail: only main may obtain a root capability by type; any other function may still receive one as an ordinary handed-down parameter
+
+module app;
+needs { io.stdout };
+
+fn log(inout out: io.Stdout, let msg: Str) {
+    out.write_line(msg);
+}
+
+fn main(inout out: io.Stdout) {
+    log(&out, "hi");
+}

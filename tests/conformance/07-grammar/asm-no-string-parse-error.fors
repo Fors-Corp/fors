@@ -1,0 +1,8 @@
+//! name: asm_no_string_parse_error
+//! rule: 07.Grammar
+//! expect: parse-error
+//! detail: an asm block with no STRING item at all must be a syntax error (at least one instruction is required)
+
+fn f() {
+    let x: i64 = asm(aarch64) { in(x0) = 1, out(x1) };
+}

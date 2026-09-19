@@ -1,0 +1,10 @@
+//! name: main_root_capability_missing_from_needs_rejected
+//! rule: 04.R8
+//! expect: check-error
+//! detail: a root capability on main (io.Stdout) whose type is not declared in needs must be diagnosed
+
+module app;
+needs { };
+
+fn main(inout out: io.Stdout) {
+}

@@ -1,0 +1,8 @@
+//! name: asm_missing_comma_parse_error
+//! rule: 07.Grammar
+//! expect: parse-error
+//! detail: two asm_items with no separating comma must be a syntax error
+
+fn f() {
+    let x: () = asm(aarch64) { "nop" "nop" };
+}

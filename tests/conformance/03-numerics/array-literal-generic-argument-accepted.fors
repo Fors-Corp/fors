@@ -1,0 +1,15 @@
+//! name: array_lit_generic_argument_synthesised
+//! rule: 03.R25
+//! expect: parse-ok
+//! detail: a parameter type mentioning generic parameters is a SYNTH position: the literal is Array[f64, 3], then T and N are read off it
+
+module m;
+needs { };
+
+fn first[T, N: usize](let a: Array[T, N]) -> T {
+    return a[0];
+}
+
+fn g() -> f64 {
+    return first([1.0, 2.0, 3.0]);
+}

@@ -1,0 +1,12 @@
+//! name: asm_without_asm_capability_rejected
+//! rule: 04.R22
+//! expect: check-error
+//! detail: an asm expression in a module that does not hold the sealed "asm" capability must be diagnosed, even inside an @unsafe declaration
+
+module app;
+needs { };
+
+@unsafe(invariant: "single nop, no side effects")
+fn f() {
+    let x: () = asm(aarch64) { "nop" };
+}

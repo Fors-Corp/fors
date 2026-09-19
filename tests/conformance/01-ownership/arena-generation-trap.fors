@@ -7,7 +7,7 @@ needs { };
 
 struct Node[A: brand] { val: i64 }
 
-fn main(sink w: World) {
+fn main() {
     with arena a: Arena[Node[a]] {
         let r: Ref[Node[a], a] = a.alloc(Node { val: 1 });
         a.reset();

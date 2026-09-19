@@ -1,0 +1,8 @@
+//! name: reserved_keyword_asm_as_identifier
+//! rule: 07.Reserved
+//! expect: parse-error
+//! detail: "asm" is reserved from v0.1 and never resolves as an identifier, so it cannot fill the binding slot of a let statement
+
+fn f() {
+    let asm = 1;
+}

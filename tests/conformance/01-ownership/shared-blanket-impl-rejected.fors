@@ -1,0 +1,9 @@
+//! name: shared_blanket_impl_rejected
+//! rule: 01.R21a
+//! expect: check-error
+//! detail: the implemented type must be a struct or enum named by its declaration, never a type parameter
+
+module app;
+needs { };
+
+impl[T] Shared for T {}

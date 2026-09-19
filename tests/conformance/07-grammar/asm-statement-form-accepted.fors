@@ -1,0 +1,12 @@
+//! name: asm_statement_form_accepted
+//! rule: 04.R27
+//! expect: parse-ok
+//! detail: an asm expression statement with no out item is checked against unit
+
+module app;
+needs { asm };
+
+@unsafe(invariant: "single nop, no side effects, no output")
+fn f() {
+    asm(aarch64) { "nop" };
+}

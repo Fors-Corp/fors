@@ -1,0 +1,17 @@
+//! name: shared_generic_bound_accepted
+//! rule: 01.R21b
+//! detail: `T: Shared` as a generic bound, satisfied by a type with `impl Shared for T`
+//! expect: parse-ok
+
+module app;
+needs { };
+
+struct Counter { n: atomic[i64] }
+impl Shared for Counter {}
+
+fn bump[T: Shared](let c: T) {
+}
+
+fn use_it(let c: Counter) {
+    bump(c);
+}

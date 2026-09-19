@@ -12,6 +12,6 @@ fn half(let n: i64) -> i64
     return n / 2;
 }
 
-fn main(sink w: World) {
+fn main() {
     let r: i64 = half(-4);
 }

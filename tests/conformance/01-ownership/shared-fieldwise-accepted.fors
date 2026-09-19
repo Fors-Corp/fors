@@ -1,0 +1,11 @@
+//! name: shared_fieldwise_check_accepted
+//! rule: 01.R21a
+//! expect: parse-ok
+//! detail: every field is atomic[U], imm, or itself Shared, so the field-wise check accepts
+
+module app;
+needs { };
+
+struct Counter { n: atomic[i64] }
+
+impl Shared for Counter {}

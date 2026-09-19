@@ -31,7 +31,8 @@ other document (chapter, design doc, comment, test) MAY only cite it
 | Tokens, literals, comments, maximal-munch rules (`&out` is two tokens, `1..<2`, `\\` strings) | ch07 Lexical grammar |
 | Reserved and contextual keyword sets, each contextual slot and its lookahead | ch07 Keywords |
 | Operator precedence table; flat bitwise tier (`cmp_expr`/`bit_expr`) | ch07 Operator table |
-| Every syntax production; header order `module`, `contracts:`, `needs`, `use` | ch07 Grammar |
+| Every syntax production; header order `module`, `contracts:`, `needs`, `inputs`, `use` | ch07 Grammar |
+| Inline-`asm` grammar (`asm_expr`/`asm_item`, at least one string = parse error), `asm` reserved but legal as a `needs_item`, `out`/`clobber` contextual slots | ch07 Grammar |
 | Struct-literal-free heads (`expr_ns`), `\|`/`&`/`[` roles, statement start, generic-argument type-vs-expression rule, lookahead bound (2 tokens) | ch07 Disambiguation 1-15 |
 | Parser synchronisation sets (missing `;` / `}`) | ch07 Error recovery |
 | Benchmark tiers, metric definitions | ch06 |
@@ -42,12 +43,32 @@ other document (chapter, design doc, comment, test) MAY only cite it
 | `COMPTIME_STEP_BUDGET`, `COMPTIME_ALLOC_BUDGET` (unset) | ch04 R14 |
 | `@unsafe(invariant:)` form | ch04 R10 |
 | Check deletion, contract policy | ch02 R10-12 |
+| Root-capability types (closed list of eleven, type -> capability pairing), opacity, `main`-param rules, no `World` value | ch04 R7-8, R21 |
+| Inline-`asm` authority (sealed `asm`/`syscall`, architecture, register, secret-input rules) | ch04 R22-26 (sealed-operation bans: R2a) |
+| Inline-`asm` value and type (CHECK mode only; statement form checks against `()`) | ch04 R27 |
+| Inline-`asm` opaque-region IR contract, `unknown` alias class, CT inventory entry, secret taint of `out`/`clobber` registers | ch05 R19-20a |
+| `Shared` marker trait, field-wise check (enum payloads, generic fields need `P: Shared`, no blanket impl), unsafe escape hatch, atomics vs `imm`/sendability | ch01 R21-21d |
+| Array-literal typing, `[x; n]`, `.splat`, `Slice[T]` by range-index | ch03 R21-24a |
+| CHECK/SYNTH mode positions (the two typing judgements) | ch03 R25 |
+| Trap-kind identifier set (closed); `nesting-limit` is not a trap | ch02 R15 |
+| Comptime file-read declaration (`inputs { ... };` header clause) | ch04 R13 |
 
 ## Closed by owner decision 2026-09-19
 
 D1 brand abstraction (ch01 R15-15e), D2 sealed capabilities (ch04 R2-2b),
 D3 `reduce` lane shape (ch03 R11, R13), D4 `raise expr;`, `scoped(p)`,
 structured-`spawn` capture extent (ch02 R1, ch01 R19, R13).
+
+## Closed by owner decision 2026-09-19, round 2
+
+R2-1 authority enters only through `main`'s parameters, no `World` value,
+closed root-capability type list (ch04 R7-8, R21); R2-2 `Shared` as a
+checked marker trait (ch01 R21-21d); R2-3 array-literal typing, `.splat`,
+`Slice[T]` by range-index (ch03 R21-25); R2-4 inline assembly from v0.1
+(ch07 grammar; ch04 R22-27 authority and typing; ch05 R19-20a IR contract). Also:
+trap-kind identifiers enumerated (ch02 R15); comptime budget constants
+named, values still unset (ch04 R14); comptime file reads declared via an
+`inputs { ... };` header clause (ch04 R13, ch07 grammar).
 
 ## Open owner questions (most blocking first)
 
@@ -73,4 +94,11 @@ structured-`spawn` capture extent (ch02 R1, ch01 R19, R13).
 9. `@declassify` gate; secret in `@device`; CT denylist (ch05 Q1-3).
 10. Tunables: `MONOMORPHIZE_INSTR_THRESHOLD`, comptime budgets (ch03 Q1, ch04 Q1).
 11. Security-release signer; `dyn.load` (ch04 Q2-3).
-12. Measurement: Tier A additions, Tier B order, canary `N`, FLOP calibration, blocked `matmul` (ch06 Q1-5).
+12. Round-2 verifier decisions to confirm (2026-09-19): statement-form
+    `asm` checks against `()` rather than being a SYNTH error (ch04 R27);
+    `env.Args` pairs with capability `env`, `fs.Dir` with `fs.read` or
+    `fs.write` (ch04 R21); the CHECK-position list (ch03 R25), in
+    particular that an argument to a generic-typed parameter is SYNTH;
+    whether `main` may be called by user code. Blocks nothing: the
+    checker can start on the drafted answers.
+13. Measurement: Tier A additions, Tier B order, canary `N`, FLOP calibration, blocked `matmul` (ch06 Q1-5).

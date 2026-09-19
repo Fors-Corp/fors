@@ -1,0 +1,11 @@
+//! name: slice_from_range_index_accepted
+//! rule: 03.R24
+//! expect: parse-ok
+//! detail: a Slice[T] is only ever obtained by range-indexing an array or another slice; it is a scoped borrow under ch01's scoped rules
+
+module m;
+needs { };
+
+fn f(let data: Array[i64, 8]) {
+    let s: Slice[i64] = data[0 ..< 3];
+}

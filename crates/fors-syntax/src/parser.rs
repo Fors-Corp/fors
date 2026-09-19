@@ -536,6 +536,20 @@ impl<'a> Parser<'a> {
         self.b.finish_node();
     }
 
+    /// A single `needs` item. The sealed capability vocabulary is a closed,
+    /// single-segment set (`ffi`, `syscall`, `asm`, ...); `asm` also being
+    /// reserved (R2-4) would otherwise make it unspellable here, so a lone
+    /// `asm` keyword is accepted as this one path's only segment.
+    fn needs_path(&mut self) {
+        if self.at(TokenKind::KwAsm) {
+            self.b.start_node(NodeKind::Path);
+            self.bump();
+            self.b.finish_node();
+        } else {
+            self.path(NodeKind::Path);
+        }
+    }
+
     fn dot_lit(&mut self) {
         self.b.start_node(NodeKind::DotLit);
         self.expect(TokenKind::Dot, "expected '.'");
@@ -564,7 +578,20 @@ impl<'a> Parser<'a> {
         if self.is_word(b"needs") {
             self.b.start_node(NodeKind::NeedsClause);
             self.bump();
-            self.delimited(LBrace, RBrace, None, |p| p.path(NodeKind::Path));
+            self.delimited(LBrace, RBrace, None, |p| p.needs_path());
+            self.expect_semi();
+            self.b.finish_node();
+        }
+        if self.is_word(b"inputs") {
+            self.b.start_node(NodeKind::InputsClause);
+            self.bump();
+            self.delimited(LBrace, RBrace, None, |p| {
+                if matches!(p.cur(), Str | MultilineStr) {
+                    p.literal();
+                } else {
+                    p.err_here(DiagCode::Expected, "expected a string");
+                }
+            });
             self.expect_semi();
             self.b.finish_node();
         }
@@ -1552,7 +1579,7 @@ impl<'a> Parser<'a> {
                 }
                 return true;
             }
-            LParen | LBracket | Pipe | KwIf | KwMatch | KwComptime => {}
+            LParen | LBracket | Pipe | KwIf | KwMatch | KwComptime | KwAsm => {}
             KwNot => {
                 self.err_here(DiagCode::Expected, "'not' binds looser than this operator; parenthesize the 'not' expression");
                 self.not_expr(ns);
@@ -1624,10 +1651,75 @@ impl<'a> Parser<'a> {
             }
             KwIf => self.if_expr(),
             KwMatch => self.match_expr(),
+            KwAsm => self.asm_expr(),
             _ => self.comptime_block(),
         }
         self.leave();
         false
+    }
+
+    /// At `asm`. Rule 2-4: `"asm" "(" IDENT ")" "{" asm_item { "," asm_item }
+    /// [ "," ] "}"`, at least one `STRING` item required.
+    fn asm_expr(&mut self) {
+        use TokenKind::*;
+        self.b.start_node(NodeKind::AsmExpr);
+        self.bump(); // asm
+        self.expect(LParen, "expected '(' after 'asm'");
+        self.expect(Ident, "expected an architecture name");
+        self.expect(RParen, "expected ')'");
+        let (os, oe) = self.cur_range();
+        let mut has_string = false;
+        self.delimited(LBrace, RBrace, Some("expected an asm item"), |p| {
+            if p.asm_item() {
+                has_string = true;
+            }
+        });
+        if !has_string {
+            self.err_at(os, oe, DiagCode::Expected, "an 'asm' block needs at least one string instruction");
+        }
+        self.b.finish_node();
+    }
+
+    /// One `asm_item`. Returns whether it was a bare `STRING`.
+    fn asm_item(&mut self) -> bool {
+        use TokenKind::*;
+        self.b.start_node(NodeKind::AsmItem);
+        let is_string = match self.cur() {
+            Str | MultilineStr => {
+                self.bump();
+                true
+            }
+            KwIn => {
+                self.bump();
+                self.expect(LParen, "expected '('");
+                self.expect(Ident, "expected a register name");
+                self.expect(RParen, "expected ')'");
+                self.expect(Eq, "expected '='");
+                self.expr(false);
+                false
+            }
+            _ if self.is_word(b"out") => {
+                self.bump();
+                self.expect(LParen, "expected '('");
+                self.expect(Ident, "expected a register name");
+                self.expect(RParen, "expected ')'");
+                false
+            }
+            _ if self.is_word(b"clobber") => {
+                self.bump();
+                self.delimited(LParen, RParen, Some("expected a register name"), |p| {
+                    p.expect(Ident, "expected a register name");
+                });
+                false
+            }
+            _ => {
+                self.err_here(DiagCode::Expected, "expected 'in', 'out', 'clobber', or a string");
+                self.error_node();
+                false
+            }
+        };
+        self.b.finish_node();
+        is_string
     }
 
     fn cparam(&mut self) {

@@ -1,0 +1,11 @@
+//! name: shared_impl_enum_payload_checked
+//! rule: 01.R21a
+//! expect: check-error
+//! detail: variant payload Label is neither atomic, imm nor Shared; payload components are fields
+
+module app;
+needs { };
+
+struct Label { s: i64 }
+enum State { idle, tagged(Label) }
+impl Shared for State {}

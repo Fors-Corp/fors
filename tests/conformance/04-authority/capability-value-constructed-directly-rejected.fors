@@ -1,7 +1,7 @@
 //! name: capability_value_no_public_constructor
 //! rule: 04.R7
 //! expect: check-error
-//! detail: fs.Dir { } constructed directly (not narrowed from World) must be diagnosed
+//! detail: fs.Dir { } constructed directly (not obtained as a main root-capability parameter, nor narrowed downward via fs.Dir.open_dir) must be diagnosed
 
 module app;
 needs { fs.read };

@@ -1,0 +1,12 @@
+//! name: sealed_op_in_generic_rejected
+//! rule: 04.R2a
+//! expect: check-error
+//! detail: inline asm is a sealed operation and must not appear in a generic function
+
+module drv;
+needs { asm };
+
+@unsafe(invariant: "single nop")
+fn f[T](let x: T) {
+    asm(aarch64) { "nop" };
+}

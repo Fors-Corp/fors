@@ -6,7 +6,7 @@
 module m;
 needs { };
 
-fn main(sink w: World) {
+fn main() {
     var x: i32 = 2000000000;
     var y: i32 = 2;
     var z: i32 = x * y;

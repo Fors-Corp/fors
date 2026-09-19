@@ -1,0 +1,11 @@
+//! name: asm_outside_unsafe_rejected
+//! rule: 04.R22
+//! expect: check-error
+//! detail: an asm expression in a declaration with no @unsafe(invariant: "...") must be diagnosed
+
+module app;
+needs { asm };
+
+fn f() {
+    let x: () = asm(aarch64) { "nop" };
+}

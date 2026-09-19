@@ -1,0 +1,10 @@
+//! name: main_generic_rejected
+//! rule: 04.R8
+//! expect: check-error
+//! detail: main must not be generic
+
+module app;
+needs { io.stdout };
+
+fn main[W: io.Writer](inout out: W) {
+}

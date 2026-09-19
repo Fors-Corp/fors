@@ -75,7 +75,7 @@ munch, and needs at most 2 characters of lookahead past the current one.
 `module use pub fn struct enum trait impl const extern let var inout sink
 if else match for in while break continue return raise raises with
 parallel simd spawn comptime move consume discard as and or not true false
-iso imm secret dyn` and `_`. Reserved without a production (future use):
+iso imm secret dyn asm` and `_`. Reserved without a production (future use):
 `import recover`.
 
 Not reserved, ordinary identifiers resolved by the checker: `reduce`
@@ -93,6 +93,7 @@ current one.
 |---|---|---|---|
 | `contracts` | file header, before any `decl` | a `decl` never starts with an identifier other than `soa`; identifier here = header clause | 1 |
 | `needs` | file header, before any `decl` | same | 1 |
+| `inputs` | file header, after `needs`, before any `use_decl`/`decl` | same | 1 |
 | `soa` | start of a `decl` | same; must be followed by `struct` | 1 |
 | `set` | first token of a `param` / `fparam` | a convention is mandatory there, so the first token is always the convention | 1 |
 | `set` | first token of a closure `cparam` | convention iff the next token is an identifier or `_` | 2 |
@@ -102,6 +103,7 @@ current one.
 | `pre`, `post`, `invariant` | signature tail (after `params`/`ret_type`/`raises` clause); `invariant` also struct header tail | an identifier cannot follow a complete type or expression, so an identifier there is the clause word | 1 |
 | `grain` | after the iterable of `parallel for` | same argument | 1 |
 | `out` | right after the marker `&` at the start of an `arg_value` | set-marker iff the token after `out` is an identifier; `&out)`, `&out.f`, `&out[i]` are the inout marker on a binding named `out` | 2 |
+| `out`, `clobber` | start of an `asm_item` | Disambiguation 16: current token `in` selects the `in(...)  = expr` item; `out`/`clobber` followed by `(` selects that item; otherwise the item is a `string_lit` | 2 |
 
 `identity`, `order` and `invariant` inside `@unsafe(invariant: "...")` are
 plain labels of a named argument (`ident ":"`), not keywords.
@@ -141,10 +143,13 @@ name ending `_ns` is the same production with struct literals disabled
 ```ebnf
 (* ---- file ---- *)
 file            = [ module_hdr ] [ contracts_clause ] [ needs_clause ]
-                  { use_decl } { decl } ;
+                  [ inputs_clause ] { use_decl } { decl } ;
 module_hdr      = "module" path ";" ;
 contracts_clause= "contracts" ":" dot_lit ";" ;
-needs_clause    = "needs" "{" [ path { "," path } [ "," ] ] "}" ";" ;
+needs_clause    = "needs" "{" [ needs_item { "," needs_item } [ "," ] ] "}" ";" ;
+needs_item      = path | "asm" ;   (* the capability `asm` is spelled with the
+                                      reserved word; legal only as a whole item *)
+inputs_clause   = "inputs" "{" [ string_lit { "," string_lit } [ "," ] ] "}" ";" ;
 use_decl        = [ "pub" ] "use" path { "," path } ";" ;
 path            = ident { "." ident } ;
 dot_lit         = "." ident ;
@@ -241,7 +246,7 @@ bare_op         = "+" | "-" | "*" | "/" | "%" | "&" | "|" | "^" | "<<"
                 | ">>" | cmp_op | "and" | "or" ;
 
 primary_expr    = literal | struct_lit | path | tuple_or_paren | array_lit
-                | closure | if_expr | match_expr | comptime_block ;
+                | closure | if_expr | match_expr | comptime_block | asm_expr ;
 literal         = number | string_lit | multiline_str | dot_lit
                 | "true" | "false" ;
 struct_lit      = path [ bracket ] "{" [ finit { "," finit } [ "," ] ] "}" ;
@@ -257,6 +262,11 @@ arm             = pattern "=>" ( block | expr ) [ "," ] ;
                      before the closing "}"; a body starting with "{" is
                      always a block *)
 comptime_block  = "comptime" block ;
+asm_expr        = "asm" "(" ident ")" "{" asm_item { "," asm_item } [ "," ] "}" ;
+asm_item        = "in" "(" ident ")" "=" expr
+                | "out" "(" ident ")"
+                | "clobber" "(" ident { "," ident } ")"
+                | string_lit ;                  (* Disambiguation 16 *)
 
 pattern         = "_" | [ "-" ] number | string_lit | "true" | "false"
                 | dot_lit [ payload ] | path [ payload ]
@@ -287,6 +297,13 @@ ret_type        = [ "scoped" "(" ident ")" ] { qualifier }
 `()` is the unit value / unit type, `(e)` a parenthesised expression /
 type, `(e,)` a 1-tuple, `(a, b)` a tuple: decided by whether a `,` follows
 the first element, inside one production, no lookahead.
+
+An `asm_expr`'s `asm_item` list MUST contain at least one `string_lit`
+item (an instruction). This is a syntactic constraint: a block with none
+MUST be a parse error (both parsers count the items; it needs no name or
+type information), although the EBNF above does not encode it. Whether an
+`asm_expr` has an expected type is NOT syntactic: that is a checker rule
+(ch04 Rule 27).
 
 ## Disambiguation rules
 
@@ -380,8 +397,13 @@ Every choice below is made on the current token plus at most one more
 14. **`fn_type` tail.** `-> T raises E` binds to the innermost `fn` type;
     parenthesise the type to attach it elsewhere.
 15. **`pub use` vs `pub` decl.** LA 2 on the token after `pub`.
+16. **`asm_item` choice.** Inside an `asm_expr` block, the current token
+    `in` selects `"in" "(" ident ")" "=" expr`; `out` or `clobber` followed
+    by `(` (LA 2) selects that item; anything else is the `string_lit`
+    item. `in` is already reserved (Keywords — reserved); `out`/`clobber`
+    are contextual only here.
 
-**Largest lookahead:** 2 tokens (rules 2, 4, 6, 7, 15 and the `scoped` /
+**Largest lookahead:** 2 tokens (rules 2, 4, 6, 7, 15, 16 and the `scoped` /
 closure-`set` slots); lexer, 2 characters past the current one (`..<`,
 exponent sign).
 
@@ -438,8 +460,11 @@ arg, `&buf.slice`, `&out` on a binding named `out`, attributed
 
 - `module` header is optional in the grammar (ch01/03/05 examples are
   header-less); whether a build unit requires one is ch04's.
-- Header order is `module`, `contracts:`, `needs`, `use` (ch02 decision,
-  ch04 Rule 1); the first draft had `needs` first.
+- Header order is `module`, `contracts:`, `needs`, `inputs`, `use` (ch02
+  decision, ch04 Rules 1, 13); the first draft had `needs` first.
+- `asm` is reserved from v0.1 (owner decision 2026-09-19, round 2, R2-4);
+  `out`/`clobber` stay contextual, scoped to `asm_item`, per the usual
+  policy of not reserving a word that is common as an identifier.
 - `use` is the import keyword (all examples); `import`, `recover` stay
   reserved-unused because un-reserving later is compatible, reserving
   later is not.
@@ -531,3 +556,21 @@ arg, `&buf.slice`, `&out` on a binding named `out`, attributed
 - `recover_missing_brace` — a `fn` body missing its `}` followed by
   `struct S { }` and `fn g() { }` yields exactly one diagnostic and both
   later declarations in the CST.
+- `asm_expr_parses` — `asm(x86_64) { in(dx) = port, in(al) = value, "out
+  dx, al" }` parses as one `asm_expr` with two `in` items and one
+  `string_lit` item, `out` result unit (no `out` item).
+- `asm_item_disambiguation` — inside an `asm_expr`, `in(...)  = ...`,
+  `out(...)`, `clobber(...)`, and a bare `string_lit` each parse as the
+  matching `asm_item`; `out`/`clobber` outside an `asm_expr` parse as
+  ordinary identifiers.
+- `asm_reserved_word` — `let asm = 1;` is rejected; `asm` is unavailable as
+  a binding, field or path name.
+- `inputs_clause_order` — `module m; needs { }; inputs { "a.json" }; use
+  x;` parses; an `inputs` clause before `needs` or after `use` is rejected.
+- `inputs_clause_items` — `inputs { };` parses (empty, like `needs { };`);
+  `inputs { 1 };` and `inputs { a.b };` are rejected (items are
+  `string_lit` only).
+- `asm_no_string_parse_error` — an `asm_expr` with no `string_lit` item is
+  a parse error.
+- `needs_item_asm` — `needs { asm, syscall };` parses; `needs { asm.x };`
+  and `use asm;` are rejected.

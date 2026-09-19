@@ -1,0 +1,18 @@
+//! name: asm_full_block_parse_ok
+//! rule: 07.Grammar
+//! expect: parse-ok
+//! detail: a full asm block with in, out, clobber and two string instructions must parse
+
+module app;
+needs { asm };
+
+@unsafe(invariant: "x1 receives x0 verbatim; x2/x3 are scratch")
+fn f() {
+    let r: i64 = asm(aarch64) {
+        in(x0) = 1,
+        out(x1),
+        clobber(x2, x3),
+        "mov x1, x0",
+        "add x1, x1, #1",
+    };
+}

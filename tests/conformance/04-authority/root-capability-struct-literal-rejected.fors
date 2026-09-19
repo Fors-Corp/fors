@@ -1,0 +1,12 @@
+//! name: root_capability_struct_literal_rejected
+//! rule: 04.R7
+//! expect: check-error
+//! detail: root-capability types are opaque: no struct literal constructs one in any module
+
+module app;
+needs { io.stdout };
+
+fn sneak() {
+    var out: io.Stdout = io.Stdout { };
+    out.write_line("hi");
+}

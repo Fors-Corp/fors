@@ -126,7 +126,7 @@ pub fn validate(tree: &Tree, tokens: &fors_lex::Tokens, source: &[u8]) -> Result
         }
         if stack.len() == 1 {
             let k = tree.kinds[i];
-            let header = matches!(k, NodeKind::ModuleHdr | NodeKind::ContractsClause | NodeKind::NeedsClause | NodeKind::UseDecl);
+            let header = matches!(k, NodeKind::ModuleHdr | NodeKind::ContractsClause | NodeKind::NeedsClause | NodeKind::InputsClause | NodeKind::UseDecl);
             if !(header || k.is_decl() || k == NodeKind::Error) {
                 return Err(format!("node {i}: {k:?} is a direct child of File"));
             }

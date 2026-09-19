@@ -1,0 +1,12 @@
+//! name: main_nonroot_parameter_type_rejected
+//! rule: 04.R8
+//! expect: check-error
+//! detail: a main parameter whose type is not in the closed root-capability list (io.Stdout, io.Stderr, io.Stdin, fs.Dir, net.Net, proc.Exec, time.Clock, rand.Rng, env.Env, env.Args, gpu.Device) must be diagnosed
+
+module app;
+needs { };
+
+struct Config { n: i64 }
+
+fn main(let cfg: Config) {
+}

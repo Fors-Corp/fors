@@ -6,9 +6,9 @@
 module m;
 needs { io.stdout };
 
-fn main(sink w: World) {
-    var out: io.Writer = move w.stdout;
-    var xs: Slice[f64] = [1.0, 2.0, 4.0, 8.0, 16.0, 32.0, 64.0, 128.0];
+fn main(inout out: io.Stdout) {
+    var data: Array[f64, 8] = [1.0, 2.0, 4.0, 8.0, 16.0, 32.0, 64.0, 128.0];
+    let xs: Slice[f64] = data[0 ..< 8];   // ch03 Rule 24
     var r: f64 = reduce(-, xs);
     if r == -45.0 {
         out.write_line("ok");

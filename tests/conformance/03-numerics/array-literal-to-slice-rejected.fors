@@ -1,0 +1,11 @@
+//! name: array_lit_to_slice_rejected
+//! rule: 03.R24
+//! expect: check-error
+//! detail: an array literal never checks against Slice[T]; a slice comes only from range-indexing
+
+module m;
+needs { };
+
+fn f() {
+    let s: Slice[f64] = [1.0, 2.0];
+}

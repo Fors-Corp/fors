@@ -1,0 +1,12 @@
+//! name: asm_in_synth_position_rejected
+//! rule: 04.R27
+//! expect: check-error
+//! detail: an asm expression initialising an un-annotated let has no expected type (SYNTH position, ch03 Rule 25); this is a checker diagnostic, the file parses
+
+module app;
+needs { asm };
+
+@unsafe(invariant: "x0 receives the constant 1")
+fn f() {
+    let x = asm(aarch64) { out(x0), "mov x0, #1" };
+}

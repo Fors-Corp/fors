@@ -5,7 +5,7 @@
 
 needs { };
 
-fn main(sink w: World) {
+fn main() {
     let a: i8 = 127;
     let b: i8 = a + 1;
 }

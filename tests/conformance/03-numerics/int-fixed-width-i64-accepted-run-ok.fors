@@ -10,8 +10,7 @@ fn f(let x: i64) -> i64 {
     return x;
 }
 
-fn main(sink w: World) {
-    var out: io.Writer = move w.stdout;
+fn main(inout out: io.Stdout) {
     var r: i64 = f(42);
     if r == 42 {
         out.write_line("ok");

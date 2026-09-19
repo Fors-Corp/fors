@@ -6,8 +6,7 @@
 module m;
 needs { io.stdout };
 
-fn main(sink w: World) {
-    var out: io.Writer = move w.stdout;
+fn main(inout out: io.Stdout) {
     var x: i32 = 2147483647;
     var y: i32 = 1;
     var z: i32 = x.sat_add(y);

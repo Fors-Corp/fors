@@ -5,7 +5,6 @@
 
 module app;
 
-fn main(sink w: World) {
-    var out: io.Writer = move w.stdout;
+fn main(inout out: io.Stdout) {
     out.write_line("ok");
 }

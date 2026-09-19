@@ -11,8 +11,7 @@ fn f(let x: u8) -> u32 {
     return y;
 }
 
-fn main(sink w: World) {
-    var out: io.Writer = move w.stdout;
+fn main(inout out: io.Stdout) {
     var r: u32 = f(5u8);
     if r == 5 {
         out.write_line("ok");

@@ -1,0 +1,4 @@
+module lib.counter;
+needs { };
+
+pub struct Counter { n: atomic[i64] }
