@@ -29,3 +29,10 @@ cargo run --release -p fors-cli -- check tests/conformance/08-names/enum-variant
 ```
 
 No performance claim is made anywhere in this repository without a results file that reproduces it.
+
+## Licensing
+
+- Compiler, tools and benchmark harness: Apache-2.0 ([LICENSE](LICENSE)).
+- Standard library and runtime, once they exist: Apache-2.0 OR MIT, at your option
+  ([LICENSE](LICENSE), [LICENSE-MIT](LICENSE-MIT)).
+- The specification in `docs/spec/`: CC-BY-4.0 ([docs/spec/LICENSE](docs/spec/LICENSE)).
