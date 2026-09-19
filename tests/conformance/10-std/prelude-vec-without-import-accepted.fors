@@ -1,0 +1,8 @@
+//! name: prelude_vec_without_import_accepted
+//! rule: 10.S2
+//! expect: check-ok
+//! detail: Vec is a prelude name (ch10 R2, ch08 R17), so a module with no import resolves it
+
+needs { };
+
+fn f[A: brand](let v: Vec[i32, A]) -> usize { return v.len(); }

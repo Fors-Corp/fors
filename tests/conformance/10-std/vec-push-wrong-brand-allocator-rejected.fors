@@ -1,0 +1,16 @@
+//! name: vec_push_wrong_brand_allocator_rejected
+//! rule: 10.S24
+//! expect: check-error
+//! detail: ch01 R15d -- Vec[T, A].push takes L: Allocator[A], so an allocator of another brand is a type error
+
+needs { };
+
+fn f(let n: i32) raises AllocError {
+    with allocator one: PageAllocator {
+        var v: Vec[i32, one] = Vec.new();
+        with allocator two: PageAllocator {
+            v.push(&two, n)?;
+        }
+        v.deinit(&one);
+    }
+}

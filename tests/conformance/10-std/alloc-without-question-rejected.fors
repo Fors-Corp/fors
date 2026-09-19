@@ -1,0 +1,13 @@
+//! name: alloc_without_question_rejected
+//! rule: 10.S6
+//! expect: check-error
+//! detail: ch02 R1 -- create raises AllocError, so the call MUST be followed by ? or else |e|
+
+needs { };
+
+fn f() {
+    with allocator a: PageAllocator {
+        var b: Own[i64, a] = a.create(1);
+        a.deinit(move b);
+    }
+}

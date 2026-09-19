@@ -1,0 +1,15 @@
+//! name: linear_element_container_deinit_trap
+//! rule: 10.S11
+//! expect: trap
+//! detail: contract  -- deinit of a non-empty container whose element type is linear would drop the elements (R11c); pop them first
+
+module app;
+needs { };
+use std.mem;
+
+fn main(inout heap: mem.Heap) raises AllocError {
+    var v: Vec[Own[i64, heap], heap] = Vec.new();
+    var b: Own[i64, heap] = heap.create(1)?;
+    v.push(&heap, move b)?;
+    v.deinit(&heap);
+}

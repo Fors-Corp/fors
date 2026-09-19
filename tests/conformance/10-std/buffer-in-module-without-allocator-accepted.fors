@@ -1,0 +1,11 @@
+//! name: buffer_in_module_without_allocator_accepted
+//! rule: 10.S23
+//! expect: check-ok
+//! detail: S0023 -- Buffer owns inline storage and takes no allocator, so it needs nothing in scope
+
+needs { };
+
+fn f() -> usize {
+    var buf: Buffer[u8, 32] = Buffer.empty();
+    return buf.cap();
+}

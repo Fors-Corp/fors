@@ -1,0 +1,12 @@
+//! name: adaptor_with_raising_closure_rejected
+//! rule: 10.S8
+//! expect: check-error
+//! detail: T0038 -- S0008: a callable passed to a pure adaptor MUST NOT be raises; the fallible form is a try_ consumer
+
+needs { };
+use std.mem;
+
+fn f[I: Iterator](sink it: I, let g: fn (let I.Item) -> i32 raises AllocError) -> usize {
+    var m: mem.Mapped[I, i32] = mem.map(&it, g);   // a raising fn type never equals a non-raising one (ch09 R60)
+    return mem.count(move m);
+}

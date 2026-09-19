@@ -1,0 +1,11 @@
+//! name: buffer_index_past_len_trap
+//! rule: 10.S23
+//! expect: trap
+//! detail: bounds
+
+needs { };
+
+fn main() {
+    var buf: Buffer[i64, 4] = Buffer.empty();
+    buf[10] = 1;
+}

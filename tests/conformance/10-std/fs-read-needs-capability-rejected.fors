@@ -1,0 +1,12 @@
+//! name: fs_read_needs_capability_rejected
+//! rule: 10.S38
+//! expect: check-error
+//! detail: ch04 R1 -- read_into needs fs.read, which this module does not declare
+
+module app;
+needs { };
+use std.fs;
+
+fn load(let d: fs.Dir, inout into: Slice[u8]) -> usize raises fs.Error {
+    return d.read_into("x", &into)?;
+}

@@ -1,0 +1,13 @@
+//! name: prelude_page_allocator_without_import_accepted
+//! rule: 10.S2
+//! expect: check-ok
+//! detail: PageAllocator is a prelude name (ch10 R2); the with header omits its brand (ch01 R15b)
+
+needs { };
+
+fn boxed(let n: i64) raises AllocError {
+    with allocator heap: PageAllocator {
+        var b: Own[i64, heap] = heap.create(n)?;
+        heap.deinit(move b);
+    }
+}

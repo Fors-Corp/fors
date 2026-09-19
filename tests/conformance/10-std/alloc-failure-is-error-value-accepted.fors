@@ -1,0 +1,14 @@
+//! name: alloc_failure_is_error_value_accepted
+//! rule: 10.S6
+//! expect: check-ok
+//! detail: S0006d -- a failed allocation is an error value: the call carries `?` and the caller declares raises
+
+needs { };
+use std.mem;
+
+fn f() raises AllocError {
+    with allocator a: mem.Fixed[64] {
+        var b: Own[i64, a] = a.create(1)?;
+        a.deinit(move b);
+    }
+}

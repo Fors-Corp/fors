@@ -1,0 +1,96 @@
+// std.mem.vec — Vec[T, A], the growable array, and try_collect_into.
+// Surface: docs/spec/10-std.md Rules 24, 35. Bodies are STUBS.
+//
+// The allocator is a PARAMETER of every growing operation, never a field
+// (ch01 R15a). A is the allocator's brand, so a Vec's storage can only be
+// returned to the allocator that produced it (ch01 R18). Imports the two
+// leaves only (alloc, seq); never std.mem, which re-exports this module.
+needs { };
+
+use std.mem.alloc, std.mem.seq;
+
+// Opaque, linear while cap > 0 (R11).
+pub struct Vec[T, A: brand] { n: usize, capacity: usize, store: Option[alloc.Block[A]] }
+
+impl[T, A: brand] Vec[T, A] {
+    // Allocates nothing. T and A come from the CHECK position (ch09 R38c);
+    // in a SYNTH position write Vec.new[i32, heap]().
+    pub fn new() -> Vec[T, A] {
+        return Vec { n: 0, capacity: 0, store: none };
+    }
+
+    pub fn len(let self: Self) -> usize { return self.n; }
+    pub fn cap(let self: Self) -> usize { return self.capacity; }
+
+    // Growth doubles from a first capacity of 4; the schedule is part of
+    // R24 because `cap` is observable.
+    pub fn push[L: alloc.Allocator[A]](inout self: Self, inout a: L, sink v: T)
+        raises alloc.AllocError
+    {
+        raise alloc.AllocError.out_of_memory;                // STUB
+    }
+
+    pub fn pop(inout self: Self) -> Option[T] { return none; }               // STUB
+
+    pub fn reserve[L: alloc.Allocator[A]](inout self: Self, inout a: L, let extra: usize)
+        raises alloc.AllocError
+    {
+        raise alloc.AllocError.out_of_memory;                // STUB
+    }
+
+    pub fn shrink_to_fit[L: alloc.Allocator[A]](inout self: Self, inout a: L) { }   // STUB
+
+    // Traps (kind contract) on a linear element type while len > 0 (R11c).
+    pub fn clear(inout self: Self) { self.n = 0; }                           // STUB
+
+    pub fn swap_remove(inout self: Self, let i: usize) -> T
+        pre i < self.n
+    {
+        return self.swap_remove(i);                          // STUB
+    }
+
+    @unsafe(invariant: "the view spans len initialised elements and is dead at the next push/reserve/deinit")
+    pub fn items(let self: Self) -> scoped(self) Slice[T] {
+        return self.items();                                 // STUB
+    }
+
+    @unsafe(invariant: "as items, and exclusive for the extent of the borrow")
+    pub fn items_mut(inout self: Self) -> scoped(self) Slice[T] {
+        return self.items_mut();                             // STUB
+    }
+
+    // The only release: Vec is linear once it has capacity (R11). Traps
+    // (kind contract) on a linear element type while len > 0 (R11c).
+    pub fn deinit[L: alloc.Allocator[A]](sink self: Self, inout a: L) { }    // STUB
+}
+
+impl[T: Copyable, A: brand] Vec[T, A] {
+    // Yields copies; the scoped result keeps self borrowed `let` for the
+    // iterator's whole life (R33a). Safe: the one unsafe step is items().
+    pub fn iter(let self: Self) -> scoped(self) seq.SliceIter[T] {
+        return seq.iter(self.items());
+    }
+}
+
+// Bounds-checked against len: indexing the items() slice traps (kind bounds).
+impl[T, A: brand] Index[usize] for Vec[T, A] {
+    type Output = T;
+    fn at(let self: Self, let i: usize) -> scoped(self) Self.Output {
+        return self.items()[i];
+    }
+}
+
+impl[T, A: brand] IndexMut[usize] for Vec[T, A] {
+    fn at_mut(inout self: Self, let i: usize) -> scoped(self) Self.Output {
+        return self.items_mut()[i];
+    }
+}
+
+// Names its destination and its allocator: a collect that invented a
+// container would allocate ambiently (R3, R35). Lives here, not in seq,
+// because it names Vec and seq must stay a leaf.
+pub fn try_collect_into[I: Iterator, A: brand, L: alloc.Allocator[A]]
+    (sink it: I, inout dst: Vec[I.Item, A], inout a: L) raises alloc.AllocError
+{
+    for x in it { dst.push(&a, x)?; }
+}

@@ -237,9 +237,15 @@ brands (ch01); receiver-type dispatch (checker); grammar productions
     D3). Types and traits: `i8 i16 i32 i64 u8 u16 u32 u64 isize usize
     f32 f64 bool Str Slice Array vector mask atomic rawptr Own Ref Arena
     Option Shared ErrorFrom never Range RangeIncl Copyable Eq Ord Add Sub
-    Mul Div Rem Neg BitAnd BitOr BitXor Shl Shr Iterator Index IndexMut`
+    Mul Div Rem Neg BitAnd BitOr BitXor Shl Shr Iterator Index IndexMut
+    Allocator AllocError PageAllocator Buffer Vec Map String Utf8Error`
     (the second line is round 4's addition: the names ch09 Rules 4, 5, 21
-    and 23 make language-known). Values: `some none reduce`. No other name
+    and 23 make language-known; the third is the eight names std
+    contributes, ch10 Rule 2, which closes Open question 1 — types and
+    traits only, each defined in `std.mem` or a submodule of it, and each
+    denoting the SAME item as its module path, `mem.Vec`, so the two
+    spellings never collide under Rule 13).
+    Values: `some none reduce`. No other name
     is available without `use`: in particular a std module — `io`, `fs`,
     `net` and the rest — is a name only in a module whose header imports
     it (`use std.io;`), and using such a name without importing it is the
@@ -707,16 +713,18 @@ fn f(inout c: net.Conn) { }   // `net` is the imported module, Rule 16
 
 ## Open questions for the owner
 
-1. Prelude contents (Rule 17). Used unqualified elsewhere but defined
-   nowhere, so currently unresolved names: `Buffer` (ch04 example, 5
-   tests), `Vec`, `PageAllocator` (`Copyable` and the other ch09
-   language-known names were added in round 4, Rule 17). Add to the prelude, or
-   require `use`? ~~And confirm prelude modules versus mandatory
-   `use std.io;`.~~ The module half is closed by owner decision
+1. ~~Prelude contents (Rule 17): `Buffer`, `Vec`, `PageAllocator` used
+   unqualified but defined nowhere.~~ CLOSED by ch10 (2026-09-20, the std
+   surface chapter, Rule 2): all three go INTO the prelude, together with
+   `Allocator`, `AllocError`, `Map`, `String` and `Utf8Error` — eight
+   names, all defined in `std.mem` or a submodule of it. The deciding
+   argument is that every site using them today is a module with no header
+   imports, so requiring `use std.mem;` would turn accepted tests into
+   defects for no gain. ~~And confirm prelude modules versus mandatory
+   `use std.io;`.~~ The module half was closed by owner decision
    2026-09-19, round 5 (D3): mandatory `use std.io;`, no prelude modules,
-   a synthetic `std` table until `std` ships. The three type names above
-   are still open, and once `std` ships they are expected to come from it
-   by `use`, not from the prelude.
+   a synthetic `std` table until `std` ships (which ch10 Rule 1 leaves
+   unchanged: std adds no eleventh module).
 2. ~~Confirm total no-shadowing including prelude names (Decision 1).~~
    Closed by owner decision 2026-09-19, round 3 (D3): total no-shadowing
    stays for items, imports, other bindings and `Self`; a function-local

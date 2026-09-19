@@ -1,0 +1,37 @@
+// std.rand — entropy and reproducibility are DIFFERENT types, and only the
+// first is authority. Surface: docs/spec/10-std.md Rule 47. Bodies are STUBS.
+//
+// Every unpredictable byte in a program traces to a rand.Rng value, which
+// traces to a `main` parameter and the `rng` capability (ch04 R8, R21).
+// Rng's operations are TOTAL: the runtime entry shim obtains a working
+// entropy source before `main`, or the process never starts, so there is no
+// "entropy failed" error value to handle.
+needs { syscall };
+
+// Root-capability type (ch04 R21), capability `rng`.
+pub struct Rng { }
+
+impl Rng {
+    pub fn fill(inout self: Self, inout into: Slice[u8]) { }                   // STUB, total
+    pub fn u64(inout self: Self) -> u64 { return 0; }                          // STUB, total
+}
+
+// A pure value with a fixed, documented algorithm and NO capability: the
+// same seed gives the same sequence on every target and build mode (ch03
+// D1). Never seeded implicitly from entropy, the clock or an address.
+// Non-cryptographic; std ships no CSPRNG.
+pub struct Pcg { state: u64, inc: u64 }
+
+impl Pcg {
+    pub fn seeded(let seed: u64) -> Pcg {
+        return Pcg { state: seed, inc: 0xda3e39cb94b95bdb };
+    }
+    pub fn u64(inout self: Self) -> u64 { return 0; }                          // STUB
+    // Unbiased; traps (kind div-zero) iff n == 0.
+    pub fn bounded(inout self: Self, let n: u64) -> u64
+        pre n > 0
+    {
+        return self.u64() % n;                                                 // STUB: rejection sampling
+    }
+    pub fn fill(inout self: Self, inout into: Slice[u8]) { }                    // STUB
+}

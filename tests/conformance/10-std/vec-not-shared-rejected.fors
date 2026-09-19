@@ -1,0 +1,10 @@
+//! name: vec_not_shared_rejected
+//! rule: 10.S51
+//! expect: check-error
+//! detail: S0051 -- no std container implements Shared; a Shared bound rejects Vec
+
+needs { };
+
+fn bump[T: Shared](let c: T) { }
+
+fn f[A: brand](let v: Vec[i32, A]) { bump(v); }

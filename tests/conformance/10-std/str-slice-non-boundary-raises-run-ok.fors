@@ -1,0 +1,17 @@
+//! name: str_slice_non_boundary_raises
+//! rule: 10.S26
+//! expect: run-ok
+//! detail: boundary  -- an endpoint inside a multi-byte sequence raises Utf8Error.not_a_boundary, which is data
+
+module app;
+needs { io.stdout };
+use std.io;
+
+fn main(inout out: io.Stdout) {
+    let s: Str = "a\xc3\xa9b";   // ch07 escapes: \xHH only
+    let head: Str = s.slice(0, 2) else |e| {
+        out.write_line("boundary");
+        return;
+    };
+    out.write_line("sliced");
+}

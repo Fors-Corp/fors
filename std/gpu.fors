@@ -1,0 +1,20 @@
+// std.gpu — the device as a capability, and nothing more in v0.1. Kernel
+// launch, device allocation and transfers are NOT a std surface (R10n): the
+// language owns @device and the reserved kernel/spmd forms, and mem's
+// allocators are host allocators.
+// Surface: docs/spec/10-std.md Rule 48. Bodies are STUBS.
+needs { syscall };
+
+pub enum Error { lost, unsupported, out_of_device_memory, other }
+
+// Root-capability type (ch04 R21), capability `gpu`.
+pub struct Device { }
+
+pub struct Info { pub compute_units: u32, pub lanes: u32, pub shared_bytes: usize }
+
+impl Device {
+    pub fn info(let self: Self) -> Info {
+        return Info { compute_units: 0, lanes: 0, shared_bytes: 0 };           // STUB
+    }
+    pub fn sync(inout self: Self) raises Error { raise Error.lost; }            // STUB
+}

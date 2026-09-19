@@ -1,0 +1,12 @@
+//! name: buffer_fields_public_accepted
+//! rule: 10.S23
+//! expect: check-ok
+//! detail: S0023 -- len and data are the two public fields of Buffer, which is what ch02's write_at example uses
+
+needs { };
+
+fn write_at[T: Copyable, N: usize](inout self: Buffer[T, N], let i: usize, let v: T)
+    pre i < self.len
+{
+    self.data[i] = v;
+}

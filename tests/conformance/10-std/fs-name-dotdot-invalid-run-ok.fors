@@ -1,0 +1,17 @@
+//! name: fs_name_dotdot_invalid
+//! rule: 10.S41
+//! expect: run-ok
+//! detail: invalid  -- `..` is not a directory entry name: Error.invalid_name is raised before any syscall (R41)
+
+module app;
+needs { fs.read, io.stdout };
+use std.fs, std.io;
+
+fn main(let d: fs.Dir, inout out: io.Stdout) {
+    var buf: Buffer[u8, 64] = Buffer.empty();
+    let n: usize = d.read_into("..", &buf.data[0 ..< 64]) else |e| {
+        out.write_line("invalid");
+        return;
+    };
+    out.write_line("read");
+}

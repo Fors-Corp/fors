@@ -1,0 +1,15 @@
+//! name: own_sent_to_unstructured_task_rejected
+//! rule: 10.S51
+//! expect: check-error
+//! detail: ch01 R13 -- an Own is neither imm nor iso, and a task that can outlive the with block MUST NOT capture a brand-mentioning value (ch01 R15c); only a structured spawn inside `parallel` may
+
+needs { };
+
+fn swallow[A: brand](sink b: Own[i64, A]) { }
+
+fn f() raises AllocError {
+    with allocator a: PageAllocator {
+        var b: Own[i64, a] = a.create(1)?;
+        spawn swallow(move b);
+    }
+}

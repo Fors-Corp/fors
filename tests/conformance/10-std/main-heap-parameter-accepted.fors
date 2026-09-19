@@ -1,0 +1,13 @@
+//! name: main_heap_parameter_accepted
+//! rule: 10.S17
+//! expect: check-ok
+//! detail: mem.Heap is a root-capability type with NO capability, so needs stays empty (ch04 R21, ch10 R17)
+
+module app;
+needs { };
+use std.mem;
+
+fn main(inout heap: mem.Heap) raises AllocError {
+    var b: Own[i64, heap] = heap.create(7)?;
+    heap.deinit(move b);
+}

@@ -1,0 +1,286 @@
+// std.mem — memory: the concrete allocators, the values that own
+// allocations, the inline buffer, the slice primitives, and the
+// re-exports that make every user-facing name a member of `mem`.
+// Surface: docs/spec/10-std.md Rules 11-31. Bodies are STUBS.
+//
+// `syscall` is sealed (ch04 R2-2b): it is spent here, mapping pages for
+// PageAllocator, mem.Bump and mem.Heap, and no importer inherits it. That
+// is what makes "allocation is not authority" true for user code (R53).
+//
+// Import graph (ch08 R7, acyclic): this module imports its five
+// submodules and NONE of them imports it; alloc is the shared leaf, seq
+// the iterator leaf. Re-exports are item-wise (ch08 R4b, R5): the
+// submodule NAMES are never re-exported, so `mem.vec` is not a name.
+needs { syscall };
+
+use std.mem.alloc, std.mem.vec, std.mem.hashmap, std.mem.text, std.mem.seq;
+
+pub use std.mem.alloc.AllocError, std.mem.alloc.Layout, std.mem.alloc.Block,
+        std.mem.alloc.Allocator, std.mem.alloc.own_raw, std.mem.alloc.disown_raw;
+pub use std.mem.vec.Vec, std.mem.vec.try_collect_into;
+pub use std.mem.hashmap.Map, std.mem.hashmap.Hash;
+pub use std.mem.text.String, std.mem.text.Utf8Error, std.mem.text.Scalars;
+pub use std.mem.seq.SliceIter, std.mem.seq.iter,
+        std.mem.seq.Mapped, std.mem.seq.Filtered, std.mem.seq.Taken,
+        std.mem.seq.Skipped, std.mem.seq.Zipped, std.mem.seq.Enumerated,
+        std.mem.seq.map, std.mem.seq.filter, std.mem.seq.take, std.mem.seq.skip,
+        std.mem.seq.zip, std.mem.seq.enumerate,
+        std.mem.seq.count, std.mem.seq.fold, std.mem.seq.for_each,
+        std.mem.seq.all, std.mem.seq.any, std.mem.seq.find,
+        std.mem.seq.try_fold, std.mem.seq.try_for_each;
+
+// The named constant of R13, fixed at 16 until measured (ch06).
+pub const MEM_MAX_ALIGN: usize = 16;
+
+// ------------------------------------------------ the concrete allocators
+
+// The process heap. A root-capability type (ch04 R21) with NO capability:
+// it arrives as a `main` parameter and its binding names a fresh brand
+// (R17). Opaque, constructorless, never stored, never moved.
+pub struct Heap[A: brand] { }
+
+impl[A: brand] alloc.Allocator[A] for Heap[A] {
+    fn alloc(inout self: Self, let layout: alloc.Layout) -> alloc.Block[A] raises alloc.AllocError {
+        raise alloc.AllocError.out_of_memory;                // STUB: syscall
+    }
+    fn alloc_zeroed(inout self: Self, let layout: alloc.Layout) -> alloc.Block[A] raises alloc.AllocError {
+        raise alloc.AllocError.out_of_memory;                // STUB
+    }
+    fn grow(inout self: Self, inout b: alloc.Block[A], let layout: alloc.Layout) raises alloc.AllocError {
+        raise alloc.AllocError.out_of_memory;                // STUB: b unchanged on failure (R14)
+    }
+    fn shrink(inout self: Self, inout b: alloc.Block[A], let layout: alloc.Layout) { }   // STUB
+    fn free(inout self: Self, sink b: alloc.Block[A]) { }                               // STUB
+    fn owns(let self: Self, let b: alloc.Block[A]) -> bool { return false; }            // STUB
+}
+
+// OS pages, page-granular. The only std allocator obtainable without a
+// main parameter: `with allocator p: PageAllocator { ... }` (R18).
+pub struct PageAllocator[A: brand] { }
+
+impl[A: brand] alloc.Allocator[A] for PageAllocator[A] {
+    fn alloc(inout self: Self, let layout: alloc.Layout) -> alloc.Block[A] raises alloc.AllocError {
+        raise alloc.AllocError.out_of_memory;                // STUB: syscall
+    }
+    fn alloc_zeroed(inout self: Self, let layout: alloc.Layout) -> alloc.Block[A] raises alloc.AllocError {
+        raise alloc.AllocError.out_of_memory;                // STUB: fresh pages are zero
+    }
+    fn grow(inout self: Self, inout b: alloc.Block[A], let layout: alloc.Layout) raises alloc.AllocError {
+        raise alloc.AllocError.out_of_memory;                // STUB
+    }
+    fn shrink(inout self: Self, inout b: alloc.Block[A], let layout: alloc.Layout) { }   // STUB
+    fn free(inout self: Self, sink b: alloc.Block[A]) { }                               // STUB
+    fn owns(let self: Self, let b: alloc.Block[A]) -> bool { return false; }            // STUB
+}
+
+// The arena allocator: regions from the OS, bump-pointer alloc, no-op
+// free, everything released at the block's close or at reset (R19).
+pub struct Bump[A: brand] { }
+
+impl[A: brand] Bump[A] {
+    // Every Block/Own of this brand is dead at this call, by exclusivity.
+    pub fn reset(inout self: Self) { }                       // STUB
+}
+
+impl[A: brand] alloc.Allocator[A] for Bump[A] {
+    fn alloc(inout self: Self, let layout: alloc.Layout) -> alloc.Block[A] raises alloc.AllocError {
+        raise alloc.AllocError.out_of_memory;                // STUB
+    }
+    fn alloc_zeroed(inout self: Self, let layout: alloc.Layout) -> alloc.Block[A] raises alloc.AllocError {
+        raise alloc.AllocError.out_of_memory;                // STUB
+    }
+    fn grow(inout self: Self, inout b: alloc.Block[A], let layout: alloc.Layout) raises alloc.AllocError {
+        raise alloc.AllocError.out_of_memory;                // STUB
+    }
+    fn shrink(inout self: Self, inout b: alloc.Block[A], let layout: alloc.Layout) { }   // no-op
+    fn free(inout self: Self, sink b: alloc.Block[A]) { }                               // no-op, keeps linearity honest
+    fn owns(let self: Self, let b: alloc.Block[A]) -> bool { return false; }            // STUB
+}
+
+// N bytes of storage inline in the `with` block's frame; touches no OS.
+// The allocator for freestanding code and tests (R20).
+pub struct Fixed[N: usize, A: brand] { used: usize, store: Array[u8, N] }
+
+impl[N: usize, A: brand] alloc.Allocator[A] for Fixed[N, A] {
+    fn alloc(inout self: Self, let layout: alloc.Layout) -> alloc.Block[A] raises alloc.AllocError {
+        raise alloc.AllocError.out_of_memory;                // STUB: bump inside store
+    }
+    fn alloc_zeroed(inout self: Self, let layout: alloc.Layout) -> alloc.Block[A] raises alloc.AllocError {
+        raise alloc.AllocError.out_of_memory;                // STUB
+    }
+    fn grow(inout self: Self, inout b: alloc.Block[A], let layout: alloc.Layout) raises alloc.AllocError {
+        raise alloc.AllocError.out_of_memory;                // STUB
+    }
+    fn shrink(inout self: Self, inout b: alloc.Block[A], let layout: alloc.Layout) { }   // STUB
+    fn free(inout self: Self, sink b: alloc.Block[A]) { }                               // STUB
+    fn owns(let self: Self, let b: alloc.Block[A]) -> bool { return false; }            // STUB
+}
+
+// Fixed[N] that also counts (R21). Standalone, not a wrapper: ch01 R15a
+// forbids holding a parent allocator in a field.
+pub struct Counting[N: usize, A: brand] { used: usize, n_allocs: u64, n_frees: u64, peak: usize, store: Array[u8, N] }
+
+impl[N: usize, A: brand] Counting[N, A] {
+    pub fn bytes_live(let self: Self) -> usize { return self.used; }
+    pub fn allocs(let self: Self) -> u64 { return self.n_allocs; }
+    pub fn frees(let self: Self) -> u64 { return self.n_frees; }
+    pub fn peak_bytes(let self: Self) -> usize { return self.peak; }
+    // Traps (kind contract) iff bytes_live() != 0.
+    pub fn assert_empty(let self: Self)
+        pre self.used == 0
+    { }
+}
+
+impl[N: usize, A: brand] alloc.Allocator[A] for Counting[N, A] {
+    fn alloc(inout self: Self, let layout: alloc.Layout) -> alloc.Block[A] raises alloc.AllocError {
+        raise alloc.AllocError.out_of_memory;                // STUB
+    }
+    fn alloc_zeroed(inout self: Self, let layout: alloc.Layout) -> alloc.Block[A] raises alloc.AllocError {
+        raise alloc.AllocError.out_of_memory;                // STUB
+    }
+    fn grow(inout self: Self, inout b: alloc.Block[A], let layout: alloc.Layout) raises alloc.AllocError {
+        raise alloc.AllocError.out_of_memory;                // STUB
+    }
+    fn shrink(inout self: Self, inout b: alloc.Block[A], let layout: alloc.Layout) { }   // STUB
+    fn free(inout self: Self, sink b: alloc.Block[A]) { self.n_frees = self.n_frees + 1; }  // STUB
+    fn owns(let self: Self, let b: alloc.Block[A]) -> bool { return false; }            // STUB
+}
+
+// ------------------------------------------------------------------ Own
+
+// ch01 R18 owns the brand rule. The language has no dereference operator
+// and no reference type, so a NON-Copyable payload can be reached only by
+// exchange (`replace`) or by `Allocator.deinit`, which hands it back (R22).
+// Prelude types are defined in package std (ch08 R21); ch10 R2 nominates
+// this module as the defining module of Own, Option, Array and Slice.
+impl[T: Copyable, A: brand] Own[T, A] {
+    pub fn get(let self: Self) -> T { return self.get(); }                       // STUB
+    pub fn set(inout self: Self, let v: T) { }                                   // STUB
+}
+
+impl[T, A: brand] Own[T, A] {
+    pub fn replace(inout self: Self, sink v: T) -> T { return self.replace(move v); }   // STUB
+}
+
+// --------------------------------------------------------------- Option
+
+impl[T] Option[T] {
+    pub fn unwrap_or(sink self: Self, sink fallback: T) -> T {
+        match self {
+            some(let v) => { discard fallback; return v; }
+            none => { return fallback; }
+        }
+    }
+    pub fn is_some(let self: Self) -> bool {
+        match self {
+            some(let v) => { return true; }
+            none => { return false; }
+        }
+    }
+}
+
+// --------------------------------------------------------------- Buffer
+
+// The inline fixed-capacity buffer: owns its storage INLINE, takes no
+// allocator, is not linear (R23). N is the capacity, len the initialised
+// prefix; Index/IndexMut are checked against len, not N.
+pub struct Buffer[T, N: usize] { pub len: usize, pub data: Array[T, N] }
+
+impl[T, N: usize] Buffer[T, N] {
+    pub fn empty() -> Buffer[T, N] { return Buffer.empty(); }                    // STUB
+    pub fn cap(let self: Self) -> usize { return N; }
+
+    // Total. When full the value comes BACK (some(v)): a sink parameter
+    // must be moved or consumed on every path (ch01 R4), and a full buffer
+    // can do neither, so it returns it. `none` means stored.
+    pub fn push(inout self: Self, sink v: T) -> Option[T] {
+        if self.len == N { return some(move v); }
+        self.data[self.len] = move v;                        // STUB: a move into an index place
+        self.len = self.len + 1;
+        return none;
+    }
+
+    pub fn pop(inout self: Self) -> Option[T] { return none; }                   // STUB
+
+    // Traps (kind contract) on a linear element type while len > 0 (R11c).
+    pub fn clear(inout self: Self) { self.len = 0; }                             // STUB
+
+    // Range-indexings of the data field: safe, no unsafe primitive (ch03 R24).
+    pub fn items(let self: Self) -> scoped(self) Slice[T] { return self.data[0 ..< self.len]; }
+    pub fn items_mut(inout self: Self) -> scoped(self) Slice[T] { return self.data[0 ..< self.len]; }
+
+    pub fn into_iter(sink self: Self) -> BufferIter[T, N] {
+        return BufferIter { at: 0, len: self.len, data: move self.data };        // STUB: a partial move, ch01 R4a(c)
+    }
+}
+
+impl[T: Copyable, N: usize] Buffer[T, N] {
+    pub fn filled(let v: T) -> Buffer[T, N] { return Buffer { len: N, data: [v; N] }; }
+    pub fn iter(let self: Self) -> scoped(self) seq.SliceIter[T] { return seq.iter(self.items()); }
+}
+
+// Bounds-checked against len: indexing the items() slice is what traps
+// (kind bounds), so no contract is needed.
+impl[T, N: usize] Index[usize] for Buffer[T, N] {
+    type Output = T;
+    fn at(let self: Self, let i: usize) -> scoped(self) Self.Output { return self.items()[i]; }
+}
+
+impl[T, N: usize] IndexMut[usize] for Buffer[T, N] {
+    fn at_mut(inout self: Self, let i: usize) -> scoped(self) Self.Output { return self.items_mut()[i]; }
+}
+
+// Consuming: moves elements out; owns the data, so it is not scoped.
+pub struct BufferIter[T, N: usize] { at: usize, len: usize, data: Array[T, N] }
+
+impl[T, N: usize] Iterator for BufferIter[T, N] {
+    type Item = T;
+    fn next(inout self: Self) -> Option[Self.Item] {
+        if self.at < self.len {
+            self.at = self.at + 1;
+            return self.take_at(self.at - 1);                // STUB: move out of data[at]
+        }
+        return none;
+    }
+}
+
+// ------------------------------------------------------- slice primitives
+
+// Safe and total (R28).
+pub fn fill[T: Copyable](inout s: Slice[T], let v: T) {
+    for i in 0 ..< s.len { s[i] = v; }
+}
+
+pub fn swap[T](inout s: Slice[T], let i: usize, let j: usize) { }             // STUB
+
+// Traps (kind contract) on unequal length.
+pub fn copy_from[T: Copyable](inout dst: Slice[T], let src: Slice[T])
+    pre dst.len == src.len
+{
+    for i in 0 ..< dst.len { dst[i] = src[i]; }
+}
+
+pub fn eq[T: Eq](let a: Slice[T], let b: Slice[T]) -> bool { return false; }  // STUB
+
+// The one unsafe split primitive ch01 R19b names.
+@unsafe(invariant: "the two ranges partition s and never overlap")
+pub fn split_at[T](inout s: Slice[T], let mid: usize)
+    -> (scoped(s) Slice[T], scoped(s) Slice[T])
+    pre mid <= s.len
+{
+    return (s[0 ..< mid], s[mid ..< s.len]);
+}
+
+// ---------------------------------------------------------------- sorting
+
+// In-place, allocation-free, unstable, deterministic (R31).
+pub fn sort[T: Ord + Copyable](inout s: Slice[T]) { }                        // STUB
+
+pub fn try_sort_by[T: Copyable, E](inout s: Slice[T],
+                                   let less: fn (let T, let T) -> bool raises E)
+    raises E
+{ }                                                                          // STUB
+
+pub fn binary_search[T: Ord + Copyable](let s: Slice[T], let key: T) -> Option[usize] {
+    return none;                                                             // STUB
+}

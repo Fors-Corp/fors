@@ -1,0 +1,105 @@
+// std.mem.hashmap — Map[K, V, A], the hash map, and the Hash trait.
+// Surface: docs/spec/10-std.md Rules 25, 29. Bodies are STUBS.
+//
+// Deterministic by default: `new` uses a FIXED seed, so a program's
+// behaviour is reproducible (ch03 D1). `seeded(s)` is the only route to
+// hash-flooding resistance, and the seed must come from the program
+// (rand.Rng, R47) — the map cannot obtain entropy itself.
+//
+// The module is named `hashmap`, not `map`, so that `use std.mem.hashmap;`
+// can never be ambiguous with std.mem's re-exported function `map`
+// (ch08 R4: a path that is both a module and a pub item is an error).
+needs { };
+
+use std.mem.alloc;
+
+// ------------------------------------------------------------------ Hash
+
+pub trait Hash { fn hash(let self: Self, let seed: u64) -> u64; }
+
+// Fixed, non-cryptographic, target-independent, address-independent (R29).
+// Implemented for Str, every integer type, bool, and Slice[T] of Hash T;
+// NOT for f32/f64. Orphan rule (ch08 R21): this module defines Hash.
+impl Hash for u8    { fn hash(let self: Self, let seed: u64) -> u64 { return (self as u64) ^ seed; } }  // STUB
+impl Hash for u16   { fn hash(let self: Self, let seed: u64) -> u64 { return (self as u64) ^ seed; } }  // STUB
+impl Hash for u32   { fn hash(let self: Self, let seed: u64) -> u64 { return (self as u64) ^ seed; } }  // STUB
+impl Hash for u64   { fn hash(let self: Self, let seed: u64) -> u64 { return self ^ seed; } }           // STUB
+impl Hash for usize { fn hash(let self: Self, let seed: u64) -> u64 { return (self as u64) ^ seed; } }  // STUB
+impl Hash for i8    { fn hash(let self: Self, let seed: u64) -> u64 { return (self as u64) ^ seed; } }  // STUB
+impl Hash for i16   { fn hash(let self: Self, let seed: u64) -> u64 { return (self as u64) ^ seed; } }  // STUB
+impl Hash for i32   { fn hash(let self: Self, let seed: u64) -> u64 { return (self as u64) ^ seed; } }  // STUB
+impl Hash for i64   { fn hash(let self: Self, let seed: u64) -> u64 { return (self as u64) ^ seed; } }  // STUB
+impl Hash for isize { fn hash(let self: Self, let seed: u64) -> u64 { return (self as u64) ^ seed; } }  // STUB
+impl Hash for bool  { fn hash(let self: Self, let seed: u64) -> u64 { return seed; } }                  // STUB
+impl Hash for Str   { fn hash(let self: Self, let seed: u64) -> u64 { return seed; } }                  // STUB
+impl[T: Hash] Hash for Slice[T] {
+    fn hash(let self: Self, let seed: u64) -> u64 {
+        var h: u64 = seed;
+        for x in self { h = x.hash(h); }                     // STUB: elements by value
+        return h;
+    }
+}
+
+// ------------------------------------------------------------------- Map
+
+// Opaque, linear while cap > 0 (R11).
+pub struct Map[K, V, A: brand] { n: usize, capacity: usize, seed: u64, store: Option[alloc.Block[A]] }
+
+impl[K: Eq + Hash, V, A: brand] Map[K, V, A] {
+    pub fn new() -> Map[K, V, A] {
+        return Map { n: 0, capacity: 0, seed: 0x9e3779b97f4a7c15, store: none };
+    }
+
+    pub fn seeded(let seed: u64) -> Map[K, V, A] {
+        return Map { n: 0, capacity: 0, seed: seed, store: none };
+    }
+
+    pub fn len(let self: Self) -> usize { return self.n; }
+
+    pub fn has(let self: Self, let k: K) -> bool { return false; }            // STUB
+
+    // Returns the displaced value, if the key was present (R6c).
+    pub fn insert[L: alloc.Allocator[A]](inout self: Self, inout a: L, sink k: K, sink v: V)
+        -> Option[V] raises alloc.AllocError
+    {
+        raise alloc.AllocError.out_of_memory;                // STUB
+    }
+
+    pub fn remove(inout self: Self, let k: K) -> Option[V] { return none; }   // STUB
+
+    pub fn reserve[L: alloc.Allocator[A]](inout self: Self, inout a: L, let extra: usize)
+        raises alloc.AllocError
+    {
+        raise alloc.AllocError.out_of_memory;                // STUB
+    }
+
+    // Traps (kind contract) on a linear value type while len > 0 (R11c).
+    pub fn clear(inout self: Self) { self.n = 0; }
+
+    pub fn deinit[L: alloc.Allocator[A]](sink self: Self, inout a: L) { }     // STUB
+}
+
+// Option[V] can carry a value only when V is Copyable, so the two
+// value-returning reads live in their own impl (R25).
+impl[K: Eq + Hash, V: Copyable, A: brand] Map[K, V, A] {
+    pub fn get(let self: Self, let k: K) -> Option[V] { return none; }        // STUB
+    pub fn get_or(let self: Self, let k: K, let fallback: V) -> V {
+        match self.get(k) {
+            some(let v) => { return v; }
+            none => { return fallback; }
+        }
+    }
+}
+
+// The value at a present key is reached as a PLACE, `m[k]`, so that ch01's
+// place rules (no partial move out of an index projection, R4a(c)) keep a
+// non-Copyable V single-owned; a method returning V by value could not.
+// Traps (kind bounds) if the key is absent: the checked form is has + [].
+impl[K: Eq + Hash, V, A: brand] Index[K] for Map[K, V, A] {
+    type Output = V;
+    fn at(let self: Self, let i: K) -> scoped(self) Self.Output { return self.at(i); }   // STUB
+}
+
+impl[K: Eq + Hash, V, A: brand] IndexMut[K] for Map[K, V, A] {
+    fn at_mut(inout self: Self, let i: K) -> scoped(self) Self.Output { return self.at_mut(i); }   // STUB
+}

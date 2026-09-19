@@ -1,0 +1,12 @@
+//! name: write_line_without_question_accepted
+//! rule: 10.S39
+//! expect: run-ok
+//! detail: ok  -- the stream write methods are total and latching, so no ? is required (R39)
+
+module app;
+needs { io.stdout };
+use std.io;
+
+fn main(inout out: io.Stdout) {
+    out.write_line("ok");
+}

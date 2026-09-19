@@ -1,0 +1,115 @@
+// std.fs — the rooted directory capability.
+// Surface: docs/spec/10-std.md Rules 41-42. Bodies are STUBS.
+//
+// Every operation names a single directory ENTRY, never a path: no `/`, no
+// NUL, not `.`, not `..`, non-empty, checked BEFORE any syscall. Traversal
+// is repeated open_dir, which ch04 R7 requires to be downward-only, so no
+// string can widen the capability a program holds. There is no ambient
+// current directory and no Path type.
+needs { syscall };
+
+use std.io;
+
+pub enum Error { not_found, exists, permission, invalid_name, is_dir, not_dir,
+                 no_space, would_block, interrupted, other }
+
+pub enum Kind { file, dir, other }
+
+pub struct Meta { pub len: u64, pub kind: Kind, pub modified_unix_nanos: i64 }
+
+// Root-capability type (ch04 R21), paired with fs.read or fs.write. Each
+// operation still needs its own capability (ch04 R1): holding a Dir grants
+// neither by itself.
+pub struct Dir { fd: i32 }
+
+impl Dir {
+    // Downward-only (ch04 R7): a subdirectory of the receiver, never a
+    // sibling or an ancestor, and never through a symlink that leaves it.
+    pub fn open_dir(let self: Self, let name: Str) -> Dir raises Error {
+        raise Error.invalid_name;                            // STUB
+    }
+
+    pub fn read_into(let self: Self, let name: Str, inout into: Slice[u8])
+        -> usize raises Error
+    {
+        raise Error.not_found;                               // STUB
+    }
+
+    pub fn write_all(let self: Self, let name: Str, let bytes: Slice[u8]) raises Error {
+        raise Error.permission;                              // STUB
+    }
+
+    pub fn open(let self: Self, let name: Str) -> File raises Error {
+        raise Error.not_found;                               // STUB
+    }
+
+    pub fn create(let self: Self, let name: Str) -> File raises Error {
+        raise Error.permission;                              // STUB
+    }
+
+    pub fn metadata(let self: Self, let name: Str) -> Meta raises Error {
+        raise Error.not_found;                               // STUB
+    }
+
+    pub fn remove(let self: Self, let name: Str) raises Error {
+        raise Error.not_found;                               // STUB
+    }
+
+    pub fn rename(let self: Self, let from: Str, let to: Str) raises Error {
+        raise Error.not_found;                               // STUB
+    }
+
+    pub fn entries(let self: Self) -> Entries raises Error {
+        raise Error.permission;                              // STUB
+    }
+}
+
+// Linear (R11): close is the only release.
+pub struct File { fd: i32 }
+
+impl File {
+    pub fn read_into(inout self: Self, inout into: Slice[u8]) -> usize raises Error {
+        raise Error.would_block;                             // STUB
+    }
+    pub fn write_all(inout self: Self, let bytes: Slice[u8]) raises Error {
+        raise Error.no_space;                                // STUB
+    }
+    pub fn len(let self: Self) -> u64 raises Error { raise Error.other; }      // STUB
+    pub fn close(sink self: Self) raises Error { }                            // STUB
+}
+
+// Orphan rule (ch08 R21): foreign trait, local type.
+impl io.Reader for File {
+    fn read(inout self: Self, inout into: Slice[u8]) -> usize raises io.Error {
+        raise io.Error.closed;                               // STUB
+    }
+}
+
+impl io.Writer for File {
+    fn write(inout self: Self, let bytes: Slice[u8]) -> usize raises io.Error {
+        raise io.Error.closed;                               // STUB
+    }
+    fn write_all(inout self: Self, let bytes: Slice[u8]) raises io.Error {
+        raise io.Error.closed;                               // STUB
+    }
+    fn flush(inout self: Self) raises io.Error { }                            // STUB
+}
+
+// NOT an Iterator: its item would have to borrow a name buffer (R10d), so
+// it takes one. Linear.
+pub struct Entries { fd: i32, at: u64 }
+
+impl Entries {
+    pub fn next_into(inout self: Self, inout name: Slice[u8]) -> Option[Meta] raises Error {
+        raise Error.other;                                   // STUB
+    }
+    pub fn close(sink self: Self) { }                                         // STUB
+}
+
+// COMPTIME-ONLY (R42) — there is no `comptime fn` in the grammar
+// (`comptime` introduces a BLOCK, ch07), so the restriction is ch10 R42's
+// rule, not a modifier: a call outside a `comptime` block is a compile
+// error. `path` must be a comptime constant listed in the caller module's
+// `inputs { ... };` clause (ch04 R13). No capability, and TOTAL — a missing
+// input is a BUILD error, which is why the corpus writes it with no `?`.
+pub fn read_to_string(let path: Str) -> Str { return ""; }                    // STUB

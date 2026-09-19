@@ -1,0 +1,109 @@
+// std.mem.text — String[A] (owned, allocator-backed) and Str's surface
+// (borrowed, always-valid UTF-8).
+// Surface: docs/spec/10-std.md Rule 26. Bodies are STUBS.
+//
+// Indexing is by BYTE and nothing else: no code-point index, no length in
+// characters, no char type. Validation and allocation are two calls, never
+// one (R6b): Str.from_utf8 validates, String.from_str allocates.
+// ch10 R2 nominates this module as Str's defining module (ch08 R21), which
+// is what lets `impl Str` appear here.
+needs { };
+
+use std.mem.alloc;
+
+pub enum Utf8Error { invalid_sequence, not_a_boundary, incomplete }
+
+// Opaque, linear while cap > 0. UTF-8 holds by construction, because
+// from_utf8 is the only entry from bytes.
+pub struct String[A: brand] { n: usize, capacity: usize, store: Option[alloc.Block[A]] }
+
+impl[A: brand] String[A] {
+    pub fn new() -> String[A] {
+        return String { n: 0, capacity: 0, store: none };
+    }
+
+    pub fn len(let self: Self) -> usize { return self.n; }       // bytes
+
+    // A view over block storage, not an Array field: unsafe by R28.
+    @unsafe(invariant: "the view spans this String's n initialised, valid UTF-8 bytes")
+    pub fn as_str(let self: Self) -> scoped(self) Str { return self.as_str(); }   // STUB
+
+    // Cannot fail on validity: `s` is already valid UTF-8 (R26).
+    pub fn push_str[L: alloc.Allocator[A]](inout self: Self, inout a: L, let s: Str)
+        raises alloc.AllocError
+    {
+        raise alloc.AllocError.out_of_memory;                // STUB
+    }
+
+    // The one text operation whose failure is Utf8Error: a surrogate or an
+    // out-of-range scalar value. It therefore MUST NOT need to grow: the
+    // caller reserves first (R6b, one failure mode per operation).
+    pub fn push_scalar(inout self: Self, let cp: u32) raises Utf8Error
+        pre self.capacity - self.n >= 4
+    {
+        raise Utf8Error.invalid_sequence;                    // STUB
+    }
+
+    pub fn from_str[L: alloc.Allocator[A]](inout a: L, let s: Str) -> String[A]
+        raises alloc.AllocError
+    {
+        raise alloc.AllocError.out_of_memory;                // STUB
+    }
+
+    pub fn reserve[L: alloc.Allocator[A]](inout self: Self, inout a: L, let extra: usize)
+        raises alloc.AllocError
+    {
+        raise alloc.AllocError.out_of_memory;                // STUB
+    }
+
+    pub fn clear(inout self: Self) { self.n = 0; }
+
+    pub fn deinit[L: alloc.Allocator[A]](sink self: Self, inout a: L) { }     // STUB
+}
+
+// Str is a prelude type (ch08 R17); this is its inherent surface.
+impl Str {
+    pub fn len(let self: Self) -> usize { return self.len(); }                // STUB, bytes
+
+    // Traps (kind bounds) out of range: an index is a bug.
+    pub fn at(let self: Self, let i: usize) -> u8 { return self.at(i); }      // STUB
+
+    // Traps (kind contract) if start > end or end > len — a bug; raises
+    // not_a_boundary if an endpoint falls inside a multi-byte sequence —
+    // that is data (R26).
+    pub fn slice(let self: Self, let start: usize, let end: usize)
+        -> scoped(self) Str raises Utf8Error
+        pre start <= end and end <= self.len()
+    {
+        raise Utf8Error.not_a_boundary;                      // STUB
+    }
+
+    pub fn eq(let self: Self, let rhs: Str) -> bool { return false; }         // STUB, bytewise
+    pub fn starts_with(let self: Self, let p: Str) -> bool { return false; }  // STUB
+    pub fn find(let self: Self, let needle: Str) -> Option[usize] { return none; } // STUB
+
+    // The ONLY validating entry, and the only way a Str is built from bytes.
+    pub fn from_utf8(let bytes: Slice[u8]) -> scoped(bytes) Str raises Utf8Error {
+        raise Utf8Error.incomplete;                          // STUB
+    }
+
+    @unsafe(invariant: "the view spans exactly this Str's bytes")
+    pub fn bytes_raw(let self: Self) -> scoped(self) Slice[u8] {
+        return self.bytes_raw();                             // STUB
+    }
+
+    @unsafe(invariant: "base and n span this Str's bytes; the scoped result keeps self borrowed")
+    pub fn scalars(let self: Self) -> scoped(self) Scalars { return self.scalars(); } // STUB
+}
+
+// A raw base and a length, NOT a Slice field: ch01 R19a forbids storing a
+// scoped value. Total `next`, never raises (R32). Item = u32 scalar value.
+pub struct Scalars { at: usize, n: usize, base: rawptr[u8] }
+
+impl Iterator for Scalars {
+    type Item = u32;
+    fn next(inout self: Self) -> Option[Self.Item] {
+        if self.at < self.n { return self.decode(); }        // STUB
+        return none;
+    }
+}

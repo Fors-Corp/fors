@@ -1,0 +1,17 @@
+//! name: two_tasks_one_allocator_rejected
+//! rule: 10.S52
+//! expect: check-error
+//! detail: ch01 R6-7 -- two structured spawns capturing one allocator inout is an exclusivity conflict
+
+needs { };
+
+fn touch[A: brand, L: Allocator[A]](inout a: L) { }
+
+fn f() {
+    with allocator a: PageAllocator {
+        parallel {
+            spawn touch(&a);
+            spawn touch(&a);
+        }
+    }
+}

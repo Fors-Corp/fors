@@ -1,0 +1,12 @@
+//! name: iter_mut_not_provided_rejected
+//! rule: 10.S33
+//! expect: check-error
+//! detail: S0010d -- there is no iterator over inout data in v0.1; mutate by index
+
+needs { };
+
+fn double[A: brand](inout v: Vec[i32, A]) {
+    for x in v.iter_mut() {
+        x = x * 2;
+    }
+}

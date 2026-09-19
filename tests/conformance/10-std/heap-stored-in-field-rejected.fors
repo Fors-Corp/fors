@@ -1,0 +1,12 @@
+//! name: heap_stored_in_field_rejected
+//! rule: 10.S17
+//! expect: check-error
+//! detail: ch01 R15a -- an allocator value MUST NOT be stored in a field; mem.Heap obeys it unchanged
+
+module app;
+needs { };
+use std.mem;
+
+struct Holder[A: brand] { h: mem.Heap[A] }
+
+fn main(inout heap: mem.Heap) { }

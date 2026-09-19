@@ -1,0 +1,15 @@
+//! name: heap_brand_mismatch_rejected
+//! rule: 10.S17
+//! expect: check-error
+//! detail: ch01 R18 -- an Own of main's heap brand cannot be freed by a with-block allocator of another brand
+
+module app;
+needs { };
+use std.mem;
+
+fn main(inout heap: mem.Heap) raises AllocError {
+    var b: Own[i64, heap] = heap.create(7)?;
+    with allocator other: PageAllocator {
+        other.deinit(move b);
+    }
+}

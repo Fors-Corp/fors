@@ -1,0 +1,12 @@
+//! name: std_fn_without_capability_value_rejected
+//! rule: 10.S3
+//! expect: check-error
+//! detail: S0003 -- no std operation reaches outside the process without a capability value; there is no free fs read
+
+module app;
+needs { fs.read };
+use std.fs;
+
+fn load(inout into: Slice[u8]) -> usize raises fs.Error {
+    return fs.read_into("x", &into)?;
+}

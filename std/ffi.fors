@@ -1,0 +1,30 @@
+// std.ffi — the permitted holder of the sealed `ffi` capability (ch04 R2-2b,
+// R9). This module is `unguaranteed` and EVERY module that imports it
+// inherits that mark in the audit ledger: importing std.ffi is a decision a
+// build records, not a convenience.
+// Surface: docs/spec/10-std.md Rule 49. Bodies are STUBS.
+//
+// Std declares no `extern "c"` function and provides no marshalling: an
+// extern declaration is the calling module's, its `raises` ban is ch02 R13's,
+// and the error mapping is a future chapter's.
+needs { ffi };
+
+use std.mem;
+
+pub enum Error { not_terminated, interior_nul, other }
+
+// A borrowed, NUL-terminated view.
+pub struct CStr { n: usize, base: rawptr[u8] }
+
+impl CStr {
+    pub fn len(let self: Self) -> usize { return self.n; }                      // bytes before the NUL
+
+    pub fn to_str(let self: Self) -> scoped(self) Str raises mem.Utf8Error {
+        raise mem.Utf8Error.invalid_sequence;                                   // STUB
+    }
+
+    // The bytes MUST contain a NUL.
+    pub fn from_bytes(let b: Slice[u8]) -> scoped(b) CStr raises Error {
+        raise Error.not_terminated;                                             // STUB
+    }
+}

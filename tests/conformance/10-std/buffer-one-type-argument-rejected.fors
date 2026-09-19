@@ -1,0 +1,8 @@
+//! name: buffer_one_type_argument_rejected
+//! rule: 10.S23
+//! expect: check-error
+//! detail: T0011 -- Buffer takes two arguments, an element type and a const capacity (R23); Buffer[u8] is an arity error
+
+needs { };
+
+fn f(let b: Buffer[u8]) -> usize { return b.len; }

@@ -1,0 +1,13 @@
+//! name: writer_flush_requires_question_rejected
+//! rule: 10.S39
+//! expect: check-error
+//! detail: ch02 R1 -- io.Writer.flush raises io.Error, so the call MUST carry ? or else |e|
+
+module app;
+needs { io.stdout };
+use std.io;
+
+fn main(inout out: io.Stdout) {
+    out.write_line("ok");
+    out.flush();
+}

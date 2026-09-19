@@ -1,0 +1,13 @@
+//! name: str_index_is_bytes
+//! rule: 10.S26
+//! expect: run-ok
+//! detail: 3  -- Str.len is bytes, never code points (R26)
+
+module app;
+needs { io.stdout };
+use std.io;
+
+fn main(inout out: io.Stdout) {
+    let s: Str = "abc";
+    out.write_uint(s.len() as u64);
+}

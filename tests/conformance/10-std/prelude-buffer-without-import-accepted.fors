@@ -1,0 +1,8 @@
+//! name: prelude_buffer_without_import_accepted
+//! rule: 10.S2
+//! expect: check-ok
+//! detail: Buffer is a prelude name (ch10 R2), and Buffer[T, N] takes a const capacity (R23)
+
+needs { };
+
+fn f(let b: Buffer[u8, 16]) -> usize { return b.len; }

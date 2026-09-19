@@ -1,0 +1,30 @@
+// std.proc — process execution. No pipes, no signals, no fork (R10m).
+// Surface: docs/spec/10-std.md Rules 44, 50. Bodies are STUBS.
+needs { syscall };
+
+pub enum Error { not_found, permission, invalid_program, no_resources, other }
+
+// Root-capability type (ch04 R21), capability `exec`.
+pub struct Exec { }
+
+impl Exec {
+    // args verbatim: no shell, no PATH search of its own, no environment
+    // decision — `prog` is resolved by the operating system as given.
+    pub fn run(let self: Self, let prog: Str, let args: Slice[Str]) -> Child raises Error {
+        raise Error.not_found;                                                 // STUB
+    }
+}
+
+// Linear (R11): wait is the only release.
+pub struct Child { id: u64 }
+
+impl Child {
+    pub fn pid(let self: Self) -> u64 { return self.id; }
+    pub fn wait(sink self: Self) -> i32 raises Error { raise Error.other; }    // STUB
+}
+
+// The ONE ambient read std allows (R50): a scheduling hint, no capability.
+// The language's own `parallel` already depends on the runtime knowing it,
+// it reveals nothing beyond the machine's width, and it can affect nothing
+// outside the process.
+pub fn hardware_threads() -> usize { return 1; }                               // STUB

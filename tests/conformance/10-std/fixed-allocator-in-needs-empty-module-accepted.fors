@@ -1,0 +1,15 @@
+//! name: fixed_allocator_in_needs_empty_module_accepted
+//! rule: 10.S20
+//! expect: check-ok
+//! detail: S0020 -- mem.Fixed[N] serves inline storage and touches no OS, so it works with needs { }
+
+needs { };
+use std.mem;
+
+fn f() raises AllocError {
+    with allocator scratch: mem.Fixed[4096] {
+        var v: Vec[i32, scratch] = Vec.new();
+        v.push(&scratch, 1)?;
+        v.deinit(&scratch);
+    }
+}

@@ -1,0 +1,8 @@
+//! name: item_named_as_std_prelude_addition_rejected
+//! rule: 10.S2
+//! expect: check-error
+//! detail: N0013 -- an item named as a prelude name collides eagerly (ch08 R13); Vec is now a prelude name
+
+needs { };
+
+struct Vec { n: usize }

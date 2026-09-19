@@ -1,0 +1,17 @@
+//! name: adaptor_chain_accepted
+//! rule: 10.S34
+//! expect: check-ok
+//! detail: S0034 -- adaptors are free functions taking the source inout and returning a scoped value, so a borrowed iterator can be adapted stage by stage and consumed once
+
+needs { };
+use std.mem;
+
+fn double(let x: i32) -> i32 { return x * 2; }
+fn small(let x: i32) -> bool { return x < 10; }
+
+fn f[A: brand](let v: Vec[i32, A]) -> usize {
+    var it: mem.SliceIter[i32] = v.iter();
+    var m: mem.Mapped[mem.SliceIter[i32], i32] = mem.map(&it, double);
+    var k: mem.Filtered[mem.Mapped[mem.SliceIter[i32], i32]] = mem.filter(&m, small);
+    return mem.count(move k);
+}

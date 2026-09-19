@@ -1,0 +1,16 @@
+//! name: free_wrong_brand_rejected
+//! rule: 10.S16
+//! expect: check-error
+//! detail: T0010 -- ch01 R18 and R15d: free accepts only a Block whose brand equals the receiver's, so a safe program cannot free with the wrong allocator
+
+needs { };
+use std.mem;
+
+fn f() raises AllocError {
+    with allocator one: PageAllocator {
+        var blk: mem.Block[one] = one.alloc(mem.Layout.of[i64]())?;
+        with allocator two: PageAllocator {
+            two.free(move blk);
+        }
+    }
+}

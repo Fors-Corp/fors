@@ -1,0 +1,12 @@
+//! name: rand_rng_needs_capability_rejected
+//! rule: 10.S38
+//! expect: check-error
+//! detail: ch04 R8 -- a main parameter of type rand.Rng requires `rng` in the root module's needs
+
+module app;
+needs { };
+use std.rand;
+
+fn main(inout r: rand.Rng) {
+    let x: u64 = r.u64();
+}

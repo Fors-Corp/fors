@@ -1,0 +1,14 @@
+//! name: time_since_reversed_trap
+//! rule: 10.S45
+//! expect: trap
+//! detail: contract  -- Instant.since carries `pre earlier.nanos <= self.nanos` (R45, R55)
+
+module app;
+needs { clock };
+use std.time;
+
+fn main(let c: time.Clock) {
+    let a: time.Instant = c.now();
+    let b: time.Instant = c.now();
+    let d: time.Duration = a.since(b);
+}

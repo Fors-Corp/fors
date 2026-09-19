@@ -1,0 +1,11 @@
+//! name: free_brand_laundering_rejected
+//! rule: 10.S16
+//! expect: check-error
+//! detail: T0010 -- two rigid brands never unify (ch01 R15d): a generic function cannot free a Block[A] through an Allocator[B], so no wrapper can launder a block to another allocator
+
+needs { };
+use std.mem;
+
+fn launder[A: brand, B: brand, L: Allocator[B]](inout other: L, sink blk: mem.Block[A]) {
+    other.free(move blk);
+}

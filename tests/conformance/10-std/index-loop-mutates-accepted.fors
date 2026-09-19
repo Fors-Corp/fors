@@ -1,0 +1,12 @@
+//! name: index_loop_mutates_accepted
+//! rule: 10.S33
+//! expect: check-ok
+//! detail: S0033c -- the index loop is the mutating form, and the one parallel for accepts
+
+needs { };
+
+fn double[A: brand](inout v: Vec[i32, A]) {
+    for i in 0 ..< v.len() {
+        v[i] = v[i] * 2;
+    }
+}

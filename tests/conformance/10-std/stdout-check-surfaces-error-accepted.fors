@@ -1,0 +1,13 @@
+//! name: stdout_check_surfaces_error_accepted
+//! rule: 10.S39
+//! expect: check-ok
+//! detail: S0039 -- check is the fallible surface of the latched flag; it raises io.Error
+
+module app;
+needs { io.stdout };
+use std.io;
+
+fn main(inout out: io.Stdout) raises io.Error {
+    out.write_line("hello");
+    out.check()?;
+}

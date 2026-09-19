@@ -43,7 +43,8 @@ ABI belong to other chapters and are only referenced here.
 - **Exported requirement**: a module's checked requirement (Rule 2) minus
   the sealed capabilities.
 - **Policy**: the manifest's per-target, per-dependency capability bound.
-- **Root capability**: a value of one of the eleven fixed types in Rule 21.
+- **Root capability**: a value of one of the twelve fixed types in Rule 21
+  (eleven capability-paired ones and `mem.Heap`, which pairs with none).
   There is no `World` value; a root capability is obtainable only as a
   parameter of `main`, directly or by narrowing (Rule 7).
 - **Taint**: a ledger-recorded fact (metadata), not a runtime check.
@@ -119,7 +120,7 @@ ABI belong to other chapters and are only referenced here.
    module; it MUST NOT be generic, `extern` or `comptime`, and a function
    named `main` in any other module is an ordinary function to which the
    runtime supplies nothing. `main`'s parameters MUST each be, exactly and
-   nominally, one of the eleven root-capability types (Rule 21) — not a
+   nominally, one of the twelve root-capability types (Rule 21) — not a
    trait such as `io.Writer`, a `dyn` type, a type parameter, a tuple, or
    a qualified or wrapped form — and each type MUST appear at most once in
    `main`'s parameter list; a `main` parameter of any other type MUST be a
@@ -135,7 +136,10 @@ ABI belong to other chapters and are only referenced here.
    such a module is legal to write; Rule 7's unforgeability is kept here,
    at the one place a spelled name could otherwise stand in for the
    type). For every `main` parameter, the capability Rule 21 pairs with its
-   type MUST be declared in the root module's `needs { ... }` (Rule 1);
+   type MUST be declared in the root module's `needs { ... }` (Rule 1) —
+   with the single exception of `mem.Heap`, which pairs with no capability
+   because allocation is not authority (Rule 21, ch10 Rule 17): a `needs`
+   entry for it does not exist and MUST NOT be required;
    `main` MUST be the sole
    root of capability values, and no function other than `main` MAY obtain
    a root capability except by being handed one, as an ordinary parameter,
@@ -188,7 +192,11 @@ ABI belong to other chapters and are only referenced here.
     each operation on it still needs its own capability under Rule 1),
     `net.Net` -> `net`, `proc.Exec` -> `exec`, `time.Clock` -> `clock`,
     `rand.Rng` -> `rng`, `env.Env` -> `env`, `env.Args` -> `env`,
-    `gpu.Device` -> `gpu`. `io.Stdout` and `io.Stderr` are distinct nominal
+    `gpu.Device` -> `gpu`, and `mem.Heap` -> **(no capability)**, the
+    process heap of ch10 Rule 17: it is a root-capability type for Rules 7
+    and 8 (opaque, constructorless, reachable only as a `main` parameter or
+    handed down) and pairs with NO capability word, because allocation is
+    not authority. `io.Stdout` and `io.Stderr` are distinct nominal
     types that each implement the trait `io.Writer` (`io.Stdin`:
     `io.Reader`); they are usable where a `T: io.Writer` bound or a
     `dyn io.Writer` is expected, but the trait is never a root-capability
@@ -210,12 +218,15 @@ ABI belong to other chapters and are only referenced here.
     writes both, and they are independent: `needs { io.stdout };` for the
     authority, `use std.io;` for the name.
 
-    **Reserved for the std surface chapter** (owner decision 2026-09-19,
-    round 5, D5; nothing is designed here): heap-allocating std types take
-    an explicit allocator value (ch01's closed round-5 decision), and the
-    ROOT HEAP arrives as a `main` parameter, so that chapter will add its
-    type to the list above. Allocation is NOT authority: that type gets no
-    `needs` entry, and no capability word for allocation exists.
+    **The root heap** (owner decision 2026-09-19, round 5, D5; designed in
+    ch10): heap-allocating std types take an explicit allocator value
+    (ch01's closed round-5 decision) and the ROOT HEAP arrives as a `main`
+    parameter, whose type `mem.Heap` is now in the list above with no
+    capability and no `needs` entry — no capability word for allocation
+    exists. Its binding additionally names a fresh brand inside `main`
+    (ch10 Rule 17), exactly as a `with allocator` header does (ch01 Rule
+    15), which is what lets `main` hold a branded allocator without being
+    generic.
 22. Inline assembly (`asm_expr`, ch07 grammar) MUST appear only inside a
     declaration marked `@unsafe(invariant: "...")` (Rule 10) in a module
     whose own `needs` holds the sealed `asm` capability (Rules 1-2); an
@@ -270,7 +281,8 @@ needs { io.stdout };
 use std.io;                      // mandatory since round 5, D3 (ch08 R17)
 
 fn main(inout out: io.Stdout) raises io.Error {
-    out.write_line("hello")?;    // root capability handed in by the runtime, Rule 8
+    out.write_line("hello");     // root capability handed in by the runtime, Rule 8
+    out.flush()?;                // the fallible surface is io.Writer (ch10 Rule 39)
 }
 ```
 
@@ -280,12 +292,15 @@ needs { net, io.stderr };        // capabilities, not type names (Rule 21)
 use std.net, std.io;             // both types are named through a module
 
 fn main(inout conn: net.Net, inout err: io.Stderr) raises net.Error {   // `net` is the imported module, not a capability word
-    var buf: Buffer[u8] = Buffer.fixed(4096);
-    let n: usize = get(&conn, "https://example.org", &buf)?;
+    var buf: Buffer[u8, 4096] = Buffer.empty();          // ch10 Rule 23
+    let n: usize = get(&conn, net.Addr.v4([127, 0, 0, 1], 80), &buf)?;
 }
 
-fn get(inout c: net.Net, let url: Str, inout out: Buffer[u8]) -> usize raises net.Error {
-    return c.get_into(url, &out)?;   // c is handed down, not obtained fresh (Rule 8)
+fn get(inout c: net.Net, let a: net.Addr, inout out: Buffer[u8, 4096]) -> usize raises net.Error {
+    var s: net.Conn = c.connect(a)?;     // c is handed down, not obtained fresh (Rule 8)
+    let n: usize = s.read_into(&out.data[0 ..< 4096])?;
+    s.shutdown()?;
+    return n;
 }
 ```
 

@@ -1,0 +1,11 @@
+//! name: prelude_alloc_error_without_import_accepted
+//! rule: 10.S2
+//! expect: check-ok
+//! detail: AllocError is a prelude name (ch10 R2), so a wrapper can name it with no import
+
+needs { };
+
+fn wrap(let n: usize) -> usize raises AllocError {
+    if n == 0 { raise AllocError.too_large; }
+    return n;
+}

@@ -1,0 +1,12 @@
+//! name: fs_read_to_string_outside_comptime_rejected
+//! rule: 10.S42
+//! expect: check-error
+//! detail: S0042 -- fs.read_to_string is comptime-only; a call outside a comptime block is an error
+
+module app;
+needs { };
+use std.fs;
+
+fn setup() {
+    let data: Str = fs.read_to_string(".config");
+}

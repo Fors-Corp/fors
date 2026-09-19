@@ -1,0 +1,32 @@
+// std.time — the clock. Every operation is TOTAL: `time` has no error type
+// (R7). Surface: docs/spec/10-std.md Rule 45. Bodies are STUBS.
+//
+// `now` is MONOTONIC: never decreases within a process, unaffected by
+// wall-clock adjustment, origin unspecified — so an Instant is meaningful
+// only in a difference. `wall` is the separate, jump-prone clock: UTC
+// nanoseconds since the Unix epoch, with NO time zone, calendar or
+// formatting (R10g).
+needs { syscall };
+
+// Root-capability type (ch04 R21), capability `clock`.
+pub struct Clock { }
+
+pub struct Instant { pub nanos: u64 }
+pub struct Wall { pub unix_nanos: i64 }
+pub struct Duration { pub nanos: u64 }
+
+impl Clock {
+    pub fn now(let self: Self) -> Instant { return Instant { nanos: 0 }; }     // STUB, monotonic
+    pub fn wall(let self: Self) -> Wall { return Wall { unix_nanos: 0 }; }     // STUB
+    pub fn sleep(let self: Self, let d: Duration) { }                          // STUB
+}
+
+impl Instant {
+    // Traps (kind overflow) iff `earlier` is later: that is a monotonicity
+    // bug, not a condition (R45).
+    pub fn since(let self: Self, let earlier: Instant) -> Duration
+        pre earlier.nanos <= self.nanos
+    {
+        return Duration { nanos: self.nanos - earlier.nanos };
+    }
+}

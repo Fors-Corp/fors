@@ -17,6 +17,7 @@ other document (chapter, design doc, comment, test) MAY only cite it
 7. `07-grammar.md` — lexical grammar, keywords (reserved and contextual), operator table, complete EBNF, disambiguation rules (LL(2)), error-recovery synchronisation set. Present; verified 2026-09-19 against every example in ch01-05 (ch06 has none); round-5 owner decisions applied (receiver shorthand, `spmd`/`kernel` reserved, `;`/bitwise confirmed).
 8. `08-names.md` — file-to-module mapping, `use`/`pub use`, module graph edges and acyclicity, visibility, module scope, lookup, no-shadowing, path and pattern resolution, prelude, orphan rule, resolver/checker boundary. Draft, verified 2026-09-19; round-5 owner decisions applied (std modules need `use std.<m>;`); decidable from syntax plus the set of module names.
 9. `09-types.md` — type universe and equality, the closed coercion list, well-formedness, traits and impls with associated types, overlap, the closed operator-trait table, `Copyable`, the two typing judgements per form, generic-argument determination, member lookup and receivers, pattern typing and exhaustiveness, generic bodies, the signature-only interface. Draft, 2026-09-19; round-4 owner decisions applied.
+10. `10-std.md` — the standard-library SURFACE (signatures and guarantees, never implementations): the closed module and prelude lists, the allocator interface and the concrete allocators, the core types (`Buffer`, `Vec`, `Map`, `String`, `Str`, `Slice`), iteration, the operations each capability module unlocks with their failure behaviour, concurrency and determinism, and the rules std itself obeys. Draft, 2026-09-20; implements round 5's D5 (explicit allocators, root heap at `main`, allocation is not authority) and closes the type half of ch08 Q1.
 
 ## Fact -> owning chapter
 
@@ -49,7 +50,17 @@ other document (chapter, design doc, comment, test) MAY only cite it
 | `COMPTIME_STEP_BUDGET`, `COMPTIME_ALLOC_BUDGET` (unset) | ch04 R14 |
 | `@unsafe(invariant:)` form | ch04 R10 |
 | Check deletion, contract policy | ch02 R10-12 |
-| Root-capability types (closed list of eleven, type -> capability pairing), opacity, `main`-param rules (the type's head judged by what the header binds it to — `use std.io;` or an alias — never by spelling, so a user module named `io` cannot forge one), no `World` value | ch04 R7-8, R21 |
+| Std module list (the ten), prelude additions (the eight), std's naming and convention conventions | ch10 R1-5 |
+| Failure discipline of std (total / one `raises` type / `Option`); allocation failure is an error value | ch10 R6-7, R6d |
+| Allocator interface (`Allocator[A]`, `Layout`, `Block[A]`), alignment, zeroing, reallocation, freeing | ch10 R12-16 |
+| Concrete allocators: `mem.Heap` (root heap, no capability), `PageAllocator`, `mem.Bump`, `mem.Fixed[N]`, `mem.Counting[N]` | ch10 R17-21 |
+| Linearity (a linear value MUST be consumed); `Own[T, A]`'s surface | ch10 R11, R22 |
+| Core types: `Buffer[T, N]`, `Vec[T, A]`, `Map[K, V, A]`, `String[A]`, `Str`, slice primitives | ch10 R23-28 |
+| Iterator surface: the three yield forms, the closed adaptor and consumer sets, `try_*` | ch10 R32-37 |
+| Per-module operations, their `needs` and their failure behaviour (io fs net proc time rand env gpu ffi) | ch10 R38-49 |
+| What std adds to concurrency; which std types are `Shared`; no locks/channels in v0.1 | ch10 R50-52 |
+| The rules std itself obeys; std's sealed `syscall`/`ffi` holders; v0.1 stability; "not in v0.1" | ch10 R9-10, R53-57 |
+| Root-capability types (closed list of twelve, type -> capability pairing; `mem.Heap` pairs with none), opacity, `main`-param rules (the type's head judged by what the header binds it to — `use std.io;` or an alias — never by spelling, so a user module named `io` cannot forge one), no `World` value | ch04 R7-8, R21 |
 | Inline-`asm` authority (sealed `asm`/`syscall`, architecture, register, secret-input rules) | ch04 R22-26 (sealed-operation bans: R2a) |
 | Inline-`asm` value and type (CHECK mode only; statement form checks against `()`) | ch04 R27 |
 | Inline-`asm` opaque-region IR contract, `unknown` alias class, CT inventory entry, secret taint of `out`/`clobber` registers | ch05 R19-20a |
@@ -171,6 +182,12 @@ allocator and no ambient allocation, the root heap arriving as a `main`
 parameter and carrying no `needs` entry (ch01 round-5 section, ch04
 R21); `fors fmt` has one canonical style, 4-space indent, 100-column
 target (ch07, chosen over ch06 because ch06 owns measurement only).
+**D5 is now DESIGNED, in ch10** (2026-09-20): the allocator interface is
+ch10 R12, the root heap is `mem.Heap` (ch10 R17; ch04 R21's list, no
+capability, its `main` binding naming a fresh brand), and ch10's open
+questions 1-2 name the three one-clause edits the frozen chapters still
+need — ch01's second origin for an allocator value, ch01's linearity
+rule, and ch03 R24's exception for ch10 R28's `@unsafe` slice primitives.
 
 ## Open owner questions (most blocking first)
 
@@ -182,11 +199,11 @@ target (ch07, chosen over ch06 because ch06 owns measurement only).
 2. Header and keyword leftovers: `contracts:` placement (ch02 Q3, encoded
    in ch07 `file`); `recover` reserved-unused vs dropped (ch01 Q2).
    One-line grammar changes, but they touch every module header.
-3. ch08 calls needed before the name resolver is frozen: prelude
-   contents — `Buffer`, `Vec`, `PageAllocator` are used
-   unqualified in ch04 and the corpus but defined nowhere (`Copyable`
-   settled round 4) — remain open (ch08 Q1); the module half of that
-   question is CLOSED by round 5's D3 (mandatory `use std.io;`, no
+3. ch08 calls needed before the name resolver is frozen: ~~prelude
+   contents — `Buffer`, `Vec`, `PageAllocator` used unqualified but
+   defined nowhere~~ CLOSED by ch10 R2 (2026-09-20): all three enter the
+   prelude with `Allocator AllocError Map String Utf8Error`, eight names
+   from `std.mem`; the module half of that question is CLOSED by round 5's D3 (mandatory `use std.io;`, no
    prelude modules, a synthetic `std` table until `std` ships). The
    manifest must still define package name and source root (ch08 Q3).
    (ch08 Q2, no-shadowing, closed round 3 above.)

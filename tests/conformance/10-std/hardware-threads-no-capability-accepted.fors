@@ -1,0 +1,9 @@
+//! name: hardware_threads_no_capability_accepted
+//! rule: 10.S50
+//! expect: check-ok
+//! detail: S0050 -- the one ambient read std allows: a scheduling hint with no capability
+
+needs { };
+use std.proc;
+
+fn width() -> usize { return proc.hardware_threads(); }

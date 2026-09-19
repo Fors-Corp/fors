@@ -1,0 +1,8 @@
+//! name: result_type_absent_rejected
+//! rule: 10.S10
+//! expect: check-error
+//! detail: N0014 -- there is no Result type in v0.1: errors travel as raises (R10b)
+
+needs { };
+
+fn f() -> Result[i32, AllocError] { return 0; }

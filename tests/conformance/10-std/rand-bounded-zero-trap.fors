@@ -1,0 +1,12 @@
+//! name: rand_bounded_zero_trap
+//! rule: 10.S47
+//! expect: trap
+//! detail: contract  -- Pcg.bounded carries `pre n > 0` (R47, R55)
+
+needs { };
+use std.rand;
+
+fn main() {
+    var g: rand.Pcg = rand.Pcg.seeded(1);
+    let x: u64 = g.bounded(0);
+}

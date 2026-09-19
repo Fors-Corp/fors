@@ -1,0 +1,12 @@
+//! name: rand_pcg_needs_no_capability_accepted
+//! rule: 10.S47
+//! expect: check-ok
+//! detail: S0047 -- Pcg is a pure value: seeding and drawing need no capability and no needs entry
+
+needs { };
+use std.rand;
+
+fn draw(let seed: u64) -> u64 {
+    var g: rand.Pcg = rand.Pcg.seeded(seed);
+    return g.u64();
+}

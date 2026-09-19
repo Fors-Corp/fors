@@ -1,0 +1,85 @@
+// std.net — sockets. No TLS, no HTTP, no net.Client in v0.1 (R10i).
+// Surface: docs/spec/10-std.md Rule 43. Bodies are STUBS.
+needs { syscall };
+
+use std.io, std.time;
+
+pub enum Error { refused, unreachable, reset, closed, in_use, invalid_address,
+                 would_block, interrupted, other }
+
+// Its own type, because a deadline is not a socket error (R6b) and ch02's
+// example converts it (`impl ErrorFrom[net.TimeoutError] for app.Error`).
+pub enum TimeoutError { timed_out }
+
+// Root-capability type (ch04 R21), capability `net`.
+pub struct Net { }
+
+impl Net {
+    pub fn resolve_into(let self: Self, let host: Str, inout into: Slice[Addr])
+        -> usize raises Error
+    {
+        raise Error.unreachable;                             // STUB
+    }
+    pub fn connect(let self: Self, let a: Addr) -> Conn raises Error {
+        raise Error.refused;                                 // STUB
+    }
+    pub fn listen(let self: Self, let a: Addr) -> Listener raises Error {
+        raise Error.in_use;                                  // STUB
+    }
+}
+
+pub struct Addr { v6: bool, port: u16, octets: Array[u8, 16] }
+
+impl Addr {
+    pub fn v4(let octets: Array[u8, 4], let port: u16) -> Addr {
+        return Addr { v6: false, port: port, octets: [0; 16] };               // STUB
+    }
+    pub fn v6(let octets: Array[u8, 16], let port: u16) -> Addr {
+        return Addr { v6: true, port: port, octets: octets };
+    }
+    pub fn port(let self: Self) -> u16 { return self.port; }
+}
+
+// Linear (R11): shutdown is the only release. No buffering, no timeout
+// state; a read that would block raises Error.would_block.
+pub struct Conn { fd: i32 }
+
+impl Conn {
+    pub fn read_into(inout self: Self, inout into: Slice[u8]) -> usize raises Error {
+        raise Error.would_block;                             // STUB
+    }
+    pub fn write_all(inout self: Self, let bytes: Slice[u8]) raises Error {
+        raise Error.closed;                                  // STUB
+    }
+    // Its only failure IS the deadline (R6b, R43).
+    pub fn wait_until(inout self: Self, let deadline: time.Instant) raises TimeoutError {
+        raise TimeoutError.timed_out;                        // STUB
+    }
+    pub fn shutdown(sink self: Self) raises Error { }                         // STUB
+}
+
+impl io.Reader for Conn {
+    fn read(inout self: Self, inout into: Slice[u8]) -> usize raises io.Error {
+        raise io.Error.closed;                               // STUB
+    }
+}
+
+impl io.Writer for Conn {
+    fn write(inout self: Self, let bytes: Slice[u8]) -> usize raises io.Error {
+        raise io.Error.closed;                               // STUB
+    }
+    fn write_all(inout self: Self, let bytes: Slice[u8]) raises io.Error {
+        raise io.Error.closed;                               // STUB
+    }
+    fn flush(inout self: Self) raises io.Error { }                            // STUB
+}
+
+// Linear (R11).
+pub struct Listener { fd: i32 }
+
+impl Listener {
+    pub fn accept(inout self: Self) -> Conn raises Error {
+        raise Error.would_block;                             // STUB
+    }
+    pub fn close(sink self: Self) { }                                         // STUB
+}

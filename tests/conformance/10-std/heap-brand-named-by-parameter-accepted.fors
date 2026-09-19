@@ -1,0 +1,14 @@
+//! name: heap_brand_named_by_parameter_accepted
+//! rule: 10.S17
+//! expect: check-ok
+//! detail: main's heap binding names a fresh brand, so Own[i64, heap] and Vec[i32, heap] are writable inside main
+
+module app;
+needs { };
+use std.mem;
+
+fn main(inout heap: mem.Heap) raises AllocError {
+    var v: Vec[i32, heap] = Vec.new();
+    v.push(&heap, 1)?;
+    v.deinit(&heap);
+}

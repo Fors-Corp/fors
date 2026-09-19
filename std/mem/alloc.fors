@@ -1,0 +1,93 @@
+// std.mem.alloc — the allocator interface and what it is written in terms
+// of: AllocError, Layout, Block[A], Allocator[A], and the two @unsafe
+// placement primitives that `create`/`deinit`'s provided bodies use.
+// Surface: docs/spec/10-std.md Rules 7, 12-16. Bodies are STUBS.
+//
+// This is the leaf of std.mem's import graph (ch08 R7, acyclic): every
+// container submodule imports it, std.mem re-exports its items, and it
+// imports nothing. It holds no capability: mapping pages is std.mem's
+// (R53), and this module only names what a mapped block looks like.
+needs { };
+
+// ---------------------------------------------------------------- errors
+
+pub enum AllocError { out_of_memory, too_large, unsupported_align }
+
+// ---------------------------------------------------------------- layout
+
+pub struct Layout { pub size: usize, pub align: usize }
+
+impl Layout {
+    // `of` and `array` are the only constructors, so `align` is always a
+    // power of two and at most MEM_MAX_ALIGN (R13). The language has no
+    // spelling for a type's size yet (ch09 R57 names size_of/align_of
+    // as operations, ch08 R17 binds neither): STUB until it does.
+    pub fn of[T]() -> Layout {
+        return Layout { size: 0, align: 1 };                 // STUB
+    }
+    // Raises too_large iff n * size_of[T]() overflows usize (R13).
+    pub fn array[T](let n: usize) -> Layout raises AllocError {
+        if n > 0 {
+            raise AllocError.too_large;                      // STUB: checked multiply
+        }
+        return Layout { size: 0, align: 1 };                 // STUB
+    }
+}
+
+// --------------------------------------------------------------- blocks
+
+// Opaque, linear (R11), not Copyable. A Block records its own size, so
+// `free` takes no Layout and a wrong-size free is unrepresentable (R16).
+pub struct Block[A: brand] { size: usize, align: usize, ptr: rawptr[u8] }
+
+impl[A: brand] Block[A] {
+    pub fn len(let self: Self) -> usize { return self.size; }
+    pub fn align(let self: Self) -> usize { return self.align; }
+
+    @unsafe(invariant: "the returned view spans exactly this block and is dead at the next grow/free")
+    pub fn bytes_raw(inout self: Self) -> scoped(self) Slice[u8] {
+        return self.bytes_raw();                             // STUB: self.ptr[0 ..< size]
+    }
+}
+
+// ------------------------------------------------ placement primitives
+
+// Moves `v` into `b`, which MUST have Layout.of[T]()'s size and align.
+// The block is consumed: the Own now owns it (R12, R28).
+@unsafe(invariant: "b was allocated for Layout.of[T]() by an allocator of brand A")
+pub fn own_raw[T, A: brand](sink b: Block[A], sink v: T) -> Own[T, A] {
+    return own_raw(move b, move v);                          // STUB
+}
+
+// The inverse: gives back the block and the payload it held.
+@unsafe(invariant: "o was produced by own_raw of this brand and is not yet disowned")
+pub fn disown_raw[T, A: brand](sink o: Own[T, A]) -> (Block[A], T) {
+    return disown_raw(move o);                               // STUB
+}
+
+// ----------------------------------------------------------- the interface
+
+pub trait Allocator[A: brand] {
+    fn alloc(inout self: Self, let layout: Layout) -> Block[A] raises AllocError;
+    fn alloc_zeroed(inout self: Self, let layout: Layout) -> Block[A] raises AllocError;
+    fn grow(inout self: Self, inout b: Block[A], let layout: Layout) raises AllocError;
+    fn shrink(inout self: Self, inout b: Block[A], let layout: Layout);
+    fn free(inout self: Self, sink b: Block[A]);
+    fn owns(let self: Self, let b: Block[A]) -> bool;
+
+    // Provided (ch07 trait_item permits a body): written once here in
+    // terms of alloc/free and the placement primitives above, so an
+    // allocator author implements the six methods and gets both.
+    fn create[T](inout self: Self, sink v: T) -> Own[T, A] raises AllocError {
+        var b: Block[A] = self.alloc(Layout.of[T]())?;
+        return own_raw(move b, move v);
+    }
+
+    // Returns the payload: the caller decides what happens to it, so a
+    // linear T is never dropped silently (R11, R22).
+    fn deinit[T](inout self: Self, sink o: Own[T, A]) -> T {
+        let (b, v) = disown_raw(move o);
+        self.free(move b);
+        return v;
+    }
+}
