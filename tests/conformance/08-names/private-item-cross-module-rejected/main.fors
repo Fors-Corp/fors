@@ -1,0 +1,9 @@
+//! name: private_item_cross_module_rejected
+//! rule: 08.R4
+//! expect: check-error
+//! detail: lib.hidden is not pub in lib
+
+module main;
+use lib.hidden;
+
+fn f() -> i32 { return 0; }

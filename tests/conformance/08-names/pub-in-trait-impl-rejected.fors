@@ -1,0 +1,13 @@
+//! name: pub_in_trait_impl_rejected
+//! rule: 08.R11
+//! expect: check-error
+//! detail: a trait-impl method has the trait's visibility; pub on it is an error
+
+module m;
+
+trait Greet { fn hello(let self: Self) -> i32; }
+struct Thing { pub x: i32 }
+
+impl Greet for Thing {
+    pub fn hello(let self: Self) -> i32 { return 1; }
+}

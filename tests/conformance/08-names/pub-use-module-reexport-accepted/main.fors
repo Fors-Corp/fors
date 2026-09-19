@@ -1,0 +1,9 @@
+//! name: pub_use_module_reexport_accepted
+//! rule: 08.R5
+//! expect: check-ok
+//! detail: api re-exports the module inner; api.inner binds that module in main
+
+module main;
+use api.inner;
+
+fn f() -> inner.Point { return inner.Point { x: 1, y: 2 }; }

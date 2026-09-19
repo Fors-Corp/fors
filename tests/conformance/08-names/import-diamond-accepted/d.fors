@@ -1,0 +1,3 @@
+module d;
+
+pub fn k() -> i32 { return 1; }

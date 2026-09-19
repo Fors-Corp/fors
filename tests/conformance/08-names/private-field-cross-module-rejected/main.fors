@@ -1,0 +1,9 @@
+//! name: private_field_cross_module_rejected
+//! rule: 08.R11
+//! expect: check-error
+//! detail: field x has no pub; enforced by the checker with ch08 R11's visibility (R22)
+
+module main;
+use lib.Widget;
+
+fn f(let w: Widget) -> i32 { return w.x; }

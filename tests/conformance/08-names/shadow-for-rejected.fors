@@ -1,0 +1,13 @@
+//! name: shadow_for_rejected
+//! rule: 08.R18
+//! expect: check-error
+//! detail: for binding i reuses an enclosing local
+
+module m;
+
+fn f(let xs: Slice[i32]) -> i32 {
+    let i: i32 = 0;
+    var total: i32 = 0;
+    for i in xs { total = total + i; }
+    return total + i;
+}

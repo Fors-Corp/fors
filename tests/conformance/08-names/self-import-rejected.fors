@@ -1,0 +1,9 @@
+//! name: self_import_rejected
+//! rule: 08.R8
+//! expect: check-error
+//! detail: a module naming itself in `use` is a cycle of length one
+
+module selfmod;
+use selfmod;
+
+pub fn f() -> i32 { return 1; }

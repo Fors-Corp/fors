@@ -1,0 +1,13 @@
+//! name: duplicate_method_in_impl_rejected
+//! rule: 08.R27
+//! expect: check-error
+//! detail: two methods of one impl block named get
+
+module m;
+
+struct Thing { pub x: i32 }
+
+impl Thing {
+    pub fn get(let self: Self) -> i32 { return 1; }
+    pub fn get(let self: Self) -> i32 { return 2; }
+}

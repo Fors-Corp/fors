@@ -1,0 +1,8 @@
+//! name: duplicate_field_rejected
+//! rule: 08.R27
+//! expect: check-error
+//! detail: two fields of one struct named x
+
+module m;
+
+struct P { pub x: i32, pub x: i32 }

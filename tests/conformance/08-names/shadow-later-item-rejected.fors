@@ -1,0 +1,13 @@
+//! name: shadow_later_item_rejected
+//! rule: 08.R18
+//! expect: check-error
+//! detail: module scope is order-independent: the item declared below is already visible
+
+module m;
+
+fn f() -> i32 {
+    let helper: i32 = 2;
+    return helper;
+}
+
+fn helper() -> i32 { return 1; }

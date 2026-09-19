@@ -1,0 +1,11 @@
+//! name: let_initialiser_self_reference_rejected
+//! rule: 08.R9
+//! expect: check-error
+//! detail: a let binding is not in scope in its own initialiser (R26)
+
+module m;
+
+fn f() -> i32 {
+    let x: i32 = x + 1;
+    return x;
+}

@@ -1,0 +1,13 @@
+//! name: pattern_fresh_binding_accepted
+//! rule: 08.R25
+//! expect: check-ok
+//! detail: `other` resolves to nothing, so it is a new binding, visible in its arm
+
+module m;
+
+fn f(let n: i32) -> i32 {
+    match n {
+        0 => 0,
+        other => other + 1,
+    }
+}

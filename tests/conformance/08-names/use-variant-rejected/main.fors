@@ -1,0 +1,9 @@
+//! name: use_variant_rejected
+//! rule: 08.R4
+//! expect: check-error
+//! detail: lib.Color is not a module, so lib.Color.red matches neither R4a nor R4b: variants are not import targets
+
+module main;
+use lib.Color.red;
+
+fn f() -> i32 { return 0; }

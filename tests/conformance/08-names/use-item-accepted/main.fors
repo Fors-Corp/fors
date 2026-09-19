@@ -1,0 +1,9 @@
+//! name: use_item_accepted
+//! rule: 08.R4
+//! expect: check-ok
+//! detail: lib.helper is not a module, lib is: binds the item helper (R4b)
+
+module main;
+use lib.helper;
+
+fn f() -> i32 { return helper(); }

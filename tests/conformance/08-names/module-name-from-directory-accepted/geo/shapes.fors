@@ -1,0 +1,3 @@
+module geo.shapes;
+
+pub fn area() -> i32 { return 4; }

@@ -1,0 +1,11 @@
+//! name: shadow_gparam_rejected
+//! rule: 08.R18
+//! expect: check-error
+//! detail: local T reuses the fn's generic parameter name
+
+module m;
+
+fn f[T](let x: T) -> i32 {
+    let T: i32 = 0;
+    return T;
+}

@@ -1,0 +1,8 @@
+//! name: duplicate_variant_rejected
+//! rule: 08.R27
+//! expect: check-error
+//! detail: two variants of one enum named red
+
+module m;
+
+enum Color { red, green, red }

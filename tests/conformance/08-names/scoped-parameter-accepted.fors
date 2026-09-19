@@ -1,0 +1,10 @@
+//! name: scoped_parameter_accepted
+//! rule: 08.R20
+//! expect: check-ok
+//! detail: scoped(x) names the fn's own parameter
+
+module m;
+
+fn f(let x: Arena) -> scoped(x) Own[i32, x] {
+    return Own.alloc(x, 1);
+}

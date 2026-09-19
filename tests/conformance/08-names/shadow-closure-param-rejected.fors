@@ -1,0 +1,11 @@
+//! name: shadow_closure_param_rejected
+//! rule: 08.R18
+//! expect: check-error
+//! detail: closure parameter x reuses the enclosing fn's parameter
+
+module m;
+
+fn f(let x: i32) -> i32 {
+    let g = |x: i32| x;
+    return g(x);
+}

@@ -1,0 +1,11 @@
+//! name: shadow_prelude_module_rejected
+//! rule: 08.R18
+//! expect: check-error
+//! detail: local reuses the prelude module name io
+
+module m;
+
+fn f() -> i32 {
+    let io: i32 = 5;
+    return io;
+}

@@ -1,0 +1,9 @@
+//! name: self_import_item_rejected
+//! rule: 08.R8
+//! expect: check-error
+//! detail: importing an item of the importing module is an edge to itself
+
+module selfmod;
+use selfmod.f;
+
+pub fn f() -> i32 { return 1; }

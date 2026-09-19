@@ -1,0 +1,10 @@
+//! name: private_type_in_public_signature_rejected
+//! rule: 08.R12
+//! expect: check-error
+//! detail: pub fn f returns the non-pub struct Hidden
+
+module m;
+
+struct Hidden { pub x: i32 }
+
+pub fn f() -> Hidden { return Hidden { x: 1 }; }

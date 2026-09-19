@@ -1,0 +1,9 @@
+//! name: pub_use_reexport_accepted
+//! rule: 08.R5
+//! expect: check-ok
+//! detail: api re-exports inner.Point; main reaches it through api alone
+
+module main;
+use api.Point;
+
+fn f() -> Point { return Point { x: 1, y: 2 }; }

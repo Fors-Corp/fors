@@ -1,0 +1,12 @@
+//! name: method_gparam_shadows_impl_gparam_rejected
+//! rule: 08.R18
+//! expect: check-error
+//! detail: the method's T reuses the impl's T, which is in scope over every method (R26)
+
+module m;
+
+struct Box[T] { pub v: T }
+
+impl[T] Box[T] {
+    pub fn size[T](let self: Self) -> i32 { return 1; }
+}

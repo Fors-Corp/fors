@@ -1,0 +1,15 @@
+//! name: shadow_with_arena_rejected
+//! rule: 08.R18
+//! expect: check-error
+//! detail: the with-arena binding reuses an enclosing local
+
+module m;
+
+fn f() -> i32 {
+    let a: i32 = 0;
+    with arena a: Arena {
+        var v: Own[i32, a] = Own.alloc(a, 1);
+        discard v;
+    }
+    return a;
+}

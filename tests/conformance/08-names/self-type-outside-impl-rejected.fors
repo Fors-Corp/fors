@@ -1,0 +1,8 @@
+//! name: self_type_outside_impl_rejected
+//! rule: 08.R26
+//! expect: check-error
+//! detail: Self is bound only inside trait and impl bodies
+
+module m;
+
+fn f(let x: Self) -> i32 { return 0; }

@@ -1,0 +1,12 @@
+//! name: capability_word_not_a_name_accepted
+//! rule: 08.R23
+//! expect: check-ok
+//! detail: `clock` in needs binds nothing, so a local may be named clock
+
+module m;
+needs { clock };
+
+fn f() -> i32 {
+    let clock: i32 = 5;
+    return clock;
+}

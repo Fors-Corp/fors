@@ -1,0 +1,11 @@
+//! name: shadow_param_rejected
+//! rule: 08.R18
+//! expect: check-error
+//! detail: local v reuses the fn's parameter name
+
+module m;
+
+fn f(let v: i32) -> i32 {
+    let v: i32 = 2;
+    return v;
+}

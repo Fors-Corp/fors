@@ -1,0 +1,14 @@
+//! name: shadow_local_rejected
+//! rule: 08.R18
+//! expect: check-error
+//! detail: inner let v reuses a binding of an enclosing block
+
+module m;
+
+fn f() -> i32 {
+    let v: i32 = 1;
+    {
+        let v: i32 = 2;
+        return v;
+    }
+}

@@ -1,0 +1,12 @@
+//! name: scoped_non_parameter_rejected
+//! rule: 08.R20
+//! expect: check-error
+//! detail: scoped(LIMIT) names a const, not a parameter of f: the lookup is among parameters only
+
+module m;
+
+const LIMIT: i32 = 1;
+
+fn f(let x: Arena) -> scoped(LIMIT) Own[i32, x] {
+    return Own.alloc(x, LIMIT);
+}

@@ -1,0 +1,9 @@
+//! name: unimported_module_path_rejected
+//! rule: 08.R16
+//! expect: check-error
+//! detail: module a.b exists but only a is imported; b is not a module-scope name of a
+
+module main;
+use a;
+
+fn f() -> i32 { return a.one() + a.b.c(); }

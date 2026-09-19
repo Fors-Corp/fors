@@ -1,0 +1,9 @@
+//! name: import_diamond_accepted
+//! rule: 08.R7
+//! expect: check-ok
+//! detail: main -> b -> d and main -> c -> d: a diamond is not a cycle
+
+module main;
+use b, c;
+
+fn f() -> i32 { return b.g() + c.h(); }

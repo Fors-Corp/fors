@@ -1,0 +1,12 @@
+//! name: for_binding_not_in_iterable_rejected
+//! rule: 08.R26
+//! expect: check-error
+//! detail: the loop binding is in scope in the loop block only, so i in the iterable is unresolved
+
+module m;
+
+fn f() -> i32 {
+    var total: i32 = 0;
+    for i in 0 ..< i { total = total + 1; }
+    return total;
+}

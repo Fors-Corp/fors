@@ -1,0 +1,12 @@
+//! name: redeclare_in_same_block_rejected
+//! rule: 08.R18
+//! expect: check-error
+//! detail: the earlier v is still in scope at the second let
+
+module m;
+
+fn f() -> i32 {
+    let v: i32 = 1;
+    let v: i32 = 2;
+    return v;
+}

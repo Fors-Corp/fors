@@ -1,0 +1,9 @@
+//! name: use_multiple_paths_accepted
+//! rule: 08.R3
+//! expect: check-ok
+//! detail: one use_decl with a comma-separated list of paths
+
+module main;
+use a, b;
+
+fn f() -> i32 { return a.one() + b.two(); }

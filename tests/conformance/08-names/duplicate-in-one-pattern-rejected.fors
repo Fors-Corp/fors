@@ -1,0 +1,12 @@
+//! name: duplicate_in_one_pattern_rejected
+//! rule: 08.R18
+//! expect: check-error
+//! detail: x is bound twice inside one pattern
+
+module m;
+
+fn f(let a: i32, let b: i32) -> i32 {
+    match (a, b) {
+        (x, x) => 1,
+    }
+}

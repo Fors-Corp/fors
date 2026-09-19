@@ -1,0 +1,11 @@
+//! name: impl_in_third_module_rejected
+//! rule: 08.R21
+//! expect: check-error
+//! detail: impl Greet for Thing in main, which defines neither the trait nor the type
+
+module main;
+use trait_mod.Greet, type_mod.Thing;
+
+impl Greet for Thing {
+    fn hello(let self: Self) -> i32 { return 1; }
+}

@@ -1,0 +1,3 @@
+module type_mod;
+
+pub struct Thing { pub x: i32 }

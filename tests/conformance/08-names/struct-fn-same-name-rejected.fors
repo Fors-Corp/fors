@@ -1,0 +1,9 @@
+//! name: struct_fn_same_name_rejected
+//! rule: 08.R13
+//! expect: check-error
+//! detail: a struct and a fn share a name: one namespace per module scope
+
+module m;
+
+struct Widget { pub x: i32 }
+fn Widget() -> i32 { return 0; }

@@ -1,0 +1,10 @@
+//! name: private_type_in_private_field_accepted
+//! rule: 08.R12
+//! expect: check-ok
+//! detail: only pub fields belong to a pub struct's signature
+
+module m;
+
+struct Hidden { pub x: i32 }
+
+pub struct Open { pub a: i32, h: Hidden }

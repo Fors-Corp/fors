@@ -1,0 +1,12 @@
+//! name: path_ends_on_module_rejected
+//! rule: 08.R16
+//! expect: check-error
+//! detail: a module is not a value: the path `lib` ends on a module
+
+module main;
+use lib;
+
+fn f() -> i32 {
+    let m: i32 = lib;
+    return lib.helper() + m;
+}

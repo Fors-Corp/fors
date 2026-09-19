@@ -1,0 +1,9 @@
+//! name: import_same_entity_twice_accepted
+//! rule: 08.R13
+//! expect: check-ok
+//! detail: inner.Point and api.Point denote one entity: not a collision
+
+module main;
+use inner.Point, api.Point;
+
+fn f() -> Point { return Point { x: 1, y: 2 }; }

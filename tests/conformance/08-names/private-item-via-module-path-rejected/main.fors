@@ -1,0 +1,9 @@
+//! name: private_item_via_module_path_rejected
+//! rule: 08.R10
+//! expect: check-error
+//! detail: lib.hidden is not pub; reached as a path segment after the module
+
+module main;
+use lib;
+
+fn f() -> i32 { return lib.hidden(); }

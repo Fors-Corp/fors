@@ -1,0 +1,8 @@
+//! name: pub_on_variant_field_rejected
+//! rule: 08.R11
+//! expect: check-error
+//! detail: variant payload fields take the enum's visibility; pub there is an error
+
+module m;
+
+enum Shape { dot, box { pub w: i32, h: i32 } }

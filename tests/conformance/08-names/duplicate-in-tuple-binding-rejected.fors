@@ -1,0 +1,11 @@
+//! name: duplicate_in_tuple_binding_rejected
+//! rule: 08.R18
+//! expect: check-error
+//! detail: a is bound twice inside one tuple binding
+
+module m;
+
+fn f() -> i32 {
+    let (a, a): (i32, i32) = (1, 2);
+    return 0;
+}

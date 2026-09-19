@@ -1,0 +1,9 @@
+//! name: import_not_transitive_rejected
+//! rule: 08.R6
+//! expect: check-error
+//! detail: mid imports provider.value without pub; main cannot see `value` through mid
+
+module main;
+use mid;
+
+fn f() -> i32 { return mid.relay() + value(); }

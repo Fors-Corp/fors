@@ -1,0 +1,12 @@
+//! name: use_before_let_rejected
+//! rule: 08.R9
+//! expect: check-error
+//! detail: local x is referenced before its let statement; nothing else is named x
+
+module m;
+
+fn f() -> i32 {
+    let y: i32 = x;
+    let x: i32 = 1;
+    return y + x;
+}

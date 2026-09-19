@@ -1,0 +1,10 @@
+//! name: gparam_named_as_item_rejected
+//! rule: 08.R18
+//! expect: check-error
+//! detail: a generic parameter is a binding and may not take a module item's name
+
+module m;
+
+struct Thing { pub x: i32 }
+
+fn f[Thing](let x: i32) -> i32 { return x; }

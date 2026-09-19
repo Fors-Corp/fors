@@ -1,0 +1,16 @@
+//! name: enum_variant_path_accepted
+//! rule: 08.R16
+//! expect: check-ok
+//! detail: module, then pub enum, then variant: all three segments resolve without types
+
+module main;
+use lib;
+
+fn pick() -> lib.Color { return lib.Color.red; }
+
+fn f(let c: lib.Color) -> i32 {
+    match c {
+        lib.Color.red => 1,
+        lib.Color.green => 2,
+    }
+}

@@ -1,0 +1,9 @@
+//! name: use_module_then_item_path_accepted
+//! rule: 08.R4
+//! expect: check-ok
+//! detail: use lib binds the module name; lib.helper is module then pub item (R4a, R16)
+
+module main;
+use lib;
+
+fn f() -> i32 { return lib.helper(); }

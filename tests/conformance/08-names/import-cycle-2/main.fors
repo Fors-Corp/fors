@@ -1,0 +1,9 @@
+//! name: import_cycle_2
+//! rule: 08.R7
+//! expect: check-error
+//! detail: main -> b -> main; the diagnostic names b, main, b
+
+module main;
+use b;
+
+pub fn f() -> i32 { return b.g(); }

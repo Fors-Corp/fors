@@ -1,0 +1,10 @@
+//! name: unresolved_name_rejected
+//! rule: 08.R14
+//! expect: check-error
+//! detail: unknown_name resolves in no scope
+
+module m;
+
+fn f() -> i32 {
+    return unknown_name;
+}

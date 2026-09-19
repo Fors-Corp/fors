@@ -1,0 +1,15 @@
+//! name: pattern_const_reference_accepted
+//! rule: 08.R25
+//! expect: check-ok
+//! detail: LIMIT resolves to a const, so the pattern is a reference; as a binding it would break R18
+
+module m;
+
+const LIMIT: i32 = 10;
+
+fn f(let n: i32) -> i32 {
+    match n {
+        LIMIT => 1,
+        _ => 0,
+    }
+}

@@ -1,0 +1,15 @@
+//! name: impl_in_trait_module_accepted
+//! rule: 08.R21
+//! expect: check-ok
+//! detail: main defines the trait, so it may implement it for an imported type
+
+module main;
+use type_mod.Thing;
+
+trait Greet {
+    fn hello(let self: Self) -> i32;
+}
+
+impl Greet for Thing {
+    fn hello(let self: Self) -> i32 { return 1; }
+}

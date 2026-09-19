@@ -1,0 +1,12 @@
+//! name: shadow_import_rejected
+//! rule: 08.R18
+//! expect: check-error
+//! detail: local helper reuses the name of an import
+
+module main;
+use lib.helper;
+
+fn f() -> i32 {
+    let helper: i32 = 0;
+    return helper;
+}

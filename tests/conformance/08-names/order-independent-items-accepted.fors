@@ -1,0 +1,13 @@
+//! name: order_independent_items_accepted
+//! rule: 08.R9
+//! expect: check-ok
+//! detail: g, Pair and LIMIT are used above their declarations
+
+module m;
+
+fn f() -> i32 { return g() + LIMIT; }
+fn make() -> Pair { return Pair { a: f(), b: g() }; }
+fn g() -> i32 { return 1; }
+
+struct Pair { pub a: i32, pub b: i32 }
+const LIMIT: i32 = 3;

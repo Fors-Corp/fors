@@ -1,0 +1,8 @@
+//! name: duplicate_param_rejected
+//! rule: 08.R18
+//! expect: check-error
+//! detail: two parameters of one fn named a
+
+module m;
+
+fn f(let a: i32, let a: i32) -> i32 { return 0; }

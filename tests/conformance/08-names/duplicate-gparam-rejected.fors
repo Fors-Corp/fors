@@ -1,0 +1,8 @@
+//! name: duplicate_gparam_rejected
+//! rule: 08.R18
+//! expect: check-error
+//! detail: two generic parameters of one list named T
+
+module m;
+
+fn f[T, T](let x: i32) -> i32 { return x; }

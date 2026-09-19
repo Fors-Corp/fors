@@ -1,0 +1,9 @@
+//! name: module_header_mismatch_rejected
+//! rule: 08.R1
+//! expect: check-error
+//! detail: file foo.fors declares module bar; derived name is foo
+
+module main;
+use foo;
+
+fn f() -> i32 { return foo.g(); }

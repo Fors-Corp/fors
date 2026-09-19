@@ -15,6 +15,7 @@ other document (chapter, design doc, comment, test) MAY only cite it
 5. `05-ir-contract.md` — IR levels, alias classes, secret/CT, tiles, differential agreement
 6. `06-measurement.md` — benchmark tiers and metrics
 7. `07-grammar.md` — lexical grammar, keywords (reserved and contextual), operator table, complete EBNF, disambiguation rules (LL(2)), error-recovery synchronisation set. Present; verified 2026-09-19 against every example in ch01-05 (ch06 has none).
+8. `08-names.md` — file-to-module mapping, `use`/`pub use`, module graph edges and acyclicity, visibility, module scope, lookup, no-shadowing, path and pattern resolution, prelude, orphan rule, resolver/checker boundary. Draft, verified 2026-09-19; decidable from syntax plus the set of module names.
 
 ## Fact -> owning chapter
 
@@ -52,6 +53,20 @@ other document (chapter, design doc, comment, test) MAY only cite it
 | CHECK/SYNTH mode positions (the two typing judgements) | ch03 R25 |
 | Trap-kind identifier set (closed); `nesting-limit` is not a trap | ch02 R15 |
 | Comptime file-read declaration (`inputs { ... };` header clause) | ch04 R13 |
+| File-to-module mapping, optional `module` header must match, legal (lowercase) file names, case-insensitive file systems | ch08 R1, R24 |
+| What a `use` path binds (module or `pub` item, never a member), `pub use` re-export, imports not transitive | ch08 R3-6 |
+| Module-graph edge set (explicit `use` edges, implicit prelude-module edges), acyclicity, cycle diagnostic (capability flow along edges stays ch04 R2-2a) | ch08 R7-8, R17 |
+| Order-independent module scope; order-dependent bindings; scope of every binding form; implicit `Self` | ch08 R9, R19, R26 |
+| Visibility: `pub` items, fields, variants, inherent and trait-impl methods; private item in a public signature | ch08 R10-12 |
+| One namespace per module scope; item/import/prelude collisions are eager errors | ch08 R13, R15 |
+| Lookup, segment-by-segment path resolution, deferred (type-directed) segments | ch08 R14, R16 |
+| Prelude: closed list of types, values (`some none reduce`) and modules (`io fs net proc time rand env gpu`) | ch08 R17 |
+| No shadowing (total, prelude included); pairwise-distinct bindings | ch08 R18 |
+| `scoped(p)` names a parameter only | ch08 R20 (semantics: ch01 R19) |
+| Orphan rule; impls are not names | ch08 R21 |
+| Resolver/checker boundary: what needs a type; identifiers that are not names | ch08 R22-23 |
+| Binding versus reference in patterns | ch08 R25 |
+| Member tables (fields, variants, methods) and their duplicate rule | ch08 R27 |
 
 ## Closed by owner decision 2026-09-19
 
@@ -81,24 +96,36 @@ named, values still unset (ch04 R14); comptime file reads declared via an
 2. Header and keyword leftovers: `contracts:` placement (ch02 Q3, encoded
    in ch07 `file`); `recover` reserved-unused vs dropped (ch01 Q2).
    One-line grammar changes, but they touch every module header.
-3. Self-referential brand in the `with` header, `Arena[Node[nodes]]`
-   (ch01 Q3). Blocks the checker's `with` scoping and std tree/graph
+3. ch08 calls needed before the name resolver is frozen: prelude
+   contents — `Buffer`, `Vec`, `PageAllocator`, `Copyable` are used
+   unqualified in ch04 and the corpus but defined nowhere — and prelude
+   modules (`io.Stdout` with no `use`) versus mandatory `use std.io;`
+   (ch08 Q1); total no-shadowing, which makes `io fs net proc time rand
+   env gpu some none reduce` unusable as local names (ch08 Q2); the
+   manifest must define package name and source root (ch08 Q3). The
+   resolver can start on the drafted answers; Q1 changes one list.
+4. Self-referential brand in the `with` header, `Arena[Node[nodes]]`
+   (ch01 Q3; ch08 R19 scopes the name over the header accordingly).
+   Blocks the checker's `with` scoping and std tree/graph
    containers.
-4. Confirm trap = whole-process abort (ch02 Q1). Blocks the ABI and std.
-5. Overlapping `let`/`let` default (ch01 Q1). Blocks backend alias facts.
-6. `FAILURE_*` defaults; float return class (ch02 Q2, Q4). Blocks `fors-abi`.
-7. Deliberately absent syntax: char literals, labelled `break`, match
+5. Confirm trap = whole-process abort (ch02 Q1). Blocks the ABI and std.
+6. Overlapping `let`/`let` default (ch01 Q1). Blocks backend alias facts.
+7. `FAILURE_*` defaults; float return class (ch02 Q2, Q4). Blocks `fors-abi`.
+8. Deliberately absent syntax: char literals, labelled `break`, match
    guards, tuple index fields, type aliases (ch07 Q4). Blocks nothing
    until std needs one.
-8. `REDUCE_BLOCK`/`REDUCE_LANES` overridability (ch03 Q2).
-9. `@declassify` gate; secret in `@device`; CT denylist (ch05 Q1-3).
-10. Tunables: `MONOMORPHIZE_INSTR_THRESHOLD`, comptime budgets (ch03 Q1, ch04 Q1).
-11. Security-release signer; `dyn.load` (ch04 Q2-3).
-12. Round-2 verifier decisions to confirm (2026-09-19): statement-form
+9. `REDUCE_BLOCK`/`REDUCE_LANES` overridability (ch03 Q2).
+10. `@declassify` gate; secret in `@device`; CT denylist (ch05 Q1-3).
+11. Tunables: `MONOMORPHIZE_INSTR_THRESHOLD`, comptime budgets (ch03 Q1, ch04 Q1).
+12. Security-release signer; `dyn.load` (ch04 Q2-3).
+13. Round-2 verifier decisions to confirm (2026-09-19): statement-form
     `asm` checks against `()` rather than being a SYNTH error (ch04 R27);
     `env.Args` pairs with capability `env`, `fs.Dir` with `fs.read` or
     `fs.write` (ch04 R21); the CHECK-position list (ch03 R25), in
     particular that an argument to a generic-typed parameter is SYNTH;
     whether `main` may be called by user code. Blocks nothing: the
     checker can start on the drafted answers.
-13. Measurement: Tier A additions, Tier B order, canary `N`, FLOP calibration, blocked `matmul` (ch06 Q1-5).
+14. Measurement: Tier A additions, Tier B order, canary `N`, FLOP calibration, blocked `matmul` (ch06 Q1-5).
+15. No import aliases, globs or package-level visibility, so two modules
+    with the same last segment cannot both be imported; variant versus
+    associated-function name clash (ch08 Q4-5). Blocks nothing yet.

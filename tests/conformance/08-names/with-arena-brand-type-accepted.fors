@@ -1,0 +1,13 @@
+//! name: with_arena_brand_type_accepted
+//! rule: 08.R19
+//! expect: check-ok
+//! detail: the with-arena binding a is one binding, used as a value and in type position
+
+module m;
+
+fn f() {
+    with arena a: Arena {
+        var v: Own[i32, a] = Own.alloc(a, 1);
+        discard v;
+    }
+}

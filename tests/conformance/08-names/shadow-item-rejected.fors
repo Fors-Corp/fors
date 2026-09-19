@@ -1,0 +1,13 @@
+//! name: shadow_item_rejected
+//! rule: 08.R18
+//! expect: check-error
+//! detail: local helper reuses the name of a module item
+
+module m;
+
+fn helper() -> i32 { return 1; }
+
+fn f() -> i32 {
+    let helper: i32 = 2;
+    return helper;
+}

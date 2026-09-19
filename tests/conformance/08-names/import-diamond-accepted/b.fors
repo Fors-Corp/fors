@@ -1,0 +1,4 @@
+module b;
+use d;
+
+pub fn g() -> i32 { return d.k(); }

@@ -1,0 +1,9 @@
+//! name: module_name_from_directory_accepted
+//! rule: 08.R1
+//! expect: check-ok
+//! detail: geo/shapes.fors is module geo.shapes; the header is optional (lib has none)
+
+module main;
+use geo.shapes, lib;
+
+fn f() -> i32 { return shapes.area() + lib.one(); }

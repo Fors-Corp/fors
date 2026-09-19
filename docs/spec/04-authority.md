@@ -247,9 +247,9 @@ module fetch;
 needs { net, io.stderr };        // capabilities, not type names (Rule 21)
 use std.net;
 
-fn main(inout net: net.Net, inout err: io.Stderr) raises net.Error {
+fn main(inout conn: net.Net, inout err: io.Stderr) raises net.Error {   // `net` is the module: ch08 R18
     var buf: Buffer[u8] = Buffer.fixed(4096);
-    let n: usize = get(&net, "https://example.org", &buf)?;
+    let n: usize = get(&conn, "https://example.org", &buf)?;
 }
 
 fn get(inout c: net.Net, let url: Str, inout out: Buffer[u8]) -> usize raises net.Error {

@@ -1,0 +1,12 @@
+//! name: shadow_pattern_rejected
+//! rule: 08.R18
+//! expect: check-error
+//! detail: one-segment pattern n resolves to a parameter: R25 makes that an R18 error
+
+module m;
+
+fn f(let n: i32) -> i32 {
+    match n {
+        n => n,
+    }
+}

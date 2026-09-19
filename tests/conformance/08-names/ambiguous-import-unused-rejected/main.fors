@@ -1,0 +1,9 @@
+//! name: ambiguous_import_unused_rejected
+//! rule: 08.R15
+//! expect: check-error
+//! detail: the clash is an error at the second use path even though tag is never used
+
+module main;
+use a.tag, b.tag;
+
+fn f() -> i32 { return 0; }

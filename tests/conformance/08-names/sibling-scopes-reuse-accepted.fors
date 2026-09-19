@@ -1,0 +1,24 @@
+//! name: sibling_scopes_reuse_accepted
+//! rule: 08.R18
+//! expect: check-ok
+//! detail: scopes that do not enclose one another may reuse a name
+
+module m;
+
+fn g(let i: i32) -> i32 { return i; }
+
+fn f(let xs: Slice[i32], let n: i32) -> i32 {
+    var total: i32 = 0;
+    { let t: i32 = 1; total = total + t; }
+    { let t: i32 = 2; total = total + t; }
+    for i in xs { total = total + i; }
+    for i in xs { total = total + i; }
+    match n {
+        0 => 0,
+        k => k,
+    }
+    match total {
+        1 => 1,
+        k => k + 1,
+    }
+}

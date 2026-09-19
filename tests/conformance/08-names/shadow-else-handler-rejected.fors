@@ -1,0 +1,15 @@
+//! name: shadow_else_handler_rejected
+//! rule: 08.R18
+//! expect: check-error
+//! detail: the else |e| binding reuses a visible local
+
+module m;
+
+struct Err {}
+fn provider() -> i32 raises Err { return 1; }
+
+fn f() -> i32 {
+    let e: i32 = 0;
+    let v: i32 = provider() else |e| { 0 };
+    return v + e;
+}

@@ -1,0 +1,5 @@
+module lib;
+
+pub fn helper() -> i32 { return 1; }
+fn hidden() -> i32 { return 2; }
+pub enum Color { red, green }

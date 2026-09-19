@@ -1,0 +1,9 @@
+//! name: use_unresolved_rejected
+//! rule: 08.R4
+//! expect: check-error
+//! detail: lib has no module-scope name `absent` (R4b)
+
+module main;
+use lib.absent;
+
+fn f() -> i32 { return 0; }

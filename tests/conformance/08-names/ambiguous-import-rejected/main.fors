@@ -1,0 +1,9 @@
+//! name: ambiguous_import_rejected
+//! rule: 08.R15
+//! expect: check-error
+//! detail: a.tag and b.tag bind one name to two entities
+
+module main;
+use a.tag, b.tag;
+
+fn f() -> i32 { return tag(); }

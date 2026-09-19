@@ -1,0 +1,5 @@
+module trait_mod;
+
+pub trait Greet {
+    fn hello(let self: Self) -> i32;
+}

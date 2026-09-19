@@ -1,0 +1,9 @@
+//! name: module_header_match_accepted
+//! rule: 08.R1
+//! expect: check-ok
+//! detail: file foo.fors declares module foo, its derived name
+
+module main;
+use foo;
+
+fn f() -> i32 { return foo.g(); }

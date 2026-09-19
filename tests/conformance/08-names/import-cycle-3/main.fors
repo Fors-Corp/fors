@@ -1,0 +1,9 @@
+//! name: import_cycle_3
+//! rule: 08.R7
+//! expect: check-error
+//! detail: main -> b -> c -> main (the last edge through an item import)
+
+module main;
+use b;
+
+pub fn f() -> i32 { return b.g(); }

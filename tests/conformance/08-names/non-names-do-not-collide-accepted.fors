@@ -1,0 +1,16 @@
+//! name: non_names_do_not_collide_accepted
+//! rule: 08.R23
+//! expect: check-ok
+//! detail: field names, finit labels, named-argument labels and attribute names are not in any scope
+
+module m;
+
+struct P { pub x: i32, pub inline: i32 }
+
+@inline
+fn make(let x: i32) -> P { return P { x: x, inline: x }; }
+
+fn f(let inline: i32) -> i32 {
+    let x: P = make(x: inline);
+    return x.x + x.inline;
+}

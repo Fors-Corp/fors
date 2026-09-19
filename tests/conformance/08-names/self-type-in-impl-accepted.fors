@@ -1,0 +1,12 @@
+//! name: self_type_in_impl_accepted
+//! rule: 08.R26
+//! expect: check-ok
+//! detail: Self is implicitly bound between the braces of an impl
+
+module m;
+
+struct Thing { pub x: i32 }
+
+impl Thing {
+    pub fn get(let self: Self) -> i32 { return self.x; }
+}
