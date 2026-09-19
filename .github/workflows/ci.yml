@@ -31,4 +31,5 @@ jobs:
         env:
           RUSTFLAGS: -D warnings
       - name: Reference parser agrees with the corpus expectations
-        run: python3 tools/ref/fors_parse.py tests/conformance | tail -1 | grep -qx 'bad: 0'
+        run: |
+          python3 tools/ref/fors_parse.py tests/conformance | tail -1 | grep -qx 'bad: 0'
