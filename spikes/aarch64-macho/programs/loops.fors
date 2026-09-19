@@ -1,0 +1,13 @@
+fn main(inout out: io.Stdout) raises io.Error {
+    var checksum: i64 = 0;
+    var i: i64 = 0;
+    while i < 100 {
+        var j: i64 = 0;
+        while j < 50 {
+            checksum = checksum + i * j - j % 7;
+            j = j + 1;
+        }
+        i = i + 1;
+    }
+    out.write_int(checksum)?;
+}

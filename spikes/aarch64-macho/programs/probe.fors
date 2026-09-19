@@ -1,0 +1,15 @@
+fn fib(let n: i64) -> i64 {
+    if n < 2 {
+        return n;
+    } else {
+        return fib(n - 1) + fib(n - 2);
+    }
+}
+
+fn main(inout out: io.Stdout) raises io.Error {
+    var i: i64 = 0;
+    while i < 3 {
+        i = i + 1;
+    }
+    out.write_int(fib(10))?;
+}

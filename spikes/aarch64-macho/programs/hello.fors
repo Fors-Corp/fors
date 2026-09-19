@@ -1,0 +1,3 @@
+fn main(inout out: io.Stdout) raises io.Error {
+    out.write_line("hello")?;
+}

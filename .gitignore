@@ -1,7 +1,9 @@
 # graft's local graph cache — regenerable, not committed (run `graft build`).
 /graft/
 
-# cargo build output
+# cargo build output (the workspace's, and each standalone spike's)
 /target/
+/spikes/*/target/
+/spikes/*/out/
 
 __pycache__/
