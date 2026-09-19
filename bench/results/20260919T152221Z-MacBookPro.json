@@ -1,0 +1,312 @@
+{
+ "schema": 1,
+ "timestamp": "2026-09-19T15:22:21Z",
+ "host": {
+  "hostname": "MacBookPro.home",
+  "os": "Darwin 25.6.0",
+  "arch": "arm64",
+  "cpus": 8,
+  "python": "3.14.5",
+  "cpu": "Apple M1 Pro",
+  "performance_cores": "6",
+  "efficiency_cores": "2",
+  "ram_bytes": "17179869184",
+  "on_battery": false
+ },
+ "toolchains": {
+  "python": "Python 3.14.5"
+ },
+ "langs": {
+  "python": {
+   "name": "python",
+   "display": "Python (CPython)",
+   "source": "main.py",
+   "probe": [
+    "python3",
+    "--version"
+   ],
+   "run": [
+    "python3",
+    "{src}/main.py"
+   ]
+  }
+ },
+ "results": [
+  {
+   "kernel": "binary-trees",
+   "category": "alloc",
+   "lang": "python",
+   "threads": null,
+   "build": {
+    "ok": true,
+    "wall_s": 0.0,
+    "user_s": 0.0,
+    "sys_s": 0.0,
+    "max_rss_bytes": 0
+   },
+   "binary_bytes": null,
+   "runs": [
+    {
+     "wall_s": 21.151904458994977,
+     "user_s": 20.337308,
+     "sys_s": 0.221193,
+     "max_rss_bytes": 91439104
+    },
+    {
+     "wall_s": 21.238570958026685,
+     "user_s": 20.429989,
+     "sys_s": 0.236418,
+     "max_rss_bytes": 91455488
+    },
+    {
+     "wall_s": 21.387801292003132,
+     "user_s": 20.449799,
+     "sys_s": 0.24801399999999998,
+     "max_rss_bytes": 91455488
+    }
+   ],
+   "stats": {
+    "n": 3,
+    "min": 21.151904458994977,
+    "median": 21.238570958026685,
+    "p95": 21.387801292003132,
+    "mean": 21.25942556967493,
+    "stdev": 0.11932315398139942,
+    "max_rss_bytes": 91455488
+   },
+   "correct": true,
+   "error": null
+  },
+  {
+   "kernel": "fannkuch",
+   "category": "compute",
+   "lang": "python",
+   "threads": null,
+   "build": {
+    "ok": true,
+    "wall_s": 0.0,
+    "user_s": 0.0,
+    "sys_s": 0.0,
+    "max_rss_bytes": 0
+   },
+   "binary_bytes": null,
+   "runs": [
+    {
+     "wall_s": 78.6385011250386,
+     "user_s": 76.855635,
+     "sys_s": 0.593445,
+     "max_rss_bytes": 15663104
+    }
+   ],
+   "stats": {
+    "n": 1,
+    "min": 78.6385011250386,
+    "median": 78.6385011250386,
+    "p95": 78.6385011250386,
+    "mean": 78.6385011250386,
+    "stdev": 0.0,
+    "max_rss_bytes": 15663104
+   },
+   "correct": true,
+   "error": null
+  },
+  {
+   "kernel": "hashmap",
+   "category": "alloc",
+   "lang": "python",
+   "threads": null,
+   "build": {
+    "ok": true,
+    "wall_s": 0.0,
+    "user_s": 0.0,
+    "sys_s": 0.0,
+    "max_rss_bytes": 0
+   },
+   "binary_bytes": null,
+   "runs": [
+    {
+     "wall_s": 5.794922917033546,
+     "user_s": 5.543695,
+     "sys_s": 0.091622,
+     "max_rss_bytes": 287752192
+    },
+    {
+     "wall_s": 5.672803875000682,
+     "user_s": 5.526118,
+     "sys_s": 0.091337,
+     "max_rss_bytes": 287703040
+    },
+    {
+     "wall_s": 5.673315207997803,
+     "user_s": 5.541551,
+     "sys_s": 0.085795,
+     "max_rss_bytes": 290078720
+    }
+   ],
+   "stats": {
+    "n": 3,
+    "min": 5.672803875000682,
+    "median": 5.673315207997803,
+    "p95": 5.794922917033546,
+    "mean": 5.713680666677344,
+    "stdev": 0.07035831718825698,
+    "max_rss_bytes": 290078720
+   },
+   "correct": true,
+   "error": null
+  },
+  {
+   "kernel": "hello",
+   "category": "startup",
+   "lang": "python",
+   "threads": null,
+   "build": {
+    "ok": true,
+    "wall_s": 0.0,
+    "user_s": 0.0,
+    "sys_s": 0.0,
+    "max_rss_bytes": 0
+   },
+   "binary_bytes": null,
+   "runs": [
+    {
+     "wall_s": 0.020767750043887645,
+     "user_s": 0.012782,
+     "sys_s": 0.005632,
+     "max_rss_bytes": 15286272
+    },
+    {
+     "wall_s": 0.02161200001137331,
+     "user_s": 0.013261,
+     "sys_s": 0.005914,
+     "max_rss_bytes": 15319040
+    },
+    {
+     "wall_s": 0.02360350004164502,
+     "user_s": 0.014221999999999999,
+     "sys_s": 0.006619,
+     "max_rss_bytes": 15417344
+    },
+    {
+     "wall_s": 0.025673708994872868,
+     "user_s": 0.015042,
+     "sys_s": 0.0073019999999999995,
+     "max_rss_bytes": 15368192
+    },
+    {
+     "wall_s": 0.02498204103903845,
+     "user_s": 0.01413,
+     "sys_s": 0.007161,
+     "max_rss_bytes": 15335424
+    },
+    {
+     "wall_s": 0.021842624992132187,
+     "user_s": 0.013236999999999999,
+     "sys_s": 0.0060739999999999995,
+     "max_rss_bytes": 15400960
+    },
+    {
+     "wall_s": 0.021759458002634346,
+     "user_s": 0.013352999999999999,
+     "sys_s": 0.005781,
+     "max_rss_bytes": 15351808
+    },
+    {
+     "wall_s": 0.029069791024085134,
+     "user_s": 0.015771,
+     "sys_s": 0.008791,
+     "max_rss_bytes": 15302656
+    },
+    {
+     "wall_s": 0.026981041010003537,
+     "user_s": 0.014353999999999999,
+     "sys_s": 0.007574999999999999,
+     "max_rss_bytes": 15269888
+    },
+    {
+     "wall_s": 0.027062499953899533,
+     "user_s": 0.014377,
+     "sys_s": 0.008024,
+     "max_rss_bytes": 15400960
+    }
+   ],
+   "stats": {
+    "n": 10,
+    "min": 0.020767750043887645,
+    "median": 0.024292770540341735,
+    "p95": 0.029069791024085134,
+    "mean": 0.024335441511357202,
+    "stdev": 0.002839997655188519,
+    "max_rss_bytes": 15417344
+   },
+   "correct": true,
+   "error": null
+  },
+  {
+   "kernel": "nbody",
+   "category": "compute",
+   "lang": "python",
+   "threads": null,
+   "build": {
+    "ok": true,
+    "wall_s": 0.0,
+    "user_s": 0.0,
+    "sys_s": 0.0,
+    "max_rss_bytes": 0
+   },
+   "binary_bytes": null,
+   "runs": [
+    {
+     "wall_s": 170.41212612501113,
+     "user_s": 165.711158,
+     "sys_s": 1.195112,
+     "max_rss_bytes": 16056320
+    }
+   ],
+   "stats": {
+    "n": 1,
+    "min": 170.41212612501113,
+    "median": 170.41212612501113,
+    "p95": 170.41212612501113,
+    "mean": 170.41212612501113,
+    "stdev": 0.0,
+    "max_rss_bytes": 16056320
+   },
+   "correct": true,
+   "error": null
+  },
+  {
+   "kernel": "spectral-norm",
+   "category": "compute",
+   "lang": "python",
+   "threads": null,
+   "build": {
+    "ok": true,
+    "wall_s": 0.0,
+    "user_s": 0.0,
+    "sys_s": 0.0,
+    "max_rss_bytes": 0
+   },
+   "binary_bytes": null,
+   "runs": [
+    {
+     "wall_s": 126.90330199996242,
+     "user_s": 118.744687,
+     "sys_s": 0.972984,
+     "max_rss_bytes": 16351232
+    }
+   ],
+   "stats": {
+    "n": 1,
+    "min": 126.90330199996242,
+    "median": 126.90330199996242,
+    "p95": 126.90330199996242,
+    "mean": 126.90330199996242,
+    "stdev": 0.0,
+    "max_rss_bytes": 16351232
+   },
+   "correct": true,
+   "error": null
+  }
+ ]
+}

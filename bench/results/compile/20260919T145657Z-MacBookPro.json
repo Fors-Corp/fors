@@ -1,0 +1,97 @@
+{
+ "schema": 1,
+ "timestamp": "2026-09-19T14:56:57Z",
+ "host": {
+  "hostname": "MacBookPro.home",
+  "os": "Darwin 25.6.0",
+  "arch": "arm64",
+  "cpus": 8,
+  "python": "3.14.5",
+  "cpu": "Apple M1 Pro",
+  "performance_cores": "6",
+  "efficiency_cores": "2",
+  "ram_bytes": "17179869184",
+  "on_battery": false
+ },
+ "toolchains": {
+  "c": "Apple clang version 21.0.0 (clang-2100.1.1.101)",
+  "rust": "rustc 1.98.1 (48a229cea 2026-09-01)",
+  "go": "go version go1.27.1 darwin/arm64",
+  "swift": "Apple Swift version 6.3.3 (swiftlang-6.3.3.1.3 clang-2100.1.1.101)",
+  "java": "openjdk version \"11.0.25\" 2024-10-15 LTS"
+ },
+ "seed": {
+  "c-1000": 2027419828,
+  "rust-1000": 1647802693,
+  "go-1000": 584720967,
+  "swift-1000": 2017737509,
+  "java-1000": 1504416823
+ },
+ "rows": [
+  {
+   "lang": "c",
+   "size": 1000,
+   "seed": 2027419828,
+   "build_wall_s": 0.1576200000126846,
+   "build_user_s": 0.170736,
+   "build_sys_s": 0.038613999999999996,
+   "build_cpu_s": 0.20934999999999998,
+   "build_max_rss_bytes": 56049664,
+   "source_lines": 7048,
+   "source_bytes": 190312,
+   "correct": true
+  },
+  {
+   "lang": "rust",
+   "size": 1000,
+   "seed": 1647802693,
+   "build_wall_s": 0.5502630830160342,
+   "build_user_s": 0.319486,
+   "build_sys_s": 0.11834599999999999,
+   "build_cpu_s": 0.437832,
+   "build_max_rss_bytes": 127860736,
+   "source_lines": 6044,
+   "source_bytes": 153144,
+   "correct": true
+  },
+  {
+   "lang": "go",
+   "size": 1000,
+   "seed": 584720967,
+   "build_wall_s": 0.4059612919809297,
+   "build_user_s": 0.547491,
+   "build_sys_s": 0.184797,
+   "build_cpu_s": 0.7322879999999999,
+   "build_max_rss_bytes": 115982336,
+   "source_lines": 9048,
+   "source_bytes": 139148,
+   "correct": true
+  },
+  {
+   "lang": "swift",
+   "size": 1000,
+   "seed": 2017737509,
+   "build_wall_s": 3.213752374984324,
+   "build_user_s": 3.108684,
+   "build_sys_s": 0.10574199999999999,
+   "build_cpu_s": 3.2144259999999996,
+   "build_max_rss_bytes": 247431168,
+   "source_lines": 7052,
+   "source_bytes": 167316,
+   "correct": true
+  },
+  {
+   "lang": "java",
+   "size": 1000,
+   "seed": 1504416823,
+   "build_wall_s": 0.5351126660243608,
+   "build_user_s": 1.151878,
+   "build_sys_s": 0.038632,
+   "build_cpu_s": 1.19051,
+   "build_max_rss_bytes": 116817920,
+   "source_lines": 7050,
+   "source_bytes": 207542,
+   "correct": true
+  }
+ ]
+}

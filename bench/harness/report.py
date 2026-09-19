@@ -125,8 +125,12 @@ def main():
     except NotImplementedError:
         print("_Not defined yet: implement `score()` in bench/harness/report.py._")
     else:
+        # Normalised so the baseline reads 1.00; a language measured on fewer kernels is not comparable.
+        base = totals.get(BASELINE) or 1.0
         for lang, value in sorted(totals.items(), key=lambda kv: kv[1]):
-            print(f"- {lang}: {value:.3f}")
+            covered = len(ratios[lang].get("runtime", []))
+            partial = "" if covered == len(kernels) else f"  (partial: {covered}/{len(kernels)} kernels - not comparable)"
+            print(f"- {lang}: {value / base:.2f}{partial}")
 
     failed = [r for r in doc["results"] if not r["correct"]]
     if failed:
