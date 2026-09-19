@@ -1,0 +1,34 @@
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    # Linux only: benchmarks run on the pinned M1 box, never on shared runners.
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - run: rustup update stable --no-self-update && rustup default stable
+      - uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            target
+          key: cargo-${{ runner.os }}-${{ hashFiles('Cargo.lock') }}
+      - name: Rust tests (zero warnings)
+        run: cargo test --workspace
+        env:
+          RUSTFLAGS: -D warnings
+      - name: Reference parser agrees with the corpus expectations
+        run: python3 tools/ref/fors_parse.py tests/conformance | tail -1 | grep -qx 'bad: 0'
