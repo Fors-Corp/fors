@@ -1,0 +1,13 @@
+//! name: projection_field_behind_own_accepted
+//! rule: 09.R14
+//! expect: check-ok
+//! detail: a projection mentioned only inside Own adds no by-value edge, so the same shape is finite
+
+module m;
+
+struct S[I: Iterator, A: brand] { x: Option[Own[I.Item, A]] }
+struct Foo { n: i64 }
+impl Iterator for Foo {
+    type Item = i64;
+    fn next(inout self: Foo) -> Option[i64] { return none; }
+}

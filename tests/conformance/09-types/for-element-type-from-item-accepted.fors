@@ -1,0 +1,21 @@
+//! name: for_element_type_from_item_accepted
+//! rule: 09.R31
+//! expect: check-ok
+//! detail: the element type of a `for` over an Iterator is the normalised S.Item, here i64
+
+module m;
+
+struct Counter2 { n: i64, end: i64 }
+impl Iterator for Counter2 {
+    type Item = i64;
+    fn next(inout self: Counter2) -> Option[i64] {
+        if self.n >= self.end { return none; }
+        self.n = self.n + 1;
+        return some(self.n);
+    }
+}
+fn f(sink c: Counter2) -> i64 {
+    var total: i64 = 0;
+    for x in c { total = total + x; }
+    return total;
+}

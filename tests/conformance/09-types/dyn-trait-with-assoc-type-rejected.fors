@@ -1,0 +1,8 @@
+//! name: dyn_trait_with_assoc_type_rejected
+//! rule: 09.R25
+//! expect: check-error
+//! detail: T0025 -- a trait that declares an associated type is not dyn-capable; `dyn Iterator` does not exist in v0.1
+
+module m;
+
+fn f(inout it: dyn Iterator) { }

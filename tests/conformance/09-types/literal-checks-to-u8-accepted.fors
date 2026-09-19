@@ -1,0 +1,11 @@
+//! name: literal_checks_to_u8_accepted
+//! rule: 09.R27
+//! expect: check-ok
+//! detail: an unsuffixed integer literal checks against any integer type
+
+module m;
+
+fn f() -> u8 {
+    let a: u8 = 200;
+    return a;
+}

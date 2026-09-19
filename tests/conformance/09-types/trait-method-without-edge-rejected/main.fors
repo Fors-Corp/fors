@@ -1,0 +1,9 @@
+//! name: trait_method_without_edge_rejected
+//! rule: 09.R43
+//! expect: check-error
+//! detail: T0043 -- candidate traits come from the module graph: `main` has no direct edge to `naming`, where the impl of Named for Tag lives, so `t.id()` has no candidate
+
+module main;
+use shapes;
+
+fn f(let t: shapes.Tag) -> i64 { return t.id(); }

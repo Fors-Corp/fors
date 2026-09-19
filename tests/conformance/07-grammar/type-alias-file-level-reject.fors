@@ -1,0 +1,9 @@
+//! name: type_alias_file_level_reject
+//! rule: 07.ER1
+//! expect: parse-error
+//! detail: `type A = i32;` at file level yields exactly one diagnostic with the fixed message "type aliases do not exist"; the following declaration is intact
+
+module m;
+
+type A = i32;
+fn f() -> i32 { return 0; }

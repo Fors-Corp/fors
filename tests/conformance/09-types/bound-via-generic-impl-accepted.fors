@@ -1,0 +1,19 @@
+//! name: bound_via_generic_impl_accepted
+//! rule: 09.R12
+//! expect: check-ok
+//! detail: Pair[Sq]: Shape holds through impl[T: Shape] Shape for Pair[T], whose own bound is a goal on the strict subterm Sq
+
+module m;
+
+trait Shape { fn area(let self: Self) -> f64; }
+struct Sq { s: f64 }
+impl Shape for Sq { fn area(let self: Sq) -> f64 { return self.s * self.s; } }
+struct Pair[T] { a: T, b: T }
+impl[T: Shape] Shape for Pair[T] {
+    fn area(let self: Pair[T]) -> f64 { return self.a.area() + self.b.area(); }
+}
+fn total[T: Shape](let x: T) -> f64 { return x.area(); }
+fn f() -> f64 {
+    let p = Pair { a: Sq { s: 1.0 }, b: Sq { s: 2.0 } };
+    return total(p);
+}

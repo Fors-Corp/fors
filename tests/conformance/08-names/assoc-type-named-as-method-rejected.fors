@@ -1,0 +1,8 @@
+//! name: assoc_type_named_as_method_rejected
+//! rule: 08.R27
+//! expect: check-error
+//! detail: methods and associated types share one table per trait: `type Item;` beside `fn Item()`
+
+module m;
+
+trait Src { type Item; fn Item(let self: Self) -> i64; }

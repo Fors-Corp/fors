@@ -1,0 +1,21 @@
+//! name: implicit_receiver_move_in_closure_rejected
+//! rule: 09.R46
+//! expect: check-error
+//! detail: ch01 R4a(e) -- the closure body moves the captured place `b`
+
+module m;
+
+struct Builder { parts: i64 }
+impl Builder {
+    fn finish(sink self: Builder) -> i64 {
+        let p = self.parts;
+        discard self;
+        return p;
+    }
+    fn peek(let self: Builder) -> i64 { return self.parts; }
+    fn add(inout self: Builder) { self.parts = self.parts + 1; }
+}
+fn f(sink b: Builder) -> i64 {
+    let g: fn() -> i64 = || b.finish();
+    return g();
+}

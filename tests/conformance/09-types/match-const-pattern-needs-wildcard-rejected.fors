@@ -1,0 +1,13 @@
+//! name: match_const_pattern_needs_wildcard_rejected
+//! rule: 09.R53
+//! expect: check-error
+//! detail: T0053 -- a const pattern is refutable and covers exactly one value
+
+module m;
+
+const LIMIT: i32 = 10;
+fn f(let n: i32) -> i32 {
+    match n {
+        LIMIT => 1,
+    }
+}

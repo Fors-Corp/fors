@@ -1,0 +1,8 @@
+//! name: generics_param_equality_reject
+//! rule: 07.D19
+//! expect: parse-error
+//! detail: `=` after a gparam's identifier is the same equality-bound parse error
+
+module m;
+
+fn f[T = i64]() { }

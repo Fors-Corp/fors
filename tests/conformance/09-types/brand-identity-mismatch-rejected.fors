@@ -1,0 +1,16 @@
+//! name: brand_identity_mismatch_rejected
+//! rule: 09.R9
+//! expect: check-error
+//! detail: T0026 -- brand arguments are compared by identity: Ref[Node[one], one] is not Ref[Node[two], two]
+
+module m;
+
+struct Node[A: brand] { val: i64 }
+fn f() {
+    with arena one: Arena[Node[one]] {
+        let x: Ref[Node[one], one] = one.alloc(Node { val: 1 });
+        with arena two: Arena[Node[two]] {
+            let y: Ref[Node[two], two] = x;
+        }
+    }
+}

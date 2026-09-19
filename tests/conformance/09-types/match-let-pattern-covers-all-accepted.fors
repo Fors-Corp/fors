@@ -1,0 +1,13 @@
+//! name: match_let_pattern_covers_all_accepted
+//! rule: 09.R53
+//! expect: check-ok
+//! detail: `let n` is a wildcard for exhaustiveness: it covers every value of its column
+
+module m;
+
+fn f(let n: i32) -> i32 {
+    match n {
+        0 => 0,
+        let other => other,
+    }
+}

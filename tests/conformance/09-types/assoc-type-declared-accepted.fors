@@ -1,0 +1,11 @@
+//! name: assoc_type_declared_accepted
+//! rule: 09.R16
+//! expect: check-ok
+//! detail: `type Item;` declares an associated type; Self.Item is usable in a method signature
+
+module m;
+
+trait Source {
+    type Item;
+    fn pull(inout self: Self) -> Option[Self.Item];
+}

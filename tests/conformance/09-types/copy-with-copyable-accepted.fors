@@ -1,0 +1,8 @@
+//! name: copy_with_copyable_accepted
+//! rule: 09.R57
+//! expect: check-ok
+//! detail: with T: Copyable the same value use is a copy
+
+module m;
+
+fn dup[T: Copyable](let x: T) -> T { return x; }

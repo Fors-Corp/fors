@@ -1,0 +1,8 @@
+//! name: mixed_trait_and_type_bound_rejected
+//! rule: 09.R15
+//! expect: check-error
+//! detail: T0015 -- bounds must be all traits, or exactly one non-trait type, or exactly one fn type
+
+module m;
+
+fn f[N: usize + Copyable]() { }

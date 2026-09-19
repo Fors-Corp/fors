@@ -1,0 +1,18 @@
+//! name: projection_normalises_after_substitution_accepted
+//! rule: 09.R20
+//! expect: check-ok
+//! detail: the result type Option[I.Item] is normalised to Option[i64] once I := Counter2
+
+module m;
+
+struct Counter2 { n: i64, end: i64 }
+impl Iterator for Counter2 {
+    type Item = i64;
+    fn next(inout self: Counter2) -> Option[i64] {
+        if self.n >= self.end { return none; }
+        self.n = self.n + 1;
+        return some(self.n);
+    }
+}
+fn first[I: Iterator](inout it: I) -> Option[I.Item] { return it.next(); }
+fn f(inout c: Counter2) -> Option[i64] { return first(&c); }

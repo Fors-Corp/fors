@@ -1,0 +1,22 @@
+//! name: constraint_entry_satisfied_at_call_accepted
+//! rule: 09.R62
+//! expect: check-ok
+//! detail: at the call I.Item normalises to i64, which has the built-in Add and Copyable impls
+
+module m;
+
+struct Counter2 { n: i64, end: i64 }
+impl Iterator for Counter2 {
+    type Item = i64;
+    fn next(inout self: Counter2) -> Option[i64] {
+        if self.n >= self.end { return none; }
+        self.n = self.n + 1;
+        return some(self.n);
+    }
+}
+fn sum_all[I: Iterator, I.Item: Add + Copyable](sink it: I, let zero: I.Item) -> I.Item {
+    var acc: I.Item = zero;
+    for x in it { acc = acc + x; }
+    return acc;
+}
+fn f(sink c: Counter2) -> i64 { return sum_all(move c, 0); }

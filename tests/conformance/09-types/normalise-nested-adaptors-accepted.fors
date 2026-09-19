@@ -1,0 +1,29 @@
+//! name: normalise_nested_adaptors_accepted
+//! rule: 09.R20
+//! expect: check-ok
+//! detail: Skip[Skip[Counter2]].Item -> Skip[Counter2].Item -> Counter2.Item -> i64, by structural descent
+
+module m;
+
+struct Counter2 { n: i64, end: i64 }
+impl Iterator for Counter2 {
+    type Item = i64;
+    fn next(inout self: Counter2) -> Option[i64] {
+        if self.n >= self.end { return none; }
+        self.n = self.n + 1;
+        return some(self.n);
+    }
+}
+struct Skip[I] { inner: I, n: usize }
+impl[I: Iterator] Iterator for Skip[I] {
+    type Item = I.Item;
+    fn next(inout self: Skip[I]) -> Option[I.Item] { return self.inner.next(); }
+}
+fn first[I: Iterator](inout it: I) -> Option[I.Item] { return it.next(); }
+fn f(inout s: Skip[Skip[Counter2]]) -> i64 {
+    let got: Option[i64] = first(&s);
+    match got {
+        some(let v) => v,
+        none => 0,
+    }
+}

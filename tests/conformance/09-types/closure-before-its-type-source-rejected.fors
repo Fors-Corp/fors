@@ -1,0 +1,9 @@
+//! name: closure_before_its_type_source_rejected
+//! rule: 09.R41
+//! expect: check-error
+//! detail: T0035 -- the closure precedes the argument that binds T, so it is in SYNTH mode with an un-annotated parameter
+
+module m;
+
+fn apply_rev[T, U, F: fn(let T) -> U](let f: F, let x: T) -> U { return f(x); }
+fn demo() -> i32 { return apply_rev(|let n| n * 2, 2); }

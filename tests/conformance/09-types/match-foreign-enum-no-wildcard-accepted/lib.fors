@@ -1,0 +1,3 @@
+module lib;
+
+pub enum Color { red, green }

@@ -1,0 +1,13 @@
+//! name: impl_param_only_in_assoc_type_rejected
+//! rule: 09.R18
+//! expect: check-error
+//! detail: T0018 -- an occurrence of U only in `type Key = ...;` does not constrain it
+
+module m;
+
+trait Holder { type Held; fn n(let self: Self) -> i64; }
+struct Two[T] { a: T }
+impl[T, U] Holder for Two[T] {
+    type Held = Option[U];
+    fn n(let self: Two[T]) -> i64 { return 0; }
+}

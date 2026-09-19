@@ -1,0 +1,22 @@
+//! name: closure_before_its_iterator_rejected
+//! rule: 09.R41
+//! expect: check-error
+//! detail: T0035 -- the closure comes BEFORE the iterator that binds I, so fn(sink I.Item) -> U is not complete when it is visited: SYNTH mode, un-annotated parameter; declare the head-binding parameter first
+
+module m;
+
+struct Counter2 { n: i64, end: i64 }
+impl Iterator for Counter2 {
+    type Item = i64;
+    fn next(inout self: Counter2) -> Option[i64] {
+        if self.n >= self.end { return none; }
+        self.n = self.n + 1;
+        return some(self.n);
+    }
+}
+fn sum_rev[I: Iterator, U: Add + Copyable, F: fn(sink I.Item) -> U](let f: F, sink it: I, let zero: U) -> U {
+    var acc: U = zero;
+    for x in it { acc = acc + f(move x); }
+    return acc;
+}
+fn demo(sink xs: Counter2) -> i64 { return sum_rev(|sink x| x * 2, move xs, 0); }

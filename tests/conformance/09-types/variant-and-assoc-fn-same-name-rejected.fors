@@ -1,0 +1,9 @@
+//! name: variant_and_assoc_fn_same_name_rejected
+//! rule: 09.R48
+//! expect: check-error
+//! detail: T0048 -- an inherent associated function named like a variant of the enum (closes ch08 open question 5)
+
+module m;
+
+enum Shape2 { circle(f64), empty }
+impl Shape2 { fn empty() -> Shape2 { return Shape2.circle(0.0); } }

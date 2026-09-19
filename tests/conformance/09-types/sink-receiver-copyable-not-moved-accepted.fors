@@ -1,0 +1,11 @@
+//! name: sink_receiver_copyable_not_moved_accepted
+//! rule: 09.R46
+//! expect: check-ok
+//! detail: a Copyable receiver is copied, not moved, so it stays usable
+
+module m;
+
+struct P { x: i64 }
+impl Copyable for P { }
+impl P { fn take(sink self: P) -> i64 { return self.x; } }
+fn f(let p: P) -> i64 { return p.take() + p.take(); }

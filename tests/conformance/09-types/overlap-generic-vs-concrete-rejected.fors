@@ -1,0 +1,11 @@
+//! name: overlap_generic_vs_concrete_rejected
+//! rule: 09.R19
+//! expect: check-error
+//! detail: T0019 -- Pair[T] unifies with Pair[i32]
+
+module m;
+
+trait Shape { fn area(let self: Self) -> f64; }
+struct Pair[T] { a: T, b: T }
+impl[T] Shape for Pair[T] { fn area(let self: Pair[T]) -> f64 { return 0.0; } }
+impl Shape for Pair[i32] { fn area(let self: Pair[i32]) -> f64 { return 1.0; } }

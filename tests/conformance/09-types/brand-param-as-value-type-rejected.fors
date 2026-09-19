@@ -1,0 +1,8 @@
+//! name: brand_param_as_value_type_rejected
+//! rule: 09.R58
+//! expect: check-error
+//! detail: ch01 R15d -- a brand parameter occurs only as a brand argument, never as the type of a value
+
+module m;
+
+fn f[A: brand](let x: A) { }

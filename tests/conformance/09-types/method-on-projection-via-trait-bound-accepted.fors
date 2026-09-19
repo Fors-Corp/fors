@@ -1,0 +1,10 @@
+//! name: method_on_projection_via_trait_bound_accepted
+//! rule: 09.R43
+//! expect: check-ok
+//! detail: for a neutral projection the candidate traits are the bounds its trait declares for the associated type
+
+module m;
+
+trait Named { fn id(let self: Self) -> i64; }
+trait Source { type Item: Named; fn pull(inout self: Self) -> Option[Self.Item]; }
+fn f[S: Source](let x: S.Item) -> i64 { return x.id(); }

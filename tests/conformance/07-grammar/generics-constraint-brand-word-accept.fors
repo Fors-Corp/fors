@@ -1,0 +1,9 @@
+//! name: generics_constraint_brand_word_accept
+//! rule: 07.D19
+//! expect: parse-ok
+//! detail: `brand` is contextual in the gparam slot only: in a constraint entry's bounds it is an ordinary type path, so this parses (and is ch09's to reject)
+
+module m;
+
+trait It { type Item; }
+fn f[I: It, I.Item: brand + Eq]() { }

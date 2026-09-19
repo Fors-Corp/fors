@@ -1,0 +1,13 @@
+//! name: assoc_type_extra_in_impl_rejected
+//! rule: 09.R17
+//! expect: check-error
+//! detail: T0017 -- `Extra` is not an associated type of Iterator
+
+module m;
+
+struct Counter2 { n: i64 }
+impl Iterator for Counter2 {
+    type Item = i64;
+    type Extra = i64;
+    fn next(inout self: Counter2) -> Option[i64] { return none; }
+}

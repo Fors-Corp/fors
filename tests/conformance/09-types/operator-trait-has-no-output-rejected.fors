@@ -1,0 +1,12 @@
+//! name: operator_trait_has_no_output_rejected
+//! rule: 09.R21
+//! expect: check-error
+//! detail: T0017 -- the operator traits are homogeneous: Add declares no associated type, so `type Output` is not a member of it
+
+module m;
+
+struct V2 { x: f64, y: f64 }
+impl Add for V2 {
+    type Output = V2;
+    fn add(let self: V2, let rhs: V2) -> V2 { return V2 { x: self.x + rhs.x, y: self.y + rhs.y }; }
+}

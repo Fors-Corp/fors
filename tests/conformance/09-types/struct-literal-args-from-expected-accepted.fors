@@ -1,0 +1,12 @@
+//! name: struct_literal_args_from_expected_accepted
+//! rule: 09.R34
+//! expect: check-ok
+//! detail: the expected type determines Pair's argument before the fields are visited, so `1` is checked as u8
+
+module m;
+
+struct Pair[T] { a: T, b: T }
+fn f() -> Pair[u8] {
+    let p: Pair[u8] = Pair { a: 1, b: 2 };
+    return p;
+}

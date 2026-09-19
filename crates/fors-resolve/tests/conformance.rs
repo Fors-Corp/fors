@@ -239,6 +239,45 @@ fn ch08_names_corpus() {
     assert!(failures.is_empty(), "ch08 corpus failures:\n{}", failures.join("\n"));
 }
 
+/// Ch09 (types) corpus, round 4: this crate has no type checker, so a
+/// `T`-coded test must be resolver-CLEAN (every projection, constraint
+/// entry and associated-type item resolves with no N-error: ch08 Rules
+/// 16, 26, 27 defer exactly what ch09 decides), and a test whose
+/// `detail` names an ch08 code (`N0026`, `N0027`) must produce exactly
+/// that one diagnostic. Tests whose code is a ch01 rule are resolver-clean
+/// too. The corpus counts 09-types tests by name so a stale spec list is
+/// noticed here as well as in the spec's own listing.
+#[test]
+fn ch09_types_corpus_resolver_view() {
+    let dir = repo_root().join("tests/conformance/09-types");
+    let targets = corpus_targets(&dir);
+    assert!(targets.len() >= 150, "09-types corpus not found or truncated: {}", targets.len());
+    let mut failures = Vec::new();
+    for target in &targets {
+        let src = directive_source(target);
+        let case = parse_directives(&src);
+        assert_eq!(case.rule_chapter, 9, "{}: every 09-types test cites 09.Rk", case.name);
+        let detail = src.lines().find_map(|l| l.strip_prefix("//! detail:")).unwrap_or("").trim().to_string();
+        let expected_n: Option<u16> = detail.strip_prefix("N").and_then(|r| r.get(..4)).and_then(|d| d.parse().ok());
+        let diags = resolve_target(target);
+        let got: Vec<String> = diags.iter().map(|d| d.code.as_string()).collect();
+        match (case.expect.as_str(), expected_n) {
+            ("check-error", Some(n)) => {
+                if diags.len() != 1 || diags[0].code != Code::N(n) {
+                    failures.push(format!("{}: expected exactly one N{n:04}, got {got:?}", case.name));
+                }
+            }
+            ("check-ok", _) | ("check-error", None) => {
+                if !diags.is_empty() {
+                    failures.push(format!("{}: expected the resolver to be clean (the test is ch09's/ch01's), got {got:?}", case.name));
+                }
+            }
+            (other, _) => failures.push(format!("{}: unexpected expectation {other:?}", case.name)),
+        }
+    }
+    assert!(failures.is_empty(), "ch09 corpus (resolver view) failures:\n{}", failures.join("\n"));
+}
+
 #[test]
 fn ch04_authority_corpus_subset() {
     let dir = repo_root().join("tests/conformance/04-authority");

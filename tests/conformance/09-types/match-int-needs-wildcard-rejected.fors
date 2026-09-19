@@ -1,0 +1,13 @@
+//! name: match_int_needs_wildcard_rejected
+//! rule: 09.R53
+//! expect: check-error
+//! detail: T0053 -- integer literals have an infinite domain; e.g. 1 is uncovered
+
+module m;
+
+fn sign(let n: i32) -> i32 {
+    match n {
+        0 => 0,
+        -1 => -1,
+    }
+}

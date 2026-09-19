@@ -1,0 +1,12 @@
+//! name: assoc_type_rhs_self_projection_rejected
+//! rule: 09.R61
+//! expect: check-error
+//! detail: T0061 -- the cycle probe: inside `type A = RHS;` a projection must be headed by an impl parameter, never by Self
+
+module m;
+
+struct Counter2 { n: i64 }
+impl Iterator for Counter2 {
+    type Item = Self.Item;
+    fn next(inout self: Counter2) -> Option[i64] { return none; }
+}

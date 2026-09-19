@@ -1,0 +1,13 @@
+//! name: pattern_float_literal_rejected
+//! rule: 09.R50
+//! expect: check-error
+//! detail: T0050 -- float literals are not patterns
+
+module m;
+
+fn f(let x: f64) -> i32 {
+    match x {
+        1.5 => 1,
+        _ => 0,
+    }
+}

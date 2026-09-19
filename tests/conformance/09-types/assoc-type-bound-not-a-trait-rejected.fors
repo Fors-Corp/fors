@@ -1,0 +1,10 @@
+//! name: assoc_type_bound_not_a_trait_rejected
+//! rule: 09.R16
+//! expect: check-error
+//! detail: T0016 -- every bound of an associated type must be a trait; usize is a const-kind type
+
+module m;
+
+trait Sized2 {
+    type Len: usize;
+}

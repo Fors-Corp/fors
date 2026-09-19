@@ -1,0 +1,12 @@
+//! name: inherent_before_trait_accepted
+//! rule: 09.R43
+//! expect: check-ok
+//! detail: tier 1 (inherent) answers, so the trait method of the same name is never consulted
+
+module m;
+
+trait Named { fn id(let self: Self) -> i64; }
+struct Tag { n: i64 }
+impl Tag { fn id(let self: Tag) -> i64 { return self.n; } }
+impl Named for Tag { fn id(let self: Tag) -> i64 { return 0; } }
+fn f(let t: Tag) -> i64 { return t.id(); }

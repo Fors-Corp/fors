@@ -1,0 +1,9 @@
+//! name: bracket_instantiates_method_accepted
+//! rule: 09.R47
+//! expect: check-ok
+//! detail: a bracket after a generic fn path instantiates; after a value it indexes
+
+module m;
+
+fn id[T](sink x: T) -> T { return x; }
+fn f(let a: Array[i32, 4]) -> i32 { return id[i32](a[1]); }

@@ -1,0 +1,12 @@
+//! name: literal_default_ignores_later_use_rejected
+//! rule: 09.R1
+//! expect: check-error
+//! detail: T0026 -- `let n = 0;` is i32 whatever later uses need; passing it where i64 is expected is a mismatch, not a reason to retype `n`
+
+module m;
+
+fn takes(let v: i64) -> i64 { return v; }
+fn f() -> i64 {
+    let n = 0;
+    return takes(n);
+}

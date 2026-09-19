@@ -1,0 +1,8 @@
+//! name: item_named_as_prelude_trait_rejected
+//! rule: 08.R13
+//! expect: check-error
+//! detail: an item named `Iterator` has a prelude name (Rule 13)
+
+module m;
+
+trait Iterator { fn next(inout self: Self) -> Option[i64]; }

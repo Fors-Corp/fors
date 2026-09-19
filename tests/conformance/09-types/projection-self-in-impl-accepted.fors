@@ -1,0 +1,15 @@
+//! name: projection_self_in_impl_accepted
+//! rule: 09.R61
+//! expect: check-ok
+//! detail: inside an impl Self.Item is replaced at once by that impl's own definition, i64
+
+module m;
+
+struct Counter2 { n: i64 }
+impl Iterator for Counter2 {
+    type Item = i64;
+    fn next(inout self: Counter2) -> Option[Self.Item] {
+        self.n = self.n + 1;
+        return some(self.n);
+    }
+}

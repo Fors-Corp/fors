@@ -1,0 +1,8 @@
+//! name: generic_checked_at_definition_rejected
+//! rule: 09.R59
+//! expect: check-error
+//! detail: T0057 -- the generic is never instantiated, yet its ill-typed body is rejected at the definition
+
+module m;
+
+fn never_called[T: Copyable](let a: T) -> T { return -a; }

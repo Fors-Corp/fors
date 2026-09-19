@@ -1,0 +1,13 @@
+//! name: pattern_bare_prelude_type_rejected
+//! rule: 09.R50
+//! expect: check-error
+//! detail: T0050 -- a bare pattern name that resolves to a prelude type
+
+module m;
+
+fn f(let n: i32) -> i32 {
+    match n {
+        Option => 1,
+        _ => 0,
+    }
+}

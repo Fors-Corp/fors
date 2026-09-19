@@ -1,0 +1,11 @@
+//! name: infer_from_expected_type_accepted
+//! rule: 09.R38
+//! expect: check-ok
+//! detail: the expected type binds T := u8 before the argument is visited (Rule 38(c))
+
+module m;
+
+fn f() -> Option[u8] {
+    let b: Option[u8] = some(1);
+    return b;
+}

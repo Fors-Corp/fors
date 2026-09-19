@@ -1,0 +1,12 @@
+//! name: for_over_rigid_non_iterator_rejected
+//! rule: 09.R31
+//! expect: check-error
+//! detail: T0031 -- a rigid parameter is iterable only through an Iterator bound
+
+module m;
+
+fn count[I](sink it: I) -> i64 {
+    var n: i64 = 0;
+    for x in it { n = n + 1; }
+    return n;
+}

@@ -1,0 +1,19 @@
+//! name: implicit_receiver_move_of_field_rejected
+//! rule: 09.R46
+//! expect: check-error
+//! detail: ch01 R4a(c) -- `s.b.finish()` is a partial move out of the field place `s.b`
+
+module m;
+
+struct Builder { parts: i64 }
+impl Builder {
+    fn finish(sink self: Builder) -> i64 {
+        let p = self.parts;
+        discard self;
+        return p;
+    }
+    fn peek(let self: Builder) -> i64 { return self.parts; }
+    fn add(inout self: Builder) { self.parts = self.parts + 1; }
+}
+struct Site { b: Builder, id: i64 }
+fn f(sink s: Site) -> i64 { return s.b.finish(); }

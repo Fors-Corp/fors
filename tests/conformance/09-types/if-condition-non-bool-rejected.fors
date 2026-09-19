@@ -1,0 +1,11 @@
+//! name: if_condition_non_bool_rejected
+//! rule: 09.R30
+//! expect: check-error
+//! detail: T0030 -- an `if` condition must be bool; there is no truthiness
+
+module m;
+
+fn f(let n: i32) -> i32 {
+    if n { return 1; }
+    return 0;
+}

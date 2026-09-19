@@ -1,0 +1,24 @@
+//! name: projection_result_against_expected_accepted
+//! rule: 09.R38
+//! expect: check-ok
+//! detail: matching the declared result Option[I.Item] against the expected type binds nothing through the projection; I comes from the argument and the result normalises to Option[i64]
+
+module m;
+
+struct Counter2 { n: i64, end: i64 }
+impl Iterator for Counter2 {
+    type Item = i64;
+    fn next(inout self: Counter2) -> Option[i64] {
+        if self.n >= self.end { return none; }
+        self.n = self.n + 1;
+        return some(self.n);
+    }
+}
+fn first[I: Iterator](inout it: I) -> Option[I.Item] { return it.next(); }
+fn f(inout c: Counter2) -> i64 {
+    let got: Option[i64] = first(&c);
+    match got {
+        some(let v) => v,
+        none => 0,
+    }
+}

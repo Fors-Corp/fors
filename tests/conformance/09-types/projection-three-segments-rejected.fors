@@ -1,0 +1,8 @@
+//! name: projection_three_segments_rejected
+//! rule: 09.R61
+//! expect: check-error
+//! detail: T0061 -- a projection has exactly two segments; I.Item.Item has no spelling in v0.1
+
+module m;
+
+fn f[I: Iterator, I.Item: Iterator](let x: I.Item.Item) { }

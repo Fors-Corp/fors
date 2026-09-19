@@ -1,0 +1,11 @@
+//! name: assoc_type_missing_in_impl_rejected
+//! rule: 09.R17
+//! expect: check-error
+//! detail: T0017 -- the impl of Iterator does not define `Item`
+
+module m;
+
+struct Counter2 { n: i64 }
+impl Iterator for Counter2 {
+    fn next(inout self: Counter2) -> Option[i64] { return none; }
+}

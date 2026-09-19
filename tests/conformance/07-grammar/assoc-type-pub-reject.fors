@@ -1,0 +1,10 @@
+//! name: assoc_type_pub_reject
+//! rule: 07.D20
+//! expect: parse-error
+//! detail: an associated-type item takes no `pub`
+
+module m;
+
+struct S { x: i32 }
+trait T { type A; }
+impl T for S { pub type A = i32; }

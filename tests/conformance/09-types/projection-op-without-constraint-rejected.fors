@@ -1,0 +1,10 @@
+//! name: projection_op_without_constraint_rejected
+//! rule: 09.R57
+//! expect: check-error
+//! detail: T0057 -- the neutral I.Item has no Add bound: Iterator declares none for Item and no constraint entry adds one; nothing is learnt from any impl
+
+module m;
+
+fn no_add[I: Iterator, I.Item: Copyable](sink it: I, let zero: I.Item) {
+    for x in it { let y = zero + x; }
+}

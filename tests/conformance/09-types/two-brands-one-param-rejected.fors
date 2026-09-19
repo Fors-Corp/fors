@@ -1,0 +1,17 @@
+//! name: two_brands_one_param_rejected
+//! rule: 09.R40
+//! expect: check-error
+//! detail: T0026 -- A is bound to `two` by the first argument; the second argument's brand `one` disagrees
+
+module m;
+
+struct Node[A: brand] { val: i64 }
+fn touch[A: brand](inout a: Arena[Node[A], A], let r: Ref[Node[A], A]) -> i64 { return a[r].val; }
+fn f() {
+    with arena one: Arena[Node[one]] {
+        let x: Ref[Node[one], one] = one.alloc(Node { val: 1 });
+        with arena two: Arena[Node[two]] {
+            let v: i64 = touch(&two, x);
+        }
+    }
+}

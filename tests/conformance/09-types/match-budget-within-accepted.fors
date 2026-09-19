@@ -1,0 +1,27 @@
+//! name: match_budget_within_accepted
+//! rule: 09.R55
+//! expect: check-ok
+//! detail: the same family on 8 columns stays inside the budget (about 4 000 steps against 36 864)
+
+module m;
+
+fn f(let b0: bool, let b1: bool, let b2: bool, let b3: bool, let b4: bool, let b5: bool, let b6: bool, let b7: bool) -> i32 {
+    match (b0, b1, b2, b3, b4, b5, b6, b7) {
+        (true, true, _, _, _, _, _, _) => 0,
+        (false, false, _, _, _, _, _, _) => 1,
+        (_, true, true, _, _, _, _, _) => 2,
+        (_, false, false, _, _, _, _, _) => 3,
+        (_, _, true, true, _, _, _, _) => 4,
+        (_, _, false, false, _, _, _, _) => 5,
+        (_, _, _, true, true, _, _, _) => 6,
+        (_, _, _, false, false, _, _, _) => 7,
+        (_, _, _, _, true, true, _, _) => 8,
+        (_, _, _, _, false, false, _, _) => 9,
+        (_, _, _, _, _, true, true, _) => 10,
+        (_, _, _, _, _, false, false, _) => 11,
+        (_, _, _, _, _, _, true, true) => 12,
+        (_, _, _, _, _, _, false, false) => 13,
+        (true, false, true, false, true, false, true, false) => 14,
+        (false, true, false, true, false, true, false, true) => 15,
+    }
+}

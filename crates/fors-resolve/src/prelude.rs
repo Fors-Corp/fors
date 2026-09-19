@@ -7,13 +7,20 @@ pub const PRELUDE_TYPES: [&[u8]; 20] = [
 pub const PRELUDE_TYPES2: [&[u8]; 4] = [b"Own", b"Ref", b"Arena", b"Option"];
 pub const PRELUDE_TYPES3: [&[u8]; 2] = [b"Shared", b"ErrorFrom"];
 
+/// Round 4 (owner decisions 2026-09-19): the names ch09 Rules 4, 5, 21
+/// and 23 make language-known.
+pub const PRELUDE_TYPES4: [&[u8]; 20] = [
+    b"never", b"Range", b"RangeIncl", b"Copyable", b"Eq", b"Ord", b"Add", b"Sub", b"Mul", b"Div", b"Rem", b"Neg", b"BitAnd",
+    b"BitOr", b"BitXor", b"Shl", b"Shr", b"Iterator", b"Index", b"IndexMut",
+];
+
 pub const PRELUDE_VALUES: [&[u8]; 3] = [b"some", b"none", b"reduce"];
 
 /// Denote `std.<name>` (ch08 Rule 17). Order matches `fors_index`'s list.
 pub const PRELUDE_MODULES: [&[u8]; 8] = [b"io", b"fs", b"net", b"proc", b"time", b"rand", b"env", b"gpu"];
 
 pub fn is_prelude_type(name: &[u8]) -> bool {
-    PRELUDE_TYPES.contains(&name) || PRELUDE_TYPES2.contains(&name) || PRELUDE_TYPES3.contains(&name)
+    PRELUDE_TYPES.contains(&name) || PRELUDE_TYPES2.contains(&name) || PRELUDE_TYPES3.contains(&name) || PRELUDE_TYPES4.contains(&name)
 }
 
 pub fn is_prelude_value(name: &[u8]) -> bool {

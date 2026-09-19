@@ -1,0 +1,8 @@
+//! name: type_reserved_member_reject
+//! rule: 07.L1
+//! expect: parse-error
+//! detail: `type` cannot be a path segment: `x.type` is a parse error
+
+module m;
+
+fn f(let x: i32) -> i32 { return x.type; }

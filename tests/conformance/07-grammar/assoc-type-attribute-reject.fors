@@ -1,0 +1,8 @@
+//! name: assoc_type_attribute_reject
+//! rule: 07.D20
+//! expect: parse-error
+//! detail: an associated-type item takes no attribute
+
+module m;
+
+trait T { @x type A; }

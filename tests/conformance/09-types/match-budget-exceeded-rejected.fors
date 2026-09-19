@@ -1,0 +1,47 @@
+//! name: match_budget_exceeded_rejected
+//! rule: 09.R55
+//! expect: check-error
+//! detail: T0055 -- exhaustive and every arm useful, but the plain usefulness count on 18 columns of adjacent-pair rows is far beyond MATCH_STEP_FACTOR (256) times the pattern-node count; nest the match
+
+module m;
+
+fn f(let b0: bool, let b1: bool, let b2: bool, let b3: bool, let b4: bool, let b5: bool, let b6: bool, let b7: bool, let b8: bool, let b9: bool, let b10: bool, let b11: bool, let b12: bool, let b13: bool, let b14: bool, let b15: bool, let b16: bool, let b17: bool) -> i32 {
+    match (b0, b1, b2, b3, b4, b5, b6, b7, b8, b9, b10, b11, b12, b13, b14, b15, b16, b17) {
+        (true, true, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _) => 0,
+        (false, false, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _) => 1,
+        (_, true, true, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _) => 2,
+        (_, false, false, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _) => 3,
+        (_, _, true, true, _, _, _, _, _, _, _, _, _, _, _, _, _, _) => 4,
+        (_, _, false, false, _, _, _, _, _, _, _, _, _, _, _, _, _, _) => 5,
+        (_, _, _, true, true, _, _, _, _, _, _, _, _, _, _, _, _, _) => 6,
+        (_, _, _, false, false, _, _, _, _, _, _, _, _, _, _, _, _, _) => 7,
+        (_, _, _, _, true, true, _, _, _, _, _, _, _, _, _, _, _, _) => 8,
+        (_, _, _, _, false, false, _, _, _, _, _, _, _, _, _, _, _, _) => 9,
+        (_, _, _, _, _, true, true, _, _, _, _, _, _, _, _, _, _, _) => 10,
+        (_, _, _, _, _, false, false, _, _, _, _, _, _, _, _, _, _, _) => 11,
+        (_, _, _, _, _, _, true, true, _, _, _, _, _, _, _, _, _, _) => 12,
+        (_, _, _, _, _, _, false, false, _, _, _, _, _, _, _, _, _, _) => 13,
+        (_, _, _, _, _, _, _, true, true, _, _, _, _, _, _, _, _, _) => 14,
+        (_, _, _, _, _, _, _, false, false, _, _, _, _, _, _, _, _, _) => 15,
+        (_, _, _, _, _, _, _, _, true, true, _, _, _, _, _, _, _, _) => 16,
+        (_, _, _, _, _, _, _, _, false, false, _, _, _, _, _, _, _, _) => 17,
+        (_, _, _, _, _, _, _, _, _, true, true, _, _, _, _, _, _, _) => 18,
+        (_, _, _, _, _, _, _, _, _, false, false, _, _, _, _, _, _, _) => 19,
+        (_, _, _, _, _, _, _, _, _, _, true, true, _, _, _, _, _, _) => 20,
+        (_, _, _, _, _, _, _, _, _, _, false, false, _, _, _, _, _, _) => 21,
+        (_, _, _, _, _, _, _, _, _, _, _, true, true, _, _, _, _, _) => 22,
+        (_, _, _, _, _, _, _, _, _, _, _, false, false, _, _, _, _, _) => 23,
+        (_, _, _, _, _, _, _, _, _, _, _, _, true, true, _, _, _, _) => 24,
+        (_, _, _, _, _, _, _, _, _, _, _, _, false, false, _, _, _, _) => 25,
+        (_, _, _, _, _, _, _, _, _, _, _, _, _, true, true, _, _, _) => 26,
+        (_, _, _, _, _, _, _, _, _, _, _, _, _, false, false, _, _, _) => 27,
+        (_, _, _, _, _, _, _, _, _, _, _, _, _, _, true, true, _, _) => 28,
+        (_, _, _, _, _, _, _, _, _, _, _, _, _, _, false, false, _, _) => 29,
+        (_, _, _, _, _, _, _, _, _, _, _, _, _, _, _, true, true, _) => 30,
+        (_, _, _, _, _, _, _, _, _, _, _, _, _, _, _, false, false, _) => 31,
+        (_, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, true, true) => 32,
+        (_, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, false, false) => 33,
+        (true, false, true, false, true, false, true, false, true, false, true, false, true, false, true, false, true, false) => 34,
+        (false, true, false, true, false, true, false, true, false, true, false, true, false, true, false, true, false, true) => 35,
+    }
+}

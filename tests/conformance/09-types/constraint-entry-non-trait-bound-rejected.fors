@@ -1,0 +1,8 @@
+//! name: constraint_entry_non_trait_bound_rejected
+//! rule: 09.R62
+//! expect: check-error
+//! detail: T0062 -- every bound of a constraint entry must be a trait; usize is a const-kind type
+
+module m;
+
+fn f[I: Iterator, I.Item: usize]() { }

@@ -1,0 +1,10 @@
+//! name: recover_assoc_type_item
+//! rule: 07.ER1
+//! expect: parse-error
+//! detail: `type A = ;` inside an impl yields exactly one diagnostic and the following method `f` is still in the CST
+
+module m;
+
+struct S { x: i32 }
+trait T { type A; fn f(let self: Self) -> i32; }
+impl T for S { type A = ; fn f(let self: S) -> i32 { return 0; } }

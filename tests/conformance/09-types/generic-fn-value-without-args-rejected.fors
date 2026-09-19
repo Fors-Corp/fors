@@ -1,0 +1,11 @@
+//! name: generic_fn_value_without_args_rejected
+//! rule: 09.R7
+//! expect: check-error
+//! detail: T0039 -- a generic fn used as a value must be written with all its arguments (`id[i32]`)
+
+module m;
+
+fn id[T](sink x: T) -> T { return x; }
+fn f() {
+    let g = id;
+}

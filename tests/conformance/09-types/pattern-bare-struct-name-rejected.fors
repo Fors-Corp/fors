@@ -1,0 +1,14 @@
+//! name: pattern_bare_struct_name_rejected
+//! rule: 09.R50
+//! expect: check-error
+//! detail: T0050 -- a bare pattern name that resolves to a struct
+
+module m;
+
+struct P { x: i32 }
+fn f(let n: i32) -> i32 {
+    match n {
+        P => 1,
+        _ => 0,
+    }
+}

@@ -1,0 +1,15 @@
+//! name: raising_closure_to_plain_fn_type_rejected
+//! rule: 09.R60
+//! expect: check-error
+//! detail: T0026 -- a raising function type never equals a non-raising one
+
+module m;
+
+enum Err { bad }
+fn risky(let n: i32) -> i32 raises Err {
+    if n == 0 { raise Err.bad; }
+    return n;
+}
+fn f() {
+    let g: fn(let i32) -> i32 = risky;
+}

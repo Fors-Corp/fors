@@ -1,0 +1,8 @@
+//! name: mixed_width_operands_rejected
+//! rule: 09.R29
+//! expect: check-error
+//! detail: T0026 -- the right operand is checked against the left operand's type; there is no promotion
+
+module m;
+
+fn f(let a: i64, let b: i32) -> i64 { return a + b; }

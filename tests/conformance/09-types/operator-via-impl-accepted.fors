@@ -1,0 +1,13 @@
+//! name: operator_via_impl_accepted
+//! rule: 09.R21
+//! expect: check-ok
+//! detail: `+` on a user type resolves to its homogeneous Add impl
+
+module m;
+
+struct V2 { x: f64, y: f64 }
+impl Copyable for V2 { }
+impl Add for V2 {
+    fn add(let self: V2, let rhs: V2) -> V2 { return V2 { x: self.x + rhs.x, y: self.y + rhs.y }; }
+}
+fn f(let a: V2, let b: V2) -> V2 { return a + b; }

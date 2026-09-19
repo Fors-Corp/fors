@@ -1,0 +1,14 @@
+//! name: match_foreign_enum_no_wildcard_accepted
+//! rule: 09.R53
+//! expect: check-ok
+//! detail: an enum is closed in every module, so a match on a foreign pub enum needs no wildcard arm
+
+module main;
+use lib;
+
+fn f(let c: lib.Color) -> i32 {
+    match c {
+        lib.Color.red => 1,
+        lib.Color.green => 2,
+    }
+}

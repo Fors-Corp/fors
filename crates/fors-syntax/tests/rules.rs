@@ -303,3 +303,80 @@ fn missing_brace_never_damages_the_next_declaration() {
     assert_eq!(top, [fors_syntax::NodeKind::ImplDecl, fors_syntax::NodeKind::EnumDecl]);
     assert_eq!(p.tree.children(p.tree.children(0).next().unwrap()).filter(|&c| p.tree.kinds[c] == fors_syntax::NodeKind::FnDecl).count(), 2);
 }
+
+// ---- round 4 (owner decisions 2026-09-19): associated types, constraint
+// entries, `type` reserved (ch07 Disambiguation 19-20, Error recovery) ----
+
+#[test]
+fn assoc_type_items() {
+    assert_eq!(
+        file_shape("trait It { type Item; fn next(inout self: Self) -> Option[Self.Item]; }"),
+        "TraitDecl(AssocTypeDecl TraitItem(FnSig(Params(Param(TypeApp)) TypeApp(TypeApp))))"
+    );
+    assert_eq!(file_shape("trait K { type Key: Eq + Ord; }"), "TraitDecl(AssocTypeDecl(TypeApp TypeApp))");
+    assert_eq!(
+        file_shape("impl[I: It] It for Skip[I] { type Item = I.Item; fn next(inout self: Skip[I]) -> Option[I.Item] { return none; } }"),
+        "ImplDecl(Generics(GParam(TypeApp)) TypeApp TypeApp(TypeApp) AssocTypeDef(TypeApp) FnDecl(FnSig(Params(Param(TypeApp(TypeApp))) TypeApp(TypeApp)) Block(ReturnStmt(NameExpr))))"
+    );
+    // the two forms are not interchangeable, and take no attribute/pub/generics
+    for bad in [
+        "trait T { type A = i32; }",
+        "impl T for S { type A; }",
+        "impl T for S { type A: B; }",
+        "impl T for S { pub type A = i32; }",
+        "trait T { @x type A; }",
+        "trait T { type A[U]; }",
+        "trait T { type A + B; }",
+    ] {
+        assert_eq!(codes(bad).len(), 1, "{bad:?}: {:?}", codes(bad));
+    }
+}
+
+#[test]
+fn generics_constraint_entry() {
+    assert_eq!(
+        file_shape("fn f[I: It, I.Item: Add + Copyable,]() { }"),
+        "FnDecl(FnSig(Generics(GParam(TypeApp) GConstraint(TypeApp TypeApp)) Params) Block)"
+    );
+    assert_eq!(file_shape("fn g[Self.Item: Eq]() { }"), "FnDecl(FnSig(Generics(GConstraint(TypeApp)) Params) Block)");
+    assert_eq!(file_shape("struct S[I: It, I.Item: Eq] { }"), "StructDecl(Generics(GParam(TypeApp) GConstraint(TypeApp)))");
+    // `brand` is contextual in the gparam slot only: here it is a type path
+    assert_eq!(file_shape("fn f[I.Item: brand + Eq]() { }"), "FnDecl(FnSig(Generics(GConstraint(TypeApp TypeApp)) Params) Block)");
+    assert_eq!(codes("fn f[I.Item]() { }"), ["P0001"]);
+    assert_eq!(codes("fn f[I.Item.X: Eq]() { }"), ["P0001"]);
+    // equality bounds: the fixed message, one diagnostic, recovery at `,`/`]`
+    for bad in ["fn f[I: It, I.Item = i64]() { }", "fn f[T = i64, U]() { }", "fn f[I.Item = i64, J: It]() { }"] {
+        assert_eq!(codes(bad), ["P0009"], "{bad:?}");
+        let p = parse_checked(bad.as_bytes());
+        assert!(p.diags[0].message.contains("equality bounds do not exist"), "{bad:?}: {}", p.diags[0].message);
+    }
+}
+
+#[test]
+fn type_reserved_word() {
+    rejects("let type = 1;");
+    rejects("x.type;");
+    rejects("f(type: 1);");
+    assert_eq!(codes("struct S { type: i32 }").len(), 1);
+    // file level: fixed message, exactly one diagnostic, next declaration intact
+    let src = "type A = i32;\nfn f() -> i32 { return 0; }\n";
+    let p = parse_checked(src.as_bytes());
+    assert_eq!(p.diags.len(), 1, "{:?}", p.diags);
+    assert!(p.diags[0].message.contains("type aliases do not exist"));
+    let kinds: Vec<_> = p.tree.children(0).map(|c| shape_of(&p.tree, c)).collect();
+    assert_eq!(kinds.last().map(String::as_str), Some("FnDecl(FnSig(Params TypeApp) Block(ReturnStmt(Literal)))"));
+}
+
+#[test]
+fn recover_assoc_type_item() {
+    for src in ["impl T for S { type A = ; fn f() { } }", "impl T for S { type A i32; fn f() { } }", "trait T { type ; fn f(); }"] {
+        let p = parse_checked(src.as_bytes());
+        assert_eq!(p.diags.len(), 1, "{src:?}: {:?}", p.diags);
+        let top = p.tree.children(0).next().unwrap();
+        let members: Vec<_> = p.tree.children(top).map(|c| p.tree.kinds[c]).collect();
+        assert!(
+            members.contains(&fors_syntax::NodeKind::FnDecl) || members.contains(&fors_syntax::NodeKind::TraitItem),
+            "{src:?}: {members:?}"
+        );
+    }
+}

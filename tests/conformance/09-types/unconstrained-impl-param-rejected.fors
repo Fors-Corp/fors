@@ -1,0 +1,13 @@
+//! name: unconstrained_impl_param_rejected
+//! rule: 09.R18
+//! expect: check-error
+//! detail: T0018 -- U occurs in neither the self type nor the trait arguments
+
+module m;
+
+trait Keyed { type Key: Eq + Ord; fn key(let self: Self) -> Self.Key; }
+struct Two[T] { a: T }
+impl[T, U] Keyed for Two[T] {
+    type Key = i64;
+    fn key(let self: Two[T]) -> i64 { return 0; }
+}

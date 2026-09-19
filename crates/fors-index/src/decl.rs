@@ -286,7 +286,21 @@ fn build_decl(
             ((first, end), None)
         }
     };
-    let hashes = decl_fingerprint(tokens, source, sig_range, body_range);
+    let hashes = if matches!(kind, DeclKind::Impl | DeclKind::Trait) {
+        // Signature = header + associated-type items + member signatures;
+        // member bodies are holes (each member carries its own body hash).
+        let mut holes = Vec::new();
+        for &m in rest {
+            if matches!(tree.kinds[m], NodeKind::FnDecl | NodeKind::TraitItem) {
+                if let Some(b) = tree.children(m).find(|&c| tree.kinds[c] == NodeKind::Block) {
+                    holes.push(tree.token_range(b));
+                }
+            }
+        }
+        (crate::fingerprint::hash_tokens_excluding(tokens, source, sig_range.0, sig_range.1, &holes), crate::fingerprint::NO_BODY)
+    } else {
+        decl_fingerprint(tokens, source, sig_range, body_range)
+    };
 
     let modifiers = if has_pub { MOD_PUB } else { 0 } | if has_soa { MOD_SOA } else { 0 };
     let vis = if has_pub { Visibility::Public } else { Visibility::Private };
@@ -339,6 +353,41 @@ mod tests {
         let fn_idx = t.kind.iter().position(|&k| k == DeclKind::Fn).unwrap();
         assert_eq!(t.parent[fn_idx], impl_idx as u32);
         assert_eq!(name_str(&t, &interner, fn_idx).as_deref(), Some("get"));
+    }
+
+    fn impl_sig(src: &str) -> u128 {
+        let (t, _) = index(src);
+        let i = t.kind.iter().position(|&k| k == DeclKind::Impl).unwrap();
+        t.sig_hash[i]
+    }
+
+    /// ch09 Rules 2, 59 (AT7): `type A = T;` is part of an impl's
+    /// signature; a method body is not.
+    #[test]
+    fn assoc_type_def_is_signature_level_and_method_bodies_are_not() {
+        let base = "impl It for S { type Item = i64; fn next(inout self: S) -> Option[i64] { return none; } }\n";
+        let rhs = "impl It for S { type Item = i32; fn next(inout self: S) -> Option[i64] { return none; } }\n";
+        let body = "impl It for S { type Item = i64; fn next(inout self: S) -> Option[i64] { return some(1); } }\n";
+        let msig = "impl It for S { type Item = i64; fn next(inout self: S) -> Option[i32] { return none; } }\n";
+        let ws = "impl It for S {\n  type Item = i64; // c\n  fn next(inout self: S) -> Option[i64] { return none; } }\n";
+        assert_ne!(impl_sig(base), impl_sig(rhs), "type A = T; must change the impl's signature fingerprint");
+        assert_eq!(impl_sig(base), impl_sig(body), "a method body must not change the impl's signature fingerprint");
+        assert_ne!(impl_sig(base), impl_sig(msig));
+        assert_eq!(impl_sig(base), impl_sig(ws));
+    }
+
+    #[test]
+    fn trait_assoc_type_bounds_are_signature_level() {
+        let sig = |src: &str| {
+            let (t, _) = index(src);
+            let i = t.kind.iter().position(|&k| k == DeclKind::Trait).unwrap();
+            t.sig_hash[i]
+        };
+        let base = "trait K { type Key: Eq; fn key(let self: Self) -> Self.Key; fn two(let self: Self) -> i32 { return 2; } }\n";
+        let bound = "trait K { type Key: Eq + Ord; fn key(let self: Self) -> Self.Key; fn two(let self: Self) -> i32 { return 2; } }\n";
+        let body = "trait K { type Key: Eq; fn key(let self: Self) -> Self.Key; fn two(let self: Self) -> i32 { return 3; } }\n";
+        assert_ne!(sig(base), sig(bound));
+        assert_eq!(sig(base), sig(body));
     }
 
     #[test]

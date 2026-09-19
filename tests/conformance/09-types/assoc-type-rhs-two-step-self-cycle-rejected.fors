@@ -1,0 +1,14 @@
+//! name: assoc_type_rhs_two_step_self_cycle_rejected
+//! rule: 09.R61
+//! expect: check-error
+//! detail: T0061 -- `type A = Self.B;` is rejected by itself (Rule 61(d)), so the two-step cycle A -> B -> A cannot be written; here B is sound and only A violates
+
+module m;
+
+trait Two { type A; type B; fn n(let self: Self) -> i64; }
+struct Foo { n: i64 }
+impl Two for Foo {
+    type A = Self.B;
+    type B = i64;
+    fn n(let self: Foo) -> i64 { return self.n; }
+}

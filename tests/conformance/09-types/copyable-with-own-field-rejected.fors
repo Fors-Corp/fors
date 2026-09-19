@@ -1,0 +1,9 @@
+//! name: copyable_with_own_field_rejected
+//! rule: 09.R23
+//! expect: check-error
+//! detail: T0023 -- Own is never Copyable, so a struct holding one cannot be
+
+module m;
+
+struct H[A: brand] { p: Own[i64, A] }
+impl[A: brand] Copyable for H[A] { }

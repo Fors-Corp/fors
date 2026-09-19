@@ -1,0 +1,14 @@
+//! name: assoc_type_bound_mentions_other_assoc_type_accepted
+//! rule: 09.R16
+//! expect: check-ok
+//! detail: the bound of one associated type may mention another: Self.A inside `type B: Conv[Self.A];`
+
+module m;
+
+trait Conv[X] { fn conv(let self: Self) -> X; }
+trait Two {
+    type A;
+    type B: Conv[Self.A];
+    fn b(let self: Self) -> Self.B;
+    fn a(let self: Self) -> Self.A { return self.b().conv(); }
+}

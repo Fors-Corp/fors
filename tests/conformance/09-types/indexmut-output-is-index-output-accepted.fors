@@ -1,0 +1,19 @@
+//! name: indexmut_output_is_index_output_accepted
+//! rule: 09.R21
+//! expect: check-ok
+//! detail: IndexMut declares no Output: the element type of a write is Index[I]'s Output
+
+module m;
+
+struct Grid { cells: Array[i64, 16] }
+impl Index[usize] for Grid {
+    type Output = i64;
+    fn at(let self: Grid, let i: usize) -> scoped(self) i64 { return self.cells[i]; }
+}
+impl IndexMut[usize] for Grid {
+    fn at_mut(inout self: Grid, let i: usize) -> scoped(self) i64 { return self.cells[i]; }
+}
+fn f(inout g: Grid) -> i64 {
+    g[2usize] = 5;
+    return g[2usize];
+}

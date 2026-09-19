@@ -1,0 +1,8 @@
+//! name: projection_on_brand_param_rejected
+//! rule: 09.R61
+//! expect: check-error
+//! detail: T0061 -- a brand parameter has no bounds and cannot head a projection
+
+module m;
+
+fn f[A: brand](let x: A.Item) { }

@@ -747,6 +747,13 @@ impl<'a> Parser<'a> {
                 self.expect_semi();
                 NodeKind::ConstDecl
             }
+            KwType => {
+                // ch07 Error recovery: one fixed diagnostic, skip to `;`.
+                self.err_here(DiagCode::UnexpectedToken, "type aliases do not exist; \"type\" is legal only inside a trait or impl body");
+                self.bump();
+                self.skip_assoc_item();
+                NodeKind::Error
+            }
             k => {
                 let msg = if k == KwUse || k == KwModule {
                     "'module' and 'use' must precede all declarations"
@@ -788,8 +795,15 @@ impl<'a> Parser<'a> {
                 if impl_body || !self.opt(Semi) {
                     self.block();
                 }
+            } else if self.at(KwType) {
+                // ch07 Disambiguation 20: an associated-type item takes no
+                // attribute and no `pub`.
+                if self.p != before {
+                    self.err_here(DiagCode::UnexpectedToken, "an associated-type item takes no attribute and no 'pub'");
+                }
+                self.assoc_type_item(impl_body);
             } else {
-                self.err_here(DiagCode::Expected, "expected 'fn'");
+                self.err_here(DiagCode::Expected, "expected 'fn' or 'type'");
                 self.b.set_current_kind(NodeKind::Error);
                 if self.p == before && !self.at(Eof) {
                     self.bump();
@@ -798,6 +812,73 @@ impl<'a> Parser<'a> {
             self.b.finish_node();
         }
         self.close(os, oe, RBrace);
+    }
+
+    /// At `type` inside a `trait` (`assoc_type_decl`) or `impl`
+    /// (`assoc_type_def`) body; the enclosing item node is already open.
+    fn assoc_type_item(&mut self, impl_body: bool) {
+        use TokenKind::*;
+        self.b.set_current_kind(if impl_body { NodeKind::AssocTypeDef } else { NodeKind::AssocTypeDecl });
+        self.bump(); // type
+        if !self.expect(Ident, "expected associated type name") {
+            self.skip_assoc_item();
+            return;
+        }
+        if impl_body {
+            if self.at(Eq) {
+                self.bump();
+                self.type_(false);
+            } else if self.at(Semi) || self.at(Colon) {
+                self.err_here(DiagCode::Expected, "an impl defines \"type A = T;\"");
+            } else {
+                self.err_here(DiagCode::Expected, "expected '=' and the associated type's definition");
+            }
+        } else if self.at(Eq) {
+            self.err_here(DiagCode::UnexpectedToken, "a trait declares \"type A;\" - the definition belongs in an impl");
+        } else if self.opt(Colon) {
+            self.bounds();
+        }
+        if !self.opt(Semi) {
+            self.err_here(DiagCode::Expected, "expected ';'");
+            self.skip_assoc_item();
+        }
+    }
+
+    /// Recovery inside a `trait`/`impl` body (ch07 Error recovery,
+    /// "Associated-type items"): skip through the item's `;`, or stop at
+    /// the next member of the item sync set.
+    fn skip_assoc_item(&mut self) {
+        use TokenKind::*;
+        let mut depth = 0u32;
+        let mut open_node = false;
+        while !self.at(Eof) && !self.at_decl_sync() {
+            let k = self.cur();
+            if depth == 0 && matches!(k, Semi | RBrace | KwFn | KwType | KwPub | At) {
+                break;
+            }
+            if is_opener(k) {
+                depth += 1;
+            } else if is_closer(k) {
+                depth = depth.saturating_sub(1);
+            }
+            if !open_node {
+                open_node = true;
+                self.b.start_node(NodeKind::Error);
+            }
+            self.bump();
+        }
+        if open_node {
+            self.b.finish_node();
+        }
+        self.opt(Semi);
+    }
+
+    /// `type { "+" type }`.
+    fn bounds(&mut self) {
+        self.type_(false);
+        while self.opt(TokenKind::Plus) {
+            self.type_(false);
+        }
     }
 
     fn struct_decl(&mut self) {
@@ -849,18 +930,55 @@ impl<'a> Parser<'a> {
         self.b.finish_node();
     }
 
+    /// `gentry`: the token after the identifier decides (ch07
+    /// Disambiguation 19, LA 2): `.` selects `gconstraint`.
     fn gparam(&mut self) {
+        use TokenKind::*;
+        if self.at(Ident) && self.nth(1) == Dot {
+            self.b.start_node(NodeKind::GConstraint);
+            self.bump();
+            self.bump();
+            if self.expect(Ident, "expected an associated type name after '.'") {
+                if self.at(Eq) {
+                    self.equality_bound();
+                } else if self.expect(Colon, "expected ':' and the bounds of the constraint entry") {
+                    self.bounds();
+                }
+            }
+            self.b.finish_node();
+            return;
+        }
         self.b.start_node(NodeKind::GParam);
-        self.expect(TokenKind::Ident, "expected generic parameter name");
-        if self.opt(TokenKind::Colon) {
+        self.expect(Ident, "expected generic parameter name");
+        if self.opt(Colon) {
             if self.is_word(b"brand") {
                 self.bump();
             } else {
-                self.type_(false);
-                while self.opt(TokenKind::Plus) {
-                    self.type_(false);
-                }
+                self.bounds();
             }
+        } else if self.at(Eq) {
+            self.equality_bound();
+        }
+        self.b.finish_node();
+    }
+
+    /// At `=` in a `gentry`: fixed message, recover at the next `,` / `]`.
+    fn equality_bound(&mut self) {
+        use TokenKind::*;
+        self.err_here(DiagCode::UnexpectedToken, "associated-type equality bounds do not exist; constrain with \":\"");
+        self.b.start_node(NodeKind::Error);
+        let mut depth = 0u32;
+        while !self.at(Eof) && !self.at_decl_sync() {
+            let k = self.cur();
+            if depth == 0 && matches!(k, Comma | RBracket | LBrace | Semi) {
+                break;
+            }
+            if is_opener(k) {
+                depth += 1;
+            } else if is_closer(k) {
+                depth = depth.saturating_sub(1);
+            }
+            self.bump();
         }
         self.b.finish_node();
     }

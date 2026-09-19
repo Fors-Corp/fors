@@ -1,0 +1,10 @@
+//! name: projection_head_without_impl_rejected
+//! rule: 09.R20
+//! expect: check-error
+//! detail: T0012 -- I := Plain is given explicitly, Plain has no Iterator impl, so neither the bound holds nor can Plain.Item be normalised; one root cause, reported once
+
+module m;
+
+struct Plain { n: i64 }
+fn count[I: Iterator](let n: i64) -> i64 { return n; }
+fn f() -> i64 { return count[Plain](1); }

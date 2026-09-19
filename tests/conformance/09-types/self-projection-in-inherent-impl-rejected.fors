@@ -1,0 +1,11 @@
+//! name: self_projection_in_inherent_impl_rejected
+//! rule: 09.R61
+//! expect: check-error
+//! detail: T0061 -- an inherent impl has no trait, so Self.Item names nothing
+
+module m;
+
+struct Counter2 { n: i64 }
+impl Counter2 {
+    fn peek(let self: Counter2) -> Option[Self.Item] { return none; }
+}

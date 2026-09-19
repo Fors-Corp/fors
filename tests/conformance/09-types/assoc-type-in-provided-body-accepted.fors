@@ -1,0 +1,15 @@
+//! name: assoc_type_in_provided_body_accepted
+//! rule: 09.R16
+//! expect: check-ok
+//! detail: Self.Item is a neutral projection inside the trait, usable as a local's annotation in a provided body
+
+module m;
+
+trait Source {
+    type Item;
+    fn pull(inout self: Self) -> Option[Self.Item];
+    fn second(inout self: Self) -> Option[Self.Item] {
+        let first: Option[Self.Item] = self.pull();
+        return self.pull();
+    }
+}

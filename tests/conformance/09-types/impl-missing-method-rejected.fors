@@ -1,0 +1,10 @@
+//! name: impl_missing_method_rejected
+//! rule: 09.R17
+//! expect: check-error
+//! detail: T0017 -- the impl does not define the required method `area`
+
+module m;
+
+trait Shape { fn area(let self: Self) -> f64; }
+struct Sq { s: f64 }
+impl Shape for Sq { }

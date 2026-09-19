@@ -1,0 +1,11 @@
+//! name: local_shadowing_prelude_module_as_type_head_rejected
+//! rule: 09.R11
+//! expect: check-error
+//! detail: T0011 -- the parameter `io` shadows the prelude module (ch08 Rule 18), so the type-path head `io` in the body is a value binding, not a type-level entity
+
+module m;
+
+fn f(let io: i32) -> i32 {
+    let out: Option[io.Stdout] = none;
+    return io;
+}

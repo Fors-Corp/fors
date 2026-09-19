@@ -1,0 +1,13 @@
+//! name: match_non_exhaustive_enum_rejected
+//! rule: 09.R53
+//! expect: check-error
+//! detail: T0053 -- the variant `empty` is not covered
+
+module m;
+
+enum Shape2 { circle(f64), empty }
+fn f(let s: Shape2) -> i32 {
+    match s {
+        .circle(let r) => 1,
+    }
+}

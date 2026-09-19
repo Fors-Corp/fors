@@ -1,0 +1,9 @@
+//! name: dyn_generic_method_rejected
+//! rule: 09.R25
+//! expect: check-error
+//! detail: T0025 -- a trait with a generic method is not dyn-capable
+
+module m;
+
+trait Visit { fn each[T](let self: Self, let x: T) -> i64; }
+fn f(let v: dyn Visit) { }

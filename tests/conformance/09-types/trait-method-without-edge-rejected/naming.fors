@@ -1,0 +1,5 @@
+module naming;
+use shapes;
+
+pub trait Named { fn id(let self: Self) -> i64; }
+impl Named for shapes.Tag { fn id(let self: shapes.Tag) -> i64 { return self.n; } }

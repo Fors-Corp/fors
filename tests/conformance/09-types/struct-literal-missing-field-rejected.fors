@@ -1,0 +1,9 @@
+//! name: struct_literal_missing_field_rejected
+//! rule: 09.R34
+//! expect: check-error
+//! detail: T0034 -- a struct literal must name each field exactly once
+
+module m;
+
+struct P { x: i32, y: i32 }
+fn f() -> P { return P { x: 1 }; }

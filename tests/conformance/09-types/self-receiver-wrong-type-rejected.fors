@@ -1,0 +1,10 @@
+//! name: self_receiver_wrong_type_rejected
+//! rule: 09.R16
+//! expect: check-error
+//! detail: T0016 -- a parameter named self must have type Self
+
+module m;
+
+trait Shape {
+    fn area(let self: i32) -> f64;
+}

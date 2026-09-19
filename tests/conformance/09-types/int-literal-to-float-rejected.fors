@@ -1,0 +1,11 @@
+//! name: int_literal_to_float_rejected
+//! rule: 09.R27
+//! expect: check-error
+//! detail: T0027 -- an integer literal must not check against a float type; write 1.0
+
+module m;
+
+fn f() -> f64 {
+    let a: f64 = 1;
+    return a;
+}

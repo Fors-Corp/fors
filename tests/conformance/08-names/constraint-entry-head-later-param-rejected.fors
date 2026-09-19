@@ -1,0 +1,8 @@
+//! name: constraint_entry_head_later_param_rejected
+//! rule: 08.R26
+//! expect: check-error
+//! detail: the head I is declared LATER in the same list; a constraint entry sees only what precedes it
+
+module m;
+
+fn f[I.Item: Eq, I: Iterator]() { }

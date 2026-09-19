@@ -470,6 +470,35 @@ impl<'a> BodyCtx<'a> {
     pub fn resolve_generics(&mut self, generics: usize) -> Vec<usize> {
         let gparams: Vec<usize> = self.tree.children(generics).collect();
         for &g in &gparams {
+            if self.tree.kinds[g] == NodeKind::GConstraint {
+                // Rule 26 (round 4): a constraint entry introduces NO
+                // name. Its head must be a generic parameter declared
+                // EARLIER in this list (parameters are declared in list
+                // order, so "earlier" is "already in scope"), a generic
+                // parameter of the enclosing impl/trait, or `Self`. Its
+                // second identifier is a deferred segment (Rule 16).
+                if let Some((name, range)) = binder_name(self.tree, self.tokens, self.source, self.interner, g) {
+                    let ok = match self.lookup(name) {
+                        Some(Found::Local(n)) => {
+                            matches!(self.tree.kinds[n as usize], NodeKind::GParam | NodeKind::ImplDecl | NodeKind::TraitDecl)
+                        }
+                        _ => false,
+                    };
+                    if ok {
+                        if let Some(Found::Local(n)) = self.lookup(name) {
+                            self.record(g, ResolvedTarget::Local { node: n });
+                        }
+                    } else {
+                        self.diags.push(Diagnostic::new(
+                            range.0,
+                            range.1,
+                            Code::N(26),
+                            "the head of a constraint entry must be a generic parameter declared earlier in this list, a generic parameter of the enclosing impl or trait, or `Self`".to_string(),
+                        ));
+                    }
+                }
+                continue;
+            }
             if let Some((name, range)) = binder_name(self.tree, self.tokens, self.source, self.interner, g) {
                 // Round 3, D3: unlike other bindings, a generic parameter
                 // may not shadow a prelude name.
@@ -477,6 +506,18 @@ impl<'a> BodyCtx<'a> {
             }
         }
         gparams
+    }
+
+    /// Rule 26: the bounds of every entry of a `generics` list (parameter
+    /// or constraint entry) resolve with the whole list in scope.
+    pub fn walk_bounds(&mut self, generics: usize) {
+        let entries: Vec<usize> = self.tree.children(generics).collect();
+        for e in entries {
+            let bounds: Vec<usize> = self.tree.children(e).collect();
+            for b in bounds {
+                self.walk(b);
+            }
+        }
     }
 
     pub fn declare_self(&mut self, node: usize) {

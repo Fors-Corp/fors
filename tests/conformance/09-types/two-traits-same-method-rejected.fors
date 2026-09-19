@@ -1,0 +1,10 @@
+//! name: two_traits_same_method_rejected
+//! rule: 09.R44
+//! expect: check-error
+//! detail: T0044 -- two candidate traits in the answering tier provide `id`; write the qualified form
+
+module m;
+
+trait Named { fn id(let self: Self) -> i64; }
+trait Numbered { fn id(let self: Self) -> i64; }
+fn f[T: Named + Numbered](let t: T) -> i64 { return t.id(); }

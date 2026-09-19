@@ -1,0 +1,8 @@
+//! name: projection_unknown_assoc_type_rejected
+//! rule: 09.R61
+//! expect: check-error
+//! detail: T0061 -- no bound of I declares an associated type `Elem`
+
+module m;
+
+fn f[I: Iterator](let x: I.Elem) { }

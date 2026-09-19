@@ -46,10 +46,47 @@ manifests belong to other chapters.
 2. A call site MUST mark a non-`let` argument: `&x` (inout), `move x`
    (sink), `&out x` (set); `let` carries no marker. `move` marks a place
    expression (binding or projection path); an rvalue argument (literal,
-   call result) to a `sink` parameter carries no marker.
+   call result) to a `sink` parameter carries no marker. Every move of a
+   named place is thus written `move`, with exactly ONE exception (owner
+   decision 2026-09-19, round 4): the receiver of a method call
+   `x.m(args)` never carries a marker, whatever the convention of `self`
+   (ch09 Rule 46), so when `m` resolves to a `sink self` method the call
+   MOVES the place `x` implicitly. `(move x).m(args)` stays legal and
+   means the same. An implicit receiver move is a move for every rule of
+   this chapter — Rules 3, 4, 4a, 6-8, 12, 13 and 15a apply exactly as if
+   `move x` had been written (use after move, a move inside a loop, a
+   partial move out of a field, a move out of a `let` or `inout`
+   parameter, a move of a place captured by a closure or structured
+   `spawn`, are errors, or not, exactly as with the explicit form). The
+   diagnostic a use-after-move MUST carry in that case is ch09 Rule 46's.
+   In a qualified call (`T.m(move x)`, ch09 Rule 45) the receiver is an
+   ordinary argument and is marked.
 3. A `let` parameter MUST NOT be assigned to or moved from.
 4. A `sink` parameter MUST be moved-from or deinitialized on every path,
    unless `Copyable`.
+4a. Moves and liveness (the rule the implicit receiver move of Rule 2
+   leans on; it applies identically to `move p` and to `p.m()` with `m` a
+   `sink self` method). A move leaves the place `p` dead until an
+   assignment `p = e;` re-initialises it. (a) *Use after move*: any use of
+   a dead place, or of a path that has it as a prefix — a read, a second
+   move, passing it by any convention, a method call on it — MUST be
+   rejected. (b) *Loops*: a move, inside a `for`/`while`/`parallel` body,
+   of a place declared outside that body MUST be rejected unless every
+   path that reaches the next iteration re-initialises the place first;
+   this is Rule 8 at the loop-head merge, stated here so that no reader
+   has to derive it. (c) *Partial move*: a move whose place is a field or
+   index projection (`move a.b`, `a.b.finish()`) MUST be rejected in v0.1;
+   take the value apart with a pattern, or move the whole. (d)
+   *Parameters*: a `let` parameter (Rule 3) and an `inout` parameter MUST
+   NOT be moved from, even if reassigned afterwards; a `sink` parameter
+   and a local MAY. (e) *Captures*: a closure body MUST NOT move a place
+   it captures (a closure may be called more than once, so this is (b)
+   again). A `spawn` statement's call is not a closure: in `spawn
+   x.run();` the receiver move — implicit or written `(move x).run()` —
+   IS the `move` capture that Rule 13 requires of an `iso` value, and the
+   place is dead afterwards in the spawning task; sendability is judged
+   exactly as for `spawn run(move x);`. A `Copyable` place is copied, never
+   moved, so none of (a)-(e) applies to it (ch09 Rule 23).
 5. A `set` parameter MUST be fully initialized on every return path.
 6. Exclusivity is one forward dataflow pass per function over projection
    paths, no fixpoint, no interprocedural analysis; a callee's effect on an
@@ -341,6 +378,21 @@ fn spawn_work(sink data: iso Buffer[u8], let key: secret u64) raises Error {
 10. Owner decision 2026-09-19 (D4): `scoped(p)` prefix (Rule 19) and the
    structured-`spawn` capture clause (Rule 13: an `inout` capture is an
    access lasting to the end of the enclosing `parallel` block) accepted.
+11. Owner decision 2026-09-19, round 4: `x.finish()` on a `sink self`
+   method moves `x` implicitly (Rule 2's single exception; typing and the
+   required diagnostic are ch09 Rule 46, whose conformance list carries
+   the tests). Alternative `(move x).finish()` as the only spelling was
+   rejected by the owner; it remains legal.
+12. Round-4 verification: Rule 4a added. The chapter owned "destructive
+   moves" but no rule said that a use after a move, a move in a loop, a
+   partial move, a move out of an `inout` parameter or a move of a
+   captured place is an error; an implicit move (decision 11) cannot lean
+   on unwritten rules. Conservative v0.1 choices, each liftable without
+   breaking accepted code: no partial moves (4a(c)); no move out of an
+   `inout` parameter even with a refill (4a(d)); no moving closure
+   captures (4a(e)). `spawn x.run();` counts as the `move` capture of
+   Rule 13, because the owner made the receiver move mean exactly `(move
+   x).run()`. Tests: ch09's Rule 46 list (tests/conformance/09-types).
 
 ## Open questions for the owner
 
@@ -352,6 +404,10 @@ fn spawn_work(sink data: iso Buffer[u8], let key: secret u64) raises Error {
    because a node that links to siblings must take the brand (Rule 15d).
    Drafted as allowed; confirm, or choose another spelling before std's
    tree/graph containers are written.
+4. Rule 4a's three conservative bans (partial moves, moves out of an
+   `inout` parameter with a refill, moving closure captures). Recommended:
+   keep for v0.1; each needs per-field liveness or a call-once closure
+   kind, neither of which v0.1 has.
 
 ## Conformance tests
 

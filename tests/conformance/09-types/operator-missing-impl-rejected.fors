@@ -1,0 +1,12 @@
+//! name: operator_missing_impl_rejected
+//! rule: 09.R29
+//! expect: check-error
+//! detail: T0029 -- V2 is a concrete type with no Add impl
+
+module m;
+
+struct V2 { x: f64, y: f64 }
+fn f(let a: V2, let b: V2) -> bool {
+    let c = a + b;
+    return true;
+}

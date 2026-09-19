@@ -1,0 +1,11 @@
+//! name: constraint_entry_head_self_accepted
+//! rule: 08.R26
+//! expect: check-ok
+//! detail: `Self` may head a constraint entry inside a trait method
+
+module m;
+
+trait Src {
+    type Item;
+    fn both[Self.Item: Eq](let self: Self, let other: Self) -> bool;
+}

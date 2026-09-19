@@ -1,0 +1,9 @@
+//! name: named_arg_wrong_label_rejected
+//! rule: 09.R37
+//! expect: check-error
+//! detail: T0037 -- a named argument's label must equal the parameter's name in that position
+
+module m;
+
+fn area(let w: i32, let h: i32) -> i32 { return w * h; }
+fn f() -> i32 { return area(w: 1, d: 2); }

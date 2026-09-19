@@ -1,0 +1,8 @@
+//! name: and_on_non_bool_rejected
+//! rule: 09.R22
+//! expect: check-error
+//! detail: T0030 -- `and` is not overloadable; its operands must be bool
+
+module m;
+
+fn f(let a: i32, let b: bool) -> bool { return a and b; }

@@ -75,7 +75,10 @@ munch, and needs at most 2 characters of lookahead past the current one.
 `module use pub fn struct enum trait impl const extern let var inout sink
 if else match for in while break continue return raise raises with
 parallel simd spawn comptime move consume discard as and or not true false
-iso imm secret dyn asm` and `_`. Reserved without a production (future use):
+iso imm secret dyn asm type` and `_`. (`type` is reserved since owner decision
+2026-09-19, round 4: it introduces an associated type inside a `trait` or
+`impl` body and has no other production; no field, binding, path segment or
+label may be spelled `type`.) Reserved without a production (future use):
 `import recover`.
 
 Not reserved, ordinary identifiers resolved by the checker: `reduce`
@@ -166,8 +169,11 @@ fn_decl         = fn_sig block ;
 fn_sig          = "fn" ident [ generics ] params [ "->" ret_type ]
                   [ "raises" type ] { contract } ;
 extern_fn_decl  = "extern" string_lit fn_sig ";" ;
-generics        = "[" gparam { "," gparam } [ "," ] "]" ;
-gparam          = ident [ ":" ( "brand" | type { "+" type } ) ] ;
+generics        = "[" gentry { "," gentry } [ "," ] "]" ;
+gentry          = gparam | gconstraint ;        (* Disambiguation 19 *)
+gparam          = ident [ ":" ( "brand" | bounds ) ] ;
+gconstraint     = ident "." ident ":" bounds ;  (* introduces no name *)
+bounds          = type { "+" type } ;
 params          = "(" [ param { "," param } [ "," ] ] ")" ;
 param           = convention ident ":" type ;
 convention      = "let" | "inout" | "sink" | "set" ;
@@ -182,9 +188,14 @@ enum_decl       = "enum" ident [ generics ]
 evariant        = ident [ "(" type { "," type } [ "," ] ")"
                         | "{" field { "," field } [ "," ] "}" ] ;
 trait_decl      = "trait" ident [ generics ] "{" { trait_item } "}" ;
-trait_item      = { attribute } fn_sig ( block | ";" ) ;
+trait_item      = { attribute } fn_sig ( block | ";" )
+                | assoc_type_decl ;             (* Disambiguation 20 *)
+assoc_type_decl = "type" ident [ ":" bounds ] ";" ;
 impl_decl       = "impl" [ generics ] type [ "for" type ]
-                  "{" { { attribute } [ "pub" ] fn_decl } "}" ;
+                  "{" { impl_item } "}" ;
+impl_item       = { attribute } [ "pub" ] fn_decl
+                | assoc_type_def ;              (* Disambiguation 20 *)
+assoc_type_def  = "type" ident "=" type ";" ;
 const_decl      = "const" ident ":" type "=" expr ";" ;
 
 (* ---- statements ---- *)
@@ -421,7 +432,35 @@ Every choice below is made on the current token plus at most one more
     inside `expr`), and the token after `as` must be an `ident` (not a
     `type`, not `_`). LA 1.
 
-**Largest lookahead:** 2 tokens (rules 2, 4, 6, 7, 15, 16 and the `scoped` /
+19. **Generics entry: parameter or constraint.** At the start of a
+    `gentry` the current token is an `ident`; the NEXT token decides (LA
+    2): `.` selects `gconstraint` (`I.Item: Add + Copyable`); `:`, `,` or
+    `]` selects `gparam`. A `gconstraint` is exactly two identifiers
+    joined by one `.`, then a mandatory `:` and `bounds`; its bound list
+    never contains `brand` (that word is contextual in the `gparam` slot
+    only, so here it would be an ordinary type path). `Self` is an
+    ordinary `ident` token, so `Self.Item: Eq` is a `gconstraint`. A
+    `generics` list MAY consist of constraints only (a method constraining
+    a parameter of its `impl`). That the head names a type parameter
+    declared EARLIER in the same list, a parameter of the enclosing
+    `impl`/`trait`, or `Self` is ch08 Rule 26's; that the second
+    identifier is an associated type of one of the head's bounds is ch09
+    Rule 61's. There is no equality form: `[I: Iterator, I.Item = i64]`
+    is a parse error at `=` (Error recovery).
+20. **`type` in a `trait` / `impl` body.** `type` is reserved, no
+    `fn_sig`, attribute or `pub` starts with it, so the current token
+    alone (LA 1) selects `assoc_type_decl` (in a `trait_decl`) or
+    `assoc_type_def` (in an `impl_decl`). The two forms are not
+    interchangeable: after the `ident`, a `trait` body accepts `:` or `;`
+    and an `impl` body accepts only `=`. An associated-type item takes no
+    `attribute`, no `pub` and no `generics` (its visibility is ch08 Rule
+    11's; generic associated types do not exist); `@a type T;`,
+    `pub type T = X;` and `type T[U];` are parse errors. `type` is never
+    part of a `type`: a projection is written as the ordinary dotted
+    `path` `I.Item` / `Self.Item` inside `type_app`, with no new type
+    syntax (its second segment is deferred, ch08 Rule 16).
+
+**Largest lookahead:** 2 tokens (rules 2, 4, 6, 7, 15, 16, 19 and the `scoped` /
 closure-`set` slots); lexer, 2 characters past the current one (`..<`,
 exponent sign).
 
@@ -455,6 +494,21 @@ per recovery.
   statement sync sets: the parser has already committed to `fpat` (it is
   inside a `payload`'s `{ }`), so it reports and resumes at the next `,` or
   the closing `}` like any other `fpat` item, without unwinding further.
+
+- **Associated-type items.** Inside a `trait`/`impl` body the item sync
+  set is `fn`, `type`, `pub`, `@` and the closing `}`; a malformed
+  `assoc_type_decl`/`assoc_type_def` reports once and resumes after its
+  `;` or at the next member of that set. Three dedicated diagnostics, each
+  reported once and recovered in place like the `fpat` one: `type` where a
+  `decl` is expected (file level): `type aliases do not exist; "type" is
+  legal only inside a trait or impl body`, then skip to `;`; `type A = T;`
+  inside a `trait` body: `a trait declares "type A;" - the definition
+  belongs in an impl` (no defaults in v0.1); `type A;` or `type A: B;`
+  inside an `impl` body: `an impl defines "type A = T;"`.
+- **Equality bound.** In a `gentry`, `=` after `ident "." ident` (or
+  after a `gparam`'s `ident`) is a parse error with the fixed message
+  `associated-type equality bounds do not exist; constrain with ":"`,
+  recovering at the next `,` or `]` of the list.
 
 ## Coverage
 
@@ -523,6 +577,21 @@ arg, `&buf.slice`, `&out` on a binding named `out`, attributed
   an open owner question — this draft recommends "no", see ch08). `use`
   gained an optional `"as" ident` per `use_item`; `"as"` was already
   reserved for casts, so no new keyword is needed.
+- Owner decision 2026-09-19, round 4 (associated types): `trait_item`
+  gains `assoc_type_decl`, `impl_decl`'s body becomes `{ impl_item }` with
+  `assoc_type_def`, `generics` entries become `gentry` (parameter or
+  `gconstraint`), `bounds` is factored out of `gparam` (same language as
+  before), and `type` becomes RESERVED. No spec example and no corpus file
+  used `type` as an identifier (checked by grep over `docs/spec` and
+  `tests/conformance`), so nothing was migrated. A projection needs no
+  production: `I.Item` is already a `path`. Deliberately not added (each
+  can be added later without breaking accepted code): generic associated
+  types, associated-type defaults, associated consts, equality bounds
+  (`I.Item = T`), supertraits (`trait A: B`), a qualified projection
+  `(P as Tr).A`, a `where` clause. Constraint entries live inside
+  `generics` rather than in a `where` clause because the list is already
+  the one place bounds are written (ch09 Rule 15) and the head-is-earlier
+  rule keeps it a single left-to-right pass.
 - Not added: char literals, labels, match guards, `|`-patterns, tuple
   index fields, type aliases, nested `fn`, `spmd`/`kernel` keywords.
 - Attribute args are `[label:] (literal | path)`, never `expr`.
@@ -623,6 +692,24 @@ arg, `&buf.slice`, `&out` on a binding named `out`, attributed
   rejected (`_` is not an `ident`). (Rule 18)
 - `pattern_let_underscore_rejected` — `match p { let _ => 0 }` is a parse
   error (write `_`). (Rule 17)
+- `assoc_type_items` — `trait It { type Item; fn next(inout self: Self)
+  -> Option[Self.Item]; }`, `trait K { type Key: Eq + Ord; }`,
+  `impl[I: It] It for Skip[I] { type Item = I.Item; fn next(inout self:
+  Skip[I]) -> Option[I.Item] { return none; } }` accepted; `trait T { type
+  A = i32; }`, `impl T for S { type A; }`, `impl T for S { pub type A =
+  i32; }`, `trait T { @x type A; }`, `trait T { type A[U]; }` rejected.
+  (Rule 20)
+- `generics_constraint_entry` — `fn f[I: It, I.Item: Add + Copyable]()`,
+  `fn g[Self.Item: Eq]()`, `struct S[I: It, I.Item: Eq] { }`, trailing
+  comma after a constraint accepted; `fn f[I.Item]()` (no `:`),
+  `fn f[I.Item.X: Eq]()`, `fn f[I: It, I.Item = i64]()` (fixed message),
+  `fn f[I.Item: brand + Eq]()` parses with `brand` as a path. (Rule 19)
+- `type_reserved_word` — `let type = 1;`, `struct S { type: i32 }`,
+  `x.type`, `f(type: 1)` rejected; `type A = i32;` at file level rejected
+  with the fixed "type aliases do not exist" message and exactly one
+  diagnostic, the following declaration intact.
+- `recover_assoc_type_item` — `impl T for S { type A = ; fn f() { } }`
+  yields exactly one diagnostic and `f` in the CST.
 - `pattern_let_typed_rejected` — `match p { let x: i32 => x }` is a parse
   error at `:`; so is `.Some(let n: i32)` inside a payload
   (`pattern_let_typed_in_payload_rejected`). (Rule 17)

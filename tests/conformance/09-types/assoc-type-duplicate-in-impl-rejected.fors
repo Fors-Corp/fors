@@ -1,0 +1,13 @@
+//! name: assoc_type_duplicate_in_impl_rejected
+//! rule: 09.R17
+//! expect: check-error
+//! detail: N0027 -- `type Item` defined twice in one impl is ch08 Rule 27's duplicate-member error
+
+module m;
+
+struct Counter2 { n: i64 }
+impl Iterator for Counter2 {
+    type Item = i64;
+    type Item = i64;
+    fn next(inout self: Counter2) -> Option[i64] { return none; }
+}

@@ -1,0 +1,8 @@
+//! name: neutral_projections_distinct_params_rejected
+//! rule: 09.R20
+//! expect: check-error
+//! detail: T0026 -- I.Item and J.Item are different neutral types
+
+module m;
+
+fn cross[I: Iterator, J: Iterator](sink a: I.Item) -> J.Item { return a; }

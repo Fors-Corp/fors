@@ -1,0 +1,13 @@
+//! name: recursive_through_assoc_type_rejected
+//! rule: 09.R14
+//! expect: check-error
+//! detail: T0014 -- S[Foo] stores Foo.Item, which the impl defines as S[Foo]: the cycle runs S -> Iterator.Item -> S and is reported on the `type Item = S[Foo];`
+
+module m;
+
+struct S[I: Iterator] { x: Option[I.Item] }
+struct Foo { n: i64 }
+impl Iterator for Foo {
+    type Item = S[Foo];
+    fn next(inout self: Foo) -> Option[S[Foo]] { return none; }
+}

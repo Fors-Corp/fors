@@ -1,0 +1,9 @@
+//! name: generics_equality_bound_reject
+//! rule: 07.D19
+//! expect: parse-error
+//! detail: `I.Item = i64` is a parse error at `=` with the fixed message: equality bounds do not exist, constrain with `:`
+
+module m;
+
+trait It { type Item; }
+fn f[I: It, I.Item = i64]() { }

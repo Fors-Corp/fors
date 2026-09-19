@@ -1,0 +1,9 @@
+//! name: blanket_impl_rejected
+//! rule: 09.R18
+//! expect: check-error
+//! detail: T0018 -- the self type is a bare type parameter; blanket impls do not exist
+
+module m;
+
+trait Shape { fn area(let self: Self) -> f64; }
+impl[T] Shape for T { fn area(let self: T) -> f64 { return 0.0; } }

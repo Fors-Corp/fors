@@ -1,0 +1,16 @@
+//! name: prelude_operator_traits_without_use_accepted
+//! rule: 08.R17
+//! expect: check-ok
+//! detail: the round-4 prelude names (Iterator, Index, IndexMut, Add, Eq, Ord, Copyable, Range, never, ...) are in every module scope without a `use`
+
+module m;
+
+struct C { n: i64 }
+impl Iterator for C { type Item = i64; fn next(inout self: C) -> Option[i64] { return none; } }
+impl Index[usize] for C { type Output = i64; fn at(let self: C, let i: usize) -> scoped(self) i64 { return self.n; } }
+impl IndexMut[usize] for C { fn at_mut(inout self: C, let i: usize) -> scoped(self) i64 { return self.n; } }
+impl Add for C { fn add(let self: C, let rhs: C) -> C { return C { n: self.n + rhs.n }; } }
+impl Eq for C { fn eq(let self: C, let rhs: C) -> bool { return self.n == rhs.n; } }
+impl Copyable for C { }
+fn die() -> never { return die(); }
+fn f[T: Ord + Sub + Mul + Div + Rem + Neg + BitAnd + BitOr + BitXor + Shl + Shr](let r: Range[i32], let q: RangeIncl[i32]) { }

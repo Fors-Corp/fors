@@ -1,0 +1,11 @@
+//! name: dot_lit_in_synth_rejected
+//! rule: 09.R34
+//! expect: check-error
+//! detail: T0034 -- a dot literal is CHECK only
+
+module m;
+
+enum Color { red, green }
+fn f() {
+    let c = .red;
+}

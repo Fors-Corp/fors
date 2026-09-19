@@ -1,0 +1,9 @@
+//! name: assoc_type_default_in_trait_reject
+//! rule: 07.D20
+//! expect: parse-error
+//! detail: `type A = i32;` inside a trait body: a trait declares `type A;`, the definition belongs in an impl (fixed message, one diagnostic)
+
+module m;
+
+trait T { type A = i32; }
+fn f() -> i32 { return 0; }

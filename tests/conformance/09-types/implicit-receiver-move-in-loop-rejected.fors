@@ -1,0 +1,22 @@
+//! name: implicit_receiver_move_in_loop_rejected
+//! rule: 09.R46
+//! expect: check-error
+//! detail: ch01 R4a(b) -- `b` is declared outside the loop and moved by `b.finish()` inside it
+
+module m;
+
+struct Builder { parts: i64 }
+impl Builder {
+    fn finish(sink self: Builder) -> i64 {
+        let p = self.parts;
+        discard self;
+        return p;
+    }
+    fn peek(let self: Builder) -> i64 { return self.parts; }
+    fn add(inout self: Builder) { self.parts = self.parts + 1; }
+}
+fn f(sink b: Builder, let n: usize) -> i64 {
+    var total: i64 = 0;
+    for i in 0 ..< n { total = total + b.finish(); }
+    return total;
+}

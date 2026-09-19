@@ -1,0 +1,18 @@
+//! name: implicit_receiver_move_of_let_param_rejected
+//! rule: 09.R46
+//! expect: check-error
+//! detail: ch01 R3 -- `d.finish()` would move out of a `let` parameter
+
+module m;
+
+struct Builder { parts: i64 }
+impl Builder {
+    fn finish(sink self: Builder) -> i64 {
+        let p = self.parts;
+        discard self;
+        return p;
+    }
+    fn peek(let self: Builder) -> i64 { return self.parts; }
+    fn add(inout self: Builder) { self.parts = self.parts + 1; }
+}
+fn f(let d: Builder) -> i64 { return d.finish(); }

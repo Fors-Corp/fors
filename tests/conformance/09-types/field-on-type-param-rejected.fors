@@ -1,0 +1,8 @@
+//! name: field_on_type_param_rejected
+//! rule: 09.R42
+//! expect: check-error
+//! detail: T0042 -- a rigid parameter has no fields
+
+module m;
+
+fn f[T](let x: T) -> i32 { return x.len; }

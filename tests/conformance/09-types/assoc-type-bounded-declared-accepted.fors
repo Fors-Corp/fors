@@ -1,0 +1,12 @@
+//! name: assoc_type_bounded_declared_accepted
+//! rule: 09.R16
+//! expect: check-ok
+//! detail: `type Key: Eq + Ord;` declares bounds; a provided body may use them on Self.Key
+
+module m;
+
+trait Keyed {
+    type Key: Eq + Ord;
+    fn key(let self: Self) -> Self.Key;
+    fn same(let self: Self, let other: Self) -> bool { return self.key() == other.key(); }
+}

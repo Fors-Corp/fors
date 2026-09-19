@@ -1,0 +1,9 @@
+//! name: callable_bound_closure_accepted
+//! rule: 09.R41
+//! expect: check-ok
+//! detail: T := i32 from `2`; the closure's parameter type is complete, so it is checked and its body gives U := i32
+
+module m;
+
+fn apply[T, U, F: fn(let T) -> U](let x: T, let f: F) -> U { return f(x); }
+fn demo() -> i32 { return apply(2, |let n| n * 2); }

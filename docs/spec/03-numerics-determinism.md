@@ -128,7 +128,7 @@ fn sum_naive(let xs: Slice[f64]) -> f64 {
 ```fors
 fn max_lane[T: Ord](let v: vector[T, 8], let m: mask[8]) -> T {
     var best: T = v[0];  // T=i32: scalar, monomorphized, no witness call in simd
-    for i in 1 ..< 8 { if m.lane(i) { best = if v[i] > best { v[i] } else { best }; } }
+    for i in 1usize ..< 8 { if m.lane(i) { best = if v[i] > best { v[i] } else { best }; } }
     return best;
 }
 

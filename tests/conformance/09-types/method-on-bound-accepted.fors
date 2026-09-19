@@ -1,0 +1,9 @@
+//! name: method_on_bound_accepted
+//! rule: 09.R43
+//! expect: check-ok
+//! detail: for a rigid parameter the candidate traits are exactly its bounds
+
+module m;
+
+trait Named { fn id(let self: Self) -> i64; }
+fn f[T: Named](let t: T) -> i64 { return t.id(); }

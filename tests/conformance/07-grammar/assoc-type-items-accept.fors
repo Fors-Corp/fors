@@ -1,0 +1,14 @@
+//! name: assoc_type_items_accept
+//! rule: 07.D20
+//! expect: parse-ok
+//! detail: `type Item;`, `type Key: Eq + Ord;` in a trait, `type Item = I.Item;` in an impl (round 4)
+
+module m;
+
+trait It { type Item; fn next(inout self: Self) -> Option[Self.Item]; }
+trait K { type Key: Eq + Ord; }
+struct Skip[I] { inner: I }
+impl[I: It] It for Skip[I] {
+    type Item = I.Item;
+    fn next(inout self: Skip[I]) -> Option[I.Item] { return none; }
+}

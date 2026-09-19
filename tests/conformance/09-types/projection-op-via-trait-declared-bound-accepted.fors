@@ -1,0 +1,9 @@
+//! name: projection_op_via_trait_declared_bound_accepted
+//! rule: 09.R57
+//! expect: check-ok
+//! detail: the bounds the trait declares for Key (Eq + Ord) are operations of the neutral T.Key
+
+module m;
+
+trait Keyed { type Key: Eq + Ord; fn key(let self: Self) -> Self.Key; }
+fn less[T: Keyed](let a: T, let b: T) -> bool { return a.key() < b.key(); }

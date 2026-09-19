@@ -1,0 +1,17 @@
+//! name: constraint_entry_unsatisfied_at_call_rejected
+//! rule: 09.R62
+//! expect: check-error
+//! detail: T0012 -- at the call I.Item normalises to Circle, which does not implement Add
+
+module m;
+
+struct Circle { r: f64 }
+struct Circles { n: i64 }
+impl Iterator for Circles {
+    type Item = Circle;
+    fn next(inout self: Circles) -> Option[Circle] { return none; }
+}
+fn drain[I: Iterator, I.Item: Add](sink it: I) {
+    for x in it { }
+}
+fn f(sink cs: Circles) { drain(move cs); }

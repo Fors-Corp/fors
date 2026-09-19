@@ -1,0 +1,15 @@
+//! name: const_pattern_equal_to_literal_unreachable_rejected
+//! rule: 09.R54
+//! expect: check-error
+//! detail: T0054 -- a const pattern is the literal constructor of its value: LIMIT and 10 are the same constructor
+
+module m;
+
+const LIMIT: i32 = 10;
+fn f(let n: i32) -> i32 {
+    match n {
+        LIMIT => 1,
+        10 => 2,
+        _ => 0,
+    }
+}

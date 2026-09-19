@@ -1,0 +1,15 @@
+//! name: brand_inferred_for_callee_accepted
+//! rule: 09.R40
+//! expect: check-ok
+//! detail: a fresh brand is bound to the callee's brand parameter from the argument types
+
+module m;
+
+struct Node[A: brand] { val: i64 }
+fn touch[A: brand](inout a: Arena[Node[A], A], let r: Ref[Node[A], A]) -> i64 { return a[r].val; }
+fn f() {
+    with arena one: Arena[Node[one]] {
+        let x: Ref[Node[one], one] = one.alloc(Node { val: 1 });
+        let v: i64 = touch(&one, x);
+    }
+}

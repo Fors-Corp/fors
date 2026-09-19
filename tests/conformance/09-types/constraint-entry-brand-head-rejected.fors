@@ -1,0 +1,8 @@
+//! name: constraint_entry_brand_head_rejected
+//! rule: 09.R62
+//! expect: check-error
+//! detail: T0061 -- the head resolves to an earlier generic parameter (ch08 is satisfied) but it is a brand parameter, which has no bounds
+
+module m;
+
+fn f[A: brand, A.Item: Eq]() { }

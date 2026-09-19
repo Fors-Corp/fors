@@ -1,0 +1,18 @@
+//! name: normalise_mutually_recursive_impls_accepted
+//! rule: 09.R20
+//! expect: check-ok
+//! detail: two traits whose impls project on each other still terminate: every step projects on a strict subterm (A[B[Base]].P -> B[Base].Q -> Base.P -> i64)
+
+module m;
+
+trait P { type X; fn p(let self: Self) -> i64; }
+trait Q { type Y; fn q(let self: Self) -> i64; }
+struct Base { n: i64 }
+struct A[T] { t: T }
+struct B[T] { t: T }
+impl P for Base { type X = i64; fn p(let self: Base) -> i64 { return self.n; } }
+impl Q for Base { type Y = i64; fn q(let self: Base) -> i64 { return self.n; } }
+impl[T: Q] P for A[T] { type X = T.Y; fn p(let self: A[T]) -> i64 { return 0; } }
+impl[T: P] Q for B[T] { type Y = T.X; fn q(let self: B[T]) -> i64 { return 0; } }
+fn px[T: P](let t: T, sink x: T.X) -> T.X { return x; }
+fn f(let v: A[B[Base]]) -> i64 { return px(v, 7); }

@@ -33,12 +33,20 @@ Run tests assume `io.Writer.write_line`, which no chapter defines. A
 `Slice[T]` is obtained only by range-indexing a bound array (ch03 Rule 24);
 `main` takes root capabilities by type (ch04 Rules 8, 21).
 
-## Counts: 431 tests, 514 files
+## Counts: 648 tests, 710 files
 
-(Round 3 (2026-09-19): applied D1 pattern-binding, D2 import-alias and D3
-prelude-shadowing decisions; +30 net new tests in 07-grammar/08-names,
-2 flipped; round-3 verification added +22 (3 grammar, 19 names) -- see docs/spec/07-grammar.md and docs/spec/08-names.md
-Drafting decisions / Conformance tests.)
+(Round 4 (2026-09-19): applied the type-system decisions -- integer literal
+default `i32`, homogeneous operators, associated types with projections
+and constraint entries, implicit `sink self` receiver move; new directory
+09-types (186 tests, ch09's list plus the verification round's soundness
+probes); +19 in 07-grammar (associated-type items, constraint entries,
+`type` reserved, recovery), +12 in 08-names (deferred projections,
+round-4 prelude names, constraint-entry heads, shared member tables).
+A 09-types `detail` starts with the expected code: `T00nn` (ch09), an
+ch08 `N00nn`, or `ch01 Rk` when ch01's rule decides; text after ` -- ` is
+comment. Until a type checker exists, `fors check` must be CLEAN on every
+T-coded or ch01-coded 09-types test and report exactly the named N-code
+on the others (crates/fors-resolve/tests/conformance.rs).)
 
 | Dir | parse-ok | check-ok | parse-error | check-error | run-ok | trap |
 |---|---|---|---|---|---|---|
@@ -46,9 +54,10 @@ Drafting decisions / Conformance tests.)
 | 02-failure (25) | 8 | 0 | 2 | 9 | 1 | 5 |
 | 03-numerics (46) | 7 | 0 | 0 | 13 | 19 | 7 |
 | 04-authority (32) | 9 | 0 | 0 | 20 | 3 | 0 |
-| 07-grammar (125) | 56 | 0 | 65 | 4 | 0 | 0 |
-| 08-names (145) | 0 | 53 | 0 | 92 | 0 | 0 |
-| total | 104 | 53 | 69 | 169 | 23 | 13 |
+| 07-grammar (144) | 60 | 0 | 80 | 4 | 0 | 0 |
+| 08-names (157) | 0 | 58 | 0 | 99 | 0 | 0 |
+| 09-types (186) | 0 | 69 | 0 | 117 | 0 | 0 |
+| total | 108 | 127 | 84 | 293 | 23 | 13 |
 
 ## Change rule
 

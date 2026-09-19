@@ -1,0 +1,18 @@
+//! name: param_only_under_projection_explicit_accepted
+//! rule: 09.R39
+//! expect: check-ok
+//! detail: given explicitly, I := Counter2 makes the parameter type i64 and the literal is checked
+
+module m;
+
+struct Counter2 { n: i64, end: i64 }
+impl Iterator for Counter2 {
+    type Item = i64;
+    fn next(inout self: Counter2) -> Option[i64] {
+        if self.n >= self.end { return none; }
+        self.n = self.n + 1;
+        return some(self.n);
+    }
+}
+fn g[I: Iterator](let x: I.Item) -> i64 { return 0; }
+fn f() -> i64 { return g[Counter2](1); }

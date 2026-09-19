@@ -1,0 +1,8 @@
+//! name: projection_ambiguous_rejected
+//! rule: 09.R61
+//! expect: check-error
+//! detail: T0061 -- two bounds of T declare Output; there is no qualified form in v0.1
+
+module m;
+
+fn f[T: Index[usize] + Index[i32]](let t: T, let y: T.Output) { }

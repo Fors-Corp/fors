@@ -1,5 +1,5 @@
 import sys,re,os
-RES=set("module use pub fn struct enum trait impl const extern let var inout sink if else match for in while break continue return raise raises with parallel simd spawn comptime move consume discard as and or not true false iso imm secret dyn asm import recover".split())
+RES=set("module use pub fn struct enum trait impl const extern let var inout sink if else match for in while break continue return raise raises with parallel simd spawn comptime move consume discard as and or not true false iso imm secret dyn asm import recover type".split())
 SUF=set("i8 i16 i32 i64 u8 u16 u32 u64 isize usize f32 f64".split())
 ISUF=SUF-{"f32","f64"}
 PUN=sorted("( ) [ ] { } , ; : . @ ? -> => = == != < > <= >= + - * / % & | ^ << >> ..< ..= += -= *= /= %= &= |= ^= <<= >>=".split(),key=len,reverse=True)
@@ -176,6 +176,12 @@ class P:
             if s.isp("["): s.generics()
             s.eat("{")
             while not s.isp("}"):
+                if s.isp("type"):
+                    s.i+=1;s.ident()
+                    if s.opt(":"):
+                        s.type()
+                        while s.opt("+"): s.type()
+                    s.eat(";");continue
                 while s.isp("@"): s.attr()
                 s.fnsig()
                 if not s.opt(";"): s.block()
@@ -186,6 +192,8 @@ class P:
             if s.opt("for"): s.type()
             s.eat("{")
             while not s.isp("}"):
+                if s.isp("type"):
+                    s.i+=1;s.ident();s.eat("=");s.type();s.eat(";");continue
                 while s.isp("@"): s.attr()
                 s.opt("pub");s.fnsig();s.block()
             s.eat("}")
@@ -197,6 +205,11 @@ class P:
         s.eat("[")
         def g():
             s.ident()
+            if s.opt("."):
+                s.ident();s.eat(":")
+                s.type()
+                while s.opt("+"): s.type()
+                return
             if s.opt(":"):
                 if s.isid("brand"): s.i+=1
                 else:

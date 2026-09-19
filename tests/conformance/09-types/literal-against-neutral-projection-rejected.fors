@@ -1,0 +1,10 @@
+//! name: literal_against_neutral_projection_rejected
+//! rule: 09.R27
+//! expect: check-error
+//! detail: T0027 -- a neutral projection is rigid: no literal checks against I.Item
+
+module m;
+
+fn f[I: Iterator](let it: I) {
+    let y: Option[I.Item] = some(0);
+}

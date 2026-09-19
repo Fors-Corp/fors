@@ -1,0 +1,17 @@
+//! name: compound_assign_via_add_accepted
+//! rule: 09.R21
+//! expect: check-ok
+//! detail: `a += b` is `a = a + b` through Add
+
+module m;
+
+struct V2 { x: f64, y: f64 }
+impl Copyable for V2 { }
+impl Add for V2 {
+    fn add(let self: V2, let rhs: V2) -> V2 { return V2 { x: self.x + rhs.x, y: self.y + rhs.y }; }
+}
+fn f(let a: V2, let b: V2) -> V2 {
+    var acc: V2 = a;
+    acc += b;
+    return acc;
+}

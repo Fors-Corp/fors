@@ -1,0 +1,12 @@
+//! name: array_to_slice_rejected
+//! rule: 09.R10
+//! expect: check-error
+//! detail: T0026 -- there is no array-to-slice coercion; range-index the array instead
+
+module m;
+
+fn take(let s: Slice[i32]) -> usize { return s.len; }
+fn f() -> usize {
+    let a = [1, 2, 3];
+    return take(a);
+}

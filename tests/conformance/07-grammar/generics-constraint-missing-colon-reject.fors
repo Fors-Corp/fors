@@ -1,0 +1,8 @@
+//! name: generics_constraint_missing_colon_reject
+//! rule: 07.D19
+//! expect: parse-error
+//! detail: `fn f[I.Item]()` lacks the mandatory `:` and bounds of a constraint entry
+
+module m;
+
+fn f[I.Item]() { }

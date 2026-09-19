@@ -1,0 +1,15 @@
+//! name: unreachable_arm_rejected
+//! rule: 09.R54
+//! expect: check-error
+//! detail: T0054 -- every variant is covered before the wildcard arm
+
+module m;
+
+enum Shape2 { circle(f64), empty }
+fn f(let s: Shape2) -> f64 {
+    match s {
+        .circle(let r) => r,
+        .empty => 0.0,
+        _ => 1.0,
+    }
+}

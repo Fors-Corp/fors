@@ -1,0 +1,12 @@
+//! name: impl_method_signature_projection_mismatch_rejected
+//! rule: 09.R17
+//! expect: check-error
+//! detail: T0017 -- after normalisation the trait's Option[Self.Item] is Option[i64]; the impl writes Option[i32]
+
+module m;
+
+struct Counter2 { n: i64 }
+impl Iterator for Counter2 {
+    type Item = i64;
+    fn next(inout self: Counter2) -> Option[i32] { return none; }
+}

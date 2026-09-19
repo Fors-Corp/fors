@@ -1,0 +1,8 @@
+//! name: return_value_mismatch_rejected
+//! rule: 09.R31
+//! expect: check-error
+//! detail: T0026 -- `return e;` checks e against the declared result type
+
+module m;
+
+fn f() -> i32 { return true; }

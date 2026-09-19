@@ -57,14 +57,36 @@ pub const NO_BODY: u128 = 0;
 /// (as in [`fors_syntax::tree::Tree::token_range`]); trivia in the range
 /// is skipped so whitespace and comment edits never change the result.
 pub fn hash_tokens(tokens: &Tokens, source: &[u8], first: u32, end: u32) -> u128 {
+    hash_tokens_excluding(tokens, source, first, end, &[])
+}
+
+/// As [`hash_tokens`], but the raw-token ranges in `holes` (sorted,
+/// disjoint, inside `[first, end)`) are skipped. Used for an `impl` or
+/// `trait`: its signature is its header, its associated-type items
+/// (`type A = T;` is signature, ch09 Rules 2 and 59) and its members'
+/// signatures, but NOT its members' bodies, which are the holes. Each
+/// hole contributes one separator so two bodies cannot be merged into one
+/// without a signature-level trace.
+pub fn hash_tokens_excluding(tokens: &Tokens, source: &[u8], first: u32, end: u32, holes: &[(u32, u32)]) -> u128 {
     let mut lo = FNV_OFFSET_LO;
     let mut hi = FNV_OFFSET_HI;
-    for i in first as usize..end as usize {
-        let kind = tokens.kinds[i];
+    let mut hole = 0usize;
+    let mut i = first as usize;
+    while i < end as usize {
+        if hole < holes.len() && i >= holes[hole].0 as usize {
+            i = i.max(holes[hole].1 as usize);
+            hole += 1;
+            lo = fnv_step(lo, FNV_PRIME_LO, SEPARATOR);
+            hi = fnv_step(hi, FNV_PRIME_HI, SEPARATOR);
+            continue;
+        }
+        let at = i;
+        i += 1;
+        let kind = tokens.kinds[at];
         if kind.is_trivia() {
             continue;
         }
-        let text = tokens.text(i, source);
+        let text = tokens.text(at, source);
         let kind_byte = kind as u8;
         lo = fnv_step(lo, FNV_PRIME_LO, kind_byte);
         hi = fnv_step(hi, FNV_PRIME_HI, kind_byte);

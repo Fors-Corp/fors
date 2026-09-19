@@ -1,0 +1,11 @@
+//! name: let_never_rejected
+//! rule: 09.R33
+//! expect: check-error
+//! detail: T0033 -- a binding must not be given type never by synthesis
+
+module m;
+
+fn die() -> never { return die(); }
+fn f() {
+    let x = die();
+}

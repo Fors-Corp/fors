@@ -1,0 +1,17 @@
+//! name: projection_on_self_in_trait_accepted
+//! rule: 09.R61
+//! expect: check-ok
+//! detail: inside the trait Self.Item is a neutral projection of the trait itself
+
+module m;
+
+trait Source {
+    type Item;
+    fn pull(inout self: Self) -> Option[Self.Item];
+    fn pull_or(inout self: Self, sink d: Self.Item) -> Self.Item {
+        match self.pull() {
+            some(let v) => v,
+            none => d,
+        }
+    }
+}

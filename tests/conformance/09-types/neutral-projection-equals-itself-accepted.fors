@@ -1,0 +1,8 @@
+//! name: neutral_projection_equals_itself_accepted
+//! rule: 09.R20
+//! expect: check-ok
+//! detail: with I rigid, I.Item is equal to I.Item
+
+module m;
+
+fn pass[I: Iterator](sink x: I.Item) -> I.Item { return x; }

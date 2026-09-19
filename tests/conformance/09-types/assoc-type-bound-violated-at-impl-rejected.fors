@@ -1,0 +1,14 @@
+//! name: assoc_type_bound_violated_at_impl_rejected
+//! rule: 09.R17
+//! expect: check-error
+//! detail: T0017 -- the trait declares `type Key: Eq + Ord;` and Circle implements neither; checked once, at the impl
+
+module m;
+
+trait Keyed { type Key: Eq + Ord; fn key(let self: Self) -> Self.Key; }
+struct Circle { r: f64 }
+struct Tag { id: i64 }
+impl Keyed for Tag {
+    type Key = Circle;
+    fn key(let self: Tag) -> Circle { return Circle { r: 0.0 }; }
+}

@@ -1,0 +1,17 @@
+//! name: index_suffixed_with_two_impls_accepted
+//! rule: 09.R29
+//! expect: check-ok
+//! detail: a suffixed index selects Index[usize] by one lookup; the result is its Output, i64
+
+module m;
+
+struct Grid { cells: Array[i64, 16], names: Array[Str, 4] }
+impl Index[usize] for Grid {
+    type Output = i64;
+    fn at(let self: Grid, let i: usize) -> scoped(self) i64 { return self.cells[i]; }
+}
+impl Index[u8] for Grid {
+    type Output = Str;
+    fn at(let self: Grid, let i: u8) -> scoped(self) Str { return self.names[0]; }
+}
+fn f(let g: Grid) -> i64 { return g[0usize]; }

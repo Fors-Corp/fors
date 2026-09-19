@@ -1,0 +1,9 @@
+//! name: method_named_as_field_rejected
+//! rule: 09.R48
+//! expect: check-error
+//! detail: T0048 -- an inherent member named like a field of the struct
+
+module m;
+
+struct P { x: i32 }
+impl P { fn x(let self: P) -> i32 { return 0; } }

@@ -1,0 +1,19 @@
+//! name: constraint_entry_with_assoc_trait_accepted
+//! rule: 09.R62
+//! expect: check-ok
+//! detail: the entry's trait may itself declare associated types: values of type I.Item then have methods mentioning the neutral I.Item.Item, which has no spelling but is a legal type
+
+module m;
+
+fn first_of_first[I: Iterator, I.Item: Iterator](inout it: I) -> bool {
+    match it.next() {
+        some(let inner) => {
+            var held = inner;
+            match held.next() {
+                some(let leaf) => true,
+                none => false,
+            }
+        },
+        none => false,
+    }
+}

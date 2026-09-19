@@ -1,0 +1,8 @@
+//! name: copy_without_copyable_rejected
+//! rule: 09.R57
+//! expect: check-error
+//! detail: ch01 R3 -- without a Copyable bound a value use of the rigid-typed place `x` is a move, here out of a `let` parameter
+
+module m;
+
+fn dup[T](let x: T) -> T { return x; }

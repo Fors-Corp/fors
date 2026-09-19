@@ -1,0 +1,11 @@
+//! name: closure_checked_against_fn_type_accepted
+//! rule: 09.R35
+//! expect: check-ok
+//! detail: un-annotated closure parameters take their types from the expected fn type
+
+module m;
+
+fn f() -> i64 {
+    let g: fn(let i64) -> i64 = |let n| n * 2;
+    return g(21);
+}

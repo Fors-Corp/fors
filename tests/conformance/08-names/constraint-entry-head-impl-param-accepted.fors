@@ -1,0 +1,11 @@
+//! name: constraint_entry_head_impl_param_accepted
+//! rule: 08.R26
+//! expect: check-ok
+//! detail: a method's constraint entry may name a generic parameter of the enclosing impl
+
+module m;
+
+struct S[I] { it: I }
+impl[I: Iterator] S[I] {
+    fn total[I.Item: Add](let self: S[I]) { }
+}

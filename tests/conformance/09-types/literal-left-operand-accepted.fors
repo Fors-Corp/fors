@@ -1,0 +1,11 @@
+//! name: literal_left_operand_accepted
+//! rule: 09.R29
+//! expect: check-ok
+//! detail: the one syntactic exception: an unsuffixed literal on the left takes the type of the right operand
+
+module m;
+
+fn f(let x: i64, let n: usize) -> i64 {
+    for i in 0 ..< n { }
+    return 1 + x;
+}

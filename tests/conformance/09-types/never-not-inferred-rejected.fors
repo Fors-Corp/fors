@@ -1,0 +1,12 @@
+//! name: never_not_inferred_rejected
+//! rule: 09.R33
+//! expect: check-error
+//! detail: T0039 -- an argument of type never binds nothing, so T stays undetermined
+
+module m;
+
+fn id[T](sink x: T) -> T { return x; }
+fn die() -> never { return die(); }
+fn f() {
+    id(die());
+}

@@ -1,0 +1,9 @@
+//! name: projection_type_path_accept
+//! rule: 07.D20
+//! expect: parse-ok
+//! detail: a projection is the ordinary dotted path `I.Item` / `Self.Item` inside a type: no new type syntax
+
+module m;
+
+trait It { type Item; fn next(inout self: Self) -> Option[Self.Item]; }
+fn first[I: It](inout it: I, let d: Option[I.Item]) -> Option[I.Item] { return it.next(); }

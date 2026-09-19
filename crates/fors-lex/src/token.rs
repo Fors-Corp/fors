@@ -130,6 +130,12 @@ pub enum TokenKind {
     Error,
     /// Zero-length token at end of input.
     Eof,
+
+    // ---- appended, owner decision 2026-09-19 round 4: additive only,
+    // never reorder anything above. ----
+    /// `type` (ch07 Disambiguation 20): reserved; introduces an associated
+    /// type inside a `trait` or `impl` body and has no other production.
+    KwType,
 }
 
 impl TokenKind {
@@ -195,6 +201,7 @@ pub fn keyword_kind(word: &[u8]) -> Option<TokenKind> {
         b"asm" => KwAsm,
         b"import" => KwImport,
         b"recover" => KwRecover,
+        b"type" => KwType,
         _ => return None,
     })
 }

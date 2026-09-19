@@ -1,0 +1,12 @@
+//! name: constraint_entry_accepted
+//! rule: 09.R62
+//! expect: check-ok
+//! detail: the constraint entry gives the neutral I.Item the operations of Add and Copyable inside the function
+
+module m;
+
+fn sum_all[I: Iterator, I.Item: Add + Copyable](sink it: I, let zero: I.Item) -> I.Item {
+    var acc: I.Item = zero;
+    for x in it { acc = acc + x; }
+    return acc;
+}

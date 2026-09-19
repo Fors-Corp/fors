@@ -1,0 +1,13 @@
+//! name: bounded_impl_param_only_in_trait_args_rejected
+//! rule: 09.R18
+//! expect: check-error
+//! detail: T0018 -- U carries a bound but occurs only in the trait arguments; impl lookup and normalisation recurse on the self type only (the non-termination probe of Rules 12 and 20)
+
+module m;
+
+trait Conv[X] { fn conv(let self: Self) -> i64; }
+struct Wrap[T] { inner: T }
+struct Foo { n: i64 }
+impl[U: Conv[Wrap[U]]] Conv[U] for Foo {
+    fn conv(let self: Foo) -> i64 { return self.n; }
+}

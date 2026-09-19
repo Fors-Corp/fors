@@ -109,6 +109,27 @@ fn recover_missing_semicolon_is_exactly_one_diagnostic() {
     assert_eq!(diags[0].code.as_str(), "P0002");
 }
 
+/// Round 4 (ch07 Error recovery, "Associated-type items"): a file-level
+/// `type A = i32;` and a malformed `type A = ;` inside an impl each report
+/// exactly once, with the fixed message, and the declaration/member that
+/// follows is still in the CST.
+#[test]
+fn round4_type_item_recovery_is_exactly_one_diagnostic() {
+    let path = conformance_root().join("07-grammar/type-alias-file-level-reject.fors");
+    let src = fs::read(&path).expect("fixture must exist");
+    let (tree, diags) = fors_syntax::parse(&src);
+    assert_eq!(diags.len(), 1, "diags: {diags:?}");
+    assert!(diags[0].message.contains("type aliases do not exist"), "{}", diags[0].message);
+    assert!(tree.children(0).any(|c| tree.kinds[c] == fors_syntax::NodeKind::FnDecl));
+
+    let path = conformance_root().join("07-grammar/recover-assoc-type-item.fors");
+    let src = fs::read(&path).expect("fixture must exist");
+    let (tree, diags) = fors_syntax::parse(&src);
+    assert_eq!(diags.len(), 1, "diags: {diags:?}");
+    let impl_node = tree.children(0).find(|&c| tree.kinds[c] == fors_syntax::NodeKind::ImplDecl).expect("impl in CST");
+    assert!(tree.children(impl_node).any(|c| tree.kinds[c] == fors_syntax::NodeKind::FnDecl), "`f` must survive the recovery");
+}
+
 #[test]
 fn recover_missing_brace_is_exactly_one_diagnostic_and_resumes() {
     let path = conformance_root().join("07-grammar/recover-missing-brace.fors");

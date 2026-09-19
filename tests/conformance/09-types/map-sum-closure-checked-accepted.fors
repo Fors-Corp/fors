@@ -1,0 +1,24 @@
+//! name: map_sum_closure_checked_accepted
+//! rule: 09.R38
+//! expect: check-ok
+//! detail: I := Counter2 from `move xs`; fn(sink I.Item) -> U normalises to fn(sink i64) -> U, so the closure is CHECKed and its body gives U := i64; nothing propagates
+
+module m;
+
+struct Counter2 { n: i64, end: i64 }
+impl Iterator for Counter2 {
+    type Item = i64;
+    fn next(inout self: Counter2) -> Option[i64] {
+        if self.n >= self.end { return none; }
+        self.n = self.n + 1;
+        return some(self.n);
+    }
+}
+fn map_sum[I: Iterator, U: Add + Copyable, F: fn(sink I.Item) -> U](sink it: I, let f: F, let zero: U) -> U {
+    var acc: U = zero;
+    for x in it { acc = acc + f(move x); }
+    return acc;
+}
+fn demo2(sink xs: Counter2) -> i64 {
+    return map_sum(move xs, |sink x| x * 2, 0);
+}

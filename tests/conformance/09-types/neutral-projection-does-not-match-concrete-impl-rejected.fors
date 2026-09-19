@@ -1,0 +1,11 @@
+//! name: neutral_projection_does_not_match_concrete_impl_rejected
+//! rule: 09.R20
+//! expect: check-error
+//! detail: T0043 -- a neutral I.Item equals only itself, so Box2[I.Item] does not match impl Tagged for Box2[i64]; nothing is learnt from what I might become (Rule 59)
+
+module m;
+
+trait Tagged { fn tag(let self: Self) -> i64; }
+struct Box2[T] { v: T }
+impl Tagged for Box2[i64] { fn tag(let self: Box2[i64]) -> i64 { return 1; } }
+fn g[I: Iterator](let b: Box2[I.Item]) -> i64 { return b.tag(); }

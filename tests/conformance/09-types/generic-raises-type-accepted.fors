@@ -1,0 +1,8 @@
+//! name: generic_raises_type_accepted
+//! rule: 09.R60
+//! expect: check-ok
+//! detail: the raises type of a callable parameter may be a type parameter, determined like any other
+
+module m;
+
+fn try_apply[T, U, E, F: fn(let T) -> U raises E](let x: T, let f: F) -> U raises E { return f(x)?; }

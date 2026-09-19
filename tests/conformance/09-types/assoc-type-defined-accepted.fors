@@ -1,0 +1,16 @@
+//! name: assoc_type_defined_accepted
+//! rule: 09.R17
+//! expect: check-ok
+//! detail: the impl defines the trait's associated type exactly once
+
+module m;
+
+struct Counter2 { n: i64, end: i64 }
+impl Iterator for Counter2 {
+    type Item = i64;
+    fn next(inout self: Counter2) -> Option[i64] {
+        if self.n >= self.end { return none; }
+        self.n = self.n + 1;
+        return some(self.n);
+    }
+}

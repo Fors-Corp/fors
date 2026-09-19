@@ -1,0 +1,8 @@
+//! name: const_arg_arithmetic_on_param_rejected
+//! rule: 09.R13
+//! expect: check-error
+//! detail: T0013 -- arithmetic on a const parameter in type position; its range error could surface only after instantiation
+
+module m;
+
+fn grow[T: Copyable, N: usize](let a: Array[T, N + 1]) { }

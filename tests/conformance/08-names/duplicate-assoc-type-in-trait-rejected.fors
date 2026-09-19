@@ -1,0 +1,8 @@
+//! name: duplicate_assoc_type_in_trait_rejected
+//! rule: 08.R27
+//! expect: check-error
+//! detail: `type Item;` twice in one trait
+
+module m;
+
+trait Src { type Item; type Item; }

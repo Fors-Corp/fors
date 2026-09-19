@@ -1,0 +1,11 @@
+//! name: cannot_infer_rejected
+//! rule: 09.R39
+//! expect: check-error
+//! detail: T0039 -- T occurs in no parameter and there is no expected type
+
+module m;
+
+fn make[T]() -> Option[T] { return none; }
+fn f() {
+    let v = make();
+}

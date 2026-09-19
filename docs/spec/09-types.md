@@ -10,17 +10,24 @@ exactly two judgements, no solver, no overloading, no implicit conversions, a
 closed operator-trait set. Diagnostic codes `T00nn` equal the rule numbers;
 tests cite `09.Rk`.
 
-Note (round-3 owner decisions, 2026-09-19, not yet applied to ch07/ch08 text):
-a binding inside a pattern is written `let n`, and a bare name in a pattern is
-always a reference; `use a.b as c;` exists; a local may shadow a prelude name
-and nothing else. Examples below use these forms. Everything else is derived
-from ch07's frozen productions.
+Round 4 (owner decisions 2026-09-19, applied here): unsuffixed integer
+literals default to `i32`; operator traits are homogeneous; traits have full
+associated types (Rules 16-20, 61-62), which REPLACE the draft's
+"self-determined traits" (old Rule 20) and "bound propagation" (old Rule 38
+paragraph); a `sink self` receiver moves its place implicitly (Rule 46).
+Numbering: no rule was renumbered. Rule 20 was replaced in place (it is now
+the normalisation rule) and two rules were added at the end as section J
+(Rules 61-62), so every older citation `09.Rk` still points at the same
+subject. The round-3 forms (`let n` in patterns, `use a.b as c;`, a local may
+shadow a prelude name) are in ch07/ch08 and are used below. Every example is
+derived from ch07's productions.
 
 ## Scope
 
 Owns exclusively: the type universe and primitive sizes; type equality; the
 closed coercion list; well-formedness; generic-parameter kinds; trait and
-`impl` rules including overlap; the closed operator-trait table; `Copyable`;
+`impl` rules including overlap; associated types, projections, their
+normalisation, and constraint entries; the closed operator-trait table; `Copyable`;
 `synth` and `check` for every expression, statement and pattern form;
 generic-argument determination; member lookup (the deferred segments of ch08
 Rules 16, 22); exhaustiveness; what a generic body may do with a parameter; the
@@ -32,19 +39,29 @@ signature as the only inter-declaration interface. Not owned: see the table
 - **synth(e) = T**: `e` is typed with no expected type and yields `T`.
 - **check(e, T)**: `e` is typed against a complete expected type `T`. Which
   syntactic positions are CHECK positions is ch03 Rule 25.
-- **Complete type**: a type with no undetermined generic parameter of the call
-  being typed. A generic parameter of the *enclosing* declaration is a rigid,
-  opaque type and is complete.
+- **Projection**: the type `P.A`, the associated type `A` (of one trait among
+  `P`'s bounds) at `P` (Rule 61). **Neutral projection**: a projection whose
+  head is rigid; it is an opaque type (Rule 20).
+- **Complete type**: a type that, after substituting what the call being typed
+  has bound so far and normalising (Rule 20), mentions no undetermined generic
+  parameter of that call. A generic parameter of the *enclosing* declaration
+  is a rigid, opaque type and is complete, and so is a neutral projection.
 - **Head**: the outermost constructor of a type after stripping qualifiers: a
-  nominal item, a primitive, `tuple/n`, `fn`, `dyn Tr`, or a rigid parameter.
+  nominal item, a primitive, `tuple/n`, `fn`, `dyn Tr`, a rigid parameter, or
+  a neutral projection.
 - **One-way match** `match(P, A)`: `P` may mention unbound parameters of one
   call, `A` is complete. Walk both in lockstep; an unbound parameter in `P` is
   bound to the facing subterm of `A`; a bound parameter, or any constructor,
-  MUST equal the facing subterm (Rule 9). Nothing in `A` is ever bound. Cost is
-  linear in the size of `P`.
+  MUST equal the facing subterm (Rule 9). Matching does not look through
+  projections: a subterm of `P` that is a projection on a still-unbound
+  parameter faces anything, binds nothing and is not compared (Rule 38(e)
+  compares it later). Nothing in `A` is ever bound. Cost is linear in the size
+  of `P`.
 - **Signature**: exactly the parts listed by ch08 Rule 12, plus parameter
-  conventions and names, the `scoped(p)` prefix and contract clauses; for an
-  `impl`, its header and the signature of each method.
+  conventions and names, the `scoped(p)` prefix and contract clauses; for a
+  `trait`, also its associated-type declarations with their bounds; for an
+  `impl`, its header, its associated-type definitions (`type A = T;`) and the
+  signature of each method.
 
 ## Rules
 
@@ -56,7 +73,10 @@ signature as the only inter-declaration interface. Not owned: see the table
    variable, or any variable that outlives the one call, struct literal or
    operator expression that created it. Cost: each node does O(1) table lookups
    plus type comparisons and one-way matches linear in the size of the types
-   involved; impl lookups are memoised (Rule 12). The following are therefore
+   involved; impl lookups (Rule 12) and projection normalisations (Rule 20) are
+   memoised functions of their arguments, not constraints: a projection is
+   either rewritten at once or is a neutral, rigid type, never a variable
+   awaiting a later answer. The following are therefore
    not features, and a program that needs one MUST be rejected with this code
    where no more specific code applies: inferring a binding's type from a later
    use (`let x;` with neither annotation nor initialiser; an un-annotated
@@ -66,7 +86,11 @@ signature as the only inter-declaration interface. Not owned: see the table
    a later statement; ranking of candidates of any kind.
 2. **T0002** — Signatures are the only interface between declarations. Typing a
    body MUST consult only the signatures of the items, impls and traits it
-   mentions, never another body; nothing in a signature is inferred. A change
+   mentions, never another body; nothing in a signature is inferred. An
+   impl's associated-type definitions are part of its signature, not of any
+   body (Definitions), because other declarations' types normalise through
+   them (Rule 20): a change to `type A = T;` is a signature-level change and
+   MUST change the impl's fingerprint. A change
    confined to a body, a closure, a `const` initialiser's value (unless used as
    a const argument, Rule 13) or a private member never named outside MUST NOT
    change the result of checking any other declaration, so a fingerprint of the
@@ -83,8 +107,8 @@ signature as the only inter-declaration interface. Not owned: see the table
    ch05's.
 4. **T0004** — `()` is the unit type (one value, size 0). `never` is the
    uninhabited type (size 0); it is the type of `return`, `raise`, `break`,
-   `continue`, of a call to a function declared `-> never` (a spelling that
-   awaits Open question 1), and of a block that ends in one of these (Rule 33).
+   `continue`, of a call to a function declared `-> never` (`never` is a
+   prelude name, ch08 Rule 17), and of a block that ends in one of these (Rule 33).
    A tuple type `(T1, ..., Tn)`, `n >= 1`, is structural; `(T)` is `T` and
    `(T,)` is the 1-tuple (ch07). Tuples have no index fields; components are
    reached by a tuple `binding` or pattern.
@@ -111,16 +135,19 @@ signature as the only inter-declaration interface. Not owned: see the table
    `( )`; its parameter types are complete, so every argument is checked.
 8. **T0008** — There is no type-alias declaration (ch07). `Self` is the only
    alias-like name: inside `impl ... for S` / `impl S` it MUST be replaced by
-   `S` before any comparison, overlap test or fingerprint; inside a `trait` it
-   is a rigid parameter. If aliases are ever added they MUST be transparent in
+   `S` before any comparison, overlap test or fingerprint (`Self.A` there:
+   Rule 61(c)); inside a `trait` it is a rigid parameter whose one bound is
+   the trait itself, with the trait's own parameters as arguments. If aliases are ever added they MUST be transparent in
    the same way.
 9. **T0009** — Type equality. Two types are equal iff they have the same
    qualifier set and the same head and their arguments are pairwise equal: type
    arguments by this rule; brand arguments by identity (the same fresh brand or
    the same brand parameter, ch01 Rules 15, 15d); const arguments by value when
    closed, by identity when a bare const parameter (Rule 13). Equality is
-   syntactic on resolved, `Self`-expanded types: there is no normalisation, no
-   subtyping, no variance.
+   syntactic on resolved, `Self`-expanded, *normalised* types (Rule 20, the
+   only normalisation there is): two neutral projections are equal iff their
+   heads are equal and they name the same trait (arguments included) and the
+   same associated type. There is no subtyping and no variance.
 10. **T0010** — There is no subtyping. `check(e, T)` with `synth(e) = S`, `S !=
     T`, succeeds only through this closed list, applied once, at the outermost
     type only, never searched or chained: (a) `never` to any `T`; (b) a closure
@@ -149,7 +176,14 @@ fn f(let c: bool) -> i64 {
     is the omitted brand in a `with` header (ch01 Rule 15b). A generic item
     named with no arguments is legal only where Rule 34 or 38 determines them.
     A bare `targ` path (ch07 Disambiguation 11) is classified by the kind of
-    the parameter it fills.
+    the parameter it fills. The head of a type path MUST be what ch08 resolved
+    to a type-level entity: a struct, enum, trait (after `dyn`, in a bound or
+    an `impl` header), prelude type, type parameter or `Self`, possibly
+    reached through modules. A head that ch08 resolved to a value — in
+    particular a local or parameter that shadows a prelude module (ch08 Rule
+    18) and is then written as the head of `io.Stdout` — MUST be rejected with
+    this code, naming the binding. A type path with deferred segments (ch08
+    Rule 16) is a projection and is Rule 61's.
 12. **T0012** — Bounds MUST hold at every use: for each argument `X` given to a
     parameter `P: Tr1 + ... + Trk`, `X` MUST implement every `Tri`. "`X`
     implements `Tr[As]`" is decided structurally: if `X` is a rigid parameter,
@@ -157,8 +191,17 @@ fn f(let c: bool) -> i64 {
     self-type head equals `X`'s head, one-way match each impl's `(trait
     arguments, self type)` against `(As, X)` — at most one matches, by Rule 19
     — and then require the matched impl's own bounds on the subterms it bound.
-    Every recursive goal is about a strict subterm of `X` (Rule 18 forbids a
-    bare-parameter self type and bounds attach only to parameters), so the
+    If `X` is a neutral projection `P.A`, by the bounds the trait declares for
+    `A` (Rule 16) and the constraint entries in scope (Rule 62) only. A
+    constraint entry `P.A: Tr` of the callee is a bound like any other: after
+    Rule 38 it is checked on the normalised `P.A`. Every recursive goal is about a strict subterm of `X`: Rule 18 forbids a
+    bare-parameter self type, REQUIRES every bounded impl parameter to occur
+    in the impl's self type (a parameter bound only by the trait arguments
+    `As` would make the next goal's subject a subterm of `As`, which a bound
+    such as `U: Tr[Wrap[U]]` lets grow without limit), and an impl's bounds
+    attach only to its parameters because Rule 62 forbids constraint entries
+    on an `impl`. The trait arguments of a recursive goal may be larger than
+    `As`; its subject never is. So the
     procedure terminates in time linear in the size of `X` times the number of
     impls of that trait for that head; results are memoised. An
     `@unsafe(invariant:)` impl (ch01 Rule 21c) satisfies a bound like any other
@@ -174,7 +217,16 @@ fn f(let c: bool) -> i64 {
     nodes are struct and enum declarations, with an edge `D -> E` when a field
     or payload type of `D` mentions `E` outside the arguments of `Own`, `Ref`,
     `Arena`, `Slice`, `rawptr`, a `fn` type or `dyn`; any cycle is the error,
-    reported on one field of the cycle. The test is on declarations (one SCC
+    reported on one field of the cycle. A projection stores whatever it
+    normalises to, so the graph also has one node per associated type
+    `Tr.A`, with an edge `D -> Tr.A` when a field or payload type of `D`
+    mentions a projection of `Tr`'s `A` outside those same indirections, and
+    an edge `Tr.A -> E` for every struct or enum `E` that the right-hand side
+    of any impl's `type A = RHS;` mentions outside them (without this,
+    `struct S[I: Iterator] { x: I.Item }` with `impl Iterator for Foo { type
+    Item = S[Foo]; ... }` would give `S[Foo]` infinite size although no
+    declaration mentions itself); a cycle through such an edge is reported
+    on that `type A = RHS;`. The test is on declarations (one SCC
     pass), never per instantiation, and is conservative: a generic argument
     counts as stored by value. What `Own`/`Ref` mean is ch01's.
 15. **T0015** — A `gparam` is classified from its bound alone: `brand` (ch01
@@ -183,7 +235,9 @@ fn f(let c: bool) -> i64 {
     type parameter), or exactly one non-trait type (Rule 13), or exactly one
     `fn_type` (a callable parameter, Rule 41). `+` is the only way to state
     several bounds; there is no `where` clause, so a bound's subject is always
-    a parameter.
+    a parameter or, in a constraint entry (ch07 `gconstraint`, Rule 62), a
+    projection on a parameter. A constraint entry is not a `gparam`: it
+    introduces no name and has no kind.
 
 ```fors
 struct List { head: Option[List] }                 // rejected T0014
@@ -194,43 +248,94 @@ fn grow[T, N: usize](let a: Array[T, N]) -> Array[T, N + 1] { return a; } // rej
 
 ### D. Traits and impls
 
-16. **T0016** — A `trait` declares methods only (ch07 `trait_item`). A method
-    with `;` is required; one with a block is provided, and its body is checked
-    once, with `Self` rigid and only the trait's own methods and the bounds of
-    its generic parameters available. There are no associated types, no
-    associated consts and no supertraits: a dependent type is a trait parameter
-    (`Iterator[T]`), a constant is a parameterless method (`fn zero() ->
+16. **T0016** — A `trait` declares methods and associated types (ch07
+    `trait_item`). A method with `;` is required; one with a block is
+    provided, and its body is checked once, with `Self` rigid and only the
+    trait's own methods, the declared bounds of its associated types and the
+    bounds of its generic parameters available. `type A;` or `type A: Tr1 +
+    ... + Trk;` declares the associated type `A`: every `Tri` MUST be a trait
+    (not `brand`, not a `fn` type, not a const-kind type; Rule 15's other
+    kinds do not exist for associated types), and inside the trait `Self.A`
+    is a neutral projection (Rule 61(b)) usable in every method signature,
+    bound and provided body, including the bounds of another associated type.
+    Names: ch08 Rule 27. v0.1 restrictions, each liftable without breaking
+    accepted code: no generic associated types, no defaults (`type A = T;` in
+    a trait is ch07's parse error), no associated consts, no equality bounds,
+    no supertraits: a constant is a parameterless method (`fn zero() ->
     Self;`), and a function needing two traits writes `T: Eq + Ord`. A method
     whose first parameter is named `self` MUST give it the type `Self` (in an
     impl: the self type), optionally qualified; it is a *receiver method*.
     Other functions of a trait or impl are *associated functions*.
 17. **T0017** — `impl Tr[As] for S` MUST define every required method of `Tr`,
-    MAY redefine provided ones, and MUST NOT define anything else. Each
-    definition's signature MUST equal the trait's after substituting `Self :=
-    S` and the trait parameters by `As`: same generic parameters and bounds,
-    conventions, parameter names and types, result type (`scoped` included) and
-    `raises` type. Contract clauses on an impl method are ch02's.
+    MAY redefine provided ones, MUST define every associated type of `Tr`
+    exactly once (`type A = T;`; a second definition in the same impl is ch08
+    Rule 27's error), and MUST NOT define anything else; an inherent impl
+    MUST NOT contain a `type` item. Each right-hand side `T` MUST be
+    well-formed (Rules 11-14, 61(d)) and MUST implement every bound the trait
+    declares for `A`, after substituting `Self := S`, the trait parameters by
+    `As` and `Self.B` by this impl's definition of `B`; the check is made
+    once, at the impl, with the impl's parameters rigid (Rule 12), and is
+    never repeated at a use. Each method's signature MUST equal the trait's
+    after the same substitution and normalisation: same generic parameters,
+    bounds and constraint entries, conventions, parameter names and types,
+    result type (`scoped` included) and `raises` type. Contract clauses on an
+    impl method are ch02's.
 18. **T0018** — In an `impl_decl` with `for`, the first type MUST be a trait
     and the second MUST NOT be one; without `for` the type MUST be a struct or
-    enum. Every generic parameter of the impl MUST occur in its self type or
-    trait arguments (otherwise no match could determine it). The self type MUST
-    NOT be a bare type parameter: blanket impls do not exist. Where an impl may
-    be written is ch08 Rule 21.
+    enum. Every type, const and brand parameter of the impl MUST occur in the
+    impl head — its self type or trait arguments — otherwise "unconstrained
+    impl parameter" (no match could determine it; an occurrence only in a
+    bound, in `type A = ...;` or in a method does not count). A parameter
+    that carries a bound MUST moreover occur in the impl's SELF type: an
+    occurrence in the trait arguments alone is "bounded impl parameter not
+    in the self type" (Rules 12 and 20 recurse on the self type only; given
+    `impl[U: Tr[Wrap[U]]] Tr[U] for Foo` and `impl[V: Tr[Wrap[V]], W] Tr[V]
+    for Wrap[W]`, the goal `Foo: Tr[Wrap[Foo]]` would otherwise ask for
+    `Wrap[Foo]: Tr[Wrap[Wrap[Foo]]]`, then `Wrap[Wrap[Foo]]: ...`, for
+    ever). The impl head
+    MUST NOT contain a projection, at any depth. The self type MUST NOT be a
+    bare type parameter: blanket impls do not exist. Where an impl may be
+    written is ch08 Rule 21.
 19. **T0019** — Overlap. Two impls of the same trait MUST NOT unify: rename
     their generic parameters apart, treat them as variables, and unify the
     pairs `(trait arguments, self type)` first-order, ignoring all bounds;
     success is an error at the later impl naming the earlier. Ignoring bounds
-    means there is no specialisation and no negative reasoning. The test is
-    decidable and cheap: types are finite first-order terms (no aliases, no
-    associated-type projections, const arguments are constants or variables),
-    so unification with occurs check is near-linear, and only impls with the
-    same trait and the same self-type head are compared. Two inherent impls of
-    one type MAY coexist; their method names MUST be distinct (Rule 48).
-20. **T0020** — The language-known traits `Index[I, T]`, `IndexMut[I, T]` and
-    `Iterator[T]` are *self-determined*: a self-type head MUST have at most one
-    impl of each, whatever the trait arguments, so the operator or loop that
-    uses them reads `I`/`T` off the single impl instead of searching. This
-    replaces associated types for the forms that need them.
+    means there is no specialisation and no negative reasoning. Associated
+    types play no part: the test never reads a `type A = T;`, and two impls
+    that differ only there overlap. The test is decidable and cheap: impl
+    heads are finite first-order terms (no aliases; no projections, by Rule
+    18; const arguments are constants or variables), so unification with
+    occurs check is near-linear, and only impls with the same trait and the
+    same self-type head are compared. Two inherent impls of one type MAY
+    coexist; their method names MUST be distinct (Rule 48).
+20. **T0020** — Normalisation. Types are compared (Rule 9), matched (Rule 38)
+    and displayed after normalisation, a function computed bottom-up:
+    arguments first, then each projection `H.A` of trait `Tr[As]` whose head
+    `H` is now normal. (a) If `H` is rigid — a type parameter, `Self` in a
+    trait, or itself a neutral projection — `H.A` is *neutral*: a normal,
+    opaque type, equal only to the same (head, trait with arguments, name)
+    (Rule 9), whose only operations are those of Rule 57. (b) Otherwise find
+    the impl of `Tr[As]` for `H` by Rule 12's lookup (none: T0012, reported
+    where the projection arose; at most one, by Rule 19), take its `type A =
+    RHS;`, apply the match substitution to `RHS` and normalise the result. An
+    undetermined parameter of the call being typed is neither: a projection on
+    it is left alone until it is bound (Rule 38). *Termination and cost.* By
+    Rule 61(d) a projection inside `RHS` is headed only by one of the impl's
+    own parameters; to head a projection that parameter must carry the bound
+    that declares the associated type (Rule 61(c)), and by Rule 18 a bounded
+    impl parameter occurs in the impl's SELF type, so the match bound it to
+    a STRICT SUBTERM of `H`, already normal. Every
+    expansion step therefore projects on a strict subterm of the type being
+    normalised: normalisation is structural descent on `H`. It terminates; no
+    cycle can be written (`type A = Self.A;` and a projection headed by a
+    concrete type are Rule 61 errors, and `Wrap[T].A` is not a ch07 `type` at
+    all); with results memoised per (type, trait, name) its cost is linear in
+    the number of distinct subterms of the type. Implementations SHOULD
+    intern types so a repeated right-hand side (`type A = Pair[T.A, T.A];`)
+    is shared rather than copied. Normalisation happens at substitution time
+    — instantiating a signature at a call, a field type at an access, an impl
+    at a lookup — so no later rule ever sees a projection with a non-rigid,
+    determined head.
 21. **T0021** — The operator-trait set is closed; no other operator is
     overloadable and no other trait is consulted by an operator.
 
@@ -241,15 +346,32 @@ fn grow[T, N: usize](let a: Array[T, N]) -> Array[T, N + 1] { return a; } // rej
     | `&` `\|` `^` `<<` `>>` | `BitAnd` `BitOr` `BitXor` `Shl` `Shr` | `bitand bitor bitxor shl shr (let rhs: Self) -> Self` |
     | `==` `!=` | `Eq` | `eq(let rhs: Self) -> bool`; `a != b` is `not a.eq(b)` |
     | `<` `<=` `>` `>=` | `Ord` | `lt`, `le` `(let rhs: Self) -> bool`; `a > b` is `b.lt(a)`, `a >= b` is `b.le(a)` |
-    | `a[i]` read | `Index[I, T]` | `at(let i: I) -> scoped(self) T` |
-    | `a[i]` written or passed `&` | `IndexMut[I, T]` | `at_mut(inout self, let i: I) -> scoped(self) T` |
-    | `for x in e` | `Iterator[T]` | `next(inout self) -> Option[T]` |
+    | `a[i]` read | `Index[I]`, `type Output;` | `at(let i: I) -> scoped(self) Self.Output` |
+    | `a[i]` written or passed `&` | `IndexMut[I]` | `at_mut(inout self, let i: I) -> scoped(self) Self.Output` |
+    | `for x in e` | `Iterator`, `type Item;` | `next(inout self) -> Option[Self.Item]` |
     | `a op= b` | the trait of `op` | `a = a op b` with the place `a` evaluated once |
 
-    Every binary operator trait is homogeneous (`Self x Self`), so resolution
+    Every binary operator trait is homogeneous (`Self x Self -> Self`; owner
+    decision round 4): `Add` and its siblings have NO `Output`, so resolution
     is one lookup keyed on the left operand's type (Rule 29); operands are
     evaluated left to right whatever the desugaring. Whether a `scoped` result
-    is a place is ch01 Rules 19-19a.
+    is a place is ch01 Rules 19-19a. The language-known declarations are
+    (receivers abbreviated in the table are written in full here):
+
+    ```fors
+    trait Iterator { type Item; fn next(inout self: Self) -> Option[Self.Item]; }
+    trait Index[I] { type Output; fn at(let self: Self, let i: I) -> scoped(self) Self.Output; }
+    trait IndexMut[I] { fn at_mut(inout self: Self, let i: I) -> scoped(self) Self.Output; }
+    ```
+
+    A type MAY implement `Index[I]` for several `I`. `IndexMut[I]` declares no
+    associated type of its own: it is the one trait with a language-known
+    prerequisite — `impl IndexMut[As] for S` MUST be rejected unless `S`
+    implements `Index[As]` (Rule 12, impl parameters rigid), a bound `P:
+    IndexMut[I]` implies `P: Index[I]`, and inside `IndexMut` `Self.Output`
+    denotes `Index[I]`'s. Reads and writes of `a[i]` therefore have one and
+    the same element type. This is not a supertrait feature: no other trait
+    has or can declare a prerequisite.
 22. **T0022** — Not overloadable, and typed only by this chapter's fixed rules:
     `and`, `or`, `not` (operands `bool`); `=`; `?` and the `else` handler
     (ch02); `move`, `&`, `&out` (ch01 Rule 2); `as` (numeric primitives only,
@@ -259,8 +381,9 @@ fn grow[T, N: usize](let a: Array[T, N]) -> Array[T, N + 1] { return a; } // rej
     impls: every integer type has all of Rule 21's arithmetic, bitwise, `Eq`
     and `Ord` traits (`Neg` signed only); floats have `Add Sub Mul Div Rem Neg
     Eq Ord`; `bool` has `Eq`; `mask[N]` has `BitAnd BitOr BitXor Eq`; `Array`,
-    `Slice`, `vector` index by `usize`, `Arena[T, A]` by `Ref[T, A]` (ch01 Rule
-    16). Their semantics (traps, IEEE, lanes) are ch03's;
+    `Slice`, `vector` index by `usize` with `Output = T` (indexing stays
+    `usize`-only: write `1usize ..< 8` for a loop that indexes), `Arena[T, A]`
+    by `Ref[T, A]` (ch01 Rule 16). Their semantics (traps, IEEE, lanes) are ch03's;
     `wrap_`/`sat_`/`unchecked_` forms are ordinary methods (ch03 Rule 4).
 23. **T0023** — `Copyable` is a checked marker trait with no methods. Using a
     place of `Copyable` type as a value copies it; any other place is moved
@@ -278,8 +401,9 @@ fn grow[T, N: usize](let a: Array[T, N]) -> Array[T, N + 1] { return a; } // rej
     contributes no operation to a generic body; as a bound it only restricts
     instantiation (ch01 Rule 21b). `Shared`'s field check is ch01 Rules 21-21d.
     A marker trait MUST NOT be used as `dyn`.
-25. **T0025** — `dyn Tr` is well-formed iff `Tr` is dyn-capable: it has no
-    generic methods, every method is a receiver method with convention `let` or
+25. **T0025** — `dyn Tr` is well-formed iff `Tr` is dyn-capable: it declares
+    no associated type (so `dyn Iterator` does not exist in v0.1; there is no
+    `dyn Tr[Item = T]` form), it has no generic methods, every method is a receiver method with convention `let` or
     `inout`, and `Self` occurs in no signature other than as the receiver's
     type. Method calls on `dyn Tr` are typed from the trait's signatures.
     Representation is ch03 Rule 16's witness table.
@@ -297,6 +421,38 @@ impl Shape for Pair[i32] {                                           // rejected
     fn area(let self: Pair[i32]) -> f64 { return 1.0; }
 }
 impl[T] Shape for T { fn area(let self: T) -> f64 { return 0.0; } }  // rejected T0018
+
+struct Counter2 { n: i64, end: i64 }
+impl Iterator for Counter2 {
+    type Item = i64;
+    fn next(inout self: Counter2) -> Option[i64] {      // Self.Item normalised: Rule 17
+        if self.n >= self.end { return none; }
+        self.n = self.n + 1;
+        return some(self.n);
+    }
+}
+struct Skip[I] { inner: I, n: usize }
+impl[I: Iterator] Iterator for Skip[I] {
+    type Item = I.Item;                                  // headed by an impl parameter: Rule 61(d)
+    fn next(inout self: Skip[I]) -> Option[I.Item] { return self.inner.next(); }
+}
+// Skip[Skip[Counter2]].Item  ->  Skip[Counter2].Item  ->  Counter2.Item  ->  i64   (Rule 20)
+trait Keyed { type Key: Eq + Ord; fn key(let self: Self) -> Self.Key; }
+impl Keyed for Circle { type Key = f64; fn key(let self: Circle) -> f64 { return self.r; } }
+impl Keyed for Counter2 {                                // rejected T0017: Circle is not Eq
+    type Key = Circle;
+    fn key(let self: Counter2) -> Circle { return Circle { r: 0.0 }; }
+}
+struct Two[T] { a: T }
+impl[T, U] Keyed for Two[T] {                            // rejected T0018: U unconstrained
+    type Key = i64;
+    fn key(let self: Two[T]) -> i64 { return 0; }
+}
+struct Three[T] { a: T }
+impl[I: Iterator] Keyed for Three[I.Item] {              // rejected T0018: projection in head
+    type Key = i64;
+    fn key(let self: Three[I.Item]) -> i64 { return 0; }
+}
 ```
 
 ### E. The two judgements
@@ -345,15 +501,25 @@ impl[T] Shape for T { fn area(let self: T) -> f64 { return 0.0; } }  // rejected
     rejected (T0039). A path ending on a type, trait or module is not a value
     (ch08 Rule 16).
 29. **T0029** — Operators. `a op b` is typed as the method call of Rule 21: `S
-    = synth(a)`; `S` MUST implement the trait (Rule 12, or a bound when `S` is
-    rigid), else T0029 naming operator, trait and `S`; then `b` is a call
+    = synth(a)`; `S` MUST implement the trait (Rule 12), else T0029 naming operator, trait
+    and `S`; when `S` is rigid (a type parameter or a neutral projection) the
+    trait MUST be among its bounds, else T0057 (Rule 57: the fix is a bound,
+    not an impl); then `b` is a call
     argument whose parameter type `S` is complete, so it is checked against `S`
     (ch03 Rule 25). One syntactic exception keeps `0 ..< n` and `1 + x` usable:
     when `a` is an unsuffixed numeric literal (optionally negated) and `b` is
     not, `b` is synthesised first and `a` checked against it. When both are
     literals Rule 27's default applies. There is no other operand promotion.
-    `a[i]`: `synth(a)`, then the single impl of Rule 20 gives `I`, and `i` is
-    checked against it.
+    `a[i]`: `S = synth(a)`; collect the `Index` impls whose head matches `S`
+    (if `S` is rigid: its `Index[...]` bounds, Rule 12). None: T0029. Exactly
+    one, `Index[I]`: `i` is checked against `I` (so `v[0]` indexes by
+    `usize`). Several: `i` is synthesised and `S` MUST implement
+    `Index[synth(i)]`, one Rule 12 lookup; an unsuffixed literal index MUST
+    then be rejected (T0029, "suffix the index"), so adding a second `Index`
+    impl can break `a[0]` but can never silently change which impl it means.
+    The result type is the normalised `S.Output` of the chosen impl; a write
+    or `&` use selects `IndexMut` with the same `I` (Rule 21). Nothing is
+    ranked.
 30. **T0030** — `not`/`and`/`or` operands and `if`/`while` conditions and
     contract clauses are synthesised and MUST be `bool`. Both operands of
     `..<`/`..=` MUST be the same integer type `I` (Rule 29's literal exception
@@ -369,7 +535,13 @@ impl[T] Shape for T { fn area(let self: T) -> f64 { return 0.0; } }  // rejected
     is ch01's); a statement-form `if`/`match` that is not the block's tail is
     checked against `()`. `for p in e`: `synth(e)` MUST be
     `Range[I]`/`RangeIncl[I]` (element `I`), `Array[T, N]` or `Slice[T]`
-    (element `T`), or a type with an `Iterator[T]` impl (Rule 20); the body is
+    (element `T`), or a type `S` that implements `Iterator` (Rule 12; a rigid
+    `S` needs the bound), in which case the element type is the normalised
+    `S.Item` (Rule 20; neutral when `S` is rigid) and the binding is typed
+    against it. The iterable is a value use: a place of non-`Copyable`
+    type is moved into the loop, which owns and drops the iterator (Rule
+    23; so `for x in it` with `sink it: I` consumes the parameter, and a
+    `let` parameter cannot be iterated directly, ch01 Rule 3). The body is
     checked against `()`, as are the bodies of `while`, `parallel`, `with` and
     attribute blocks. A function body is checked against the declared result
     type (`()` if absent); `return e;` checks `e` against it and `return;`
@@ -383,8 +555,9 @@ impl[T] Shape for T { fn area(let self: T) -> f64 { return 0.0; } }  // rejected
     this is one pass. An `if` with no `else` has type `()` and its block is
     checked against `()`. There is no join or common-supertype computation.
 33. **T0033** — `never`. A binding MUST NOT be given type `never` by synthesis
-    (`let x = return;` is rejected; with an annotation the initialiser coerces
-    by Rule 10(a)). `never` MUST NOT be bound to a generic parameter by Rule
+    (`let x = die();` with `fn die() -> never` is rejected — `return` itself
+    is a statement in ch07, not an expression; with an annotation the
+    initialiser coerces by Rule 10(a)). `never` MUST NOT be bound to a generic parameter by Rule
     38's matching: an argument that synthesises `never` binds nothing (it
     coerces to whatever the parameter becomes), and a parameter left
     undetermined is T0039. `break`/`continue` outside a loop MUST be rejected.
@@ -425,33 +598,39 @@ impl[T] Shape for T { fn area(let self: T) -> f64 { return 0.0; } }  // rejected
     *parameters to determine* be those of the impl or trait reached (with
     `Self`), then those of the function, enum or struct. (a) Explicit `[...]`
     arguments, if written, MUST be all of the function's (or type's) own
-    parameters, in order. (b) A method receiver is synthesised and matched
-    one-way against the receiver parameter type. (c) In a CHECK position the
-    declared result type is matched one-way against the expected type; a
-    structural mismatch here binds nothing and is not yet an error. (d)
-    Arguments are then visited left to right: if the parameter type, after
-    substituting everything bound so far, is complete, the argument is checked
-    against it; otherwise the argument is synthesised and the parameter type is
-    matched one-way against the result. (e) The result type, fully substituted,
-    is the call's type (subsumption applies in CHECK mode). A binding is never
-    revised; a later disagreement is T0026 at that argument. No variable
-    survives the call: each nested call runs the procedure to completion before
-    the outer one continues.
-    *Bound propagation.* Immediately after a type parameter `P` becomes bound
-    in step (a), (b), (c) or (d), each declared bound `P: Tr[As]` whose trait
-    is self-determined (Rule 20) and whose `As` mentions a parameter that is
-    still undetermined is resolved: if `P` was bound to a rigid parameter, take
-    that parameter's declared `Tr[Bs]` bound; otherwise take the single impl of
-    `Tr` for the head of `P`'s binding (unique by Rule 20) one-way matched
-    against that binding, giving `Tr[Bs]`; then match `As` one-way against
-    `Bs`, binding the undetermined parameters, which propagate in turn. No such
-    bound or impl is T0012 at the call. This is a lookup and not a search: the
-    impl is unique, each (parameter, bound) pair is resolved at most once, and
-    the work is linear in the number of bounds. A bound on a trait that is not
-    self-determined never binds anything. Propagation happens *before* the next
-    argument is visited, so a closure argument whose parameter type was just
-    completed is checked (Rule 41), not synthesised.
-39. **T0039** — If a parameter is still undetermined after Rule 38(d) the call
+    parameters, in order (constraint entries are not parameters and take no
+    argument). (b) A method receiver is synthesised and matched one-way
+    against the receiver parameter type. (c) In a CHECK position the declared
+    result type is matched one-way against the expected type; a structural
+    mismatch here binds nothing and is not yet an error. (d) Arguments are
+    then visited left to right: the parameter type is substituted with
+    everything bound so far and normalised (Rule 20); if it is now complete,
+    the argument is checked against it; otherwise the argument is synthesised
+    and the parameter type is matched one-way against the result. A parameter
+    type that is, or contains, a projection on a still-undetermined parameter
+    never BINDS through that projection (Definitions, one-way match): the
+    projection subterm is skipped. (e) Finally every parameter type whose
+    argument was synthesised in (d) is substituted in full, normalised, and
+    the type that argument synthesised MUST equal it or coerce to it by Rule
+    10 (T0026 at that argument);
+    this is the only place a skipped projection is compared, and it is a
+    comparison of two complete types, not a unification. The bounds and
+    constraint entries of the callee are then checked (Rule 12). (f) The
+    result type, fully substituted and normalised, is the call's type
+    (subsumption applies in CHECK mode). A binding is never revised; a later
+    disagreement is T0026 at that argument. No variable survives the call:
+    each nested call runs the procedure to completion before the outer one
+    continues. Associated types need no inference step of their own: once `I`
+    is bound, `I.Item` is a function of it (Rule 20), so an argument whose
+    parameter type mentions only projections on already-bound parameters is
+    complete and is CHECKed — this is what lets a closure follow its iterator
+    (Rule 41, and the `map_sum` example below). An argument that precedes the
+    binding of its projection's head is merely synthesised (`fn f[I:
+    Iterator](let x: I.Item, sink it: I)` types `x` alone, then compares in
+    (e)); declare the head-binding parameter first.
+39. **T0039** — If a parameter is still undetermined after Rule 38(d) — a
+    parameter that occurs only under projections (`fn g[I: Iterator](let x:
+    I.Item)`) always is, unless given explicitly — the call
     MUST be rejected: "cannot infer `T`; write `f[T](...)`". Wrong
     explicit-argument count, wrong argument count, and a convention marker that
     disagrees with the parameter (ch01 Rule 2) are also reported at the call.
@@ -467,7 +646,8 @@ impl[T] Shape for T { fn area(let self: T) -> f64 { return 0.0; } }  // rejected
     accepts a closure type, `fn` item or `fn` value of that signature, and a
     value of type `F` may be called with it. When the argument for a parameter
     of type `F` (or of a `fn` type) is syntactically a closure and every
-    *parameter* type of the signature is complete, the closure is checked by
+    *parameter* type of the signature is complete (after substitution and
+    normalisation, Rule 38(d)), the closure is checked by
     Rule 35; if the signature's result type is not yet complete the body is
     synthesised instead and the result type matched one-way against it.
     Otherwise Rule 38(d) applies. This is the only place a result type flows
@@ -476,18 +656,23 @@ impl[T] Shape for T { fn area(let self: T) -> f64 { return 0.0; } }  // rejected
 ```fors
 fn apply[T, U, F: fn(let T) -> U](let x: T, let f: F) -> U { return f(x); }
 fn demo() {
-        let a = apply(2, |let n| n * 2);   // T := i32 from `2`; closure checked; U := i32
+    let a = apply(2, |let n| n * 2);   // T := i32 from `2`; closure checked; U := i32
     let b: Option[u8] = some(1);       // Rule 38(c): T := u8, then `1` is checked
     let c = none;                      // rejected T0039: write Option[u8].none
     let d = apply(|let n| n * 2, 2);   // rejected T0035: T unbound, closure is SYNTH
 }
 
-fn map_sum[T, U: Add, I: Iterator[T], F: fn(sink T) -> U](sink it: I, let f: F, let zero: U) -> U { ... }
-fn demo2(sink xs: Counter) {           // given: impl Iterator[i64] for Counter
-    let s = map_sum(move xs, |sink x| x * 2, 0);
-    // I := Counter from `move xs`; bound propagation reads the single impl
-    // Iterator[i64] for Counter: T := i64; the closure is then CHECKed against
-    // fn(sink i64) -> U and its body synthesises U := i64; `0` is checked as i64.
+fn map_sum[I: Iterator, U: Add + Copyable, F: fn(sink I.Item) -> U](sink it: I, let f: F, let zero: U) -> U {
+    var acc: U = zero;                      // a copy: U is Copyable (Rule 23)
+    for x in it { acc = acc + f(move x); }  // x: I.Item (Rule 31); `+` from U: Add
+    return acc;
+}
+fn demo2(sink xs: Counter2) {          // given: impl Iterator for Counter2 { type Item = i64; ... }
+    let s = map_sum(move xs, |sink x| x * 2, 0);   // an argument, so marked (ch01 Rule 2)
+    // I := Counter2 from `move xs`; fn(sink I.Item) -> U normalises to
+    // fn(sink i64) -> U, whose parameter types are complete, so the closure
+    // is CHECKed (x: i64) and its body synthesises U := i64; `0` is then
+    // checked as i64. Nothing was propagated: I.Item is a function of I.
 }
 ```
 
@@ -505,7 +690,9 @@ fn demo2(sink xs: Counter) {           // given: impl Iterator[i64] for Counter
     (1) receiver methods named `name` in the inherent impls of `S`'s head whose
     self type matches `S`; (2) receiver methods named `name` of each *candidate
     trait* that `S` implements. If `S` is a rigid parameter the candidate
-    traits are exactly its bounds; if `S` is `dyn Tr`, exactly `Tr`; otherwise
+    traits are exactly its bounds; if `S` is a neutral projection `P.A`,
+    exactly the bounds its trait declares for `A` plus the constraint entries
+    on `P.A` in scope (Rule 62); if `S` is `dyn Tr`, exactly `Tr`; otherwise
     they are the prelude traits and the traits with an impl for `S`'s head
     located in the module defining that head, in the current module, or in a
     module the current module has a direct edge to (ch08 Rule 7).  This uses
@@ -519,16 +706,40 @@ fn demo2(sink xs: Counter) {           // given: impl Iterator[i64] for Counter
 45. **T0045** — Qualified forms (deferred segments, ch08 Rule 16). `Type.name`
     / `Type[args].name`: an inherent associated function or method of that
     head, else one from a candidate trait (Rules 43-44). `P.name` with `P` a
-    rigid parameter: from `P`'s bounds. `Tr.name` / `Tr[args].name`: that
+    rigid parameter: from `P`'s bounds; when `name` is an associated type the
+    path is a projection (Rule 61), and `P.A.name` takes `name` from the
+    bounds of the neutral projection `P.A` (Rule 43's candidate traits). `Tr.name` / `Tr[args].name`: that
     trait's function, with `Self` determined like any parameter by Rule 38. In
     every qualified form a receiver is an ordinary first argument and carries
     its ch01 Rule 2 marker.
-46. **T0046** — Receivers. In method-call form the receiver carries no marker:
-    `let self` reads it; `inout self` requires a mutable place; `sink self`
-    requires an rvalue or an explicit `(move x).m()`. There is no
-    auto-dereference, auto-reference or receiver adjustment of any kind: the
-    receiver's type MUST match the method's self type up to the qualifier
-    access ch01 permits.
+46. **T0046** — Receivers. In method-call form `e.m(args)` the receiver
+    carries no convention marker, for ANY convention; the convention comes
+    from the method Rules 43-44 resolved: `let self` reads `e`; `inout self`
+    requires a mutable place; `sink self` takes an rvalue as it is and, when
+    `e` is a place (ch07 `place`: a binding or a projection path), MOVES that
+    place implicitly (owner decision round 4). This is the single exception
+    to ch01 Rule 2, which cross-references this rule. `(move x).m(args)` is
+    legal and means exactly the same. The implicit move is a move in every
+    respect: all of ch01's rules apply unchanged (ch01 Rule 4a, clause by
+    clause: (a) use after move; (b) a move inside a loop; (c) a partial
+    move, so `a.b.finish()` on a field place is rejected; (d) a move out of
+    a `let` or `inout` parameter; (e) a move of a place captured by a
+    closure, and `spawn x.run();` as the `move` capture of ch01 Rule 13;
+    further an `iso` or `imm` qualified place, ch01 Rules 12-13, and ch05's
+    rules for a `secret` one) and
+    accept or reject the call exactly as they would `(move x).m(args)`; if
+    the receiver's type is `Copyable` it is copied, not moved (Rule 23). This
+    chapter adds no ownership rule of its own. **Diagnostic requirement
+    (normative).** When a use-after-move (or any other ch01 move error) is
+    reported for a place whose move was an implicit receiver move, the
+    diagnostic MUST name the consuming call (its method name and location)
+    and the `sink self` declaration it resolved to (the method's owner type
+    or trait and its location), e.g. "`x` was moved by the call `x.finish()`
+    at 12:5, because `Builder.finish` takes `sink self` (declared at
+    3:8)". The code stays ch01's. There is no auto-dereference,
+    auto-reference or receiver adjustment of any kind: the receiver's type
+    MUST match the method's self type up to the qualifier access ch01
+    permits.
 47. **T0047** — A `bracket` after an expression instantiates iff its operand is
     a `path` the resolver bound to a generic `fn`, struct, enum, trait or
     prelude type, or is a `.name` that Rule 43/45 resolves to a method or
@@ -539,7 +750,9 @@ fn demo2(sink xs: Counter) {           // given: impl Iterator[i64] for Counter
     later declaration: two inherent methods or associated functions of one head
     with the same name, in the same or different `impl` blocks; an inherent
     member named like a field of the struct; an inherent associated function
-    named like a variant of the enum.
+    named like a variant of the enum (closes ch08 open question 5: the clash
+    is an error, so ch08 Rule 16's "the variant wins" never decides a
+    program). Names inside one trait or one impl are ch08 Rule 27's.
 49. **T0049** — The checker enforces ch08 Rule 11 for every member it resolves,
     with ch08's diagnostic, and performs no scope lookup (ch08 Rule 22).
 
@@ -549,6 +762,19 @@ impl Counter { fn bump(inout self: Counter) { self.n = self.n + 1; } }
 fn total(let c: Circle, inout k: Counter) -> f64 {
     k.bump();                          // inout receiver, no marker: Rule 46
     return c.area() + Shape.twice(c);  // method form; qualified form: Rule 45
+}
+
+struct Builder { parts: i64 }          // not Copyable
+impl Builder {
+    fn finish(sink self: Builder) -> i64 { let p = self.parts; discard self; return p; }
+}
+fn build(sink b: Builder, sink c: Builder, let d: Builder) -> i64 {
+    let n = b.finish();                // moves `b` implicitly: Rule 46
+    let m = (move c).finish();         // same meaning, explicit
+    let k = b.finish();                // rejected (ch01): `b` was moved by the call
+                                       // `b.finish()`; `Builder.finish` takes `sink self`
+    let j = d.finish();                // rejected (ch01 Rule 3): move out of a `let` parameter
+    return n + m;
 }
 ```
 
@@ -560,7 +786,11 @@ fn total(let c: Circle, inout k: Counter) -> f64 {
     Str`. `true`/`false`: `S = bool`. Float literals MUST be rejected. Tuple:
     `S` a tuple of the same arity, componentwise. A `path` with no payload MUST
     resolve to a unit variant of enum `S` or to a `const` of type `S` whose
-    type is an integer type, `bool` or `Str`. A `path` or `dot_lit` with a
+    type is an integer type, `bool` or `Str`; ch08 Rule 25 lets any
+    module-scope entity through, so a bare pattern name that resolves to
+    anything else — a `fn`, a struct, a trait, a prelude type, a variant
+    that has a payload — MUST be rejected here, with the hint `to bind,
+    write "let n"`. A `path` or `dot_lit` with a
     payload MUST name a variant of `S` (a `dot_lit` always means `S`'s variant)
     or, for a `{ }` payload, the struct `S` itself; a `( )` payload needs one
     sub-pattern per component, a `{ }` payload names visible fields at most
@@ -571,7 +801,9 @@ fn total(let c: Circle, inout k: Counter) -> f64 {
     meaning of the `fpat` shorthand under the round-3 forms is ch08's.
 52. **T0052** — Refutable patterns occur only in `match` arms. ch07's `binding`
     (in `let`, `var`, `for`) admits only names, `_` and tuples, all
-    irrefutable, so no irrefutability check exists.
+    irrefutable, so no irrefutability check exists. Within a `match`, `_` and
+    `let n` are irrefutable; a `const` pattern is refutable, like the literal
+    of its value.
 53. **T0053** — A `match` MUST be exhaustive. The checker runs the standard
     usefulness algorithm on the arm matrix: the match is exhaustive iff the
     all-wildcard row is not useful after the last arm. Constructors: an enum's
@@ -579,7 +811,13 @@ fn total(let c: Circle, inout k: Counter) -> f64 {
     gaining a variant breaks its matches); `true`/`false`; the single
     constructor of a tuple or struct; integer and string literals, whose
     domains count as infinite, so such a column is exhaustive only through `_`
-    or `let n`. The diagnostic names one uncovered value.
+    or `let n`. `let n` is a wildcard for this algorithm: it covers every
+    value of its column. A `const` pattern is the literal constructor of the
+    constant's comptime value (ch04) and covers exactly that one value: two
+    constants of equal value, or a constant and an equal literal, are the same
+    constructor (the second arm is Rule 54's), and an arm list of `bool`
+    constants `T` and `F` is exhaustive iff their values are `true` and
+    `false`. The diagnostic names one uncovered value.
 54. **T0054** — An arm that is not useful with respect to the arms before it
     MUST be rejected as unreachable.
 55. **T0055** — Why this is cheap, and the guard. The grammar has no
@@ -589,7 +827,16 @@ fn total(let c: Circle, inout k: Counter) -> f64 {
     problem stays co-NP-hard in theory (wildcards over tuples of enums), so the
     computation is charged one step per row visited and MUST stop with T0055,
     asking for the match to be nested, after `MATCH_STEP_FACTOR` (256) times
-    the match's pattern-node count: acceptance never depends on machine speed.
+    the match's pattern-node count: acceptance never depends on machine
+    speed. The count is that of the PLAIN algorithm, so that it is the same
+    in every implementation: for each usefulness query (one per arm, then
+    the all-wildcard row), specialise the first column by each constructor
+    that occurs in it, plus the default matrix when those constructors are
+    not a complete signature, and charge one step per row of every matrix
+    so formed, with no memoisation and no early exit other than an empty
+    matrix or an exhausted column list. An implementation MAY compute the
+    answer faster but MUST report T0055 exactly when the plain count of
+    the whole match exceeds the budget.
 56. **T0056** — Range patterns, or-patterns and guards are absent from ch07 and
     MUST NOT be accepted. Should or-patterns be added, every alternative MUST
     bind the same names with equal types.
@@ -614,27 +861,104 @@ fn sign(let n: i32) -> i32 { match n { 0 => 0, -1 => -1 } }   // rejected T0053:
     are: binding it, passing it by a convention, moving it, storing it in an
     aggregate, dropping it, `size_of` / `align_of`, and the methods and
     operators of `T`'s declared bounds (an operator needs its Rule 21 trait
-    among the bounds; copying needs `Copyable`). Fields, literals, `as`,
+    among the bounds; copying needs `Copyable`). A neutral projection `P.A`
+    is a rigid type under this rule; its "declared bounds" are exactly the
+    bounds the trait declares for `A` (Rule 16) plus the constraint entries
+    on `P.A` in scope (Rule 62), and nothing is learnt from any impl. Fields, literals, `as`,
     patterns other than `_` and `let n`, and methods not provided by a bound
-    MUST be rejected.
+    MUST be rejected. Codes: an operator whose trait is not among the bounds
+    is T0057; a method no bound provides is T0043; a field T0042; a literal
+    T0027; `as` T0030; a pattern T0050. Without a `Copyable` bound a value
+    use of a rigid-typed place is a move (Rule 23), never a copy, and
+    whether that move is legal is ch01's, with ch01's code.
 58. **T0058** — A brand parameter has no operations at all and occurs only as a
     brand argument (ch01 Rule 15d). A const parameter is a constant of its type
     in the body. `Shared` and `Copyable` bounds add no methods (Rule 24).
 59. **T0059** — No error may depend on an instantiation. Every diagnostic is
     raised either at the definition, against the declared bounds, or at a use
-    site, from the callee's signature (arity, kinds, bounds, inference,
-    const-argument fit); an instantiated body is never re-checked, no rule
+    site, from the callee's signature and the signatures of the impls that
+    normalisation reads (arity, kinds, bounds, constraint entries, inference,
+    const-argument fit; an impl's `type A = T;` is signature, Rule 2); an instantiated body is never re-checked, no rule
     inspects which type a parameter received, and there is no specialisation.
     Hence both lowerings of ch03 Rule 16 are valid for every accepted program:
     each operation of Rule 57 is a witness-table entry (`size`, `align`,
     `copy`, `move`, `deinit`, a bound's method slot) or, monomorphised, its
-    direct counterpart.
+    direct counterpart; a value of neutral type `P.A` uses the witness of `A`
+    that `P`'s trait witness carries (how that witness is laid out is ch03
+    Rule 16's to state).
 60. **T0060** — The `raises` type of a signature is a type like any other (ch02
     Rule 1): it MAY be a type parameter (`fn try_apply[T, U, E, F: fn(let T) ->
     U raises E](let x: T, let f: F) -> U raises E`), determined by Rule 38.
     Nothing abstracts over *whether* a function raises: a non-raising function
     type never equals a raising one, and `never` is not inferred for `E` (Rule
     33). A combinator that must accept both is written twice.
+
+### J. Projections and constraint entries
+
+61. **T0061** — Projections. A projection is written as the dotted type path
+    `P.A` and in no other way; ch08 Rules 16 and 22 hand the second segment
+    to this rule. It is well-formed iff all of: (a) the path has exactly two
+    segments (`I.Item.Item` MUST be rejected; a nested projection can arise
+    only by substitution into a signature, where it is an ordinary neutral
+    type, Rule 20(a)); (b) `P` is a *type* parameter in scope or `Self` — a
+    brand or const parameter has no bounds and MUST be rejected, and so MUST
+    a head that is a struct, enum, prelude type or trait ("write the type
+    itself": a projection headed by a concrete type is not writable in v0.1;
+    `Wrap[T].A` is not even a ch07 `type`); (c) exactly one trait among
+    `P`'s bounds declares an associated type named `A` — none is "no
+    associated type `A`", two or more (including two instantiations of one
+    trait, `P: Index[usize] + Index[Key]`) is "ambiguous projection", and
+    there is no qualified form in v0.1. For `Self` inside `trait Tr[Ps]` the
+    bounds are `Tr[Ps]` alone (plus `Index[I]` inside `IndexMut[I]`, Rule
+    21). For `Self` inside `impl Tr[As] for S`, `A` MUST be an associated
+    type of `Tr` (of `Index` too, in an `IndexMut` impl) and `Self.A` is
+    replaced at once by that impl's own definition (no lookup); inside an
+    inherent impl `Self.A` MUST be rejected. (d) Inside the right-hand side
+    of `type A = RHS;` a projection MUST be headed by one of the impl's own
+    type parameters: `Self.B` there MUST be rejected (it would let `type A =
+    Self.A;` or a two-step cycle be written). This is the premise of Rule
+    20's termination argument. A projection MUST NOT occur in an impl head
+    (Rule 18); it MAY occur anywhere else a type may: parameter, result and
+    `raises` types, fields, payloads, the arguments of bounds, `fn` types,
+    annotations of locals and explicit generic arguments.
+62. **T0062** — Constraint entries. A `gconstraint` `P.A: Tr1 + ... + Trk`
+    (ch07) adds bounds to the projection `P.A` and introduces no name. `P`
+    MUST be a type parameter declared EARLIER in the same list, a type
+    parameter of the enclosing `impl` or `trait`, or `Self` (scope and the
+    earlier-than test: ch08 Rule 26); `P.A` MUST be a well-formed projection
+    (Rule 61); every `Tri` MUST be a trait (no `brand`, no `fn` type, no
+    const-kind type). A constraint entry is legal only in the `generics` of a
+    `fn` — a `fn` item, a trait method, an impl method; in the list of a
+    `struct`, `enum`, `trait` or `impl` it MUST be rejected. (On an `impl` it
+    would make impl lookup recurse on a normalised projection, which is not a
+    subterm of the goal, and Rule 12 would lose its termination argument;
+    the other three would force every impl over the type to restate it. A
+    method constrains a parameter of its impl instead: `impl[I: Iterator]
+    Sum[I] { fn total[I.Item: Add + Copyable](...) }`.) Inside the function
+    the entry's traits are bounds of the neutral type `P.A` (Rules 12, 43,
+    57); at each use of the function they are checked, after Rule 38, on the
+    normalised `P.A` (T0012). The traits of a constraint entry MAY themselves
+    declare associated types (`I.Item: Iterator`): values of type `I.Item`
+    then have methods whose signatures mention the neutral `I.Item.Item`,
+    which is a legal type although Rule 61(a) gives it no spelling.
+
+```fors
+fn sum_all[I: Iterator, I.Item: Add + Copyable](sink it: I, let zero: I.Item) -> I.Item {
+    var acc: I.Item = zero;                 // copy: the constraint entry gives Copyable
+    for x in it { acc = acc + x; }          // `+`: the constraint entry gives Add
+    return acc;
+}
+fn no_add[I: Iterator](sink it: I, let zero: I.Item) {
+    for x in it { let y = zero + x; }       // rejected T0057: I.Item has no Add bound (Rule 29)
+}
+fn bad1[I.Item: Eq, I: Iterator]() { }      // rejected (ch08 Rule 26): head not declared earlier
+fn bad2[I: Iterator, J: Iterator](sink a: I.Item) -> J.Item {
+    return a;                               // rejected T0026: I.Item and J.Item are
+}                                           // different neutral types
+fn bad3[A: brand, T: Index[usize] + Index[i32]](let x: A.Item, let y: T.Output) { }
+                                            // rejected T0061 twice: brand head; ambiguous
+fn bad4(let x: Counter2.Item) { }           // rejected T0061: concrete head, write i64
+```
 
 ## Not owned by this chapter
 
@@ -653,6 +977,9 @@ fn sign(let n: i32) -> i32 { match n { 0 => 0, -1 => -1 } }   // rejected T0053:
 | Root-capability types and their opacity; `asm_expr` typing | ch04 R7-8, R21, R27 |
 | Layout, alias classes, `soa` representation | ch05 |
 | Scope lookup, path heads, visibility definitions, orphan rule, prelude list | ch08 R10-18, R21-27 |
+| Deferral of a projection's second segment; scope and earlier-than test of a constraint entry's head; duplicate member names in one trait or impl (associated types included) | ch08 R16, R22, R26, R27 |
+| Syntax of `type A;`, `type A = T;`, `gconstraint`; `type` reserved; the `.`-versus-`:` lookahead | ch07 Grammar, Disambiguation 19-20 |
+| Whether an implicit receiver move is legal (use after move, loops, partial moves, `let`/`inout` parameters, captures, `spawn`, qualifiers) | ch01 R2-4a, R8, R12-13 |
 
 ## Drafting decisions
 
@@ -661,14 +988,54 @@ fn sign(let n: i32) -> i32 { match n { 0 => 0, -1 => -1 } }   // rejected T0053:
   Option[u8] = some(1);`, `Buffer.fixed(4096)` and `none` in a field
   initialiser (all attested in ch01/ch04) would mistype or fail; both orders
   are solver-free.
-- **Bound propagation through self-determined traits** (Rule 38). Without it,
-  `I: Iterator[T]` leaves `T` undetermined by any argument, so every iterator
-  adaptor would need explicit type arguments and its closure would be
-  unsynthesisable (T0035). Alternative: associated types (`I.Item`). Rejected
-  for v0.1 because projections make impl overlap and type equality
-  non-structural; uniqueness (Rule 20) gives the same functional dependency as
-  a table lookup. Propagation is restricted to self-determined traits because
-  only there is the impl unique, so it can never become a search.
+- **Associated types instead of bound propagation** (owner decision round 4;
+  Rules 16-20, 38, 61-62). The draft's self-determined traits (old Rule 20)
+  and the "Bound propagation" paragraph of Rule 38, with its example and five
+  tests, are deleted: `I.Item` is a function of `I`, so nothing propagates.
+  What keeps this inside Rule 1 and the near-linear gate: impl heads carry no
+  projections, so overlap stays first-order and blind to associated types
+  (Rules 18-19); right-hand sides project only on impl parameters, so
+  normalisation is structural descent (Rules 20, 61(d)); a neutral projection
+  is a rigid type, never a variable; one-way matching skips projections and
+  one final equality check compares them (Rule 38(e)).
+- **Constraint entries only on `fn` generics** (Rule 62). The owner's design
+  allows them in "the generics list"; this draft restricts *where*: not on
+  `impl` (an impl bound on `T.A` makes Rule 12 recurse on a normalised
+  projection, which can be larger than the goal — `impl[T: Tr, T.A: Tr] Tr for
+  Wrap[T] { type A = Wrap[T.A]; }` with `Base.A = Wrap[Wrap[Base]]` never
+  terminates), and not on `struct`/`enum`/`trait` (every impl over such a type
+  would need the entry the previous clause forbids). ch07 parses them
+  everywhere; the rejection is T0062. Liftable later (Open question 4).
+- **`IndexMut[I]` has a language-known prerequisite `Index[I]`** and no
+  `Output` of its own (Rule 21). Alternative: both declare `Output`. Rejected:
+  `P: Index[usize] + IndexMut[usize]` would make `P.Output` ambiguous (Rule
+  61(c)) and a read and a write of `a[i]` would have two unrelated neutral
+  types in generic code. It is one closed special case, not supertraits.
+- **Index with several impls synthesises the index** and rejects an
+  unsuffixed literal there (Rule 29), so a new `Index` impl can break, never
+  re-route, an existing `a[0]`.
+- **`Self.A` inside an impl** is that impl's own definition, by table lookup,
+  in method signatures and bodies, but is rejected inside `type A = RHS;`
+  (Rule 61(c)-(d)).
+- **Nested neutral projections exist but cannot be written** (Rules 61(a),
+  62): a constraint entry or a trait-declared bound may name a trait that has
+  associated types; the resulting `I.Item.Item` appears only by substitution.
+  Decided "allowed" because forbidding it would forbid `type Iter: Iterator;`.
+- **The `map_sum` example declares `U: Add + Copyable`** and the call writes
+  `map_sum(move xs, ...)`: the owner's sketch had `U: Add` and an unmarked
+  `xs`, but its body must copy `zero` out of a `let` parameter (ch01 Rule 3)
+  and `xs` is an argument, not a receiver, so ch01 Rule 2 marks it. The
+  inference shown is unchanged.
+- **Implicit receiver move** (owner decision round 4; Rule 46). The draft's
+  `(move x).m()`-only rule is gone; the visibility ch01 Rule 2 loses is bought
+  back by the mandatory diagnostic detail.
+- Round-3 checker obligations now stated: a bare pattern name resolving to a
+  `fn`, struct, trait or prelude type is T0050 (Rule 50); a value binding
+  used as a type-path head is T0011 (Rule 11); `let n` is a wildcard and a
+  `const` pattern a one-value constructor for exhaustiveness (Rules 52-53).
+- Drafting defaults taken by the orchestrator, round 4: the prelude gains this
+  chapter's language-known names (ch08 Rule 17); variant versus associated
+  function is an error (Rule 48); `MATCH_STEP_FACTOR` = 256 until measured.
 - **Bound-by-earlier-argument means CHECK.** ch03 Rule 25 lists a generic call
   argument as SYNTH "while the parameter type still mentions a generic
   parameter"; Rule 38(d) reads "still" as "still undetermined", which is ch03's
@@ -678,13 +1045,13 @@ fn sign(let n: i32) -> i32 { match n { 0 => 0, -1 => -1 } }   // rejected T0053:
   literal-typed values that adopt a type later; rejected by Rule 1. Positions
   checked here that ch03 Rule 25's list omits and should cite: index operand,
   `raise` operand, handler block, `grain` expression, function-body tail.
-- **Homogeneous operator traits.** Alternative `Mul[R]` (design doc). Rejected:
-  a parameterised `Mul` needs either overload resolution on the right operand
-  or an associated output type. Scalar-times-vector is a method or `.splat`.
-- **No associated types, consts or supertraits.** ch07's `trait_item` is a
-  method only and `trait_decl` has no bound list; trait parameters plus Rule
-  20's self-determined traits cover iterators and indexing, and keep overlap
-  first-order (no projections to normalise).
+- **Homogeneous operator traits** (confirmed by the owner, round 4).
+  Alternative `Mul[R]` with `type Output` (design doc). Not taken for v0.1
+  although associated types now exist: a parameterised `Mul` needs overload
+  resolution on the right operand. Scalar-times-vector is a method or `.splat`.
+- **No associated consts, supertraits, generic associated types, defaults or
+  equality bounds** (Rule 16): none is needed by the language-known traits,
+  and each can be added without breaking accepted code.
 - **No blanket impls** (Rule 18). Alternative: allow them and detect cycles
   during impl lookup. Rejected: lookup would stop being structural recursion,
   and a blanket impl overlaps every other impl anyway.
@@ -701,7 +1068,9 @@ fn sign(let n: i32) -> i32 { match n { 0 => 0, -1 => -1 } }   // rejected T0053:
   (Rule 14); literal defaults `i32`/`f64` match ch03's `[1, 2, 3]` example; an
   unreachable arm is an error, not a lint; the exhaustiveness budget is a
   function of the match's size, never of time.
-- Self-review 2026-09-19, holes closed: overlap via `Self` (Rule 8); overlap
+- Self-review 2026-09-19, holes closed: overlap via `Self` (Rule 8; ch08
+  keeps `Self` out of an impl header, so the corpus probes renaming apart
+  instead); overlap
   undecidable through projections (none exist); unbounded operations and copies
   in generic bodies (Rule 57); brand escaping a `with` block by inference (Rule
   40); `Shared` bound met by an `@unsafe` impl (Rule 12); foreign enum growth
@@ -709,90 +1078,273 @@ fn sign(let n: i32) -> i32 { match n { 0 => 0, -1 => -1 } }   // rejected T0053:
   impl-lookup non-termination (Rules 12, 18); `1 + x` under left-keyed
   operators (Rule 29); closure result flowing outward (Rule 41: the closure is
   identified syntactically before it is typed).
+- Self-review round 4, probes and the rule that answers each. Overlap through
+  associated types: impossible, heads have no projections and Rule 19 never
+  reads a definition (Rules 18-19). Normalisation cycle: `type A =
+  Wrap[T].A;` is not a ch07 `type` (`.A` cannot follow `]`), `type A =
+  Wrap.A;` / `S.A` is a concrete head (Rule 61(b)), `type A = Self.A;` is
+  Rule 61(d). Projection on a brand or const parameter: Rule 61(b).
+  Projection whose bound comes only from a constraint entry on another
+  projection: not writable (Rule 61(a)), legal as a substituted neutral type
+  (Rule 62). `Self.Item` inside the trait: neutral, Rule 61(c) with Rule 8.
+  Impl-lookup non-termination through an impl-level constraint entry: Rule
+  62 forbids the entry. A parameter occurring only under a projection: never
+  bound, T0039 (Rule 39). Literal argument typed before its projection's head
+  is bound: synthesised as `i32`, compared in Rule 38(e), never revised.
+  Implicit receiver move of a place captured by a closure or `spawn`, of a
+  `secret` value, or on an `iso`/`imm` place: Rule 46 adds no ownership rule
+  and defers to ch01/ch05 on exactly the terms of `(move x).m()`, so no
+  contradiction can be introduced. Single pass (Rule 1): normalisation and
+  impl lookup are memoised functions of closed inputs called at substitution
+  time; the only deferred work is Rule 38(e), which is inside the one call.
+
+- Verification round 4 (adversarial review of the draft above), holes
+  closed with the rule that now closes each. (1) Impl lookup and
+  normalisation could diverge through a bounded impl parameter that occurs
+  only in the trait arguments (`impl[U: Tr[Wrap[U]]] Tr[U] for Foo` plus
+  `impl[V: Tr[Wrap[V]], W] Tr[V] for Wrap[W]`): Rule 18 now requires every
+  bounded impl parameter to occur in the self type, so both recursions
+  descend on the self type (Rules 12, 20). (2) The infinite-size test
+  missed `struct S[I: Iterator] { x: I.Item }` with `type Item = S[Foo];`:
+  Rule 14 adds one graph node per associated type; conservative (an
+  iterator yielding a struct that holds a by-value projection field of the
+  same trait is a false positive), see open question 8. (3) `let x =
+  return;` is not ch07 syntax: Rule 33 now uses a `-> never` call. (4) The
+  match budget (Rule 55) depended on whether an implementation exits early
+  on an all-wildcard row; the plain count is now normative. (5) An
+  operator on a rigid type without the bound was T0029 in Rule 29 and
+  T0057 in Rule 57: Rule 29 now says T0057 for rigid operands, and Rule
+  57 lists every code it delegates to. (6) `copy-without-copyable`: a value
+  use of a non-`Copyable` rigid place is a move (Rule 23), so the error is
+  ch01's, never T0057. (7) `for x in it` moves its iterable (Rule 31), so
+  the `sink it: I` examples satisfy ch01 Rule 4. (8) ch01 had no rule for
+  use after move, moves in loops, partial moves, moves out of `inout` or
+  captured places — the implicit receiver move leaned on nothing: ch01
+  Rule 4a now states each clause, and Rule 46 cites them one by one. (9)
+  ch08 keeps `Self` out of impl headers, so "overlap via Self" cannot be
+  written; the corpus probes parameters renamed apart. Every probe the
+  task listed is a corpus test: mutually recursive impls across two traits
+  (`normalise-mutually-recursive-impls-accepted`), a right-hand side
+  projecting on a parameter that occurs only under another projection
+  (`projection-in-impl-head-rejected`, `impl-param-only-in-assoc-type-
+  rejected`), overlap through associated types (`overlap-ignores-assoc-
+  types-rejected`, `overlap-ignores-bounds-rejected`), impls that would
+  unify only after normalisation (`neutral-projection-does-not-match-
+  concrete-impl-rejected`), an ambiguous projection reached through a
+  constraint entry (`constraint-entry-ambiguous-projection-rejected`),
+  `I.Item.Item` (ch07 `generics-constraint-three-segments-reject`, ch09
+  `projection-three-segments-rejected`, `constraint-entry-with-assoc-trait-
+  accepted`), `Self.Item` in a provided body (`assoc-type-in-provided-body-
+  accepted`), a projection field (`projection-in-struct-field-accepted`,
+  `recursive-through-assoc-type-rejected`), the closure before its
+  iterator (`closure-before-its-iterator-rejected`), and the five receiver-
+  move shapes (`implicit-receiver-move-*-rejected`).
 
 ## Open owner questions
 
-1. **Prelude additions** (ch08 Rule 17). This chapter needs, unqualified:
-   `Copyable never Eq Ord Add Sub Mul Div Rem Neg BitAnd BitOr BitXor Shl Shr
-   Index IndexMut Iterator Range RangeIncl` (ch03 already writes `T: Ord` with
-   no `use`). Recommended: add them all; this also closes README Q3's
-   `Copyable`. Blocks std and the checker's lang-item table.
-2. **Integer literal default**: `i32` (drafted, matches ch03) or `i64`? With
-   `i32`, ch03's example `for i in 1 ..< 8 { ... v[i] ... }` is ill-typed
-   because built-in indexing takes `usize`. Recommended: keep `i32` and
-   `usize`-only indexing, and change that example to `1usize ..< 8`.
-3. **v0.1 restrictions**, each addable later without breaking accepted code:
-   homogeneous operators (no `Mul[R]`, Rule 21); no blanket impls, associated
-   types or supertraits (Rules 16, 18); no arithmetic on const parameters (Rule
-   13, although ch07 parses `N + 1`); no effect polymorphism, so std writes
-   `map`/`try_map` pairs (Rule 60). Recommended: accept all four.
-4. **`sink self` on a place is written `(move x).m()`** (Rule 46). Recommended:
-   accept; it keeps every move visible (ch01 Rule 2).
-5. **ch08 Q5**: a variant and an associated function of the same name are an
-   error here (Rule 48). Recommended: confirm.
-6. `MATCH_STEP_FACTOR` = 256: confirm or measure.
+Closed in round 4 and removed from this list: the integer-literal default
+(`i32`), homogeneous operators, associated types, the `sink self` receiver
+(owner); prelude additions, variant versus associated function,
+`MATCH_STEP_FACTOR` (drafting defaults, see Drafting decisions).
+
+1. **Remaining v0.1 restrictions**, each addable later without breaking
+   accepted code: no blanket impls or supertraits (Rules 16, 18); no generic
+   associated types, defaults, associated consts or equality bounds (Rule 16);
+   no arithmetic on const parameters (Rule 13, although ch07 parses `N + 1`);
+   no effect polymorphism, so std writes `map`/`try_map` pairs (Rule 60).
+   Recommended: accept all.
+2. **Qualified projection form.** `P: Index[usize] + Index[Key]` makes
+   `P.Output` ambiguous and nothing can name either (Rule 61(c)).
+   Recommended: add `(P as Tr).A` later, when std first needs it; it needs a
+   ch07 production, so decide before the grammar freeze whether to reserve the
+   shape.
+3. **Projection headed by a concrete type** (`Counter2.Item`, `Vec[T].Item`)
+   is not writable (Rule 61(b)). Recommended: keep for v0.1 (the type itself
+   can always be written); lifting it needs `type_app "." ident` in ch07 and a
+   termination re-argument for right-hand sides, and is compatible.
+4. **Constraint entries only on `fn` lists** (Rule 62, a drafting
+   restriction, not the owner's). Recommended: keep for v0.1; lifting it on
+   `impl` needs a termination measure (or a step budget like Rule 55) for
+   impl lookup.
+5. **Associated consts** (`const N: usize;` in a trait). Recommended: not in
+   v0.1; a parameterless method covers values, and a const usable in type
+   position would reopen Rule 13's post-instantiation-error problem.
+6. **`IndexMut`'s language-known prerequisite** (Rule 21). Recommended:
+   confirm; the alternative is general supertraits.
+7. **Nested projection spelling** (`I.Item.Item`, Rule 61(a)). Recommended:
+   not in v0.1; add together with question 2.
+8. **Bounded impl parameters must occur in the self type** (Rule 18) and
+   **the associated-type node of the infinite-size test** (Rule 14) are
+   the verification round's containments; the first rejects `impl[E:
+   Display] From[E] for MyErr`-style impls, the second gives a false
+   positive for an iterator that yields a struct holding a by-value
+   projection field of the same trait. Recommended: keep both for v0.1
+   (each is liftable without breaking accepted code; lifting the first
+   needs a termination measure over trait arguments, the second a
+   per-instantiation size check that Rule 59 currently forbids).
 
 ## Conformance tests
 
-All in `tests/conformance/09-types/`; `-accepted` expects `check-ok`,
-`-rejected` expects `check-error` with the code shown. R1
-`let-without-type-or-init-rejected` T0001,
+All in `tests/conformance/09-types/` (186 tests, one per name below; the
+list is generated from the corpus directives and MUST stay equal to it);
+`-accepted` expects `check-ok`, `-rejected` expects `check-error` with the
+code shown, which is also the first token of the test's `detail`. A ch01
+code means the receiver move (or a value use of a non-`Copyable` place) is
+decided by that ch01 rule; `implicit-receiver-move-then-use-rejected`'s
+`detail` MUST name the consuming call and the `sink self` declaration
+(Rule 46). Until a type checker exists, `fors check` is CLEAN on every
+T- and ch01-coded test and reports exactly the named ch08 code on the
+others (crates/fors-resolve/tests/conformance.rs, `ch09_types_corpus_
+resolver_view`).
+
+R1 `let-without-type-or-init-rejected` T0001,
 `literal-default-ignores-later-use-rejected` T0026; R7
-`fn-item-as-value-accepted`, `generic-fn-value-without-args-rejected` T0039; R9
-`nominal-structs-distinct-rejected` T0026, `brand-identity-mismatch-rejected`
-T0026; R10 `never-coerces-accepted`, `array-to-slice-rejected` T0026,
-`concrete-to-dyn-accepted`; R11 `type-arity-rejected` T0011; R12
-`bound-unsatisfied-rejected` T0012, `bound-via-generic-impl-accepted`; R13
-`const-param-float-rejected` T0013, `const-arg-arithmetic-on-param-rejected`
-T0013; R14 `recursive-struct-rejected` T0014, `recursive-via-ref-accepted`; R15
-`mixed-trait-and-type-bound-rejected` T0015; R16 `provided-method-accepted`,
+`fn-item-as-value-accepted`, `generic-fn-value-without-args-rejected` T0039;
+R9 `brand-identity-mismatch-rejected` T0026,
+`nominal-structs-distinct-rejected` T0026; R10 `array-to-slice-rejected`
+T0026, `concrete-to-dyn-accepted`, `never-coerces-accepted`; R11
+`local-shadowing-prelude-module-as-type-head-rejected` T0011,
+`type-arity-rejected` T0011; R12 `bound-unsatisfied-rejected` T0012,
+`bound-via-generic-impl-accepted`; R13
+`const-arg-arithmetic-on-param-rejected` T0013, `const-param-float-rejected`
+T0013; R14 `projection-field-behind-own-accepted`, `recursive-struct-rejected`
+T0014, `recursive-through-assoc-type-rejected` T0014,
+`recursive-via-ref-accepted`; R15 `mixed-trait-and-type-bound-rejected` T0015;
+R16 `assoc-type-bound-mentions-other-assoc-type-accepted`,
+`assoc-type-bound-not-a-trait-rejected` T0016,
+`assoc-type-bounded-declared-accepted`, `assoc-type-declared-accepted`,
+`assoc-type-in-provided-body-accepted`, `provided-method-accepted`,
 `provided-method-uses-foreign-op-rejected` T0057,
-`self-receiver-wrong-type-rejected` T0016; R17 `impl-missing-method-rejected`
-T0017; R18 `blanket-impl-rejected` T0018, `unconstrained-impl-param-rejected`
-T0018; R19 `overlap-generic-vs-concrete-rejected` T0019,
-`overlap-via-self-rejected` T0019; R20 `two-iterator-impls-rejected` T0020; R21
-`operator-via-impl-accepted`, `compound-assign-via-add-accepted`; R22
-`and-on-non-bool-rejected` T0030; R23 `copyable-fieldwise-accepted`,
-`copyable-with-own-field-rejected` T0023; R24 `dyn-marker-rejected` T0024; R25
-`dyn-generic-method-rejected` T0025; R27 `literal-checks-to-u8-accepted`,
-`int-literal-to-float-rejected` T0027, `literal-against-param-rejected` T0027;
-R28 `none-in-synth-rejected` T0039; R29 `operator-missing-impl-rejected` T0029,
-`literal-left-operand-accepted`, `mixed-width-operands-rejected` T0026; R30
-`if-condition-non-bool-rejected` T0030; R31 `return-value-mismatch-rejected`
-T0026, `for-over-non-iterable-rejected` T0031; R32
-`if-branches-first-fixes-accepted`, `if-branch-mismatch-rejected` T0026,
-`if-first-branch-never-accepted`; R33 `let-never-rejected` T0033,
-`never-not-inferred-rejected` T0039; R34
-`struct-literal-missing-field-rejected` T0034,
-`struct-literal-args-from-expected-accepted`, `dot-lit-in-synth-rejected`
-T0034; R35 `closure-synth-unannotated-rejected` T0035,
-`closure-checked-against-fn-type-accepted`; R36 `handler-block-type-rejected`
+`self-receiver-wrong-type-rejected` T0016; R17
+`assoc-type-bound-met-by-projection-accepted`,
+`assoc-type-bound-violated-at-impl-rejected` T0017,
+`assoc-type-defined-accepted`, `assoc-type-duplicate-in-impl-rejected` (ch08
+code N0027), `assoc-type-extra-in-impl-rejected` T0017,
+`assoc-type-in-inherent-impl-rejected` T0017,
+`assoc-type-missing-in-impl-rejected` T0017,
+`impl-method-signature-normalised-accepted`,
+`impl-method-signature-projection-mismatch-rejected` T0017,
+`impl-missing-method-rejected` T0017; R18 `blanket-impl-rejected` T0018,
+`bounded-impl-param-only-in-trait-args-rejected` T0018,
+`impl-param-only-in-assoc-type-rejected` T0018,
+`projection-in-impl-head-rejected` T0018,
+`unbounded-impl-param-in-trait-args-accepted`,
+`unconstrained-impl-brand-param-rejected` T0018,
+`unconstrained-impl-param-rejected` T0018; R19
+`overlap-generic-vs-concrete-rejected` T0019,
+`overlap-ignores-assoc-types-rejected` T0019,
+`overlap-ignores-bounds-rejected` T0019, `overlap-renamed-params-rejected`
+T0019; R20 `neutral-projection-does-not-match-concrete-impl-rejected` T0043,
+`neutral-projection-equals-itself-accepted`,
+`neutral-projection-matches-generic-impl-accepted`,
+`neutral-projections-distinct-params-rejected` T0026,
+`normalise-mutually-recursive-impls-accepted`,
+`normalise-nested-adaptors-accepted`, `projection-head-without-impl-rejected`
+T0012, `projection-normalises-after-substitution-accepted`; R21
+`compound-assign-via-add-accepted`, `index-two-index-types-accepted`,
+`indexmut-output-is-index-output-accepted`, `indexmut-without-index-rejected`
+T0021, `operator-trait-has-no-output-rejected` T0017,
+`operator-via-impl-accepted`; R22 `and-on-non-bool-rejected` T0030; R23
+`copyable-fieldwise-accepted`, `copyable-with-own-field-rejected` T0023; R24
+`dyn-marker-rejected` T0024; R25 `dyn-generic-method-rejected` T0025,
+`dyn-trait-with-assoc-type-rejected` T0025; R27
+`int-literal-to-float-rejected` T0027,
+`literal-against-neutral-projection-rejected` T0027,
+`literal-against-param-rejected` T0027, `literal-checks-to-u8-accepted`; R28
+`none-in-synth-rejected` T0039; R29 `index-literal-with-two-impls-rejected`
+T0029, `index-suffixed-with-two-impls-accepted`,
+`literal-left-operand-accepted`, `mixed-width-operands-rejected` T0026,
+`operator-missing-impl-rejected` T0029; R30 `if-condition-non-bool-rejected`
+T0030; R31 `for-element-type-from-item-accepted`,
+`for-element-type-mismatch-rejected` T0026, `for-over-non-iterable-rejected`
+T0031, `for-over-rigid-iterator-accepted`,
+`for-over-rigid-non-iterator-rejected` T0031, `return-value-mismatch-rejected`
+T0026; R32 `if-branch-mismatch-rejected` T0026,
+`if-branches-first-fixes-accepted`, `if-first-branch-never-accepted`; R33
+`let-never-rejected` T0033, `never-not-inferred-rejected` T0039; R34
+`dot-lit-in-synth-rejected` T0034,
+`struct-literal-args-from-expected-accepted`,
+`struct-literal-missing-field-rejected` T0034; R35
+`closure-checked-against-fn-type-accepted`,
+`closure-synth-unannotated-rejected` T0035; R36 `handler-block-type-rejected`
 T0026; R37 `named-arg-wrong-label-rejected` T0037; R38
-`infer-from-first-argument-accepted`, `infer-from-expected-type-accepted`,
-`binding-never-revised-rejected` T0026; `generic-arg-from-iterator-bound-accepted`,
+`binding-never-revised-rejected` T0026, `infer-from-expected-type-accepted`,
+`infer-from-first-argument-accepted`, `map-sum-closure-checked-accepted`,
+`projection-arg-before-head-accepted`,
+`projection-arg-before-head-final-check-rejected` T0026,
+`projection-result-against-expected-accepted`; R39 `cannot-infer-rejected`
+T0039, `param-only-under-projection-explicit-accepted`,
+`param-only-under-projection-rejected` T0039; R40
+`brand-inferred-for-callee-accepted`, `two-brands-one-param-rejected` T0026;
+R41 `callable-bound-closure-accepted`, `closure-before-its-iterator-rejected`
+T0035, `closure-before-its-type-source-rejected` T0035; R42
+`field-on-type-param-rejected` T0042; R43 `inherent-before-trait-accepted`,
+`method-on-bound-accepted`, `method-on-projection-via-trait-bound-accepted`,
+`trait-method-without-edge-rejected` T0043; R44
+`two-traits-same-method-rejected` T0044; R45 `qualified-trait-call-accepted`;
+R46 `explicit-move-receiver-accepted`, `implicit-receiver-move-accepted`,
+`implicit-receiver-move-in-closure-rejected` (ch01 Rule 4a(e)),
+`implicit-receiver-move-in-loop-rejected` (ch01 Rule 4a(b)),
+`implicit-receiver-move-of-field-rejected` (ch01 Rule 4a(c)),
+`implicit-receiver-move-of-inout-param-rejected` (ch01 Rule 4a(d)),
+`implicit-receiver-move-of-let-param-rejected` (ch01 Rule 3),
+`implicit-receiver-move-then-use-rejected` (ch01 Rule 4a(a)),
+`inout-receiver-unmarked-accepted`, `let-receiver-unmarked-accepted`,
+`no-auto-deref-own-rejected` T0043,
+`qualified-call-sink-receiver-needs-move-rejected` (ch01 Rule 2),
+`sink-receiver-copyable-not-moved-accepted`, `sink-receiver-rvalue-accepted`;
+R47 `bracket-instantiates-method-accepted`; R48
+`duplicate-method-across-impls-rejected` T0048,
+`method-named-as-field-rejected` T0048,
+`variant-and-assoc-fn-same-name-rejected` T0048; R50
+`pattern-bare-fn-name-rejected` T0050, `pattern-bare-prelude-type-rejected`
+T0050, `pattern-bare-struct-name-rejected` T0050,
+`pattern-float-literal-rejected` T0050; R51 `let-binding-in-pattern-accepted`;
+R53 `match-bool-consts-exhaustive-accepted`,
+`match-const-pattern-needs-wildcard-rejected` T0053,
+`match-foreign-enum-no-wildcard-accepted`, `match-int-needs-wildcard-rejected`
+T0053, `match-let-pattern-covers-all-accepted`,
+`match-non-exhaustive-enum-rejected` T0053; R54
+`arm-after-let-pattern-unreachable-rejected` T0054,
+`const-pattern-equal-to-literal-unreachable-rejected` T0054,
+`unreachable-arm-rejected` T0054; R55 `match-budget-exceeded-rejected` T0055,
+`match-budget-within-accepted`; R57 `copy-with-copyable-accepted`,
+`copy-without-copyable-rejected` (ch01 Rule 3),
+`projection-op-via-trait-declared-bound-accepted`,
+`projection-op-without-constraint-rejected` T0057,
+`unbounded-op-on-param-rejected` T0057; R58
+`brand-param-as-value-type-rejected` (ch01 Rule 15d); R59
+`generic-checked-at-definition-rejected` T0057; R60
+`generic-raises-type-accepted`, `raising-closure-to-plain-fn-type-rejected`
+T0026; R61 `assoc-type-rhs-self-projection-rejected` T0061,
+`assoc-type-rhs-two-step-self-cycle-rejected` T0061,
+`projection-ambiguous-rejected` T0061, `projection-in-struct-field-accepted`,
+`projection-on-brand-param-rejected` T0061,
+`projection-on-concrete-head-rejected` T0061, `projection-on-param-accepted`,
+`projection-on-self-in-trait-accepted`, `projection-self-in-impl-accepted`,
+`projection-three-segments-rejected` T0061,
+`projection-unknown-assoc-type-rejected` T0061,
+`self-projection-in-inherent-impl-rejected` T0061; R62
+`constraint-entry-accepted`, `constraint-entry-ambiguous-projection-rejected`
+T0061, `constraint-entry-brand-head-rejected` T0061,
+`constraint-entry-head-not-earlier-rejected` (ch08 code N0026),
+`constraint-entry-in-impl-generics-rejected` T0062,
+`constraint-entry-in-struct-generics-rejected` T0062,
+`constraint-entry-non-trait-bound-rejected` T0062,
+`constraint-entry-on-impl-param-in-method-accepted`,
+`constraint-entry-satisfied-at-call-accepted`,
+`constraint-entry-unsatisfied-at-call-rejected` T0012,
+`constraint-entry-with-assoc-trait-accepted`.
+
+Removed in round 4: R20 `two-iterator-impls-rejected`; R38's five
+bound-propagation tests (`generic-arg-from-iterator-bound-accepted`,
 `closure-param-from-iterator-bound-accepted`,
 `rigid-param-iterator-bound-propagates-accepted`,
-`non-self-determined-bound-does-not-bind-rejected` T0039,
-`iterator-bound-no-impl-rejected` T0012; R39 `cannot-infer-rejected` T0039; R40
-`brand-inferred-for-callee-accepted`, `two-brands-one-param-rejected` T0026;
-R41 `callable-bound-closure-accepted`,
-`closure-before-its-type-source-rejected` T0035; R42
-`field-on-type-param-rejected` T0042; R43 `inherent-before-trait-accepted`,
-`trait-method-without-edge-rejected` T0043, `method-on-bound-accepted`; R44
-`two-traits-same-method-rejected` T0044; R45 `qualified-trait-call-accepted`;
-R46 `sink-receiver-needs-move-rejected` T0046, `no-auto-deref-own-rejected`
-T0043; R47 `bracket-instantiates-method-accepted`; R48
-`method-named-as-field-rejected` T0048,
-`duplicate-method-across-impls-rejected` T0048; R50
-`pattern-float-literal-rejected` T0050; R51 `let-binding-in-pattern-accepted`;
-R53 `match-non-exhaustive-enum-rejected` T0053,
-`match-int-needs-wildcard-rejected` T0053,
-`match-foreign-enum-no-wildcard-accepted`; R54 `unreachable-arm-rejected`
-T0054; R55 `match-budget-exceeded-rejected` T0055; R57
-`unbounded-op-on-param-rejected` T0057, `copy-without-copyable-rejected` T0057;
-R58 `brand-param-as-value-type-rejected` (ch01 code); R59
-`generic-checked-at-definition-rejected` T0057 (an uninstantiated generic with
-an ill-typed body); R60 `generic-raises-type-accepted`,
-`raising-closure-to-plain-fn-type-rejected` T0026. Rules 2, 49 and 52 have no
-corpus test: 2 is an incremental-build property (tested in the query engine),
-49 re-uses ch08's tests, 52 is a fact about the grammar.
+`non-self-determined-bound-does-not-bind-rejected`,
+`iterator-bound-no-impl-rejected`); R46 `sink-receiver-needs-move-rejected`;
+R19 `overlap-via-self-rejected` (not writable: ch08 keeps `Self` out of an
+impl header; replaced by `overlap-renamed-params-rejected`). Rules 2, 49
+and 52 have no corpus test: 2 is an incremental-build property (tested in
+the query engine: `assoc_type_def_is_signature_level_and_method_bodies_
+are_not` in crates/fors-index), 49 re-uses ch08's tests, 52 is a fact
+about the grammar. Rule 56 has none: it forbids syntax ch07 does not have.

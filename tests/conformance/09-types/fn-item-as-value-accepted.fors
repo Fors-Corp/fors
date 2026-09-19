@@ -1,0 +1,12 @@
+//! name: fn_item_as_value_accepted
+//! rule: 09.R7
+//! expect: check-ok
+//! detail: a non-generic fn item used as a value has the matching fn type
+
+module m;
+
+fn inc(let n: i32) -> i32 { return n + 1; }
+fn f() -> i32 {
+    let g: fn(let i32) -> i32 = inc;
+    return g(2);
+}

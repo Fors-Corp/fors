@@ -1,0 +1,21 @@
+//! name: projection_arg_before_head_final_check_rejected
+//! rule: 09.R38
+//! expect: check-error
+//! detail: T0026 -- the literal is synthesised as i32 before I is bound and is never revised; the final check finds I.Item = i64
+
+module m;
+
+struct Counter2 { n: i64, end: i64 }
+impl Iterator for Counter2 {
+    type Item = i64;
+    fn next(inout self: Counter2) -> Option[i64] {
+        if self.n >= self.end { return none; }
+        self.n = self.n + 1;
+        return some(self.n);
+    }
+}
+fn seed[I: Iterator](let x: I.Item, sink it: I) -> i64 {
+    discard it;
+    return 0;
+}
+fn f(sink c: Counter2) -> i64 { return seed(7, move c); }

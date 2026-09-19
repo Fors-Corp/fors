@@ -1,0 +1,18 @@
+//! name: sink_receiver_rvalue_accepted
+//! rule: 09.R46
+//! expect: check-ok
+//! detail: an rvalue receiver of a `sink self` method is taken as it is
+
+module m;
+
+struct Builder { parts: i64 }
+impl Builder {
+    fn finish(sink self: Builder) -> i64 {
+        let p = self.parts;
+        discard self;
+        return p;
+    }
+    fn peek(let self: Builder) -> i64 { return self.parts; }
+    fn add(inout self: Builder) { self.parts = self.parts + 1; }
+}
+fn f() -> i64 { return Builder { parts: 3 }.finish(); }

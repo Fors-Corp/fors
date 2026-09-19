@@ -1,0 +1,8 @@
+//! name: constraint_entry_head_unresolved_rejected
+//! rule: 08.R26
+//! expect: check-error
+//! detail: the head names nothing at all
+
+module m;
+
+fn f[Q.Item: Eq]() { }

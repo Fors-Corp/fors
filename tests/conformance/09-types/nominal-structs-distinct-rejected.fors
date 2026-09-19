@@ -1,0 +1,10 @@
+//! name: nominal_structs_distinct_rejected
+//! rule: 09.R9
+//! expect: check-error
+//! detail: T0026 -- two struct declarations with identical fields are different types
+
+module m;
+
+struct A { x: i32 }
+struct B { x: i32 }
+fn f(sink a: A) -> B { return a; }

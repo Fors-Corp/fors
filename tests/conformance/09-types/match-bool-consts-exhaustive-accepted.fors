@@ -1,0 +1,15 @@
+//! name: match_bool_consts_exhaustive_accepted
+//! rule: 09.R53
+//! expect: check-ok
+//! detail: bool constants whose values are true and false are the two constructors of bool
+
+module m;
+
+const YES: bool = true;
+const NO: bool = false;
+fn f(let b: bool) -> i32 {
+    match b {
+        YES => 1,
+        NO => 0,
+    }
+}

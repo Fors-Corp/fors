@@ -1,0 +1,11 @@
+//! name: overlap_renamed_params_rejected
+//! rule: 09.R19
+//! expect: check-error
+//! detail: T0019 -- the impls' parameters are renamed apart before unification, so `Conv[T] for Foo` and `Conv[U] for Foo` are the same head
+
+module m;
+
+trait Conv[X] { fn conv(let self: Self) -> i64; }
+struct Foo { n: i64 }
+impl[T] Conv[T] for Foo { fn conv(let self: Foo) -> i64 { return 0; } }
+impl[U] Conv[U] for Foo { fn conv(let self: Foo) -> i64 { return 1; } }

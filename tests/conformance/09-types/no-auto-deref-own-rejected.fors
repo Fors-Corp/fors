@@ -1,0 +1,18 @@
+//! name: no_auto_deref_own_rejected
+//! rule: 09.R46
+//! expect: check-error
+//! detail: T0043 -- there is no auto-dereference: Own[Builder, A] has no method `peek`
+
+module m;
+
+struct Builder { parts: i64 }
+impl Builder {
+    fn finish(sink self: Builder) -> i64 {
+        let p = self.parts;
+        discard self;
+        return p;
+    }
+    fn peek(let self: Builder) -> i64 { return self.parts; }
+    fn add(inout self: Builder) { self.parts = self.parts + 1; }
+}
+fn f[A: brand](let o: Own[Builder, A]) -> i64 { return o.peek(); }

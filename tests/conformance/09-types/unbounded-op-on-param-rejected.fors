@@ -1,0 +1,8 @@
+//! name: unbounded_op_on_param_rejected
+//! rule: 09.R57
+//! expect: check-error
+//! detail: T0057 -- `+` on a rigid T needs Add among its bounds
+
+module m;
+
+fn sum2[T: Copyable](let a: T, let b: T) -> T { return a + b; }

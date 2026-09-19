@@ -1,0 +1,15 @@
+//! name: concrete_to_dyn_accepted
+//! rule: 09.R10
+//! expect: check-ok
+//! detail: a type that implements a dyn-capable trait coerces to dyn Tr at the outermost type (Rule 10(c))
+
+module m;
+
+trait Shape { fn area(let self: Self) -> f64; }
+struct Sq { s: f64 }
+impl Shape for Sq { fn area(let self: Sq) -> f64 { return self.s * self.s; } }
+fn show(let s: dyn Shape) -> f64 { return s.area(); }
+fn f() -> f64 {
+    let q = Sq { s: 2.0 };
+    return show(q);
+}

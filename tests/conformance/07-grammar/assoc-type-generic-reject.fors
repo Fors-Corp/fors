@@ -1,0 +1,8 @@
+//! name: assoc_type_generic_reject
+//! rule: 07.D20
+//! expect: parse-error
+//! detail: generic associated types do not exist: `type A[U];` is a parse error
+
+module m;
+
+trait T { type A[U]; }

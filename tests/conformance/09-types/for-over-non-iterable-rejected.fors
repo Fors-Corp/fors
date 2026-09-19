@@ -1,0 +1,10 @@
+//! name: for_over_non_iterable_rejected
+//! rule: 09.R31
+//! expect: check-error
+//! detail: T0031 -- i64 is not a range, Array, Slice or Iterator
+
+module m;
+
+fn f(let n: i64) {
+    for x in n { }
+}

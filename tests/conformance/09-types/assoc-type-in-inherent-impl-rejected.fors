@@ -1,0 +1,11 @@
+//! name: assoc_type_in_inherent_impl_rejected
+//! rule: 09.R17
+//! expect: check-error
+//! detail: T0017 -- an inherent impl must not contain a `type` item
+
+module m;
+
+struct Counter2 { n: i64 }
+impl Counter2 {
+    type Item = i64;
+}

@@ -1,0 +1,13 @@
+//! name: arm_after_let_pattern_unreachable_rejected
+//! rule: 09.R54
+//! expect: check-error
+//! detail: T0054 -- `let n` is irrefutable, so no later arm is useful
+
+module m;
+
+fn f(let n: i32) -> i32 {
+    match n {
+        let other => other,
+        0 => 0,
+    }
+}

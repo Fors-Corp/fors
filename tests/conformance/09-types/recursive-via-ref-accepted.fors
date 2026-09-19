@@ -1,0 +1,8 @@
+//! name: recursive_via_ref_accepted
+//! rule: 09.R14
+//! expect: check-ok
+//! detail: a Ref breaks the by-value cycle
+
+module m;
+
+struct Tree[A: brand] { root: Option[Ref[Tree[A], A]], val: i64 }

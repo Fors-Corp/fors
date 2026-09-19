@@ -1,0 +1,10 @@
+//! name: qualified_trait_call_accepted
+//! rule: 09.R45
+//! expect: check-ok
+//! detail: the qualified form names the trait; the receiver is an ordinary first argument
+
+module m;
+
+trait Named { fn id(let self: Self) -> i64; }
+trait Numbered { fn id(let self: Self) -> i64; }
+fn f[T: Named + Numbered](let t: T) -> i64 { return Named.id(t) + Numbered.id(t); }

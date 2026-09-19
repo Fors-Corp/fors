@@ -1,0 +1,11 @@
+//! name: provided_method_accepted
+//! rule: 09.R16
+//! expect: check-ok
+//! detail: a provided method's body is checked once against the trait's own methods
+
+module m;
+
+trait Shape {
+    fn area(let self: Self) -> f64;
+    fn twice(let self: Self) -> f64 { return self.area() * 2.0; }
+}

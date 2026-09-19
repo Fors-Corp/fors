@@ -192,7 +192,7 @@ impl Universe {
 
 fn build_prelude(interner: &mut Interner, modules: &ModuleTable) -> Prelude {
     let mut out = HashMap::new();
-    for n in prelude::PRELUDE_TYPES.iter().chain(&prelude::PRELUDE_TYPES2).chain(&prelude::PRELUDE_TYPES3) {
+    for n in prelude::PRELUDE_TYPES.iter().chain(&prelude::PRELUDE_TYPES2).chain(&prelude::PRELUDE_TYPES3).chain(&prelude::PRELUDE_TYPES4) {
         let s = interner.intern(n);
         out.insert(s, Entity::PreludeType(s));
     }
@@ -418,12 +418,31 @@ fn check_signature_leaks(interner: &mut Interner, f: &FileCtx, m: usize, scope: 
             DeclKind::Impl => {
                 // "every `pub` method in an `impl` whose type is `pub`":
                 // the implementing type is the last header type.
-                let ty = f.tree.children(node).filter(|&c| !matches!(f.tree.kinds[c], NodeKind::Generics | NodeKind::FnDecl | NodeKind::TraitItem | NodeKind::Attribute)).last();
+                let headers: Vec<usize> = f
+                    .tree
+                    .children(node)
+                    .filter(|&c| !matches!(f.tree.kinds[c], NodeKind::Generics | NodeKind::FnDecl | NodeKind::TraitItem | NodeKind::Attribute | NodeKind::AssocTypeDef | NodeKind::AssocTypeDecl | NodeKind::Error))
+                    .collect();
+                let ty = headers.last().copied();
                 let ty_pub = ty.filter(|&t| f.tree.kinds[t] == NodeKind::TypeApp).is_some_and(|t| {
                     segments_with_ranges(f.tree, f.tokens, f.source, interner, t).first().is_some_and(|&(n, _)| is_pub_item(scope, n))
                 });
                 if !ty_pub {
                     continue;
+                }
+                // Round 4 (Rule 12): in an impl of a `pub` trait for a
+                // `pub` type, the right-hand side of every `type A = T;`
+                // is signature. A prelude or imported trait is `pub`.
+                let head_pub = |t: usize, interner: &mut Interner| {
+                    f.tree.kinds[t] == NodeKind::TypeApp
+                        && segments_with_ranges(f.tree, f.tokens, f.source, interner, t).first().is_some_and(|&(n, _)| is_pub_item(scope, n) || scope.index.get(&n).is_none_or(|&r| scope.origin[r as usize] != Origin::Item))
+                };
+                if headers.len() == 2 && head_pub(headers[0], interner) {
+                    for c in f.tree.children(node) {
+                        if f.tree.kinds[c] == NodeKind::AssocTypeDef {
+                            find_type_apps(f.tree, c, &mut sig_types);
+                        }
+                    }
                 }
                 for row in 0..f.decls.len() {
                     if f.decls.parent[row] == i as u32 && f.decls.vis[row] == Visibility::Public {
@@ -557,18 +576,38 @@ pub fn build_universe(
                         let (fs, fe) = f.tree.token_range(node);
                         (fs as usize..fe as usize).any(|t| is_sig(f.tokens, t) && f.tokens.kinds[t] == TokenKind::KwFor)
                     };
+                    // Rule 27 (round 4): methods and associated types
+                    // share ONE table per trait and per impl; the later
+                    // member, in source order, is the duplicate.
+                    let mut members: Vec<(u32, Symbol, (u32, u32), bool)> = Vec::new();
+                    for row in 0..f.decls.len() {
+                        if f.decls.parent[row] == i as u32 {
+                            if let Some(name) = f.decls.name[row] {
+                                members.push((f.decls.range_start[row], name, (f.decls.range_start[row], f.decls.range_end[row]), false));
+                            }
+                        }
+                    }
+                    for c in f.tree.children(node) {
+                        if matches!(f.tree.kinds[c], NodeKind::AssocTypeDecl | NodeKind::AssocTypeDef) {
+                            if let Some((name, _)) = binder_name(f.tree, f.tokens, f.source, interner, c) {
+                                let r = byte_range(f.tree, f.tokens, c);
+                                members.push((r.0, name, r, true));
+                            }
+                        }
+                    }
+                    members.sort_by_key(|&(start, ..)| start);
                     let mut seen: Vec<Symbol> = Vec::new();
+                    for &(_, name, r, is_type) in &members {
+                        if seen.contains(&name) {
+                            let msg = if is_type { "duplicate associated-type name in one impl/trait (methods and associated types share one table)" } else { "duplicate method name in one impl/trait" };
+                            diags.push((m, Diagnostic::new(r.0, r.1, Code::N(27), msg.to_string())));
+                        } else {
+                            seen.push(name);
+                        }
+                    }
                     for row in 0..f.decls.len() {
                         if f.decls.parent[row] != i as u32 {
                             continue;
-                        }
-                        if let Some(name) = f.decls.name[row] {
-                            if seen.contains(&name) {
-                                let r = (f.decls.range_start[row], f.decls.range_end[row]);
-                                diags.push((m, Diagnostic::new(r.0, r.1, Code::N(27), "duplicate method name in one impl/trait".to_string())));
-                            } else {
-                                seen.push(name);
-                            }
                         }
                         if is_trait_impl && f.decls.vis[row] == Visibility::Public {
                             let r = (f.decls.range_start[row], f.decls.range_end[row]);

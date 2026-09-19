@@ -1,0 +1,13 @@
+//! name: unconstrained_impl_brand_param_rejected
+//! rule: 09.R18
+//! expect: check-error
+//! detail: T0018 -- a brand parameter of an impl must occur in the impl head too
+
+module m;
+
+trait Holder { type Held; fn n(let self: Self) -> i64; }
+struct One { a: i64 }
+impl[A: brand] Holder for One {
+    type Held = Option[Ref[i64, A]];
+    fn n(let self: One) -> i64 { return 0; }
+}

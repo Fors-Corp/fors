@@ -1,0 +1,11 @@
+//! name: if_branches_first_fixes_accepted
+//! rule: 09.R32
+//! expect: check-ok
+//! detail: in SYNTH mode the first non-never branch fixes the type and the rest are checked against it
+
+module m;
+
+fn f(let c: bool) -> u8 {
+    let v = if c { 1u8 } else { 2 };
+    return v;
+}

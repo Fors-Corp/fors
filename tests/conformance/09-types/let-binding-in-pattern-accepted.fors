@@ -1,0 +1,15 @@
+//! name: let_binding_in_pattern_accepted
+//! rule: 09.R51
+//! expect: check-ok
+//! detail: `let r` has the type of the component it faces, with the enum's arguments substituted
+
+module m;
+
+enum Shape2 { circle(f64), rect { w: f64, h: f64 }, empty }
+fn area(let s: Shape2) -> f64 {
+    match s {
+        Shape2.circle(let r) => r * r * 3.0,
+        .rect { w: let w, h: let h } => w * h,
+        .empty => 0.0,
+    }
+}

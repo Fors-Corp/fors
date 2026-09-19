@@ -1,0 +1,8 @@
+//! name: generics_constraint_three_segments_reject
+//! rule: 07.D19
+//! expect: parse-error
+//! detail: a constraint entry is exactly two identifiers joined by one `.`; `I.Item.X: Eq` is a parse error
+
+module m;
+
+fn f[I.Item.X: Eq]() { }

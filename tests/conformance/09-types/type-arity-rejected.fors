@@ -1,0 +1,8 @@
+//! name: type_arity_rejected
+//! rule: 09.R11
+//! expect: check-error
+//! detail: T0011 -- Option declares one parameter, two arguments are supplied
+
+module m;
+
+fn f(let x: Option[i32, i32]) { }

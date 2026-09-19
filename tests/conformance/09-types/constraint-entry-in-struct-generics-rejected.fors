@@ -1,0 +1,8 @@
+//! name: constraint_entry_in_struct_generics_rejected
+//! rule: 09.R62
+//! expect: check-error
+//! detail: T0062 -- constraint entries are legal only in the generics of a fn
+
+module m;
+
+struct Sorted[I: Iterator, I.Item: Ord] { it: I }

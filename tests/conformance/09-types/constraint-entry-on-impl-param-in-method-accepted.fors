@@ -1,0 +1,15 @@
+//! name: constraint_entry_on_impl_param_in_method_accepted
+//! rule: 09.R62
+//! expect: check-ok
+//! detail: a method's list may consist of constraint entries only, constraining a parameter of its impl
+
+module m;
+
+struct Sum[I] { it: I }
+impl[I: Iterator] Sum[I] {
+    fn total[I.Item: Add + Copyable](sink self: Sum[I], let zero: I.Item) -> I.Item {
+        var acc: I.Item = zero;
+        for x in self.it { acc = acc + x; }
+        return acc;
+    }
+}

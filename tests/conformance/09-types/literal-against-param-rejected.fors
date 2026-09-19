@@ -1,0 +1,11 @@
+//! name: literal_against_param_rejected
+//! rule: 09.R27
+//! expect: check-error
+//! detail: T0027 -- no literal checks against a rigid type parameter
+
+module m;
+
+fn f[T: Copyable](let x: T) -> T {
+    let y: T = 0;
+    return y;
+}

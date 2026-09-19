@@ -1,0 +1,8 @@
+//! name: constraint_entry_head_not_earlier_rejected
+//! rule: 09.R62
+//! expect: check-error
+//! detail: N0026 -- the head I is declared LATER in the same list (ch08 Rule 26 owns the earlier-than test)
+
+module m;
+
+fn bad1[I.Item: Eq, I: Iterator]() { }

@@ -142,7 +142,9 @@ brands (ch01); receiver-type dispatch (checker); grammar productions
     module defining the struct unless marked `pub`. An enum variant and
     its payload fields are exactly as visible as the enum; `pub` on a
     field inside an `evariant` MUST be a compile error. A trait's
-    methods are exactly as visible as the trait. A method in an inherent
+    methods and associated types are exactly as visible as the trait
+    (an `assoc_type_def` in an impl likewise; ch07 gives neither form a
+    `pub`). A method in an inherent
     `impl T { }` is private to the module containing that `impl` unless
     marked `pub`; a method in `impl Tr for T { }` has the trait's
     visibility and `pub` on it MUST be a compile error. Naming a private
@@ -155,8 +157,11 @@ brands (ch01); receiver-type dispatch (checker); grammar productions
     `gparam` bound, parameter type, `ret_type` and `raises` type; for a
     `struct`, its `gparam` bounds and the types of its `pub` fields; for
     an `enum`, its bounds and every payload type; for a `trait`, its
-    bounds and every method signature; for a `const`, its type; and the
-    signature of every `pub` method in an `impl` whose type is `pub`.
+    bounds, every method signature and the bounds of every associated
+    type; for a `const`, its type; the signature of every `pub` method in
+    an `impl` whose type is `pub`; and, in an impl of a `pub` trait for a
+    `pub` type, the right-hand side of every `type A = T;`. The bounds of
+    a constraint entry (Rule 26) count as `gparam` bounds.
     The test is syntactic: each `path` in those positions is resolved
     (Rule 16) and its head entity inspected. Violation MUST be a compile
     error naming the leaked item.
@@ -204,9 +209,14 @@ brands (ch01); receiver-type dispatch (checker); grammar productions
     deferred segment. **anything else** (struct, trait, `fn`, `const`,
     prelude type or value, generic parameter, `Self`, variant, local,
     parameter) — every remaining segment is deferred. A **deferred
-    segment** is a field, method or associated-item name: this phase
-    records it unresolved and the checker resolves it by type
-    (Rule 22). The algorithm is identical in type and expression
+    segment** is a field, method, associated-function or associated-type
+    name: this phase records it unresolved and the checker resolves it by
+    type (Rule 22). In particular a type path headed by a generic
+    parameter or `Self` — the projection `I.Item`, `Self.Item` (ch09 Rule
+    61), also as the subject of a constraint entry — has its head
+    resolved here and its second segment deferred: this phase never asks
+    which trait declares `Item`, nor whether the head is a *type*
+    parameter. The algorithm is identical in type and expression
     position. Whether the entity finally reached is of a kind legal in
     its position (a type where a type is needed, a constant `targ`, a
     brand) is the checker's, since a bare `targ` path is classified
@@ -214,7 +224,10 @@ brands (ch01); receiver-type dispatch (checker); grammar productions
 17. **N0017** — The prelude is a closed list, present in every module
     scope. Types and traits: `i8 i16 i32 i64 u8 u16 u32 u64 isize usize
     f32 f64 bool Str Slice Array vector mask atomic rawptr Own Ref Arena
-    Option Shared ErrorFrom`. Values: `some none reduce`. Modules: `io fs
+    Option Shared ErrorFrom never Range RangeIncl Copyable Eq Ord Add Sub
+    Mul Div Rem Neg BitAnd BitOr BitXor Shl Shr Iterator Index IndexMut`
+    (the second line is round 4's addition: the names ch09 Rules 4, 5, 21
+    and 23 make language-known). Values: `some none reduce`. Modules: `io fs
     net proc time rand env gpu`, denoting `std.io`, `std.fs`, `std.net`,
     `std.proc`, `std.time`, `std.rand`, `std.env`, `std.gpu` (the homes
     of ch04 Rule 21's root-capability types). Resolving a path through a
@@ -286,7 +299,8 @@ brands (ch01); receiver-type dispatch (checker); grammar productions
     operand is not a `path` continuation (`f().x`, `a[i].x`, `x?.y`);
     method names and receiver dispatch; a Bracket's index-or-instantiate
     reading; the field names of `finit` and `fpat`; the labels of named
-    arguments; the variant named by a `dot_lit`; associated items
+    arguments; the variant named by a `dot_lit`; associated items —
+    functions and associated types, so every projection (Rule 16) —
     reached through a generic parameter, `Self`, a struct, a trait or a
     prelude type; whether a name reached in a pattern (Rule 25) is a
     legal constant or constructor; and enforcement of Rule 11. The
@@ -349,7 +363,19 @@ brands (ch01); receiver-type dispatch (checker); grammar productions
 26. **N0026** — Scope of each binding. A `gparam`: the whole
     declaration that carries the `generics` — the other bounds of the
     list, parameters, `ret_type`, `raises` type, contracts, fields,
-    variants, body; for an `impl`, the header types and every method. A
+    variants, body; for an `impl`, the header types, every `type A = T;`
+    and every method; for a `trait`, every associated-type bound and
+    method. A constraint entry (ch07 `gconstraint`, `I.Item: Add`)
+    introduces NO name and has no scope of its own. Its head identifier
+    is looked up by Rule 14 and MUST resolve to a generic parameter
+    declared EARLIER (to its left) in the same `generics` list, to a
+    generic parameter of the enclosing `impl`/`trait`, or to `Self`; any
+    other entity, a parameter declared later in the list, or no hit MUST
+    be a compile error with this rule's code, naming the head. (This is
+    the one place where order inside a `generics` list matters: ordinary
+    bounds still see every parameter of the list.) Its second identifier
+    is a deferred segment (Rule 16) and the paths in its bounds resolve
+    like those of any `gparam` bound. A
     method's generic parameters are subject to Rule 18 against those of
     its `impl`/`trait`. `Self`: an implicit binding, behaving as a
     generic parameter, of every `trait_decl` and `impl_decl`, in scope
@@ -377,11 +403,16 @@ brands (ch01); receiver-type dispatch (checker); grammar productions
     payload depth it occurs at.
 27. **N0027** — Member tables. Within one `struct_decl` the field names,
     within one struct-form `evariant` its field names, within one
-    `enum_decl` the variant names, within one `trait_decl` the method
-    names, and within one `impl_decl` the method names MUST be pairwise
+    `enum_decl` the variant names, within one `trait_decl` the names of
+    its methods and associated types, and within one `impl_decl` the
+    names of its methods and associated-type definitions MUST be pairwise
     distinct, else a compile error at the second naming the first.
-    Duplicates across different `impl` blocks of one type, and a method
-    sharing a name with a field or variant, are the checker's.
+    Methods and associated types share one table per trait and per impl:
+    `type Item;` beside `fn Item()`, or `type A = X;` twice in one impl,
+    is this error. Whether an impl defines exactly the associated types
+    its trait declares is the checker's (ch09 Rule 17). Duplicates across
+    different `impl` blocks of one type, and a method sharing a name with
+    a field or variant, are the checker's (ch09 Rule 48).
 
 ## Examples
 
@@ -561,13 +592,23 @@ fn f(let net: net.Net) {   // type annotation resolved before `net` is in scope
   naming lint into a hard rule, which is what makes the mapping
   deterministic on case-insensitive file systems.
 - `Self` is an implicit binding (Rule 26); no earlier chapter defines it.
+- Round 4 (2026-09-19; associated types, ch09 Rules 16-20, 61-62): the
+  prelude gains the language-known names (Rule 17), which also settles
+  `Copyable` from open question 1; associated types join the member
+  tables (Rule 27), the deferred segments (Rules 16, 22), the visibility
+  and signature rules (Rules 11-12); a constraint entry's head must be
+  an earlier parameter (Rule 26) — the resolver owns that test because
+  it is positional and needs no type, while "is it a *type* parameter
+  with a bound declaring that name" is ch09 Rule 61's. `type` is now
+  reserved (ch07), so Rule 24 already forbids a module named `type`.
 - Diagnostic codes `N00xx` equal the rule numbers; tests cite `08.Rk`.
 
 ## Open questions for the owner
 
 1. Prelude contents (Rule 17). Used unqualified elsewhere but defined
    nowhere, so currently unresolved names: `Buffer` (ch04 example, 5
-   tests), `Vec`, `PageAllocator`, `Copyable`. Add to the prelude, or
+   tests), `Vec`, `PageAllocator` (`Copyable` and the other ch09
+   language-known names were added in round 4, Rule 17). Add to the prelude, or
    require `use`? And confirm prelude modules versus mandatory
    `use std.io;`.
 2. ~~Confirm total no-shadowing including prelude names (Decision 1).~~
@@ -581,9 +622,10 @@ fn f(let net: net.Net) {   // type annotation resolved before `net` is in scope
    closed (owner decision 2026-09-19, round 3, D2; Rules 3-6): two
    same-named modules (`a.util`, `b.util`) can now both be imported, as
    `use a.util as autil; use b.util as butil;`.
-5. Should a variant and an inherent associated function of the same name
-   be an error (Rule 16 currently lets the variant win; Rule 27 leaves
-   the clash to the checker)?
+5. ~~Should a variant and an inherent associated function of the same
+   name be an error?~~ Closed, round 4 (2026-09-19, drafting default
+   taken with the ch09 decisions): it is an error, ch09 Rule 48, so Rule
+   16's variant-first reading never decides an accepted program.
 6. Mutable pattern bindings (`"var" ident` in a pattern): left open by
    round 3's D1, which recommends "no" — a pattern binding is always by
    `let`, and code needing to mutate it copies into a local `var` in the
@@ -662,6 +704,18 @@ in-impl-header-rejected`, `gparam-visible-in-sibling-bound-accepted`; R27
 `same-method-in-two-impls-accepted`. Rules 2 and 24 have no corpus test:
 they need a manifest or an illegal file name, which the corpus format
 cannot carry.
+
+Added by round 4 (associated types): R16 `projection-second-segment-
+deferred-accepted` (`I.Item` and `Self.Item` resolve with no N-error even
+when no bound declares `Item`; that is ch09's T0061); R17 `prelude-
+operator-traits-without-use-accepted`, `item-named-as-prelude-trait-
+rejected` (an item named `Iterator` or `Add` is N0013, so the test cites Rule 13); R26 `constraint-
+entry-head-earlier-param-accepted`, `constraint-entry-head-later-param-
+rejected`, `constraint-entry-head-impl-param-accepted`, `constraint-
+entry-head-self-accepted`, `constraint-entry-head-not-a-gparam-rejected`,
+`constraint-entry-head-unresolved-rejected`; R27 `duplicate-assoc-type-in-
+trait-rejected`, `duplicate-assoc-type-in-impl-rejected`, `assoc-type-
+named-as-method-rejected`.
 
 Added by owner decision 2026-09-19, round 3 (D1/D2/D3; new tests, this
 round; `local-shadows-prelude-{type,module}-accepted` and

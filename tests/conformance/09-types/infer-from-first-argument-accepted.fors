@@ -1,0 +1,9 @@
+//! name: infer_from_first_argument_accepted
+//! rule: 09.R38
+//! expect: check-ok
+//! detail: T := i32 from the first argument; the second is then checked against i32
+
+module m;
+
+fn pick[T: Copyable](let a: T, let b: T) -> T { return a; }
+fn f() -> i32 { return pick(1, 2); }

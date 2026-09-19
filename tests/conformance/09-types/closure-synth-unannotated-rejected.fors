@@ -1,0 +1,10 @@
+//! name: closure_synth_unannotated_rejected
+//! rule: 09.R35
+//! expect: check-error
+//! detail: T0035 -- in SYNTH mode every closure parameter must carry a type
+
+module m;
+
+fn f() {
+    let g = |let n| n;
+}

@@ -1,0 +1,16 @@
+//! name: overlap_ignores_assoc_types_rejected
+//! rule: 09.R19
+//! expect: check-error
+//! detail: T0019 -- two impls that differ only in `type Item = ...;` overlap; the test never reads a definition
+
+module m;
+
+struct Counter2 { n: i64 }
+impl Iterator for Counter2 {
+    type Item = i64;
+    fn next(inout self: Counter2) -> Option[i64] { return none; }
+}
+impl Iterator for Counter2 {
+    type Item = i32;
+    fn next(inout self: Counter2) -> Option[i32] { return none; }
+}

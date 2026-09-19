@@ -1,0 +1,14 @@
+//! name: pattern_bare_fn_name_rejected
+//! rule: 09.R50
+//! expect: check-error
+//! detail: T0050 -- a bare pattern name that resolves to a fn is not a pattern; to bind, write `let n`
+
+module m;
+
+fn helper() -> i32 { return 1; }
+fn f(let n: i32) -> i32 {
+    match n {
+        helper => 1,
+        _ => 0,
+    }
+}

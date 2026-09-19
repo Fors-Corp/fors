@@ -1,0 +1,8 @@
+//! name: type_reserved_binding_reject
+//! rule: 07.L1
+//! expect: parse-error
+//! detail: `type` is reserved (round 4): `let type = 1;` is not a binding
+
+module m;
+
+fn f() { let type = 1; }

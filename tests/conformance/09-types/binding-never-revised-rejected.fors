@@ -1,0 +1,9 @@
+//! name: binding_never_revised_rejected
+//! rule: 09.R38
+//! expect: check-error
+//! detail: T0026 -- T := i32 from the first argument and is never revised; `true` is a mismatch at the second
+
+module m;
+
+fn pick[T: Copyable](let a: T, let b: T) -> T { return a; }
+fn f() -> i32 { return pick(1, true); }

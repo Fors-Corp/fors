@@ -1,0 +1,8 @@
+//! name: recursive_struct_rejected
+//! rule: 09.R14
+//! expect: check-error
+//! detail: T0014 -- List stores an Option[List] by value: infinite size
+
+module m;
+
+struct List { head: Option[List] }

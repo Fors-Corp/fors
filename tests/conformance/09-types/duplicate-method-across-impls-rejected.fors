@@ -1,0 +1,10 @@
+//! name: duplicate_method_across_impls_rejected
+//! rule: 09.R48
+//! expect: check-error
+//! detail: T0048 -- two inherent methods of one head with the same name, in different impl blocks
+
+module m;
+
+struct P { x: i32 }
+impl P { fn get(let self: P) -> i32 { return self.x; } }
+impl P { fn get(let self: P) -> i32 { return 0; } }

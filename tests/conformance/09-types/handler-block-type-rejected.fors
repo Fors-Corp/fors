@@ -1,0 +1,15 @@
+//! name: handler_block_type_rejected
+//! rule: 09.R36
+//! expect: check-error
+//! detail: T0026 -- the handler block is checked against the call's success type, i64
+
+module m;
+
+enum Err { empty }
+fn take(let n: usize) -> i64 raises Err {
+    if n == 0 { raise Err.empty; }
+    return 1;
+}
+fn f(let n: usize) -> i64 {
+    return take(n) else |e| { true };
+}

@@ -1,0 +1,8 @@
+//! name: constraint_entry_ambiguous_projection_rejected
+//! rule: 09.R62
+//! expect: check-error
+//! detail: T0061 -- the subject T.Output of the constraint entry is itself an ambiguous projection: two bounds of T declare Output
+
+module m;
+
+fn f[T: Index[usize] + Index[i32], T.Output: Eq](let t: T) { }

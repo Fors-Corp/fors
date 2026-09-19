@@ -1,0 +1,10 @@
+//! name: none_in_synth_rejected
+//! rule: 09.R28
+//! expect: check-error
+//! detail: T0039 -- `none` in SYNTH mode has no way to determine Option's argument; write Option[u8].none
+
+module m;
+
+fn f() {
+    let c = none;
+}

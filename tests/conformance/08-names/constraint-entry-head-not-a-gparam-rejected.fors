@@ -1,0 +1,9 @@
+//! name: constraint_entry_head_not_a_gparam_rejected
+//! rule: 08.R26
+//! expect: check-error
+//! detail: the head resolves to a module-scope struct, not a generic parameter
+
+module m;
+
+struct P { x: i32 }
+fn f[P.Item: Eq]() { }

@@ -1,0 +1,11 @@
+//! name: never_coerces_accepted
+//! rule: 09.R10
+//! expect: check-ok
+//! detail: a branch of type never coerces to the expected i64 (Rule 10(a))
+
+module m;
+
+fn f(let c: bool) -> i64 {
+    let a: i64 = if c { 1 } else { return 0; };
+    return a;
+}

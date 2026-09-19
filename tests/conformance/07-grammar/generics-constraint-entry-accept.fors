@@ -1,0 +1,14 @@
+//! name: generics_constraint_entry_accept
+//! rule: 07.D19
+//! expect: parse-ok
+//! detail: `I.Item: Add + Copyable` after `I: It`, `Self.Item: Eq`, a list of constraints only, a struct list with a constraint (its rejection is ch09's), trailing comma
+
+module m;
+
+trait It { type Item; }
+fn f[I: It, I.Item: Add + Copyable,]() { }
+fn g[Self.Item: Eq]() { }
+struct S[I: It, I.Item: Eq] { it: I }
+impl[I: It] S[I] {
+    fn h[I.Item: Ord](let self: S[I]) { }
+}

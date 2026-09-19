@@ -163,6 +163,19 @@ pub enum NodeKind {
     /// `"let" ident` as a `pattern` alternative (ch07 grammar, D1). Both
     /// tokens are owned directly; leaf.
     PatLet,
+
+    // ---- appended, owner decision 2026-09-19 round 4 (associated
+    // types): additive only. ----
+    /// `"type" ident [ ":" bounds ] ";"` in a `TraitDecl` body (ch07
+    /// `assoc_type_decl`). Children: the bound types.
+    AssocTypeDecl,
+    /// `"type" ident "=" type ";"` in an `ImplDecl` body (ch07
+    /// `assoc_type_def`). Child: the right-hand-side type.
+    AssocTypeDef,
+    /// `ident "." ident ":" bounds` in a `Generics` list (ch07
+    /// `gconstraint`). Introduces no name; both identifiers are tokens
+    /// the node owns directly; children: the bound types.
+    GConstraint,
 }
 
 impl NodeKind {

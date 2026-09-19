@@ -1,0 +1,11 @@
+//! name: indexmut_without_index_rejected
+//! rule: 09.R21
+//! expect: check-error
+//! detail: T0021 -- impl IndexMut[usize] for a type with no Index[usize] impl: the language-known prerequisite is missing
+
+module m;
+
+struct Grid { cells: Array[i64, 16] }
+impl IndexMut[usize] for Grid {
+    fn at_mut(inout self: Grid, let i: usize) -> scoped(self) i64 { return self.cells[i]; }
+}

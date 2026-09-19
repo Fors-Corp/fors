@@ -1,0 +1,23 @@
+//! name: projection_in_struct_field_accepted
+//! rule: 09.R61
+//! expect: check-ok
+//! detail: a projection may be a field type of a generic struct; a field access substitutes and normalises it
+
+module m;
+
+struct Counter2 { n: i64, end: i64 }
+impl Iterator for Counter2 {
+    type Item = i64;
+    fn next(inout self: Counter2) -> Option[i64] {
+        if self.n >= self.end { return none; }
+        self.n = self.n + 1;
+        return some(self.n);
+    }
+}
+struct Peek[I: Iterator] { it: I, head: Option[I.Item] }
+fn head_of(let p: Peek[Counter2]) -> i64 {
+    match p.head {
+        some(let v) => v,
+        none => 0,
+    }
+}

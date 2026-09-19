@@ -1,0 +1,8 @@
+//! name: dyn_marker_rejected
+//! rule: 09.R24
+//! expect: check-error
+//! detail: T0024 -- a marker trait must not be used as dyn
+
+module m;
+
+fn f(let x: dyn Copyable) { }

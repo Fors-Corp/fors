@@ -1,0 +1,13 @@
+//! name: assoc_type_bound_met_by_projection_accepted
+//! rule: 09.R17
+//! expect: check-ok
+//! detail: `type Key = T.Key;` meets `Key: Eq + Ord` through the bounds the trait declares for T.Key, with T rigid
+
+module m;
+
+trait Keyed { type Key: Eq + Ord; fn key(let self: Self) -> Self.Key; }
+struct Wrap[T] { inner: T }
+impl[T: Keyed] Keyed for Wrap[T] {
+    type Key = T.Key;
+    fn key(let self: Wrap[T]) -> T.Key { return self.inner.key(); }
+}

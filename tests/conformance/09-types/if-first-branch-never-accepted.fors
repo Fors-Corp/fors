@@ -1,0 +1,11 @@
+//! name: if_first_branch_never_accepted
+//! rule: 09.R32
+//! expect: check-ok
+//! detail: a never first branch needs no second visit: the next branch fixes the type
+
+module m;
+
+fn f(let c: bool) -> i64 {
+    let v = if c { return 0; } else { 2i64 };
+    return v;
+}

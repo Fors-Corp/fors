@@ -1,0 +1,8 @@
+//! name: constraint_entry_head_earlier_param_accepted
+//! rule: 08.R26
+//! expect: check-ok
+//! detail: the head I is declared earlier in the same list
+
+module m;
+
+fn f[I: Iterator, I.Item: Eq]() { }

@@ -1,0 +1,9 @@
+//! name: projection_second_segment_deferred_accepted
+//! rule: 08.R16
+//! expect: check-ok
+//! detail: `I.Item` and `Self.Item` resolve their head here and defer the second segment: no N-error even though no bound of I declares `Item` (that is ch09's T0061)
+
+module m;
+
+trait Src { fn pull(inout self: Self) -> Option[Self.Item]; }
+fn f[I](let x: I.Item, let y: I.Nothing) { }

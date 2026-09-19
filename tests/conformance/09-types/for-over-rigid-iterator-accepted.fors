@@ -1,0 +1,12 @@
+//! name: for_over_rigid_iterator_accepted
+//! rule: 09.R31
+//! expect: check-ok
+//! detail: a rigid I: Iterator may be iterated; the element type is the neutral I.Item
+
+module m;
+
+fn count[I: Iterator](sink it: I) -> i64 {
+    var n: i64 = 0;
+    for x in it { n = n + 1; }
+    return n;
+}

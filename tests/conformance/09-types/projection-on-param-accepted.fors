@@ -1,0 +1,8 @@
+//! name: projection_on_param_accepted
+//! rule: 09.R61
+//! expect: check-ok
+//! detail: I.Item with I a type parameter whose one bound declares Item
+
+module m;
+
+fn first[I: Iterator](inout it: I) -> Option[I.Item] { return it.next(); }

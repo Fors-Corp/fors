@@ -1,0 +1,12 @@
+//! name: let_without_type_or_init_rejected
+//! rule: 09.R1
+//! expect: check-error
+//! detail: T0001 -- `let x;` has neither annotation nor initialiser; its type would have to come from a later use
+
+module m;
+
+fn f() -> i32 {
+    let x;
+    x = 1;
+    return x;
+}

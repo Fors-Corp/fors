@@ -1,0 +1,10 @@
+//! name: assoc_type_decl_in_impl_reject
+//! rule: 07.D20
+//! expect: parse-error
+//! detail: `type A;` inside an impl body: an impl defines `type A = T;`
+
+module m;
+
+struct S { x: i32 }
+trait T { type A; }
+impl T for S { type A; }

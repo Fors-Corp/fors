@@ -161,6 +161,7 @@ fn resolve_file_bodies(
                 let children: Vec<usize> = inp.tree.children(node).collect();
                 if let Some(&g) = children.iter().find(|&&c| inp.tree.kinds[c] == NodeKind::Generics) {
                     ctx.resolve_generics(g);
+                    ctx.walk_bounds(g);
                 }
                 for &c in &children {
                     if inp.tree.kinds[c] == NodeKind::Generics {
@@ -175,6 +176,7 @@ fn resolve_file_bodies(
                 let children: Vec<usize> = inp.tree.children(node).collect();
                 if let Some(&g) = children.iter().find(|&&c| inp.tree.kinds[c] == NodeKind::Generics) {
                     ctx.resolve_generics(g);
+                    ctx.walk_bounds(g);
                 }
                 for &c in &children {
                     if inp.tree.kinds[c] == NodeKind::Generics {
@@ -192,13 +194,14 @@ fn resolve_file_bodies(
                 let generics_node = children.iter().copied().find(|&c| inp.tree.kinds[c] == NodeKind::Generics);
                 if let Some(g) = generics_node {
                     ctx.resolve_generics(g);
+                    ctx.walk_bounds(g);
                 }
                 // Header types (the impl's target/trait types) see the
                 // impl's own gparams but not `Self` (Rule 26).
                 let header_types: Vec<usize> = children
                     .iter()
                     .copied()
-                    .filter(|&c| Some(c) != generics_node && !matches!(inp.tree.kinds[c], NodeKind::FnDecl | NodeKind::TraitItem | NodeKind::Attribute | NodeKind::Error))
+                    .filter(|&c| Some(c) != generics_node && !matches!(inp.tree.kinds[c], NodeKind::FnDecl | NodeKind::TraitItem | NodeKind::Attribute | NodeKind::Error | NodeKind::AssocTypeDecl | NodeKind::AssocTypeDef))
                     .collect();
                 let mut header_targets: Vec<Option<ResolvedTarget>> = Vec::new();
                 for &c in &header_types {
@@ -212,6 +215,15 @@ fn resolve_file_bodies(
                     check_impl_orphan(&mut ctx, file, node, &header_types, &header_targets);
                 }
                 ctx.declare_self(node);
+                // Rule 26 (round 4): an associated-type bound / right-hand
+                // side sees the impl's or trait's parameters and `Self`.
+                for &c in &children {
+                    if matches!(inp.tree.kinds[c], NodeKind::AssocTypeDecl | NodeKind::AssocTypeDef) {
+                        for t in inp.tree.children(c) {
+                            ctx.walk(t);
+                        }
+                    }
+                }
                 for &c in &children {
                     if matches!(inp.tree.kinds[c], NodeKind::FnDecl | NodeKind::TraitItem) {
                         ctx.push_frame_pub();

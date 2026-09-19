@@ -1,0 +1,17 @@
+//! name: index_two_index_types_accepted
+//! rule: 09.R21
+//! expect: check-ok
+//! detail: a type may implement Index[I] for several I, each with its own Output
+
+module m;
+
+struct Grid { cells: Array[i64, 16], names: Array[Str, 4] }
+enum Axis { x, y, z, w }
+impl Index[usize] for Grid {
+    type Output = i64;
+    fn at(let self: Grid, let i: usize) -> scoped(self) i64 { return self.cells[i]; }
+}
+impl Index[Axis] for Grid {
+    type Output = Str;
+    fn at(let self: Grid, let i: Axis) -> scoped(self) Str { return self.names[0]; }
+}
