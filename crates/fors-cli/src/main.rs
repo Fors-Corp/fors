@@ -5,9 +5,20 @@
 //! diagnostic (`path:line:col: error[Pxxxx]: message`) otherwise.
 //! `fors parse --tree <file>` additionally dumps the tree, indented, one
 //! node per line.
+//!
+//! `fors check <path>...` runs name resolution (ch08) and the ch04 rules
+//! it owns on each `path`: a directory is a package source root (modules
+//! named from their path under it, ch08 R1); a single file is a one-
+//! module package (the conformance corpus's convention — see
+//! `tests/conformance/README.md`). Prints every diagnostic as
+//! `path:line:col: error[CODE]: message`, sorted by file then byte
+//! offset; exit 0 when every given path is clean.
 
 use std::io::Write;
+use std::path::{Path, PathBuf};
 use std::process::ExitCode;
+
+use fors_index::{module::is_legal_segment, Interner, Segments};
 
 fn line_col(source: &[u8], byte_offset: u32) -> (u32, u32) {
     let offset = (byte_offset as usize).min(source.len());
@@ -72,12 +83,186 @@ fn run_parse(args: &[String]) -> ExitCode {
     }
 }
 
+/// One resolved file of a package: its disk path, source bytes and
+/// canonical module name (ch08 Rule 1).
+struct PkgFile {
+    display: String,
+    source: Vec<u8>,
+    name: Segments,
+    /// Extra diagnostics decided while building the package (Rule 24
+    /// file-name legality, duplicate module names) — not byte-positioned
+    /// inside the file, so reported at its very start.
+    extra: Vec<(u32, u32, &'static str, String)>,
+}
+
+fn walk_fors_files(root: &Path, out: &mut Vec<PathBuf>) {
+    let Ok(entries) = std::fs::read_dir(root) else { return };
+    let mut entries: Vec<_> = entries.flatten().collect();
+    entries.sort_by_key(|e| e.file_name());
+    for entry in entries {
+        let path = entry.path();
+        let Ok(ft) = entry.file_type() else { continue };
+        if ft.is_dir() {
+            walk_fors_files(&path, out);
+        } else if ft.is_file() && path.extension().is_some_and(|e| e == "fors") {
+            out.push(path);
+        }
+    }
+}
+
+/// Builds one package from a CLI path: a directory (its files, named by
+/// path under it) or a single file (a one-module package, ch08 R24's
+/// name check waived per the conformance corpus's convention: a `module`
+/// header names it, else its file stem does, validated).
+fn build_package(path: &Path, interner: &mut Interner) -> Option<(Vec<PkgFile>, Option<usize>)> {
+    if path.is_dir() {
+        let mut paths = Vec::new();
+        walk_fors_files(path, &mut paths);
+        let mut files = Vec::with_capacity(paths.len());
+        let mut root = None;
+        for p in &paths {
+            let source = std::fs::read(p).ok()?;
+            let rel = p.strip_prefix(path).unwrap_or(p);
+            let mut segs_bytes: Vec<Vec<u8>> = Vec::new();
+            let mut extra = Vec::new();
+            let comps: Vec<_> = rel.components().collect();
+            for (i, c) in comps.iter().enumerate() {
+                let os = c.as_os_str().to_string_lossy();
+                let seg = if i + 1 == comps.len() { os.strip_suffix(".fors").unwrap_or(&os).to_string() } else { os.to_string() };
+                if !is_legal_segment(seg.as_bytes()) {
+                    extra.push((0, 0, "N0024", format!("illegal file/directory name segment `{seg}`")));
+                }
+                segs_bytes.push(seg.into_bytes());
+            }
+            if comps.len() == 1 && segs_bytes.first().map(|s| s.as_slice()) == Some(b"main") {
+                root = Some(files.len());
+            }
+            let name: Segments = segs_bytes.iter().map(|s| interner.intern(s)).collect();
+            files.push(PkgFile { display: p.display().to_string(), source, name, extra });
+        }
+        if root.is_none() && files.len() == 1 {
+            root = Some(0);
+        }
+        // Rule 24: two files mapping to one module name.
+        for i in 0..files.len() {
+            for j in (i + 1)..files.len() {
+                if files[i].name == files[j].name {
+                    let other = files[j].display.clone();
+                    let mname = fors_index::module::join_dotted(interner, &files[i].name);
+                    files[i].extra.push((0, 0, "N0024", format!("also names module `{mname}` as `{other}`")));
+                }
+            }
+        }
+        Some((files, root))
+    } else {
+        // A single file is a one-module package (conformance corpus
+        // convention: the hyphenated disk name is the *test's* name, not
+        // the module's — see `tests/conformance/README.md`). Its `module`
+        // header names it when present; only absent a header does its
+        // file stem have to obey ch08 R24.
+        let source = std::fs::read(path).ok()?;
+        let mut extra = Vec::new();
+        let name: Segments = match real_header_segments(&source, interner) {
+            Some(segs) => segs,
+            None => {
+                let stem = path.file_stem().map(|s| s.to_string_lossy().into_owned()).unwrap_or_else(|| "main".to_string());
+                if !is_legal_segment(stem.as_bytes()) {
+                    extra.push((0, 0, "N0024", format!("illegal file name `{stem}`")));
+                }
+                vec![interner.intern(stem.as_bytes())]
+            }
+        };
+        Some((vec![PkgFile { display: path.display().to_string(), source, name, extra }], Some(0)))
+    }
+}
+
+fn run_check(args: &[String]) -> ExitCode {
+    if args.is_empty() {
+        eprintln!("fors check: no input paths");
+        return ExitCode::from(2);
+    }
+    let mut lines: Vec<(String, u32, u32, String)> = Vec::new();
+    let mut any = false;
+
+    for arg in args {
+        let path = Path::new(arg);
+        let mut interner = Interner::new();
+        let Some((files, root)) = build_package(path, &mut interner) else {
+            eprintln!("{arg}: error: could not read package");
+            any = true;
+            continue;
+        };
+        let parsed: Vec<fors_syntax::Parse> = files.iter().map(|f| fors_syntax::parse_file(&f.source)).collect();
+        let inputs: Vec<fors_resolve::FileInput> = files
+            .iter()
+            .zip(parsed.iter())
+            .map(|(f, p)| fors_resolve::FileInput { tree: &p.tree, tokens: &p.tokens, source: &f.source, name: f.name.clone() })
+            .collect();
+        let output = fors_resolve::resolve(&mut interner, &inputs, root);
+
+        for (i, f) in files.iter().enumerate() {
+            for d in &parsed[i].diags {
+                any = true;
+                let (l, c) = line_col(&f.source, d.start);
+                lines.push((f.display.clone(), d.start, d.start, format!("{l}:{c}: error[{}]: {}", d.code.as_str(), d.message)));
+            }
+            for (_, _, code, msg) in &f.extra {
+                any = true;
+                lines.push((f.display.clone(), 0, 0, format!("1:1: error[{code}]: {msg}")));
+            }
+            for d in &output.files[i].diagnostics {
+                any = true;
+                let (l, c) = line_col(&f.source, d.start);
+                lines.push((f.display.clone(), d.start, d.start, format!("{l}:{c}: error[{}]: {}", d.code.as_string(), d.message)));
+            }
+        }
+    }
+
+    lines.sort_by(|a, b| (a.0.as_str(), a.1).cmp(&(b.0.as_str(), b.1)));
+    let stdout = std::io::stdout();
+    let mut out = stdout.lock();
+    for (path, _, _, rest) in &lines {
+        let _ = writeln!(out, "{path}:{rest}");
+    }
+
+    if any {
+        ExitCode::from(1)
+    } else {
+        ExitCode::from(0)
+    }
+}
+
+fn real_header_segments(source: &[u8], interner: &mut Interner) -> Option<Segments> {
+    let parsed = fors_syntax::parse_file(source);
+    if parsed.tree.is_empty() {
+        return None;
+    }
+    let child = parsed.tree.children(0).next()?;
+    if parsed.tree.kinds[child] != fors_syntax::NodeKind::ModuleHdr {
+        return None;
+    }
+    let path_node = parsed.tree.children(child).next()?;
+    let (first, end) = parsed.tree.token_range(path_node);
+    let mut out = Vec::new();
+    for i in first as usize..end as usize {
+        if parsed.tokens.kinds[i] == fors_lex::TokenKind::Ident {
+            out.push(interner.intern(parsed.tokens.text(i, source)));
+        }
+    }
+    if out.is_empty() {
+        None
+    } else {
+        Some(out)
+    }
+}
+
 fn main() -> ExitCode {
     let args: Vec<String> = std::env::args().skip(1).collect();
     match args.first().map(String::as_str) {
         Some("parse") => run_parse(&args[1..]),
+        Some("check") => run_check(&args[1..]),
         _ => {
-            eprintln!("usage: fors parse [--tree] <file>...");
+            eprintln!("usage: fors parse [--tree] <file>...\n       fors check <path>...");
             ExitCode::from(2)
         }
     }

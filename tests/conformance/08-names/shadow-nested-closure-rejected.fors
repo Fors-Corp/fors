@@ -1,0 +1,11 @@
+//! name: shadow_nested_closure_rejected
+//! rule: 08.R18
+//! expect: check-error
+//! detail: the inner closure's parameter reuses the outer closure's
+
+module m;
+
+fn f() -> i32 {
+    let g = |a: i32| |a: i32| a;
+    return 0;
+}

@@ -1,0 +1,19 @@
+//! name: shadow_deeply_nested_block_rejected
+//! rule: 08.R18
+//! expect: check-error
+//! detail: x is still in scope three blocks down
+
+module m;
+
+fn f() -> i32 {
+    let x: i32 = 1;
+    {
+        {
+            while x < 2 {
+                let x: i32 = 2;
+                discard x;
+            }
+        }
+    }
+    return x;
+}

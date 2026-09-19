@@ -1,0 +1,9 @@
+//! name: use_module_private_item_no_tie_accepted
+//! rule: 08.R4
+//! expect: check-ok
+//! detail: module a has a private fn b: Rule 4(b) would fail on it, so there is no tie and a.b is the module
+
+module main;
+use a.b;
+
+fn f() -> i32 { return b.c(); }

@@ -1,0 +1,14 @@
+//! name: pattern_names_local_rejected
+//! rule: 08.R18
+//! expect: check-error
+//! detail: a one-segment pattern that resolves to a binding is a Rule 18 violation (Rule 25), not a comparison against the local
+
+module m;
+
+fn f(let n: i32) -> i32 {
+    let k: i32 = 1;
+    match n {
+        k => 1,
+        _ => 0,
+    }
+}

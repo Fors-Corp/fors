@@ -1,0 +1,11 @@
+//! name: impl_foreign_trait_for_prelude_type_rejected
+//! rule: 08.R21
+//! expect: check-error
+//! detail: i32 is defined in package std and Tr in lib; main is neither
+
+module main;
+use lib.Tr;
+
+impl Tr for i32 {
+    fn go(let self: Self) -> i32 { return 1; }
+}

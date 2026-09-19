@@ -1,0 +1,15 @@
+//! name: with_brand_out_of_scope_rejected
+//! rule: 08.R26
+//! expect: check-error
+//! detail: the with identifier is in scope in its header type and block only; after the block the brand name is unresolved
+
+module m;
+
+fn f() {
+    with arena a: Arena {
+        var v: Own[i32, a] = Own.alloc(a, 1);
+        discard v;
+    }
+    var w: Own[i32, a] = Own.make(2);
+    discard w;
+}

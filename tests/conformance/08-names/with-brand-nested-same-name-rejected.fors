@@ -1,0 +1,15 @@
+//! name: with_brand_nested_same_name_rejected
+//! rule: 08.R18
+//! expect: check-error
+//! detail: a with identifier is a single binding under Rule 18: a nested with may not reuse it
+
+module m;
+
+fn f() {
+    with arena a: Arena {
+        with arena a: Arena {
+            var v: Own[i32, a] = Own.alloc(a, 1);
+            discard v;
+        }
+    }
+}

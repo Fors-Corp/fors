@@ -1,0 +1,28 @@
+//! name: private_type_in_private_positions_accepted
+//! rule: 08.R12
+//! expect: check-ok
+//! detail: not signature: a private method of a pub type, a pub method of a private type, a const initialiser, a fn body, a private field
+
+module m;
+
+struct Hidden { x: i32 }
+
+pub struct S { v: i32, h: Hidden }
+struct Q { v: i32 }
+
+fn mk() -> Hidden { return Hidden { x: 1 }; }
+
+pub const C: i32 = mk().x;
+
+impl S {
+    fn inner(let self: Self) -> Hidden { return mk(); }
+}
+
+impl Q {
+    pub fn inner(let self: Self) -> Hidden { return mk(); }
+}
+
+pub fn f() -> i32 {
+    let h: Hidden = mk();
+    return h.x;
+}

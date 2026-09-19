@@ -1,0 +1,4 @@
+module mid;
+use provider.value;
+
+pub fn relay() -> i32 { return value(); }

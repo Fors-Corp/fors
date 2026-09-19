@@ -1,0 +1,8 @@
+//! name: duplicate_variant_field_rejected
+//! rule: 08.R27
+//! expect: check-error
+//! detail: field names within one struct-form evariant must be pairwise distinct
+
+module m;
+
+enum E { one { a: i32, a: i32 }, two }

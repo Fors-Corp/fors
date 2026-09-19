@@ -1,0 +1,2 @@
+module a;
+pub use other.b;

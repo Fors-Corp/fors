@@ -1,0 +1,8 @@
+//! name: prelude_module_backed_by_std_accepted
+//! rule: 08.R17
+//! expect: check-ok
+//! detail: io denotes std.io without a use; inside package std the prelude module names are not provided, so std.fs may call a local `io`-free helper and must write its use out
+
+module main;
+
+fn f(let x: io.Stdout) -> i32 { return 0; }

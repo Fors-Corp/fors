@@ -6,6 +6,16 @@ version = 4
 name = "fors-cli"
 version = "0.1.0"
 dependencies = [
+ "fors-index",
+ "fors-lex",
+ "fors-resolve",
+ "fors-syntax",
+]
+
+[[package]]
+name = "fors-index"
+version = "0.1.0"
+dependencies = [
  "fors-lex",
  "fors-syntax",
 ]
@@ -13,6 +23,15 @@ dependencies = [
 [[package]]
 name = "fors-lex"
 version = "0.1.0"
+
+[[package]]
+name = "fors-resolve"
+version = "0.1.0"
+dependencies = [
+ "fors-index",
+ "fors-lex",
+ "fors-syntax",
+]
 
 [[package]]
 name = "fors-syntax"

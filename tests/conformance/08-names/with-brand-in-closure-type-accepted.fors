@@ -1,0 +1,22 @@
+//! name: with_brand_in_closure_type_accepted
+//! rule: 08.R19
+//! expect: check-ok
+//! detail: the brand is an ordinary binding: visible in nested blocks and closures of the with block, and the name is free for a sibling with
+
+module m;
+
+fn f() {
+    with arena a: Arena {
+        {
+            let g = |n: i32| {
+                var v: Own[i32, a] = Own.alloc(a, n);
+                discard v;
+            };
+            g(1);
+        }
+    }
+    with allocator a: Arena {
+        var u: Own[i32, a] = Own.alloc(a, 3);
+        discard u;
+    }
+}

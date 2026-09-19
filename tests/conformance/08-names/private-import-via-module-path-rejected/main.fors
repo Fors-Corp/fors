@@ -1,0 +1,9 @@
+//! name: private_import_via_module_path_rejected
+//! rule: 08.R16
+//! expect: check-error
+//! detail: mid binds `value` by a plain use: it is not a pub module-scope name of mid
+
+module main;
+use mid;
+
+fn f() -> i32 { return mid.value(); }

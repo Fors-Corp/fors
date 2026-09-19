@@ -1,0 +1,9 @@
+//! name: use_module_beside_directory_accepted
+//! rule: 08.R4
+//! expect: check-ok
+//! detail: a.fors and a/b.fors coexist (R24); module a has no pub name b, so (b) would not succeed and `use a.b` is the module
+
+module main;
+use a.b, a;
+
+fn f() -> i32 { return b.c() + a.top(); }

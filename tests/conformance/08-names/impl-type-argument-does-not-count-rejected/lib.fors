@@ -1,0 +1,5 @@
+module lib;
+
+pub trait Tr {
+    fn go(let self: Self) -> i32;
+}

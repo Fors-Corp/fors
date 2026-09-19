@@ -1,0 +1,8 @@
+//! name: prelude_module_backed_by_std_rejected
+//! rule: 08.R16
+//! expect: check-error
+//! detail: io denotes std.io, which is part of this build and has no pub name Missing
+
+module main;
+
+fn f(let x: io.Missing) -> i32 { return 0; }

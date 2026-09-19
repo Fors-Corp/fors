@@ -1,0 +1,21 @@
+//! name: name_free_after_scope_ends_accepted
+//! rule: 08.R18
+//! expect: check-ok
+//! detail: a name is free again once its scope has ended: after a block, after a closure, across arms, and a closure parameter after the closure
+
+module m;
+
+fn f(let n: i32) -> i32 {
+    {
+        let x: i32 = 1;
+        discard x;
+    }
+    let g = |y: i32| y;
+    let y: i32 = g(n);
+    let x: i32 = match n {
+        0 => 0,
+        k => k,
+    };
+    let k: i32 = x + y;
+    return k;
+}

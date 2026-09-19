@@ -492,6 +492,26 @@ reference-accepted`, `pattern-fresh-binding-accepted`, `fpat-shorthand-
 shadow-rejected`; R26 `for-binding-not-in-iterable-rejected`, `self-type-
 in-impl-accepted`, `self-type-outside-impl-rejected`, `handler-binding-
 scope-rejected`; R27 `duplicate-field-rejected`, `duplicate-variant-
-rejected`, `duplicate-method-in-impl-rejected`. Rules 2, 22 and 24 have no
-corpus test: 2 and 24 need a manifest or an illegal file name, which the
-corpus format cannot carry; 22 is a phase boundary.
+rejected`, `duplicate-method-in-impl-rejected`. Added by the resolver review (adversarial, same format): R4 `use-module-
+beside-directory-accepted`, `use-module-private-item-no-tie-accepted`,
+`use-module-reexport-tie-rejected`, `use-unresolved-used-many-times-
+rejected`; R12 `private-type-in-pub-{enum-payload,trait-method,const,
+method}-rejected`, `private-type-in-private-positions-accepted`; R13
+`item-named-as-prelude-module-rejected`; R16 `private-import-via-module-
+path-rejected`, `enum-variant-via-reexport-accepted`, `path-ends-on-
+prelude-module-rejected`, `prelude-module-backed-by-std-rejected`; R17
+`prelude-module-backed-by-std-accepted`; R18 `pattern-names-local-
+rejected`, `shadow-in-closure-body-rejected`, `shadow-nested-closure-
+rejected`, `shadow-deeply-nested-block-rejected`, `duplicate-cparam-
+rejected`, `with-brand-nested-same-name-rejected`, `name-free-after-scope-
+ends-accepted`; R19 `with-brand-in-closure-type-accepted`; R21 `impl-
+inherent-foreign-type-rejected`, `impl-type-argument-does-not-count-
+rejected`, `impl-foreign-trait-for-prelude-type-rejected`, `impl-own-
+trait-for-generic-type-accepted`; R22 `checker-questions-not-diagnosed-
+accepted`; R25 `pattern-misspelt-const-binds-accepted`, `pattern-prelude-
+value-reference-accepted`; R26 `with-brand-out-of-scope-rejected`, `self-
+in-impl-header-rejected`, `gparam-visible-in-sibling-bound-accepted`; R27
+`duplicate-trait-method-rejected`, `duplicate-variant-field-rejected`,
+`same-method-in-two-impls-accepted`. Rules 2 and 24 have no corpus test:
+they need a manifest or an illegal file name, which the corpus format
+cannot carry.

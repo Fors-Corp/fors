@@ -1,0 +1,8 @@
+//! name: item_named_as_prelude_module_rejected
+//! rule: 08.R13
+//! expect: check-error
+//! detail: io is a prelude module name; an item may not take it
+
+module m;
+
+fn io() -> i32 { return 1; }

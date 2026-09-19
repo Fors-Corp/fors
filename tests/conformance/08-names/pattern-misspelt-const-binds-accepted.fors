@@ -1,0 +1,14 @@
+//! name: pattern_misspelt_const_binds_accepted
+//! rule: 08.R25
+//! expect: check-ok
+//! detail: LIMTI resolves to nothing, so it is a fresh catch-all binding (Drafting decisions); an unused-binding lint, not this phase, is the guard
+
+module m;
+
+const LIMIT: i32 = 10;
+
+fn f(let n: i32) -> i32 {
+    match n {
+        LIMTI => LIMTI + LIMIT,
+    }
+}

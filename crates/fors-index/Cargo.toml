@@ -1,15 +1,9 @@
 [package]
-name = "fors-cli"
+name = "fors-index"
 version = "0.1.0"
 edition = "2024"
 publish = false
 
-[[bin]]
-name = "fors"
-path = "src/main.rs"
-
 [dependencies]
 fors-lex = { path = "../fors-lex" }
 fors-syntax = { path = "../fors-syntax" }
-fors-index = { path = "../fors-index" }
-fors-resolve = { path = "../fors-resolve" }

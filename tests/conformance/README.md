@@ -33,7 +33,7 @@ Run tests assume `io.Writer.write_line`, which no chapter defines. A
 `Slice[T]` is obtained only by range-indexing a bound array (ch03 Rule 24);
 `main` takes root capabilities by type (ch04 Rules 8, 21).
 
-## Counts: 349 tests, 395 files
+## Counts: 385 tests, 449 files
 
 | Dir | parse-ok | check-ok | parse-error | check-error | run-ok | trap |
 |---|---|---|---|---|---|---|
@@ -42,8 +42,8 @@ Run tests assume `io.Writer.write_line`, which no chapter defines. A
 | 03-numerics (46) | 7 | 0 | 0 | 13 | 19 | 7 |
 | 04-authority (32) | 9 | 0 | 0 | 20 | 3 | 0 |
 | 07-grammar (109) | 48 | 0 | 57 | 4 | 0 | 0 |
-| 08-names (79) | 0 | 24 | 0 | 55 | 0 | 0 |
-| total | 96 | 24 | 61 | 132 | 23 | 13 |
+| 08-names (115) | 0 | 37 | 0 | 78 | 0 | 0 |
+| total | 96 | 37 | 61 | 155 | 23 | 13 |
 
 ## Change rule
 

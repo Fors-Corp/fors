@@ -1,0 +1,12 @@
+//! name: gparam_visible_in_sibling_bound_accepted
+//! rule: 08.R26
+//! expect: check-ok
+//! detail: a gparam is in scope over the whole declaration, including the other bounds of its list, even an earlier one
+
+module m;
+
+trait Conv[X] {
+    fn conv(let self: Self) -> X;
+}
+
+fn f[A: Conv[B], B](let a: A) -> B { return a.conv(); }

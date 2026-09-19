@@ -1,0 +1,12 @@
+//! name: private_type_in_pub_trait_method_rejected
+//! rule: 08.R12
+//! expect: check-error
+//! detail: every method signature of a pub trait is signature
+
+module m;
+
+struct Hidden { x: i32 }
+
+pub trait T {
+    fn get(let self: Self) -> Hidden;
+}

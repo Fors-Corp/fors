@@ -1,0 +1,14 @@
+//! name: shadow_in_closure_body_rejected
+//! rule: 08.R18
+//! expect: check-error
+//! detail: a closure body sees the function's bindings (Rule 14), so a let inside it may not reuse the parameter's name
+
+module m;
+
+fn f(let n: i32) -> i32 {
+    let g = |x: i32| {
+        let n: i32 = x;
+        n
+    };
+    return g(n);
+}

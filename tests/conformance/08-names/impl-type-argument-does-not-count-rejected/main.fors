@@ -1,0 +1,13 @@
+//! name: impl_type_argument_does_not_count_rejected
+//! rule: 08.R21
+//! expect: check-error
+//! detail: only the head of the implementing type counts: Own is std's, Tr is lib's, and Mine as a type argument gives main no standing
+
+module main;
+use lib.Tr;
+
+struct Mine { x: i32 }
+
+impl Tr for Own[Mine] {
+    fn go(let self: Self) -> i32 { return 1; }
+}

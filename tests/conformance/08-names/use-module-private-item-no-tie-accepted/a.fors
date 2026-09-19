@@ -1,0 +1,4 @@
+module a;
+
+fn b() -> i32 { return 1; }
+pub fn top() -> i32 { return b(); }

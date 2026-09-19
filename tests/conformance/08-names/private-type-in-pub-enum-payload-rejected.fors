@@ -1,0 +1,10 @@
+//! name: private_type_in_pub_enum_payload_rejected
+//! rule: 08.R12
+//! expect: check-error
+//! detail: every payload type of a pub enum is signature
+
+module m;
+
+struct Hidden { x: i32 }
+
+pub enum E { one(Hidden), two }

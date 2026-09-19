@@ -1,0 +1,19 @@
+//! name: impl_own_trait_for_generic_type_accepted
+//! rule: 08.R21
+//! expect: check-ok
+//! detail: the module defining the trait may implement it for any type, including a foreign generic one
+
+module main;
+use lib.Box;
+
+trait Show {
+    fn show(let self: Self) -> i32;
+}
+
+impl[T] Show for Box[T] {
+    fn show(let self: Self) -> i32 { return 1; }
+}
+
+impl Show for i32 {
+    fn show(let self: Self) -> i32 { return 2; }
+}

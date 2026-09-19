@@ -1,0 +1,9 @@
+//! name: use_module_reexport_tie_rejected
+//! rule: 08.R4
+//! expect: check-error
+//! detail: a.b is a module and b is also a name module a re-exports: the use names both
+
+module main;
+use a.b;
+
+fn f() -> i32 { return 0; }

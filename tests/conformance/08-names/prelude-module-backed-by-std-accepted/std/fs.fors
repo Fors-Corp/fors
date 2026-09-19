@@ -1,0 +1,4 @@
+module std.fs;
+use std.io;
+
+pub fn open(let out: io.Stdout) -> i32 { return 0; }

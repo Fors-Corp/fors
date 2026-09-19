@@ -1,0 +1,14 @@
+//! name: self_in_impl_header_rejected
+//! rule: 08.R26
+//! expect: check-error
+//! detail: Self is in scope between the braces of an impl, not in its header
+
+module m;
+
+trait T {
+    fn get(let self: Self) -> i32;
+}
+
+impl T for Self {
+    fn get(let self: Self) -> i32 { return 1; }
+}

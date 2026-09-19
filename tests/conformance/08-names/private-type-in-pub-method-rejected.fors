@@ -1,0 +1,14 @@
+//! name: private_type_in_pub_method_rejected
+//! rule: 08.R12
+//! expect: check-error
+//! detail: the signature of a pub method in an impl whose type is pub
+
+module m;
+
+struct Hidden { x: i32 }
+
+pub struct S { v: i32 }
+
+impl S {
+    pub fn leak(let self: Self) -> Own[Hidden] { return self.make(); }
+}

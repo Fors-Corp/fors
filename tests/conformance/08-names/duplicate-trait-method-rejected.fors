@@ -1,0 +1,11 @@
+//! name: duplicate_trait_method_rejected
+//! rule: 08.R27
+//! expect: check-error
+//! detail: method names within one trait_decl must be pairwise distinct
+
+module m;
+
+trait T {
+    fn get(let self: Self) -> i32;
+    fn get(let self: Self) -> i32;
+}

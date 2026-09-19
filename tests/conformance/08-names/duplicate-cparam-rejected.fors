@@ -1,0 +1,11 @@
+//! name: duplicate_cparam_rejected
+//! rule: 08.R18
+//! expect: check-error
+//! detail: the cparams of one closure must be pairwise distinct
+
+module m;
+
+fn f() -> i32 {
+    let g = |a: i32, a: i32| a;
+    return 0;
+}

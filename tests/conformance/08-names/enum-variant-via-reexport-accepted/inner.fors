@@ -1,0 +1,3 @@
+module inner;
+
+pub enum Color { red, green }

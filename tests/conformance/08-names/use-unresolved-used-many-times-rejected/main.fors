@@ -1,0 +1,10 @@
+//! name: use_unresolved_used_many_times_rejected
+//! rule: 08.R4
+//! expect: check-error
+//! detail: the unresolved import is the one root cause: its uses are not also unresolved names
+
+module main;
+use nowhere.thing;
+
+fn f() -> i32 { return thing() + thing(); }
+fn g() -> thing { return thing.make(); }

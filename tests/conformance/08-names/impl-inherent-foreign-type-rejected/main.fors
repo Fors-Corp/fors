@@ -1,0 +1,11 @@
+//! name: impl_inherent_foreign_type_rejected
+//! rule: 08.R21
+//! expect: check-error
+//! detail: an inherent impl must appear in the module defining the type's item
+
+module main;
+use lib.Point;
+
+impl Point {
+    fn sum(let self: Self) -> i32 { return 0; }
+}

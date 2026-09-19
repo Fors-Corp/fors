@@ -1,0 +1,12 @@
+//! name: private_type_in_pub_const_rejected
+//! rule: 08.R12
+//! expect: check-error
+//! detail: a pub const's type is signature
+
+module m;
+
+struct Hidden { x: i32 }
+
+fn make() -> Hidden { return Hidden { x: 1 }; }
+
+pub const C: Hidden = make();

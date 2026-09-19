@@ -1,0 +1,14 @@
+//! name: enum_variant_via_reexport_accepted
+//! rule: 08.R16
+//! expect: check-ok
+//! detail: the enum is reached through a re-export; its variants resolve without an edge to the defining module
+
+module main;
+use api.Color;
+
+fn f(let c: Color) -> i32 {
+    match c {
+        Color.red => 1,
+        Color.green => 2,
+    }
+}
