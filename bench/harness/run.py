@@ -344,6 +344,10 @@ def cmd_bench(args):
                 else:
                     print(f"{label:40s} FAILED: {cell['error']}")
         path.write_text(json.dumps(doc, indent=1))  # after every kernel: a killed long run keeps its data
+    if canary:  # closing sample, so even a single-kernel run has two points to compare
+        wall = measure(canary, BUILD / "_canary" / "run.out", args.timeout)["wall_s"]
+        doc["canary"].append({"before": "(end)", "wall_s": wall})
+        path.write_text(json.dumps(doc, indent=1))
     print(f"\nwrote {path.relative_to(ROOT.parent)}")
     return 0 if all(r["correct"] for r in results) else 1
 
