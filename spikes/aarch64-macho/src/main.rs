@@ -1,6 +1,15 @@
-// aarch64 Mach-O backend feasibility spike — Rung 1: own codegen from the
-// fors-syntax CST to arm64 assembly TEXT, assembled/linked by `cc`
-// (which drives the system `as`/`ld`). See REPORT.md.
+// aarch64 Mach-O backend feasibility spike.
+//
+// Rung 1: own codegen from the fors-syntax CST to arm64 assembly TEXT,
+// assembled/linked by `cc` (which drives the system `as`/`ld`).
+// Rung 2: the SAME codegen instead builds a small in-memory instruction
+// IR (`ir::Inst`), which is fed to our own encoder (`encode.rs`) and our
+// own Mach-O relocatable-object writer (`macho.rs`); `cc`/`ld` still do
+// the final link.
+// Rung 3: see `exec.rs` — our own MH_EXECUTE writer, no `ld`, no
+// `codesign` tool, no external process at all.
+//
+// See REPORT.md.
 //
 // Language subset supported: fn decls with i64 params, let/var i64
 // locals, assignment, + - * / % (wrapping), comparisons, if/else,
@@ -18,6 +27,15 @@ use std::time::Instant;
 
 use fors_lex::{TokenKind as TK, Tokens};
 use fors_syntax::{NodeKind as NK, Tree};
+
+mod encode;
+mod exec;
+mod ir;
+mod macho;
+mod runtime_blob;
+mod sha256;
+
+use ir::{Cond, Function, Inst, Item};
 
 // ---------- token/text helpers ----------
 
@@ -79,7 +97,7 @@ fn direct_ident(tree: &Tree, tokens: &Tokens, source: &[u8], node: usize) -> Opt
     None
 }
 
-// ---------- IR ----------
+// ---------- IR front end ----------
 
 struct Func {
     name: String,
@@ -142,26 +160,33 @@ fn collect_locals(tree: &Tree, tokens: &Tokens, source: &[u8], node: usize, out:
     }
 }
 
-// ---------- codegen ----------
+// ---------- codegen (emits `ir::Item`, shared by both back ends) ----------
 
 struct Codegen<'a> {
     tree: &'a Tree,
     tokens: &'a Tokens,
     source: &'a [u8],
-    out: String,
+    items: Vec<Item>,
     label_id: u32,
     strings: Vec<(String, Vec<u8>)>,
     syms: std::collections::HashMap<String, i32>, // name -> offset (positive, used as [x29, #-off])
     epilogue: String,
+    fname: String,
 }
 
 impl<'a> Codegen<'a> {
+    fn emit(&mut self, i: Inst) {
+        self.items.push(Item::Inst(i));
+    }
+    fn label(&mut self, l: &str) {
+        self.items.push(Item::Label(l.to_string()));
+    }
     fn new_label(&mut self, base: &str) -> String {
         self.label_id += 1;
         format!("L{}_{}", base, self.label_id)
     }
 
-    fn load_imm(&mut self, reg: &str, v: i64) {
+    fn load_imm(&mut self, rd: u8, v: i64) {
         let u = v as u64;
         let chunks = [
             (u & 0xffff) as u16,
@@ -175,23 +200,24 @@ impl<'a> Codegen<'a> {
                 continue;
             }
             if first {
-                self.out.push_str(&format!("    movz {reg}, #{c}, lsl #{}\n", i * 16));
+                self.emit(Inst::Movz { rd, imm16: c, hw: i as u8 });
                 first = false;
             } else {
-                self.out.push_str(&format!("    movk {reg}, #{c}, lsl #{}\n", i * 16));
+                self.emit(Inst::Movk { rd, imm16: c, hw: i as u8 });
             }
         }
         if first {
-            // v == 0
-            self.out.push_str(&format!("    movz {reg}, #0\n"));
+            self.emit(Inst::Movz { rd, imm16: 0, hw: 0 });
         }
     }
 
-    fn push(&mut self, reg: &str) {
-        self.out.push_str(&format!("    sub sp, sp, #16\n    str {reg}, [sp]\n"));
+    fn push(&mut self, reg: u8) {
+        self.emit(Inst::AddSubImm { sub: true, rd: ir::SP, rn: ir::SP, imm12: 16 });
+        self.emit(Inst::StrSp0 { rt: reg });
     }
-    fn pop(&mut self, reg: &str) {
-        self.out.push_str(&format!("    ldr {reg}, [sp]\n    add sp, sp, #16\n"));
+    fn pop(&mut self, reg: u8) {
+        self.emit(Inst::LdrSp0 { rt: reg });
+        self.emit(Inst::AddSubImm { sub: false, rd: ir::SP, rn: ir::SP, imm12: 16 });
     }
 
     fn slot(&self, name: &str) -> i32 {
@@ -204,12 +230,12 @@ impl<'a> Codegen<'a> {
             NK::Literal => {
                 let t = leaf_text(self.tree, self.tokens, self.source, n);
                 let v: i64 = t.parse().expect("integer literal");
-                self.load_imm("x0", v);
+                self.load_imm(0, v);
             }
             NK::NameExpr => {
                 let name = leaf_text(self.tree, self.tokens, self.source, n);
                 let off = self.slot(&name);
-                self.out.push_str(&format!("    ldr x0, [x29, #-{off}]\n"));
+                self.emit(Inst::LdurFp { rt: 0, offset: off as i16 });
             }
             NK::TupleOrParen | NK::TryExpr => {
                 let c = self.tree.children(n).next().expect("parenthesized/try expr has an inner expr");
@@ -221,7 +247,7 @@ impl<'a> Codegen<'a> {
                 let c = self.tree.children(n).next().unwrap();
                 self.expr(c);
                 if neg {
-                    self.out.push_str("    neg x0, x0\n");
+                    self.emit(Inst::Neg { rd: 0, rm: 0 });
                 }
             }
             NK::AddExpr | NK::MulExpr | NK::CmpExpr => {
@@ -231,25 +257,43 @@ impl<'a> Codegen<'a> {
                     let prev_end = self.tree.token_range(children[w - 1]).1;
                     let cur_start = self.tree.token_range(children[w]).0;
                     let op = op_between(self.tokens, prev_end, cur_start);
-                    self.push("x0");
+                    self.push(0);
                     self.expr(children[w]);
-                    self.out.push_str("    mov x1, x0\n");
-                    self.pop("x0");
+                    self.emit(Inst::MovReg { rd: 1, rm: 0 });
+                    self.pop(0);
                     match op {
-                        TK::Plus => self.out.push_str("    add x0, x0, x1\n"),
-                        TK::Minus => self.out.push_str("    sub x0, x0, x1\n"),
-                        TK::Star => self.out.push_str("    mul x0, x0, x1\n"),
-                        TK::Slash => self.out.push_str("    sdiv x0, x0, x1\n"),
+                        TK::Plus => self.emit(Inst::AddSubReg { sub: false, rd: 0, rn: 0, rm: 1 }),
+                        TK::Minus => self.emit(Inst::AddSubReg { sub: true, rd: 0, rn: 0, rm: 1 }),
+                        TK::Star => self.emit(Inst::Mul { rd: 0, rn: 0, rm: 1 }),
+                        TK::Slash => self.emit(Inst::Sdiv { rd: 0, rn: 0, rm: 1 }),
                         TK::Percent => {
-                            self.out.push_str("    sdiv x2, x0, x1\n");
-                            self.out.push_str("    msub x0, x2, x1, x0\n");
+                            self.emit(Inst::Sdiv { rd: 2, rn: 0, rm: 1 });
+                            self.emit(Inst::Msub { rd: 0, rn: 2, rm: 1, ra: 0 });
                         }
-                        TK::Lt => self.out.push_str("    cmp x0, x1\n    cset x0, lt\n"),
-                        TK::Gt => self.out.push_str("    cmp x0, x1\n    cset x0, gt\n"),
-                        TK::LtEq => self.out.push_str("    cmp x0, x1\n    cset x0, le\n"),
-                        TK::GtEq => self.out.push_str("    cmp x0, x1\n    cset x0, ge\n"),
-                        TK::EqEq => self.out.push_str("    cmp x0, x1\n    cset x0, eq\n"),
-                        TK::NotEq => self.out.push_str("    cmp x0, x1\n    cset x0, ne\n"),
+                        TK::Lt => {
+                            self.emit(Inst::CmpReg { rn: 0, rm: 1 });
+                            self.emit(Inst::Cset { rd: 0, cond: Cond::Lt });
+                        }
+                        TK::Gt => {
+                            self.emit(Inst::CmpReg { rn: 0, rm: 1 });
+                            self.emit(Inst::Cset { rd: 0, cond: Cond::Gt });
+                        }
+                        TK::LtEq => {
+                            self.emit(Inst::CmpReg { rn: 0, rm: 1 });
+                            self.emit(Inst::Cset { rd: 0, cond: Cond::Le });
+                        }
+                        TK::GtEq => {
+                            self.emit(Inst::CmpReg { rn: 0, rm: 1 });
+                            self.emit(Inst::Cset { rd: 0, cond: Cond::Ge });
+                        }
+                        TK::EqEq => {
+                            self.emit(Inst::CmpReg { rn: 0, rm: 1 });
+                            self.emit(Inst::Cset { rd: 0, cond: Cond::Eq });
+                        }
+                        TK::NotEq => {
+                            self.emit(Inst::CmpReg { rn: 0, rm: 1 });
+                            self.emit(Inst::Cset { rd: 0, cond: Cond::Ne });
+                        }
                         other => panic!("unsupported binary operator token {other:?}"),
                     }
                 }
@@ -261,13 +305,12 @@ impl<'a> Codegen<'a> {
                 let args: Vec<usize> = it.collect();
                 for &a in &args {
                     self.expr(a);
-                    self.push("x0");
+                    self.push(0);
                 }
-                let regs = ["x0", "x1", "x2", "x3", "x4", "x5", "x6", "x7"];
                 for i in (0..args.len()).rev() {
-                    self.pop(regs[i]);
+                    self.pop(i as u8);
                 }
-                self.out.push_str(&format!("    bl _{name}\n"));
+                self.emit(Inst::Bl { func: name });
             }
             other => panic!("unsupported expression node {other:?}"),
         }
@@ -299,10 +342,10 @@ impl<'a> Codegen<'a> {
                 if let Some(init) = init {
                     self.expr(init);
                 } else {
-                    self.out.push_str("    mov x0, #0\n");
+                    self.load_imm(0, 0);
                 }
                 let off = self.slot(&name);
-                self.out.push_str(&format!("    str x0, [x29, #-{off}]\n"));
+                self.emit(Inst::SturFp { rt: 0, offset: off as i16 });
             }
             NK::AssignStmt => {
                 let mut it = self.tree.children(n);
@@ -311,7 +354,7 @@ impl<'a> Codegen<'a> {
                 let name = leaf_text(self.tree, self.tokens, self.source, place);
                 self.expr(value);
                 let off = self.slot(&name);
-                self.out.push_str(&format!("    str x0, [x29, #-{off}]\n"));
+                self.emit(Inst::SturFp { rt: 0, offset: off as i16 });
             }
             NK::WhileStmt => {
                 let mut it = self.tree.children(n);
@@ -319,11 +362,13 @@ impl<'a> Codegen<'a> {
                 let body = it.next().unwrap();
                 let start = self.new_label("while_start");
                 let end = self.new_label("while_end");
-                self.out.push_str(&format!("{start}:\n"));
+                self.label(&start);
                 self.expr(cond);
-                self.out.push_str(&format!("    cmp x0, #0\n    b.eq {end}\n"));
+                self.emit(Inst::CmpImm { rn: 0, imm12: 0 });
+                self.emit(Inst::Bcond { cond: Cond::Eq, label: end.clone() });
                 self.stmt(body);
-                self.out.push_str(&format!("    b {start}\n{end}:\n"));
+                self.emit(Inst::B { label: start });
+                self.label(&end);
             }
             NK::IfExpr => {
                 let children: Vec<usize> = self.tree.children(n).collect();
@@ -333,19 +378,21 @@ impl<'a> Codegen<'a> {
                 let l_else = self.new_label("if_else");
                 let l_end = self.new_label("if_end");
                 self.expr(cond);
-                self.out.push_str(&format!("    cmp x0, #0\n    b.eq {l_else}\n"));
+                self.emit(Inst::CmpImm { rn: 0, imm12: 0 });
+                self.emit(Inst::Bcond { cond: Cond::Eq, label: l_else.clone() });
                 self.stmt(then_b);
-                self.out.push_str(&format!("    b {l_end}\n{l_else}:\n"));
+                self.emit(Inst::B { label: l_end.clone() });
+                self.label(&l_else);
                 if let Some(eb) = else_b {
                     self.stmt(eb);
                 }
-                self.out.push_str(&format!("{l_end}:\n"));
+                self.label(&l_end);
             }
             NK::ReturnStmt => {
                 if let Some(e) = self.tree.children(n).next() {
                     self.expr(e);
                 }
-                self.out.push_str(&format!("    b {}\n", self.epilogue));
+                self.emit(Inst::B { label: self.epilogue.clone() });
             }
             NK::ExprStmt => {
                 let c = self.tree.children(n).next().unwrap();
@@ -373,17 +420,18 @@ impl<'a> Codegen<'a> {
                 let bytes = self.string_literal_bytes(args[0]);
                 let mut data = bytes;
                 data.push(b'\n');
-                let label = format!("Lstr{}", self.strings.len());
+                let label = format!("Lstr_{}_{}", self.fname, self.strings.len());
                 let len = data.len();
                 self.strings.push((label.clone(), data));
-                self.out.push_str(&format!(
-                    "    adrp x0, {label}@PAGE\n    add x0, x0, {label}@PAGEOFF\n    mov x1, #{len}\n    bl _rt_write_str\n"
-                ));
+                self.emit(Inst::AdrpLabel { rd: 0, label: label.clone() });
+                self.emit(Inst::AddPageoff { rd: 0, rn: 0, label });
+                self.load_imm(1, len as i64);
+                self.emit(Inst::Bl { func: "rt_write_str".to_string() });
                 return;
             }
             if name == "out.write_int" {
                 self.expr(args[0]);
-                self.out.push_str("    bl _rt_write_int\n");
+                self.emit(Inst::Bl { func: "rt_write_int".to_string() });
                 return;
             }
         }
@@ -400,83 +448,14 @@ fn leaf_text_raw(tree: &Tree, tokens: &Tokens, source: &[u8], i: usize) -> Strin
         .to_string()
 }
 
-const RUNTIME_ASM: &str = r#"
-.text
-// Hand-emitted runtime: the two library operations the subset supports,
-// using the write(2) syscall directly (macOS arm64: x16=4, x0=fd,
-// x1=buf, x2=len, svc #0x80). No libc I/O is used.
-.globl _rt_write_str
-_rt_write_str:
-    stp x29, x30, [sp, #-16]!
-    mov x29, sp
-    mov x2, x1
-    mov x1, x0
-    mov x0, #1
-    mov x16, #4
-    svc #0x80
-    ldp x29, x30, [sp], #16
-    ret
-
-.globl _rt_write_int
-_rt_write_int:
-    stp x29, x30, [sp, #-16]!
-    mov x29, sp
-    sub sp, sp, #48
-    mov x2, x0
-    mov x3, #0
-    cmp x2, #0
-    b.ge Lwi_pos
-    mov x3, #1
-    neg x2, x2
-Lwi_pos:
-    add x4, sp, #38
-    mov w7, #10
-    strb w7, [sp, #39]
-    mov x6, #0
-    mov x5, #10
-    cmp x2, #0
-    b.ne Lwi_loop
-    mov w9, #48
-    strb w9, [x4]
-    sub x4, x4, #1
-    add x6, x6, #1
-    b Lwi_sign
-Lwi_loop:
-    cmp x2, #0
-    b.eq Lwi_sign
-    udiv x8, x2, x5
-    msub x9, x8, x5, x2
-    add w9, w9, #48
-    strb w9, [x4]
-    sub x4, x4, #1
-    add x6, x6, #1
-    mov x2, x8
-    b Lwi_loop
-Lwi_sign:
-    cmp x3, #0
-    b.eq Lwi_done
-    mov w9, #45
-    strb w9, [x4]
-    sub x4, x4, #1
-    add x6, x6, #1
-Lwi_done:
-    add x10, x4, #1
-    add x6, x6, #1
-    mov x0, #1
-    mov x1, x10
-    mov x2, x6
-    mov x16, #4
-    svc #0x80
-    mov sp, x29
-    ldp x29, x30, [sp], #16
-    ret
-"#;
-
 fn round16(n: i32) -> i32 {
     (n + 15) / 16 * 16
 }
 
-fn compile_function(tree: &Tree, tokens: &Tokens, source: &[u8], f: &Func, label_base: u32) -> (String, u32) {
+/// Compiles one function to an `ir::Function` plus its string-literal
+/// data. Shared by both back ends: the printer walks `Function::items`
+/// to text, the encoder walks the same items to machine code.
+fn compile_function(tree: &Tree, tokens: &Tokens, source: &[u8], f: &Func, label_base: u32) -> (Function, Vec<(String, Vec<u8>)>, u32) {
     let mut locals = Vec::new();
     collect_locals(tree, tokens, source, f.body, &mut locals);
 
@@ -499,49 +478,45 @@ fn compile_function(tree: &Tree, tokens: &Tokens, source: &[u8], f: &Func, label
         tree,
         tokens,
         source,
-        out: String::new(),
+        items: Vec::new(),
         label_id: label_base,
         strings: Vec::new(),
         syms,
         epilogue: epilogue.clone(),
+        fname: fname.clone(),
     };
 
-    cg.out.push_str(&format!(".text\n.globl _{fname}\n_{fname}:\n"));
-    cg.out.push_str("    stp x29, x30, [sp, #-16]!\n    mov x29, sp\n");
+    cg.emit(Inst::StpPreSp { rt1: 29, rt2: 30, imm: -16 });
+    cg.emit(Inst::MovSp { rd: 29, rn: ir::SP });
     if frame > 0 {
-        cg.out.push_str(&format!("    sub sp, sp, #{frame}\n"));
+        cg.emit(Inst::AddSubImm { sub: true, rd: ir::SP, rn: ir::SP, imm12: frame as u16 });
     }
     if !f.is_main {
-        let regs = ["x0", "x1", "x2", "x3", "x4", "x5", "x6", "x7"];
         for (i, p) in f.params.iter().enumerate() {
             let off = cg.slot(p);
-            cg.out.push_str(&format!("    str {}, [x29, #-{off}]\n", regs[i]));
+            cg.emit(Inst::SturFp { rt: i as u8, offset: off as i16 });
         }
     }
     cg.stmt(f.body);
     if f.is_main {
-        cg.out.push_str("    mov x0, #0\n");
+        cg.load_imm(0, 0);
     }
-    cg.out.push_str(&format!("{epilogue}:\n"));
+    cg.label(&epilogue);
     if frame > 0 {
-        cg.out.push_str("    mov sp, x29\n");
+        cg.emit(Inst::MovSp { rd: ir::SP, rn: 29 });
     }
-    cg.out.push_str("    ldp x29, x30, [sp], #16\n    ret\n");
+    cg.emit(Inst::LdpPostSp { rt1: 29, rt2: 30, imm: 16 });
+    cg.emit(Inst::Ret);
 
-    let mut data = String::new();
-    if !cg.strings.is_empty() {
-        data.push_str(".section __TEXT,__const\n");
-        for (label, bytes) in &cg.strings {
-            data.push_str(&format!("{label}:\n    .byte "));
-            let parts: Vec<String> = bytes.iter().map(|b| b.to_string()).collect();
-            data.push_str(&parts.join(","));
-            data.push('\n');
-        }
-    }
-    (format!("{}{}", cg.out, data), cg.label_id)
+    (Function { name: fname, is_global: f.is_main, items: cg.items }, cg.strings, cg.label_id)
 }
 
-fn compile(source: &[u8]) -> String {
+struct Program {
+    funcs: Vec<Function>,
+    data: Vec<(String, Vec<u8>)>,
+}
+
+fn compile_ir(source: &[u8]) -> Program {
     let p = fors_syntax::parse_file(source);
     if !p.diags.is_empty() {
         for d in &p.diags {
@@ -550,17 +525,153 @@ fn compile(source: &[u8]) -> String {
         panic!("source did not parse cleanly");
     }
     let funcs = collect_functions(&p.tree, &p.tokens, source);
-    let mut asm = String::new();
-    asm.push_str(".text\n");
+    let mut out_funcs = Vec::new();
+    let mut out_data = Vec::new();
     let mut label_base = 0u32;
     for f in &funcs {
-        let (code, next_base) = compile_function(&p.tree, &p.tokens, source, f, label_base);
+        let (irf, data, next_base) = compile_function(&p.tree, &p.tokens, source, f, label_base);
         label_base = next_base;
-        asm.push_str(&code);
+        out_funcs.push(irf);
+        out_data.extend(data);
+    }
+    Program { funcs: out_funcs, data: out_data }
+}
+
+// ---------- rung 1 back end: assembly text ----------
+
+fn print_asm(prog: &Program) -> String {
+    let mut asm = String::new();
+    for f in &prog.funcs {
+        ir::print_function(f, &mut asm);
         asm.push('\n');
     }
-    asm.push_str(RUNTIME_ASM);
+    if !prog.data.is_empty() {
+        asm.push_str(".section __TEXT,__const\n");
+        for (label, bytes) in &prog.data {
+            asm.push_str(&format!("{label}:\n    .byte "));
+            let parts: Vec<String> = bytes.iter().map(|b| b.to_string()).collect();
+            asm.push_str(&parts.join(","));
+            asm.push('\n');
+        }
+    }
+    asm.push_str(runtime_blob::RUNTIME_ASM_TEXT);
     asm
+}
+
+fn compile_rung1(source: &[u8]) -> String {
+    print_asm(&compile_ir(source))
+}
+
+// ---------- macOS build-version discovery (for LC_BUILD_VERSION) ----------
+
+fn discover_platform_version() -> (u32, u32) {
+    // Copy platform/minos/sdk from a cc-produced object, as instructed:
+    // avoids hand-guessing the running SDK's encoded version.
+    let tmp = std::env::temp_dir().join("spike_probe.o");
+    let src = std::env::temp_dir().join("spike_probe.s");
+    fs::write(&src, ".text\n.globl _p\n_p:\n ret\n").unwrap();
+    let ok = Command::new("cc").args(["-arch", "arm64", "-c", "-o"]).arg(&tmp).arg(&src).status().map(|s| s.success()).unwrap_or(false);
+    if ok {
+        if let Ok(bytes) = fs::read(&tmp) {
+            if let Some(v) = find_build_version(&bytes) {
+                return v;
+            }
+        }
+    }
+    (0x001a0000, 0) // fallback: 26.0.0, sdk n/a
+}
+
+fn find_build_version(data: &[u8]) -> Option<(u32, u32)> {
+    let ncmds = u32::from_le_bytes(data[16..20].try_into().ok()?);
+    let mut off = 32usize;
+    for _ in 0..ncmds {
+        let cmd = u32::from_le_bytes(data[off..off + 4].try_into().ok()?);
+        let cmdsize = u32::from_le_bytes(data[off + 4..off + 8].try_into().ok()?) as usize;
+        if cmd == 0x32 {
+            let minos = u32::from_le_bytes(data[off + 12..off + 16].try_into().ok()?);
+            let sdk = u32::from_le_bytes(data[off + 16..off + 20].try_into().ok()?);
+            return Some((minos, sdk));
+        }
+        off += cmdsize;
+    }
+    None
+}
+
+// ---------- rung 2 back end: our encoder + our object writer, linked by `cc`/`ld` ----------
+
+fn compile_rung2_object(source: &[u8]) -> Vec<u8> {
+    let prog = compile_ir(source);
+    let extra = vec![("rt_write_str".to_string(), runtime_blob::RT_WRITE_STR_OFF as u32), ("rt_write_int".to_string(), runtime_blob::RT_WRITE_INT_OFF as u32)];
+    let mut enc = encode::encode_program(&prog.funcs, &extra);
+    enc.text.extend_from_slice(runtime_blob::RUNTIME_BLOB);
+    // rt_write_str/_int are called via `bl`, which we've already resolved
+    // as ordinary internal pc-relative branches (encode_program treated
+    // them as function symbols at code_len+offset); they still need a
+    // symtab entry each, matching the "local function symbols" wording:
+    enc.func_syms.push(("rt_write_str".to_string(), (prog_text_len(&prog)) as u32, false));
+    enc.func_syms.push(("rt_write_int".to_string(), (prog_text_len(&prog) + runtime_blob::RT_WRITE_INT_OFF) as u32, false));
+    let plat = discover_platform_version();
+    macho::build_object(&enc, &prog.data, plat)
+}
+
+fn prog_text_len(prog: &Program) -> usize {
+    prog.funcs.iter().map(|f| f.items.iter().filter(|it| matches!(it, Item::Inst(_))).count()).sum::<usize>() * 4
+}
+
+// ---------- differential test: our encoder vs the system assembler ----------
+
+fn otool_text_bytes(obj_path: &str) -> Vec<u8> {
+    let out = Command::new("otool").args(["-s", "__TEXT", "__text", obj_path]).output().expect("run otool");
+    let text = String::from_utf8_lossy(&out.stdout);
+    let mut bytes = Vec::new();
+    for line in text.lines().skip(1) {
+        let mut cols = line.split_whitespace();
+        cols.next(); // address
+        for hexword in cols {
+            if hexword.len() != 8 || !hexword.chars().all(|c| c.is_ascii_hexdigit()) {
+                continue;
+            }
+            let v = u32::from_str_radix(hexword, 16).unwrap();
+            bytes.extend_from_slice(&v.to_le_bytes());
+        }
+    }
+    bytes
+}
+
+fn difftest(path: &str) -> bool {
+    let source = fs::read(path).expect("read source");
+    let prog = compile_ir(&source);
+    let asm = print_asm(&prog);
+    let tmp_s = std::env::temp_dir().join("spike_difftest.s");
+    let tmp_o = std::env::temp_dir().join("spike_difftest.o");
+    fs::write(&tmp_s, &asm).unwrap();
+    let status = Command::new("cc").args(["-arch", "arm64", "-c", "-o"]).arg(&tmp_o).arg(&tmp_s).status().expect("cc -c");
+    assert!(status.success(), "cc -c failed for {path}");
+    let want = otool_text_bytes(tmp_o.to_str().unwrap());
+
+    let extra = vec![("rt_write_str".to_string(), runtime_blob::RT_WRITE_STR_OFF as u32), ("rt_write_int".to_string(), runtime_blob::RT_WRITE_INT_OFF as u32)];
+    let mut enc = encode::encode_program(&prog.funcs, &extra);
+    // The RUNTIME_ASM text is assembled too (it's appended by print_asm),
+    // so `want` includes it; append our frozen blob correspondingly.
+    enc.text.extend_from_slice(runtime_blob::RUNTIME_BLOB);
+    let got = enc.text;
+
+    if got.len() != want.len() {
+        println!("{path}: LENGTH MISMATCH ours={} theirs={}", got.len(), want.len());
+        return false;
+    }
+    for (i, (a, b)) in got.iter().zip(want.iter()).enumerate() {
+        if a != b {
+            let instr_idx = i / 4;
+            println!(
+                "{path}: MISMATCH at byte {i} (instr #{instr_idx}): ours=0x{:02x} theirs=0x{:02x}",
+                a, b
+            );
+            return false;
+        }
+    }
+    println!("{path}: OK ({} bytes, {} instructions match byte-for-byte)", got.len(), got.len() / 4);
+    true
 }
 
 fn main() {
@@ -574,58 +685,16 @@ fn main() {
         return;
     }
 
+    if args.len() >= 3 && args[1] == "difftest" {
+        let mut all_ok = true;
+        for src_path in &args[2..] {
+            all_ok &= difftest(src_path);
+        }
+        std::process::exit(if all_ok { 0 } else { 1 });
+    }
+
     if args.len() >= 3 && args[1] == "measure" {
-        let src_path = &args[2];
-        let source = fs::read(src_path).expect("read source");
-        let n = 20;
-        let mut parse_ms = Vec::new();
-        let mut codegen_ms = Vec::new();
-        let mut link_ms = Vec::new();
-        let mut size = 0u64;
-        for _ in 0..n {
-            let t0 = Instant::now();
-            let p = fors_syntax::parse_file(&source);
-            parse_ms.push(t0.elapsed().as_secs_f64() * 1000.0);
-
-            let t1 = Instant::now();
-            let funcs = collect_functions(&p.tree, &p.tokens, &source);
-            let mut asm = String::new();
-            asm.push_str(".text\n");
-            let mut label_base = 0u32;
-            for f in &funcs {
-                let (code, next_base) = compile_function(&p.tree, &p.tokens, &source, f, label_base);
-                label_base = next_base;
-                asm.push_str(&code);
-                asm.push('\n');
-            }
-            asm.push_str(RUNTIME_ASM);
-            codegen_ms.push(t1.elapsed().as_secs_f64() * 1000.0);
-
-            let asm_path = "/tmp/spike_measure.s";
-            let out_path = "/tmp/spike_measure_bin";
-            fs::write(asm_path, &asm).unwrap();
-            let t2 = Instant::now();
-            let status = Command::new("cc")
-                .args(["-arch", "arm64", "-o", out_path, asm_path])
-                .status()
-                .unwrap();
-            assert!(status.success());
-            link_ms.push(t2.elapsed().as_secs_f64() * 1000.0);
-            size = fs::metadata(out_path).unwrap().len();
-        }
-        fn median(v: &mut Vec<f64>) -> f64 {
-            v.sort_by(|a, b| a.partial_cmp(b).unwrap());
-            v[v.len() / 2]
-        }
-        println!(
-            "{}: parse={:.3}ms codegen={:.3}ms assemble+link={:.3}ms total={:.3}ms size={}B",
-            src_path,
-            median(&mut parse_ms),
-            median(&mut codegen_ms),
-            median(&mut link_ms),
-            median(&mut parse_ms) + median(&mut codegen_ms) + median(&mut link_ms),
-            size
-        );
+        run_measure(&args[2]);
         return;
     }
 
@@ -639,21 +708,141 @@ fn main() {
     let out_path = &args[4];
     let source = fs::read(src_path).expect("read source");
 
-    if rung != 1 {
-        eprintln!("rung {rung} not implemented in this build; only rung 1 (assembly text + cc) is wired up");
-        std::process::exit(2);
+    match rung {
+        1 => {
+            let asm = compile_rung1(&source);
+            let asm_path = format!("{out_path}.s");
+            fs::write(&asm_path, &asm).expect("write asm");
+            let status = Command::new("cc").args(["-arch", "arm64", "-o", out_path, &asm_path]).status().expect("run cc");
+            if !status.success() {
+                eprintln!("cc failed");
+                std::process::exit(1);
+            }
+        }
+        2 => {
+            let obj = compile_rung2_object(&source);
+            let obj_path = format!("{out_path}.o");
+            fs::write(&obj_path, &obj).expect("write object");
+            let status = Command::new("cc").args(["-arch", "arm64", "-o", out_path, &obj_path]).status().expect("run cc/ld");
+            if !status.success() {
+                eprintln!("ld failed");
+                std::process::exit(1);
+            }
+        }
+        3 => {
+            let prog = compile_ir(&source);
+            let extra = vec![("rt_write_str".to_string(), runtime_blob::RT_WRITE_STR_OFF as u32), ("rt_write_int".to_string(), runtime_blob::RT_WRITE_INT_OFF as u32)];
+            let mut enc = encode::encode_program(&prog.funcs, &extra);
+            enc.text.extend_from_slice(runtime_blob::RUNTIME_BLOB);
+            let out_name = std::path::Path::new(out_path).file_name().unwrap().to_str().unwrap().to_string();
+            let bin = exec::build_executable(&enc, &prog.data, &out_name);
+            exec::write_atomically(out_path, &bin);
+        }
+        other => {
+            eprintln!("rung {other} not implemented");
+            std::process::exit(2);
+        }
+    }
+}
+
+fn run_measure(src_path: &str) {
+    let source = fs::read(src_path).expect("read source");
+    let n = 20;
+
+    // rung 1
+    let mut r1: Vec<(f64, f64, f64, u64)> = Vec::new();
+    for _ in 0..n {
+        let t0 = Instant::now();
+        let prog = compile_ir(&source);
+        let parse_codegen = t0.elapsed().as_secs_f64() * 1000.0;
+        let t1 = Instant::now();
+        let asm = print_asm(&prog);
+        let codegen = t1.elapsed().as_secs_f64() * 1000.0;
+        let asm_path = std::env::temp_dir().join("spike_measure.s");
+        let out_path = std::env::temp_dir().join("spike_measure_bin");
+        fs::write(&asm_path, &asm).unwrap();
+        let t2 = Instant::now();
+        let status = Command::new("cc").args(["-arch", "arm64", "-o"]).arg(&out_path).arg(&asm_path).status().unwrap();
+        assert!(status.success());
+        let link = t2.elapsed().as_secs_f64() * 1000.0;
+        let size = fs::metadata(&out_path).unwrap().len();
+        r1.push((parse_codegen, codegen, link, size));
     }
 
-    let asm = compile(&source);
-    let asm_path = format!("{out_path}.s");
-    fs::write(&asm_path, &asm).expect("write asm");
-
-    let status = Command::new("cc")
-        .args(["-arch", "arm64", "-o", out_path, &asm_path])
-        .status()
-        .expect("run cc");
-    if !status.success() {
-        eprintln!("cc failed");
-        std::process::exit(1);
+    // rung 2
+    let plat = discover_platform_version(); // shells out to `cc` ONCE, outside the timing loop
+    let mut r2: Vec<(f64, f64, f64, u64)> = Vec::new();
+    for _ in 0..n {
+        let t0 = Instant::now();
+        let prog = compile_ir(&source);
+        let parse = t0.elapsed().as_secs_f64() * 1000.0;
+        let t1 = Instant::now();
+        let extra = vec![("rt_write_str".to_string(), runtime_blob::RT_WRITE_STR_OFF as u32), ("rt_write_int".to_string(), runtime_blob::RT_WRITE_INT_OFF as u32)];
+        let mut enc = encode::encode_program(&prog.funcs, &extra);
+        enc.text.extend_from_slice(runtime_blob::RUNTIME_BLOB);
+        let obj = macho::build_object(&enc, &prog.data, plat);
+        let encode_ms = t1.elapsed().as_secs_f64() * 1000.0;
+        let obj_path = std::env::temp_dir().join("spike_measure2.o");
+        let out_path = std::env::temp_dir().join("spike_measure2_bin");
+        fs::write(&obj_path, &obj).unwrap();
+        let t2 = Instant::now();
+        let status = Command::new("cc").args(["-arch", "arm64", "-o"]).arg(&out_path).arg(&obj_path).status().unwrap();
+        assert!(status.success());
+        let link = t2.elapsed().as_secs_f64() * 1000.0;
+        let size = fs::metadata(&out_path).unwrap().len();
+        r2.push((parse, encode_ms, link, size));
     }
+
+    // rung 3: no external process at all
+    let mut r3: Vec<(f64, f64, f64, u64)> = Vec::new();
+    for _ in 0..n {
+        let t0 = Instant::now();
+        let prog = compile_ir(&source);
+        let parse = t0.elapsed().as_secs_f64() * 1000.0;
+        let t1 = Instant::now();
+        let extra = vec![("rt_write_str".to_string(), runtime_blob::RT_WRITE_STR_OFF as u32), ("rt_write_int".to_string(), runtime_blob::RT_WRITE_INT_OFF as u32)];
+        let mut enc = encode::encode_program(&prog.funcs, &extra);
+        enc.text.extend_from_slice(runtime_blob::RUNTIME_BLOB);
+        let encode_ms = t1.elapsed().as_secs_f64() * 1000.0;
+        let t2 = Instant::now();
+        let out_path = std::env::temp_dir().join("spike_measure3_bin");
+        let bin = exec::build_executable(&enc, &prog.data, out_path.file_name().unwrap().to_str().unwrap());
+        exec::write_atomically(out_path.to_str().unwrap(), &bin);
+        let write_sign = t2.elapsed().as_secs_f64() * 1000.0;
+        let size = bin.len() as u64;
+        r3.push((parse, encode_ms, write_sign, size));
+    }
+
+    fn median4(v: &mut Vec<(f64, f64, f64, u64)>, idx: usize) -> f64 {
+        let mut xs: Vec<f64> = v.iter().map(|t| match idx { 0 => t.0, 1 => t.1, _ => t.2 }).collect();
+        xs.sort_by(|a, b| a.partial_cmp(b).unwrap());
+        xs[xs.len() / 2]
+    }
+    let size1 = r1[0].3;
+    let size2 = r2[0].3;
+    let size3 = r3[0].3;
+    println!(
+        "{src_path} rung1: parse+codegen={:.3}ms print={:.3}ms assemble+link={:.3}ms total={:.3}ms size={}B",
+        median4(&mut r1, 0),
+        median4(&mut r1, 1),
+        median4(&mut r1, 2),
+        median4(&mut r1, 0) + median4(&mut r1, 1) + median4(&mut r1, 2),
+        size1
+    );
+    println!(
+        "{src_path} rung2: parse={:.3}ms encode+write.o={:.3}ms link(cc/ld)={:.3}ms total={:.3}ms size={}B",
+        median4(&mut r2, 0),
+        median4(&mut r2, 1),
+        median4(&mut r2, 2),
+        median4(&mut r2, 0) + median4(&mut r2, 1) + median4(&mut r2, 2),
+        size2
+    );
+    println!(
+        "{src_path} rung3: parse={:.3}ms encode={:.3}ms write+sign={:.3}ms total={:.3}ms size={}B",
+        median4(&mut r3, 0),
+        median4(&mut r3, 1),
+        median4(&mut r3, 2),
+        median4(&mut r3, 0) + median4(&mut r3, 1) + median4(&mut r3, 2),
+        size3
+    );
 }
