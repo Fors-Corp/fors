@@ -166,6 +166,20 @@ def host_info():
     return info
 
 
+def git_commit():
+    """HEAD hash (+ "-dirty" if kernels/langs/harness differ from it): every results file names the exact
+    sources it measured, which is what makes the kernel set pre-registered rather than picked after the fact."""
+    def git(*argv):
+        return subprocess.run(["git", "-C", str(ROOT), *argv], capture_output=True, text=True).stdout.strip()
+
+    try:
+        head = git("rev-parse", "HEAD")
+        dirty = git("status", "--porcelain", "--", "kernels", "langs", "harness")
+    except OSError:
+        return None
+    return (head + ("-dirty" if dirty else "")) if head else None
+
+
 def cmd_check(args):
     langs, kernels = load_langs(args.lang), load_kernels(args.kernel)
     failures = 0
@@ -266,7 +280,7 @@ def cmd_bench(args):
     versions = {name: toolchain_version(lang) for name, lang in langs.items()}
     results = []
     now = datetime.now(timezone.utc)
-    doc = {"schema": 1, "timestamp": now.strftime("%Y-%m-%dT%H:%M:%SZ"), "host": host,
+    doc = {"schema": 1, "timestamp": now.strftime("%Y-%m-%dT%H:%M:%SZ"), "commit": git_commit(), "host": host,
            "toolchains": versions, "langs": langs, "results": results}
     (ROOT / "results").mkdir(exist_ok=True)
     stem = f"{now.strftime('%Y%m%dT%H%M%SZ')}-{platform.node().split('.')[0]}"

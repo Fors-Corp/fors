@@ -69,6 +69,14 @@ def main():
     print("# Fors benchmark scoreboard\n")
     print(f"`{name}` | {doc['timestamp']} | {host.get('cpu') or host['arch']}, {host['cpus']} cpus | {host['os']}"
           + (" | **ON BATTERY**" if host.get("on_battery") else ""))
+    print(f"\nKernel sources: commit `{doc.get('commit') or 'unrecorded'}`")
+    # The noise floor is measured and published, never targeted: a difference smaller than this is not a result.
+    noise = sorted((r["stats"]["stdev"] / r["stats"]["mean"], f"{r['kernel']}/{r['lang']}")
+                   for r in good if r["stats"]["n"] >= 3 and r["stats"]["mean"] > 0.05)
+    if noise:
+        worst = noise[-1]
+        print(f"\nRun-to-run noise (stdev/mean, cells with >= 3 runs): median {noise[len(noise) // 2][0]:.1%}, "
+              f"worst {worst[0]:.1%} ({worst[1]})")
 
     kernels, ratios = {}, {}
     for r in good:
