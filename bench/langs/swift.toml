@@ -1,0 +1,7 @@
+name = "swift"
+display = "Swift (swiftc -O)"
+source = "main.swift"
+probe = ["swiftc", "--version"]
+build = ["swiftc", "-O", "-o", "{out}/main", "{src}/main.swift"]
+run = ["{out}/main"]
+artifact = "{out}/main"

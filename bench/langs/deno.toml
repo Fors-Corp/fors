@@ -1,0 +1,6 @@
+name = "deno"
+display = "JavaScript (Deno/V8)"
+dir = "js"
+source = "main.js"
+probe = ["deno", "--version"]
+run = ["deno", "run", "-A", "{src}/main.js"]

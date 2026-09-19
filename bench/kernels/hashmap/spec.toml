@@ -1,0 +1,21 @@
+name = "hashmap"
+category = "alloc"
+description = """
+Standard-library hash map workload, argument = N (element count for phase 1).
+Pseudo-random stream: MINSTD, x = (x * 48271) mod 2147483647, starting from x = 42.
+Phase 1: for i in 0..N: advance x, key = x mod (N/4 + 1), counts_int[key] += 1
+using the language's standard integer-keyed hash map.
+Phase 2: for i in 0..N/4: advance x, key = "k" + decimal(x mod (N/16 + 1)), counts_str[key] += 1
+using the standard string-keyed hash map.
+Prints three lines: number of distinct int keys, number of distinct string keys,
+and checksum = (sum over int entries of key*count + sum over string entries of
+numeric_part*count) mod 1000000007 (order independent).
+C has no standard hash map: the reference implements a straightforward open-addressing
+table with linear probing, power-of-two capacity, growth at 0.7 load factor, and
+FNV-1a hashing for string keys.
+"""
+reference = "c"
+
+[sizes]
+check = ["10000"]
+bench = ["9500000"]

@@ -1,0 +1,8 @@
+name = "nbody"
+category = "compute"
+description = "Computer Language Benchmarks Game n-body: 5 bodies (Sun, Jupiter, Saturn, Uranus, Neptune) with the standard CLBG constants, momentum offset applied to the Sun, advanced by symplectic Euler (dt = 0.01) for the given number of steps. Prints system energy before and after the advance, each on its own line formatted with exactly 9 decimals (\"%.9f\"). Argument: number of steps."
+reference = "c"
+
+[sizes]
+check = ["1000"]
+bench = ["40000000"]

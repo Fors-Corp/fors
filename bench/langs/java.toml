@@ -1,0 +1,6 @@
+name = "java"
+display = "Java (HotSpot)"
+source = "Main.java"
+probe = ["java", "-version"]
+build = ["javac", "-d", "{out}", "{src}/Main.java"]
+run = ["java", "-cp", "{out}", "Main"]

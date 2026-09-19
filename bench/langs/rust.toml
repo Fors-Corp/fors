@@ -1,0 +1,7 @@
+name = "rust"
+display = "Rust (rustc -O3)"
+source = "main.rs"
+probe = ["rustc", "--version"]
+build = ["rustc", "--edition", "2024", "-C", "opt-level=3", "-C", "target-cpu=native", "-C", "codegen-units=1", "-o", "{out}/main", "{src}/main.rs"]
+run = ["{out}/main"]
+artifact = "{out}/main"

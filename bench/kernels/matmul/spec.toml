@@ -1,0 +1,9 @@
+name = "matmul"
+category = "parallel"
+description = "Dense NxN double matmul C = A x B, i-k-j loop order (hoist a = A[i][k], inner j loop does C[i][j] += a * B[k][j]). A[i][j] = ((i*j) % 7) + 1, B[i][j] = ((i+j) % 5) + 1, all in flat row-major arrays; every value is a small integer so the result is exact in doubles regardless of summation order. Rows of C are split into contiguous blocks, one per thread. Prints sum of all elements of C, then trace of C, each as an integer (no decimal point, no exponent)."
+reference = "c"
+threads = [1, 2, 4, 6, 8]
+
+[sizes]
+check = ["64"]
+bench = ["1800"]

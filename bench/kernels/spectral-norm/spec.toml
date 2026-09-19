@@ -1,0 +1,8 @@
+name = "spectral-norm"
+category = "compute"
+description = "Benchmarks Game spectral norm: A(i,j) = 1/((i+j)*(i+j+1)/2+i+1), 10 power iterations of AtA (approximate = A^T*A*v) on a vector of ones, argument = n. Print sqrt(vBv/vv) with exactly 9 decimals. Inner sums accumulate strictly left-to-right over j ascending in every language."
+reference = "c"
+
+[sizes]
+check = ["100"]
+bench = ["5500"]

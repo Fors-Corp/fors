@@ -1,0 +1,8 @@
+name = "binary-trees"
+category = "alloc"
+description = "Benchmarks Game binary-trees, single-threaded. Argument: max depth. Build a stretch tree of depth max+1 and print its node count, allocate one long-lived tree of depth max, then for each even depth d from 4 up to max, build 2^(max-d+4) trees of depth d (individually, not reused) and sum their node counts, printing the running total per depth; finally print the long-lived tree's depth and node count. Every tree node is allocated individually via the language's default allocator/GC (C: malloc+free per node; Rust: Box; Swift: class instances; etc.) - no arenas, pools, freelists or bump allocators are permitted, since this kernel measures the default per-node allocation path."
+reference = "c"
+
+[sizes]
+check = ["10"]
+bench = ["18"]

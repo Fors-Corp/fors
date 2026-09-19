@@ -1,0 +1,7 @@
+name = "go"
+display = "Go"
+source = "main.go"
+probe = ["go", "version"]
+build = ["go", "build", "-o", "{out}/main", "{src}/main.go"]
+run = ["{out}/main"]
+artifact = "{out}/main"

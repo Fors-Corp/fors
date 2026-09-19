@@ -1,0 +1,11 @@
+name = "c-fma"
+display = "C (clang -O3 -flto, default FMA contraction)"
+# Same sources as "c", built the way clang builds by default (a*b+c may fuse into FMA on arm64).
+# Published next to the strict "c" column so the baseline is never handicapped. A kernel whose output
+# changes under contraction fails the correctness gate here and is reported as such.
+dir = "c"
+source = "main.c"
+probe = ["clang", "--version"]
+build = ["clang", "-O3", "-mcpu=native", "-flto", "-pthread", "-o", "{out}/main", "{src}/main.c", "-lm"]
+run = ["{out}/main"]
+artifact = "{out}/main"

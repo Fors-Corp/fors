@@ -1,0 +1,20 @@
+name = "mandelbrot"
+category = "parallel"
+description = """
+For each pixel (px, py) of an N x N grid: cr = 2.0*px/N - 1.5, ci = 2.0*py/N - 1.0,
+iterate z = z^2 + c from z = 0 for at most 50 iterations with the escape test
+zr*zr + zi*zi > 4.0, written as: tr = zr*zr - zi*zi + cr; ti = 2.0*zr*zi + ci
+(same operation order in every language). Count the pixels that never escape
+(i.e. that reach 50 iterations without the modulus exceeding 2). Print that
+single integer. Rows [0, N) are split into contiguous blocks, one per thread:
+block i (0-indexed) owns rows [i*N/threads, (i+1)*N/threads). This static split
+is deliberately simple and load-imbalanced (rows near the middle of the image
+do more escape-iteration work than rows near the edges) - every language gets
+the exact same split, so the imbalance is identical everywhere.
+"""
+reference = "c"
+threads = [1, 2, 4, 6, 8]
+
+[sizes]
+check = ["200"]
+bench = ["4000"]

@@ -1,0 +1,9 @@
+name = "c"
+display = "C (clang -O3 -flto)"
+source = "main.c"
+probe = ["clang", "--version"]
+# -mcpu=native is the arm64 spelling; on x86_64 hosts use -march=native.
+# -ffp-contract=off: strict IEEE like every other language here (clang fuses a*b+c into FMA by default on arm64).
+build = ["clang", "-O3", "-mcpu=native", "-flto", "-ffp-contract=off", "-pthread", "-o", "{out}/main", "{src}/main.c", "-lm"]
+run = ["{out}/main"]
+artifact = "{out}/main"

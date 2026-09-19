@@ -1,0 +1,8 @@
+name = "fannkuch"
+category = "compute"
+description = "Computer Language Benchmarks Game fannkuch-redux, single-threaded, argument = n. For each permutation of 1..n (Heap's algorithm-free, classic fannkuch-redux permutation generation with count array), repeatedly flip the prefix of the permutation (reverse the first p[0] elements) until p[0] == 1, counting flips; track the maximum flip count over all permutations and the checksum = sum of (+flips for even permutation index, -flips for odd permutation index) as used by the reference benchmark. Prints the checksum on the first line and \"Pfannkuchen(<n>) = <maxflips>\" on the second line."
+reference = "c"
+
+[sizes]
+check = ["7"]
+bench = ["11"]

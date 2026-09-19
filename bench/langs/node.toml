@@ -1,0 +1,6 @@
+name = "node"
+display = "JavaScript (Node/V8)"
+dir = "js"
+source = "main.js"
+probe = ["node", "--version"]
+run = ["node", "{src}/main.js"]

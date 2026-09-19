@@ -1,0 +1,8 @@
+name = "zig"
+display = "Zig (ReleaseFast)"
+source = "main.zig"
+probe = ["zig", "version"]
+# Verified with zig 0.16.0. ReleaseFast disables safety checks. Only the hello kernel has a Zig port so far.
+build = ["zig", "build-exe", "-O", "ReleaseFast", "-mcpu=native", "-femit-bin={out}/main", "{src}/main.zig"]
+run = ["{out}/main"]
+artifact = "{out}/main"

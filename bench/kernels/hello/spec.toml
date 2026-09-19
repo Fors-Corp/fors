@@ -1,0 +1,8 @@
+name = "hello"
+category = "startup"
+description = "Print one line and exit: process startup + runtime initialisation cost."
+reference = "c"
+
+[sizes]
+check = []
+bench = []

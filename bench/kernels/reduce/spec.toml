@@ -1,0 +1,19 @@
+name = "reduce"
+category = "parallel"
+description = """
+A stateless parallel map-reduce with no input array. For each index i in [0, N):
+x = i as unsigned 32-bit; apply the lowbias32 integer hash FOUR times in sequence:
+{ x ^= x >>> 16; x = (x * 0x7feb352d) mod 2^32; x ^= x >>> 15;
+  x = (x * 0x846ca68b) mod 2^32; x ^= x >>> 16 }
+then accumulate sum += x % 1000 (sum kept as a 64-bit unsigned/signed integer).
+The index range [0, N) is split into contiguous blocks, one per thread: block i
+(0-indexed) owns indices [i*N/threads, (i+1)*N/threads). Each thread keeps a
+private partial sum; partials are added together at the end. Print the total
+(fits in 64 bits; for N up to 10^9 it stays below 2^53).
+"""
+reference = "c"
+threads = [1, 2, 4, 6, 8]
+
+[sizes]
+check = ["100000"]
+bench = ["1200000000"]
