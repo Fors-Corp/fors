@@ -1,0 +1,24 @@
+//! name: comptime_int_explicit_conversion_accepted
+//! rule: 03.R9
+//! expect: run-ok
+//! detail: ok
+
+module m;
+needs { io.stdout };
+
+const N: comptime_int = 5;
+
+fn f() -> i32 {
+    var x: i32 = N as i32;
+    return x;
+}
+
+fn main(sink w: World) {
+    var out: io.Writer = move w.stdout;
+    var r: i32 = f();
+    if r == 5 {
+        out.write_line("ok");
+    } else {
+        out.write_line("fail");
+    }
+}

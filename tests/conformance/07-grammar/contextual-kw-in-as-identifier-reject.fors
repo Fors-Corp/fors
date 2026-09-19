@@ -1,0 +1,8 @@
+//! name: contextual_kw_as_identifier
+//! rule: 07.D10
+//! expect: parse-error
+//! detail: "in" is reserved (used by for-loops), not contextual, so it cannot be used as a binding name
+
+fn f() {
+    let in = 1;
+}

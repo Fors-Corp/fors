@@ -1,0 +1,8 @@
+//! name: amp_markers
+//! rule: 07.D4
+//! expect: parse-error
+//! detail: "&" is not a general prefix operator outside an arg_value's start; "let y = &x;" tries to use it as one
+
+fn f(let x: i32) {
+    let y = &x;
+}

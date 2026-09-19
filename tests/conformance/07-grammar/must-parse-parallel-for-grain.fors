@@ -1,0 +1,10 @@
+//! name: must_parse_ch01_06_examples
+//! rule: 07.Grammar
+//! expect: parse-ok
+//! detail: parallel_for_stmt with a grain clause, matching ch01 ex3
+
+fn run(let xs: Slice[i32]) {
+    parallel for x in xs grain 64 {
+        discard x;
+    }
+}

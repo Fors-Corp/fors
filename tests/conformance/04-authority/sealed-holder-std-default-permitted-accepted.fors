@@ -1,0 +1,7 @@
+//! name: sealed_holder_std_permitted_by_default
+//! rule: 04.R2b
+//! expect: parse-ok
+//! detail: std is permitted to hold sealed capabilities with no manifest entry (chapter's own example, verbatim)
+
+module std.fs;
+needs { syscall, fs.read, fs.write };

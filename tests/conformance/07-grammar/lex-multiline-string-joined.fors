@@ -1,0 +1,10 @@
+//! name: lex_multiline_string
+//! rule: 07.L6
+//! expect: parse-ok
+//! detail: two adjacent "\\" lines join into one string literal with "\n" between them; the statement's ";" lands on a later line
+
+fn f() {
+    let s = \\first line
+        \\second line
+        ;
+}

@@ -1,0 +1,18 @@
+//! name: reduce_shape_reference_n257
+//! rule: 03.R11
+//! expect: run-ok
+//! detail: ok  -- tree(n=257) = op(block0, x256), one full 256-block combined with the 257th element; python-simulated value with all xi=1.0 and op=subtract: -1.0 (block0 = 0.0; serial left fold would give -255.0)
+
+module m;
+needs { io.stdout };
+
+fn main(sink w: World) {
+    var out: io.Writer = move w.stdout;
+    var xs: Slice[f64] = [1.0; 257];
+    var r: f64 = reduce(-, xs);
+    if r == -1.0 {
+        out.write_line("ok");
+    } else {
+        out.write_line("fail");
+    }
+}

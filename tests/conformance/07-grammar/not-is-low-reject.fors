@@ -1,0 +1,8 @@
+//! name: not_is_low
+//! rule: 07.OT8
+//! expect: parse-error
+//! detail: "not" is not a valid cmp_expr operand (it sits at level 8); "a == not b" tries to use a not_expr as the right operand of "=="
+
+fn f(let a: bool, let b: bool) {
+    let r = a == not b;
+}

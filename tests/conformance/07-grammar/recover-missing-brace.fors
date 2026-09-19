@@ -1,0 +1,12 @@
+//! name: recover_missing_brace
+//! rule: 07.ER1
+//! expect: parse-error
+//! detail: exactly one diagnostic ("unclosed {") must be reported for the missing closing brace of fn f's body; both the following struct S and fn g declarations must still be parsed into the CST
+
+fn f() {
+    let a = 1;
+
+struct S { }
+
+fn g() {
+}

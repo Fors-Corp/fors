@@ -1,0 +1,14 @@
+//! name: conv-missing-inout-marker-rejected
+//! rule: 01.R2
+//! expect: check-error
+//! detail: call site passes a bare place `n` for an `inout` parameter without the `&` marker
+
+needs { };
+
+fn bump(inout x: i64) {
+    x = x + 1;
+}
+
+fn use_it(inout n: i64) {
+    bump(n);
+}

@@ -1,0 +1,6 @@
+//! name: extern_fn_no_body
+//! rule: 07.Grammar
+//! expect: parse-ok
+//! detail: an extern_fn_decl ends in ";" with no block body
+
+extern "c" fn dgemm(let n: i32);

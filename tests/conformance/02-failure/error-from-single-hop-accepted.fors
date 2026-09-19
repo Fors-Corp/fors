@@ -1,0 +1,22 @@
+//! name: error-from-single-hop
+//! rule: 02.R3
+//! expect: parse-ok
+//! detail: n/a
+
+needs { };
+
+enum NetError { timeout }
+enum AppError { timeout(NetError) }
+
+impl ErrorFrom[NetError] for AppError {
+    fn from(let e: NetError) -> AppError { return AppError.timeout(e); }
+}
+
+fn get(let n: i64) -> i64 raises NetError {
+    if n == 0 { raise NetError.timeout; }
+    return n;
+}
+
+fn fetch(let n: i64) -> i64 raises AppError {
+    return get(n)?;
+}

@@ -1,0 +1,11 @@
+//! name: lex_multiline_string
+//! rule: 07.L6
+//! expect: parse-error
+//! detail: a comment between two "\\" lines ends the literal, so the initializer is two adjacent string tokens and the second one is unexpected; deleting the comment line joins them into one literal and the file parses
+
+fn f() {
+    let a = \\first
+        // comment breaks the join
+        \\second
+        ;
+}

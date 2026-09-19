@@ -1,0 +1,13 @@
+//! name: raise-in-raises-fn-accepted
+//! rule: 02.R1
+//! expect: parse-ok
+//! detail: n/a
+
+needs { };
+
+enum Err { empty }
+
+fn take(let n: usize) -> i64 raises Err {
+    if n == 0 { raise Err.empty; }
+    return 1;
+}

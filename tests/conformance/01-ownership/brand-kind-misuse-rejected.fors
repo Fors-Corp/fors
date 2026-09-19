@@ -1,0 +1,11 @@
+//! name: brand_kind_closed
+//! rule: 01.R15d
+//! expect: check-error
+//! detail: brand parameter `A` is used as the type of a value (`let v: A`), a position whose declared kind is not `brand`
+
+needs { };
+
+fn bad[A: brand]() {
+    let v: A;
+    discard v;
+}

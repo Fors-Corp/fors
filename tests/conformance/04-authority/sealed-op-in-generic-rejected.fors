@@ -1,0 +1,18 @@
+//! name: sealed_op_in_generic_rejected
+//! rule: 04.R2a
+//! expect: check-error
+//! detail: calling the ffi-sealed dgemm from inside a generic function body must be diagnosed
+//! manifest:
+//! [capabilities.ffi]
+//! packages = ["std", "vendor"]
+
+module vendor.blas;
+needs { ffi };
+use std.ffi;
+
+fn call_ffi[T](let n: i32, let a: rawptr[f64]) {
+    dgemm(n, a);
+}
+
+@unsafe(invariant: "n matches the caller-allocated buffer length")
+extern "c" fn dgemm(let n: i32, let a: rawptr[f64]);

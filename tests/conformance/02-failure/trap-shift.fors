@@ -1,0 +1,12 @@
+//! name: trap-shift
+//! rule: 02.Definitions
+//! expect: trap
+//! detail: shift
+
+needs { };
+
+fn main(sink w: World) {
+    let a: i32 = 1;
+    let n: i32 = 64;
+    let b: i32 = a << n;
+}

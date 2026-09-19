@@ -1,0 +1,11 @@
+//! name: unary_minus_shapes
+//! rule: 07.D8
+//! expect: parse-ok
+//! detail: unary minus at level 2 composes with a literal, subtraction, and "as", matching each shape in Rule 8
+
+fn f(let x: i32) {
+    let a = -1;
+    let b = x - 1;
+    let c = x + -1;
+    let d = -1 as i8;
+}

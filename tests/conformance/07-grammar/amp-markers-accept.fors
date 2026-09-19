@@ -1,0 +1,13 @@
+//! name: amp_markers
+//! rule: 07.D4
+//! expect: parse-ok
+//! detail: "&" is the inout marker, "&out" the set marker, and plain "&" between two operands is bitwise-and; each parses only at its fixed slot
+
+fn f(let x: i32, let y: i32, let out: i32, let a: i32, let b: i32, let xs: Slice[i32]) {
+    call1(&x);
+    call2(&out y);
+    call3(&out);
+    call4(&out.len);
+    let bw = a & b;
+    let r = reduce(&, xs);
+}

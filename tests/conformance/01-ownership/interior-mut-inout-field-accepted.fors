@@ -1,0 +1,12 @@
+//! name: interior_mut_inout_field_accepted
+//! rule: 01.R20
+//! expect: parse-ok
+//! detail: n/a
+
+needs { };
+
+struct Box { val: i64 }
+
+fn use_it(inout b: Box) {
+    b.val = 1;
+}

@@ -1,0 +1,21 @@
+//! name: scoped_result_extends_inout_access
+//! rule: 01.R19a
+//! expect: check-error
+//! detail: `buf` is used directly while the scoped result of `split_at(&buf, ..)` is still live, conflicting with the extended `inout` access
+
+needs { };
+
+@unsafe(invariant: "the two ranges partition s and never overlap")
+fn split_at[T](inout s: Slice[T], let mid: usize)
+    -> (scoped(s) Slice[T], scoped(s) Slice[T])
+    pre mid <= s.len
+{
+    return (s[0 ..< mid], s[mid ..< s.len]);
+}
+
+fn use_it(inout buf: Slice[f64]) {
+    let (lo, hi) = split_at(&buf, buf.len / 2);
+    buf[0] = 1.0;
+    discard lo;
+    discard hi;
+}

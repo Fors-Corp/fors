@@ -1,0 +1,21 @@
+//! name: int_fixed_width_i64_accepted
+//! rule: 03.R1
+//! expect: run-ok
+//! detail: ok  -- accepted counterpart of int-fixed-width-i128-rejected.fors with i128 replaced by i64
+
+module m;
+needs { io.stdout };
+
+fn f(let x: i64) -> i64 {
+    return x;
+}
+
+fn main(sink w: World) {
+    var out: io.Writer = move w.stdout;
+    var r: i64 = f(42);
+    if r == 42 {
+        out.write_line("ok");
+    } else {
+        out.write_line("fail");
+    }
+}

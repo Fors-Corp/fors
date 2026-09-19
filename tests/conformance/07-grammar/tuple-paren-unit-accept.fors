@@ -1,0 +1,11 @@
+//! name: tuple_paren_unit
+//! rule: 07.Grammar
+//! expect: parse-ok
+//! detail: "()", "(a)", "(a,)" and "(a, b)" are the unit, a parenthesised expr, a 1-tuple and a 2-tuple, chosen by whether a "," follows the first element
+
+fn f(let a: i32, let b: i32) {
+    let u = ();
+    let p = (a);
+    let t1 = (a,);
+    let t2 = (a, b);
+}

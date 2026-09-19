@@ -1,0 +1,14 @@
+//! name: svec_accepted_as_simd_local
+//! rule: 03.R20
+//! expect: parse-ok
+//! detail: SVec[T] as a local inside a simd body is legal (Rule 20's carve-out); accepted counterpart of the two svec-rejected files
+
+module m;
+needs { };
+
+fn f(let v: vector[f64, 8]) -> f64 {
+    simd for i in 0 ..< 8 {
+        var tmp: SVec[f64] = v as SVec[f64];
+    }
+    return v[0];
+}

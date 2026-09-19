@@ -1,0 +1,14 @@
+//! name: arena_brand_nonescape_rejected
+//! rule: 01.R15
+//! expect: check-error
+//! detail: the `with arena` block's brand `x` is named in the enclosing function's return type, escaping the block that introduces it
+
+needs { };
+
+struct Node[A: brand] { val: i64 }
+
+fn leak() -> Ref[Node[x], x] {
+    with arena x: Arena[Node[x]] {
+        return x.alloc(Node { val: 1 });
+    }
+}

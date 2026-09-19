@@ -1,0 +1,16 @@
+//! name: structured_spawn_inout_capture_accepted
+//! rule: 01.R13
+//! expect: parse-ok
+//! detail: n/a
+
+needs { };
+
+fn fill(inout v: f64, let k: f64) {
+    v = k;
+}
+
+fn use_it(inout lo: f64) {
+    parallel {
+        spawn fill(&lo, 1.0);
+    }
+}

@@ -1,0 +1,13 @@
+//! name: capability_value_from_narrowing_accepted
+//! rule: 04.R7
+//! expect: run-ok
+//! detail: ok  -- accepted counterpart of capability-value-constructed-directly-rejected.fors using the chapter's own `move w.net` narrowing
+
+module app;
+needs { net, io.stdout };
+
+fn main(sink w: World) {
+    var client: net.Client = move w.net;
+    var out: io.Writer = move w.stdout;
+    out.write_line("ok");
+}

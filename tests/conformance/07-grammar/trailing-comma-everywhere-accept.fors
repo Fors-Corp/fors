@@ -1,0 +1,24 @@
+//! name: trailing_comma_everywhere
+//! rule: 07.Grammar
+//! expect: parse-ok
+//! detail: a trailing "," is accepted in every comma list: needs, attribute args, fields, enum variants and payloads, generics, params, type args, array/struct/tuple literals, call args, closure params, tuple bindings and tuple patterns
+
+needs { net, io.stdout, };
+
+struct P { x: i32, y: i32, }
+enum E { a, b(i32, i32,), c { v: i32, }, }
+
+@attr(x: 1, y,)
+fn g[T, U,](let a: T, let b: U,) {
+}
+
+fn f(let a: i32, let b: i32,) -> i32 {
+    let arr = [a, b,];
+    let p = P { x: a, y: b, };
+    let t = (a, b,);
+    let m: Map[i32, i32,] = h(a, b,);
+    let cl = |x, y,| x;
+    let (u, v,) = t;
+    match t { (0, _,) => 1, _ => 2, }
+    arr[0]
+}

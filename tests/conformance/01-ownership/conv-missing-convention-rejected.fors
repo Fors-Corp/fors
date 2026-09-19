@@ -1,0 +1,10 @@
+//! name: conv-missing-convention-rejected
+//! rule: 01.R1
+//! expect: parse-error
+//! detail: parameter `i` in `fn touch(i: usize)` has no convention keyword (let/inout/sink/set), so it does not parse as a param
+
+needs { };
+
+fn touch(i: usize) {
+    discard i;
+}

@@ -1,0 +1,17 @@
+//! name: else-binds-call-only
+//! rule: 02.R5
+//! expect: parse-ok
+//! detail: n/a
+
+needs { };
+
+enum Err { empty }
+
+fn take(let n: usize) -> i64 raises Err {
+    if n == 0 { raise Err.empty; }
+    return 1;
+}
+
+fn use_it(let n: usize) -> i64 {
+    return take(n) else |e| { return 0; };
+}

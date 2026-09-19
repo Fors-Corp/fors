@@ -1,0 +1,8 @@
+//! name: statement_start
+//! rule: 07.D9
+//! expect: parse-error
+//! detail: "f() = 1;" -- the built left-hand CST is a call, not a place, so the assignment target check fails at "="
+
+fn f() {
+    f() = 1;
+}

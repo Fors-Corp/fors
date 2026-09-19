@@ -1,0 +1,8 @@
+//! name: contextual_keyword_out_as_identifier
+//! rule: 07.D10
+//! expect: parse-ok
+//! detail: "out" is a keyword only right after the "&" marker; used as a plain parameter name and place it must parse
+
+fn f(let out: i32) {
+    discard out;
+}

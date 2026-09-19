@@ -1,0 +1,14 @@
+//! name: sealed_holder_package_permitted_accepted
+//! rule: 04.R2b
+//! expect: parse-ok
+//! detail: accepted counterpart with the manifest policy naming `vendor`
+//! manifest:
+//! [capabilities.ffi]
+//! packages = ["std", "vendor"]
+
+module vendor.blas;
+needs { ffi };
+use std.ffi;
+
+@unsafe(invariant: "n matches the caller-allocated buffer length")
+extern "c" fn dgemm(let n: i32, let a: rawptr[f64]);

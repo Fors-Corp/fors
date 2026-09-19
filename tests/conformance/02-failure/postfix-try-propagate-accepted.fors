@@ -1,0 +1,19 @@
+//! name: postfix-try-propagate
+//! rule: 02.R2
+//! expect: parse-ok
+//! detail: n/a
+
+needs { };
+
+enum Err { empty }
+
+fn take(let n: usize) -> i64 raises Err {
+    if n == 0 { raise Err.empty; }
+    return 1;
+}
+
+fn take_twice(let n: usize) -> i64 raises Err {
+    let a: i64 = take(n)?;
+    let b: i64 = take(n)?;
+    return a + b;
+}

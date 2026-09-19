@@ -1,0 +1,12 @@
+//! name: varying_affine_store_accepted
+//! rule: 01.R9
+//! expect: parse-ok
+//! detail: n/a
+
+needs { };
+
+fn scale_odds(inout out: Slice[f64], let k: f64) {
+    parallel for i in 0 ..< out.len / 2 {
+        out[2 * i + 1] = out[2 * i + 1] * k;
+    }
+}

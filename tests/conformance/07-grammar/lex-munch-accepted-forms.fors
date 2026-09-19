@@ -1,0 +1,12 @@
+//! name: lex_munch
+//! rule: 07.L7
+//! expect: parse-ok
+//! detail: "&out" lexes as two tokens, "||" as two "|" (empty closure), "a<=-b" as a,<=,-,b, a match arm's "=>", and "f()?.x" as ? then .x
+
+fn f(let out: i32) {
+    g(&out out);
+    let c = || 1;
+    let r = out<=-out;
+    match out { _ => 1 }
+    h()?.x;
+}

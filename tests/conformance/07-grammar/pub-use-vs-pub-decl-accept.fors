@@ -1,0 +1,9 @@
+//! name: pub_use_vs_pub_decl
+//! rule: 07.D15
+//! expect: parse-ok
+//! detail: "pub" followed by "use" is a re-export; "pub" followed by "fn" is a public declaration; both resolve with 2 tokens of lookahead
+
+pub use math.trig;
+
+pub fn f() {
+}

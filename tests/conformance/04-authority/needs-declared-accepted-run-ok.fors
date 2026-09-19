@@ -1,0 +1,12 @@
+//! name: needs_declared_accepted
+//! rule: 04.R1
+//! expect: run-ok
+//! detail: ok  -- accepted counterpart of needs-undeclared-capability-rejected.fors with io.stdout declared
+
+module app;
+needs { io.stdout };
+
+fn main(sink w: World) {
+    var out: io.Writer = move w.stdout;
+    out.write_line("ok");
+}

@@ -1,0 +1,17 @@
+//! name: contract-off-uniform
+//! rule: 02.R10
+//! expect: run-ok
+//! detail: (no output)
+
+module app.calc;
+contracts: .off;
+
+fn half(let n: i64) -> i64
+    pre n >= 0
+{
+    return n / 2;
+}
+
+fn main(sink w: World) {
+    let r: i64 = half(-4);
+}

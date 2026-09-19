@@ -1,0 +1,11 @@
+//! name: generic_arg_forms
+//! rule: 07.D11
+//! expect: parse-ok
+//! detail: a generic argument list can hold a type, a const expression, a bare path the checker later reinterprets, or a qualified type
+
+fn f(let x: Slice[u8]) {
+    let v = vector[f64, 8];
+    let w: Array[T, N + 1] = w;
+    let y = x.wrap_as[u8]();
+    let z = f[iso Buf]();
+}

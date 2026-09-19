@@ -1,0 +1,8 @@
+//! name: generic_arg_forms
+//! rule: 07.D11
+//! expect: parse-error
+//! detail: a targ starting with "(" is forced into type position (tuple_type); "N + 1" is not a valid type list, so "(N + 1)" cannot appear directly as a targ
+
+fn f() {
+    let a: Array[T, (N + 1)] = a;
+}

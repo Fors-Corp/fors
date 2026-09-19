@@ -1,0 +1,8 @@
+//! name: extern-c-no-raises-absent-accepted
+//! rule: 02.R13
+//! expect: parse-ok
+//! detail: n/a
+
+needs { };
+
+extern "c" fn compute(let n: i32);

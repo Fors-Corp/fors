@@ -1,0 +1,6 @@
+//! name: pub_use_vs_pub_decl
+//! rule: 07.D15
+//! expect: parse-error
+//! detail: "pub" must be followed by "use" or a decl-starting keyword; "let" begins a statement, not a decl, so it cannot follow file-level "pub"
+
+pub let x = 1;

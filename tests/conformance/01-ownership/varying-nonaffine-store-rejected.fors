@@ -1,0 +1,12 @@
+//! name: varying_nonaffine_store_rejected
+//! rule: 01.R9
+//! expect: check-error
+//! detail: `out[idx[i]]` is a non-affine store index inside a `parallel for` region
+
+needs { };
+
+fn scatter_bad(inout out: Slice[f64], let idx: Slice[usize]) {
+    parallel for i in 0 ..< idx.len {
+        out[idx[i]] = 0.0;
+    }
+}

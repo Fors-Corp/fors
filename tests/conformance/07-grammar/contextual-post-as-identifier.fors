@@ -1,0 +1,8 @@
+//! name: contextual_keyword_post_as_identifier
+//! rule: 07.D10
+//! expect: parse-ok
+//! detail: "post" is a keyword only in its one listed slot; used as an ordinary let-binding name it must parse
+
+fn f() {
+    let post = 1;
+}

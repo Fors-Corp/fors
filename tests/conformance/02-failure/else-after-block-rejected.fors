@@ -1,0 +1,10 @@
+//! name: else-binds-call-only-after-block-rejected
+//! rule: 02.R5
+//! expect: parse-error
+//! detail: `else |e| { }` follows a plain block statement, not directly a call's `)`; the grammar has no handler slot there
+
+needs { };
+
+fn use_it() -> i64 {
+    { let v: i64 = 0; } else |e| { return 0; }
+}

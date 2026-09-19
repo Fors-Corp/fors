@@ -1,0 +1,8 @@
+//! name: unary_minus_and_literal_suffix
+//! rule: 07.D8
+//! expect: parse-ok
+//! detail: "-" is never fused into a numeric literal token; "-128i8" parses as unary_expr("-", 128i8)
+
+fn f() {
+    let a = -128i8;
+}

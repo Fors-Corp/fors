@@ -1,0 +1,10 @@
+//! name: brand_field_requires_param_accepted
+//! rule: 01.R15d
+//! expect: parse-ok
+//! detail: n/a
+
+needs { };
+
+struct Node[A: brand] { val: i64 }
+
+struct Holder[A: brand] { r: Ref[Node[A], A] }

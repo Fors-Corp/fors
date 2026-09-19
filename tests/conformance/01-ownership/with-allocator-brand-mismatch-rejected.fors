@@ -1,0 +1,15 @@
+//! name: with_allocator_brand
+//! rule: 01.R18
+//! expect: check-error
+//! detail: `deinit` is called on an `Own[i64, one]` value using an allocator of a different brand `two`
+
+needs { };
+
+fn use_it(let n: i64) {
+    with allocator one: PageAllocator {
+        var b: Own[i64, one] = one.create(n);
+        with allocator two: PageAllocator {
+            two.deinit(move b);
+        }
+    }
+}

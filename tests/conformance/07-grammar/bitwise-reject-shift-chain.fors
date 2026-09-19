@@ -1,0 +1,8 @@
+//! name: bitwise_needs_parens
+//! rule: 07.D12
+//! expect: parse-error
+//! detail: "<<" and ">>" are single-use inside bit_expr; a second shift in the same chain needs parentheses
+
+fn f(let a: i32, let b: i32, let c: i32) {
+    let r = a << b << c;
+}

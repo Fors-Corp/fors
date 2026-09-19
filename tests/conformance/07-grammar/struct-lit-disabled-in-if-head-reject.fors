@@ -1,0 +1,11 @@
+//! name: struct_lit_disabled_in_heads
+//! rule: 07.D1
+//! expect: parse-error
+//! detail: inside an if head (expr_ns) struct_lit is disabled, so "{" after P starts the then-block, leaving a dangling "x: 0}" that cannot parse
+
+struct P { x: i32 }
+
+fn f() {
+    if P { x: 0 } {
+    }
+}

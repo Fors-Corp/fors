@@ -1,0 +1,13 @@
+//! name: raise-only-in-raises-fn
+//! rule: 02.R1
+//! expect: check-error
+//! detail: a `raise` statement appears in a function that does not declare `raises`
+
+needs { };
+
+enum Err { empty }
+
+fn take(let n: usize) -> i64 {
+    if n == 0 { raise Err.empty; }
+    return 1;
+}

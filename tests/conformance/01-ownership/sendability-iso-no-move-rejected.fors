@@ -1,0 +1,16 @@
+//! name: sendability_iso_no_move_rejected
+//! rule: 01.R13
+//! expect: check-error
+//! detail: an `iso` value is captured into `spawn` without `move`
+
+needs { };
+
+fn process(sink data: iso Buffer[u8]) {
+    discard data;
+}
+
+fn spawn_work(sink data: iso Buffer[u8]) {
+    parallel {
+        spawn process(data);
+    }
+}

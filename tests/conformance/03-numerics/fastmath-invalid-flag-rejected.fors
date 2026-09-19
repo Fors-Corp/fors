@@ -1,0 +1,15 @@
+//! name: fastmath_flag_set_is_fixed
+//! rule: 03.R8
+//! expect: check-error
+//! detail: @fastmath(bogus) must be diagnosed: bogus is not in {reassoc, contract, nsz, finite, recip}
+
+module m;
+needs { };
+
+fn f(let a: f64, let b: f64, let c: f64) -> f64 {
+    var r: f64 = 0.0;
+    @fastmath(bogus) {
+        r = a * b + c;
+    }
+    return r;
+}

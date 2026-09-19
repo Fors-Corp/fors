@@ -1,0 +1,12 @@
+//! name: trap-div-zero
+//! rule: 02.Definitions
+//! expect: trap
+//! detail: div-zero
+
+needs { };
+
+fn main(sink w: World) {
+    let a: i64 = 10;
+    let b: i64 = 0;
+    let c: i64 = a / b;
+}

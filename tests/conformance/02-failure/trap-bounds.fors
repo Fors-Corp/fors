@@ -1,0 +1,11 @@
+//! name: trap-bounds
+//! rule: 02.Definitions
+//! expect: trap
+//! detail: bounds
+
+needs { };
+
+fn main(sink w: World) {
+    var buf: Buffer[i64] = Buffer.fixed(4);
+    buf.slice[10] = 1;
+}

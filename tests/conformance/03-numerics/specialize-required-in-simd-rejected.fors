@@ -1,0 +1,18 @@
+//! name: generics_specialize_enforced_in_simd
+//! rule: 03.R18
+//! expect: check-error
+//! detail: an unspecialized witness-table generic call (`add(v[i], v[i])`) inside a `simd for` body must be diagnosed
+
+module m;
+needs { };
+
+fn add[T](let a: T, let b: T) -> T {
+    return a + b;
+}
+
+fn f(let v: vector[f32, 8]) -> vector[f32, 8] {
+    simd for i in 0 ..< 8 {
+        var r: f32 = add(v[i], v[i]);
+    }
+    return v;
+}

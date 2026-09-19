@@ -1,0 +1,8 @@
+//! name: reserved_keyword_true_as_identifier
+//! rule: 07.Reserved
+//! expect: parse-error
+//! detail: "true" is reserved and never resolves as an identifier, so it cannot fill the binding slot of a let statement
+
+fn f() {
+    let true = 1;
+}

@@ -1,0 +1,8 @@
+//! name: not_is_low
+//! rule: 07.OT8
+//! expect: parse-ok
+//! detail: "not a == b" parses as "not (a == b)" since "not" is level 8, well below comparison
+
+fn f(let a: bool, let b: bool) {
+    let r = not a == b;
+}

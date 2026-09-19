@@ -1,0 +1,12 @@
+//! name: varying_mixed_index_rejected
+//! rule: 01.R9
+//! expect: check-error
+//! detail: the varying-store index `out[i]` and the read `out[i - 1]` use different index expressions in the same region
+
+needs { };
+
+fn smooth_bad(inout out: Slice[f64]) {
+    parallel for i in 1 ..< out.len {
+        out[i] = out[i - 1];
+    }
+}

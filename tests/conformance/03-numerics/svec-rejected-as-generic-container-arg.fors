@@ -1,0 +1,11 @@
+//! name: svec_rejected_as_generic_container_argument
+//! rule: 03.R20
+//! expect: check-error
+//! detail: SVec[f64] as a generic container's type argument (Array[SVec[f64], 4]) must be diagnosed
+
+module m;
+needs { };
+
+fn f() {
+    var arr: Array[SVec[f64], 4];
+}

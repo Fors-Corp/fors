@@ -1,0 +1,19 @@
+//! name: merge_liveness_disagreement_rejected
+//! rule: 01.R8
+//! expect: check-error
+//! detail: `x` is moved on the `if` branch and left live on the `else` branch, disagreeing at the merge point
+
+needs { };
+
+struct Box { val: i64 }
+
+fn take(sink b: Box) {
+    discard b;
+}
+
+fn use_it(sink x: Box, let cond: bool) {
+    if cond {
+        take(move x);
+    } else {
+    }
+}

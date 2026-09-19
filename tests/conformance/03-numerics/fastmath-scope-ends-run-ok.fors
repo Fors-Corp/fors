@@ -1,0 +1,24 @@
+//! name: fastmath_scope_ends
+//! rule: 03.R8
+//! expect: run-ok
+//! detail: ok  -- Rule 8 permits but never requires fusing inside the block, so r1 is not checked; after the block r2 MUST be the unfused -2.220446049250313e-16 (fused would be -2.9511114736925357e-16)
+
+module m;
+needs { io.stdout };
+
+fn main(sink w: World) {
+    var out: io.Writer = move w.stdout;
+    var a: f64 = 1.6394267984578836;
+    var b: f64 = 1.025010755222667;
+    var c: f64 = -1.6804301008195948;
+    var r1: f64 = 0.0;
+    @fastmath(contract) {
+        r1 = a * b + c;
+    }
+    var r2: f64 = a * b + c;
+    if r2 == -2.220446049250313e-16 {
+        out.write_line("ok");
+    } else {
+        out.write_line("fail");
+    }
+}

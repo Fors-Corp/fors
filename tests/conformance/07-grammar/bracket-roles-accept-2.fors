@@ -1,0 +1,17 @@
+//! name: bracket_roles
+//! rule: 07.D5
+//! expect: parse-ok
+//! detail: "[" directly after a name in fn/impl introduces generics; attributes take "( )" for their own arguments
+
+@f(a: 1)
+fn g[T](let x: T) {
+    discard x;
+}
+
+struct A[T] { v: T }
+struct B { v: i32 }
+
+impl[T] A[T] for B {
+    fn h(let self: B) {
+    }
+}

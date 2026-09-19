@@ -1,0 +1,8 @@
+//! name: lex_nested_comment
+//! rule: 07.L2
+//! expect: parse-error
+//! detail: an unterminated nested block comment reaches EOF at depth > 0, reported as one error token to EOF
+
+fn f() {
+    /* a /* b */
+}

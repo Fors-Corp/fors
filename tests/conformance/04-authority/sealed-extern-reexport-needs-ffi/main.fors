@@ -1,0 +1,15 @@
+//! name: sealed_extern_reexport_needs_ffi
+//! rule: 04.R2a
+//! expect: check-error
+//! detail: calling vendor.blas.dgemm from a module that does not declare ffi must be diagnosed at the call site
+//! manifest:
+//! [capabilities.ffi]
+//! packages = ["std", "vendor"]
+
+module app.caller;
+needs { };
+use vendor.blas;
+
+fn call_it(let n: i32, let a: rawptr[f64]) {
+    vendor.blas.dgemm(n, a);
+}

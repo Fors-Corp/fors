@@ -1,0 +1,8 @@
+//! name: bare_operator_argument
+//! rule: 07.D7
+//! expect: parse-ok
+//! detail: an operator token followed by "," or ")" at an arg_value's start is a bare_op, syntactically legal in any call
+
+fn f(let xs: Slice[i32]) {
+    let r = reduce(+, xs, identity: 0.0);
+}

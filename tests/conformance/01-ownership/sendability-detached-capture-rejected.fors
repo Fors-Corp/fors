@@ -1,0 +1,12 @@
+//! name: structured_spawn_inout_capture_accepted_counterpart
+//! rule: 01.R13
+//! expect: check-error
+//! detail: `spawn` outside a structured `parallel { }` block captures local `n` by convention; only structured spawn may do this
+
+needs { };
+
+fn touch(let v: i64) { }
+
+fn use_it(let n: i64) {
+    spawn touch(n);
+}

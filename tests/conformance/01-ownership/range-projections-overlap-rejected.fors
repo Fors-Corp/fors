@@ -1,0 +1,18 @@
+//! name: range_projections_overlap_rejected
+//! rule: 01.R19b
+//! expect: check-error
+//! detail: two live `inout` range views of the same slice, built directly with `[..]` rather than a split primitive, are treated as overlapping
+
+needs { };
+
+fn fill(inout s: Slice[f64], let k: f64) {
+    s[0] = k;
+}
+
+fn use_it(inout buf: Slice[f64]) {
+    let mid: usize = buf.len / 2;
+    parallel {
+        spawn fill(&buf[0 ..< mid], 0.0);
+        fill(&buf[mid ..< buf.len], 1.0);
+    }
+}

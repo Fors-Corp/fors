@@ -1,0 +1,8 @@
+//! name: lex_numbers
+//! rule: 07.L4
+//! expect: parse-error
+//! detail: "1.5q" -- "q" is not a legal numeric suffix, so the glued identifier run is a lexical error
+
+fn f() {
+    let a = 1.5q;
+}

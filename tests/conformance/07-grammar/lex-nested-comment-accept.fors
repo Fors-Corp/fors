@@ -1,0 +1,9 @@
+//! name: lex_nested_comment
+//! rule: 07.L2
+//! expect: parse-ok
+//! detail: a nested /* */ block comment closes at the second "*/"; the quote inside is inert
+
+fn f() {
+    /* a /* b */ " */
+    let x = 1;
+}

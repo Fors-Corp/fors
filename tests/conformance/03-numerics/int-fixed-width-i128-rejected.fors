@@ -1,0 +1,11 @@
+//! name: int_fixed_width_rejects_i128
+//! rule: 03.R1
+//! expect: check-error
+//! detail: i128 is not a v1 integer width (i8..i64, u8..u64) and must be diagnosed
+
+module m;
+needs { };
+
+fn f(let x: i128) -> i128 {
+    return x;
+}

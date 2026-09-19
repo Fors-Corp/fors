@@ -1,0 +1,8 @@
+//! name: must_parse_ch01_06_examples
+//! rule: 07.Grammar
+//! expect: parse-ok
+//! detail: scoped(ident) ret_type nested inside a tuple ret_type parses (ch01 ex1)
+
+fn split(let s: Slice[u8]) -> (scoped(s) Slice[u8], scoped(s) Slice[u8]) {
+    (s, s)
+}

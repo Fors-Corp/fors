@@ -1,0 +1,10 @@
+//! name: must_parse_ch01_06_examples
+//! rule: 07.Grammar
+//! expect: parse-ok
+//! detail: a contract clause parses its expr in _ns mode, matching ch01's `pre i < self.len`
+
+fn at(let self: Vec[i32], let i: usize) -> i32
+    pre i < self.len
+{
+    self[i]
+}

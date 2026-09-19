@@ -1,0 +1,14 @@
+//! name: sendability_imm_spawn_accepted
+//! rule: 01.R13
+//! expect: parse-ok
+//! detail: n/a
+
+needs { };
+
+fn touch(let v: imm Buffer[u8]) { }
+
+fn use_it(let data: imm Buffer[u8]) {
+    parallel {
+        spawn touch(data);
+    }
+}

@@ -1,0 +1,17 @@
+//! name: handler-block-mismatched-type-rejected
+//! rule: 02.R5
+//! expect: check-error
+//! detail: the `else` block yields `true` (bool) but the call's success type is `i64`
+
+needs { };
+
+enum Err { empty }
+
+fn take(let n: usize) -> i64 raises Err {
+    if n == 0 { raise Err.empty; }
+    return 1;
+}
+
+fn use_it(let n: usize) -> i64 {
+    return take(n) else |e| { true };
+}

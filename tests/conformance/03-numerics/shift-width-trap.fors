@@ -1,0 +1,13 @@
+//! name: shift_by_width_traps
+//! rule: 03.R2
+//! expect: trap
+//! detail: shift
+
+module m;
+needs { };
+
+fn main(sink w: World) {
+    var x: u8 = 1;
+    var n: u8 = 8;
+    var z: u8 = x << n;
+}

@@ -1,0 +1,11 @@
+//! name: path_vs_dot_name
+//! rule: 07.D13
+//! expect: parse-ok
+//! detail: a primary path takes ".ident" greedily, so "a.b.c" is one path with two dotted segments
+
+struct Q { c: i32 }
+struct P { b: Q }
+
+fn f(let a: P) {
+    let x = a.b.c;
+}

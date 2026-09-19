@@ -1,0 +1,14 @@
+//! name: comptime_declared_file_read_accepted
+//! rule: 04.R13
+//! expect: parse-ok
+//! detail: accepted counterpart of comptime-file-read-undeclared-rejected.fors with @comptime_input(".config") declared
+
+module app;
+needs { };
+
+@comptime_input(".config")
+fn setup() {
+    comptime {
+        let data: Str = fs.read_to_string(".config");
+    }
+}

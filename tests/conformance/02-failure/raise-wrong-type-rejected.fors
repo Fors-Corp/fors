@@ -1,0 +1,13 @@
+//! name: raise-only-in-raises-fn-wrong-type
+//! rule: 02.R1
+//! expect: check-error
+//! detail: `raise 1;` raises a value of type `i64`, but the enclosing function declares `raises Err`
+
+needs { };
+
+enum Err { empty }
+
+fn take(let n: usize) -> i64 raises Err {
+    if n == 0 { raise 1; }
+    return 1;
+}

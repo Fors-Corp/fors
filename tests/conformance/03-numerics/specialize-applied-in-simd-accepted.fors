@@ -1,0 +1,19 @@
+//! name: generics_specialize_applied_accepted
+//! rule: 03.R18
+//! expect: parse-ok
+//! detail: accepted counterpart of specialize-required-in-simd-rejected.fors with @specialize added to add[T]
+
+module m;
+needs { };
+
+@specialize
+fn add[T](let a: T, let b: T) -> T {
+    return a + b;
+}
+
+fn f(let v: vector[f32, 8]) -> vector[f32, 8] {
+    simd for i in 0 ..< 8 {
+        var r: f32 = add(v[i], v[i]);
+    }
+    return v;
+}

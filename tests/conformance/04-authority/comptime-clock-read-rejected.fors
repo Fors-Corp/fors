@@ -1,0 +1,13 @@
+//! name: comptime_rejects_clock_read
+//! rule: 04.R12
+//! expect: check-error
+//! detail: a comptime block reaching the capability value `c: Clock` must fail to build (Rule 12); `clock` is declared in needs so Rule 1 is not the cause
+
+module app;
+needs { clock };
+
+fn setup(let c: Clock) {
+    comptime {
+        let t = c.now();
+    }
+}

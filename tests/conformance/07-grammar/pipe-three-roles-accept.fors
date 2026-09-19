@@ -1,0 +1,13 @@
+//! name: pipe_three_roles
+//! rule: 07.D2
+//! expect: parse-ok
+//! detail: "|" as closure delimiter, bitwise-or chain, bare_op argument, and a call's error handler binder all parse in their own slots
+
+fn f(let a: i32, let b: i32, let c: i32, let xs: Slice[i32]) {
+    let cl = |x: i32| x + 1;
+    let bw = a | b | c;
+    let r = reduce(|, xs);
+    g() else |e| {
+        raise e;
+    };
+}

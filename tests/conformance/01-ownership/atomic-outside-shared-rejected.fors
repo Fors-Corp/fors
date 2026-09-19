@@ -1,0 +1,8 @@
+//! name: atomic_outside_shared_rejected
+//! rule: 01.R21
+//! expect: check-error
+//! detail: `atomic[i64]` is used as a field of a struct not marked `Shared`
+
+needs { };
+
+struct Counter { n: atomic[i64] }

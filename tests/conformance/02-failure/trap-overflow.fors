@@ -1,0 +1,11 @@
+//! name: trap-overflow
+//! rule: 02.Definitions
+//! expect: trap
+//! detail: overflow
+
+needs { };
+
+fn main(sink w: World) {
+    let a: i8 = 127;
+    let b: i8 = a + 1;
+}

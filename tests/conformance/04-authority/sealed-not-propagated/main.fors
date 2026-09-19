@@ -1,0 +1,8 @@
+//! name: sealed_not_propagated
+//! rule: 04.R2
+//! expect: parse-ok
+//! detail: importer of a syscall-holding module needs only fs.read, not syscall (chapter's own example pair, verbatim)
+
+module app.cfg;
+needs { fs.read };
+use std.fs;

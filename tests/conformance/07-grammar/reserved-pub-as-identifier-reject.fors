@@ -1,0 +1,8 @@
+//! name: reserved_keyword_pub_as_identifier
+//! rule: 07.Reserved
+//! expect: parse-error
+//! detail: "pub" is reserved and never resolves as an identifier, so it cannot fill the binding slot of a let statement
+
+fn f() {
+    let pub = 1;
+}

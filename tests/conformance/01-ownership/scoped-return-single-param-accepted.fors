@@ -1,0 +1,14 @@
+//! name: scoped_return_single_param_accepted
+//! rule: 01.R19
+//! expect: parse-ok
+//! detail: n/a
+
+needs { };
+
+@unsafe(invariant: "the two ranges partition s and never overlap")
+fn split_at[T](inout s: Slice[T], let mid: usize)
+    -> (scoped(s) Slice[T], scoped(s) Slice[T])
+    pre mid <= s.len
+{
+    return (s[0 ..< mid], s[mid ..< s.len]);
+}

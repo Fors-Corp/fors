@@ -1,0 +1,13 @@
+//! name: contract-proved-undischarged-rejected
+//! rule: 02.R10
+//! expect: check-error
+//! detail: under module policy `.proved`, the `pre` contract on `write_at` cannot be discharged by the proof engine
+
+module app.buf;
+contracts: .proved;
+
+fn write_at(inout self: Slice[i64], let i: usize, let v: i64)
+    pre i < self.len
+{
+    self[i] = v;
+}

@@ -1,0 +1,13 @@
+//! name: int_overflow_traps_sub
+//! rule: 03.R2
+//! expect: trap
+//! detail: overflow
+
+module m;
+needs { };
+
+fn main(sink w: World) {
+    var x: i32 = -2147483648;
+    var y: i32 = 1;
+    var z: i32 = x - y;
+}

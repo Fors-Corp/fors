@@ -1,0 +1,8 @@
+//! name: attribute_uses_parens_not_brackets
+//! rule: 07.D5
+//! expect: parse-error
+//! detail: attribute arguments always use "( )"; "[ ]" after an attribute name is not a legal attr_arg list
+
+@attr[a: 1]
+fn f() {
+}

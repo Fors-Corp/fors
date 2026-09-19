@@ -1,0 +1,11 @@
+//! name: unchecked_op_needs_unsafe_decl
+//! rule: 03.R4
+//! expect: check-error
+//! detail: x.unchecked_add(y) in a declaration with no @unsafe(invariant: "...") must be diagnosed
+
+module m;
+needs { };
+
+fn bad(let x: i32, let y: i32) -> i32 {
+    return x.unchecked_add(y);
+}

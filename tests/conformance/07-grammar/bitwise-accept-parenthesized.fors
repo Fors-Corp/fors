@@ -1,0 +1,10 @@
+//! name: bitwise_needs_parens
+//! rule: 07.D12
+//! expect: parse-ok
+//! detail: parenthesising isolates each level: additive inside its own (), a same-operator "|" chain, and a bitwise result compared once
+
+fn f(let a: i32, let b: i32, let c: i32, let m: i32) {
+    let r1 = (a + b) & c;
+    let r2 = a | b | c;
+    let r3 = (a & m) != 0;
+}

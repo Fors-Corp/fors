@@ -1,0 +1,10 @@
+//! name: must_parse_ch01_06_examples
+//! rule: 07.Grammar
+//! expect: parse-ok
+//! detail: with_stmt over an arena binding, matching ch01 ex2
+
+fn run() {
+    with arena a: Arena {
+        let x = a.alloc(4);
+    }
+}

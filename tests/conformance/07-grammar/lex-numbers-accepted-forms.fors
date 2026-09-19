@@ -1,0 +1,15 @@
+//! name: lex_numbers
+//! rule: 07.L4
+//! expect: parse-ok
+//! detail: 1..<2 is range(1,2); 1.abs() shows 1 then . then abs; 1.e3 is field access .e3; 1e3, 1.5e-3, 300u32, 0xFFu8, 1_000 each lex as one number token
+
+fn f() {
+    let a = 1..<2;
+    let b = 1.abs();
+    let c = 1.e3;
+    let d = 1e3;
+    let g = 1.5e-3;
+    let h = 300u32;
+    let i = 0xFFu8;
+    let j = 1_000;
+}

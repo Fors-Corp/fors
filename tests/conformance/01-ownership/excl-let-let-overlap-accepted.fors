@@ -1,0 +1,16 @@
+//! name: excl_let_let_overlap_accepted
+//! rule: 01.R7
+//! expect: parse-ok
+//! detail: n/a
+
+needs { };
+
+fn combine(let x: i64, let y: i64) -> i64 {
+    return x + y;
+}
+
+struct Pair { b: i64 }
+
+fn use_it(let a: Pair) -> i64 {
+    return combine(a.b, a.b);
+}

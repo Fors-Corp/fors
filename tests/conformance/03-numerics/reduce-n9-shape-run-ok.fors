@@ -1,0 +1,18 @@
+//! name: reduce_shape_reference_n9
+//! rule: 03.R11
+//! expect: run-ok
+//! detail: ok  -- tree(n=9) = (((x0-x8)-x1)-(x2-x3))-((x4-x5)-(x6-x7)) with xi = 2^i gives -301.0; a serial left fold gives -509.0
+
+module m;
+needs { io.stdout };
+
+fn main(sink w: World) {
+    var out: io.Writer = move w.stdout;
+    var xs: Slice[f64] = [1.0, 2.0, 4.0, 8.0, 16.0, 32.0, 64.0, 128.0, 256.0];
+    var r: f64 = reduce(-, xs);
+    if r == -301.0 {
+        out.write_line("ok");
+    } else {
+        out.write_line("fail");
+    }
+}

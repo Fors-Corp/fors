@@ -1,0 +1,14 @@
+//! name: struct_lit_disabled_in_heads
+//! rule: 07.D1
+//! expect: parse-ok
+//! detail: parenthesising the struct literal re-enables it inside an expr_ns head; a contract's expr_ns still parses an ordinary comparison
+
+struct P { x: i32 }
+
+fn ok(let self: P) pre self.x < 10 {
+    if (P { x: 0 }).x {
+    }
+}
+
+fn g(let i: usize, let s: Slice[u8]) pre i < s.len {
+}

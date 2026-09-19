@@ -1,0 +1,17 @@
+//! name: arena_brand_mismatch_rejected
+//! rule: 01.R16
+//! expect: check-error
+//! detail: a `Ref[Node[one], one]` is dereferenced through arena `two`, whose brand differs
+
+needs { };
+
+struct Node[A: brand] { val: i64 }
+
+fn use_it() {
+    with arena one: Arena[Node[one]] {
+        let x: Ref[Node[one], one] = one.alloc(Node { val: 1 });
+        with arena two: Arena[Node[two]] {
+            let v: i64 = two[x].val;
+        }
+    }
+}

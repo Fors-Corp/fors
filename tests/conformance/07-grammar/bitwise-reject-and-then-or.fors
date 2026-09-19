@@ -1,0 +1,8 @@
+//! name: bitwise_needs_parens
+//! rule: 07.D12
+//! expect: parse-error
+//! detail: "&" and "|" are different same-operator chains at the same flat level and cannot mix without parentheses
+
+fn f(let a: i32, let b: i32, let c: i32) {
+    let r = a & b | c;
+}

@@ -1,0 +1,8 @@
+//! name: comparison_no_chaining
+//! rule: 07.D12
+//! expect: parse-error
+//! detail: "a < b < c" chains two cmp_op; cmp_expr allows at most one comparison per range_expr operand
+
+fn f(let a: i32, let b: i32, let c: i32) {
+    let r = a < b < c;
+}

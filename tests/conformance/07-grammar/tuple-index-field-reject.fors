@@ -1,0 +1,8 @@
+//! name: path_vs_dot_name
+//! rule: 07.D13
+//! expect: parse-error
+//! detail: tuple index fields ("t.0") do not exist; postfix "." must be followed by an ident, and a number cannot fill that slot
+
+fn f(let t: (i32, i32)) {
+    let y = t.0;
+}

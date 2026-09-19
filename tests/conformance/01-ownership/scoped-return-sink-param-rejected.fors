@@ -1,0 +1,10 @@
+//! name: scoped_return_sink_param_rejected
+//! rule: 01.R19
+//! expect: check-error
+//! detail: `scoped(v)` names a `sink` parameter; the designated parameter MUST have convention `let` or `inout`
+
+needs { };
+
+fn peek[T](sink v: Slice[T]) -> scoped(v) Slice[T] {
+    return v[0 ..< v.len];
+}

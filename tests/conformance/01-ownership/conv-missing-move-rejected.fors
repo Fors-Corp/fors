@@ -1,0 +1,16 @@
+//! name: conv-missing-move-rejected
+//! rule: 01.R2
+//! expect: check-error
+//! detail: call site passes place `b` to a `sink` parameter without the `move` marker
+
+needs { };
+
+struct Box { val: i64 }
+
+fn consume_box(sink b: Box) {
+    discard b;
+}
+
+fn use_it(sink b: Box) {
+    consume_box(b);
+}

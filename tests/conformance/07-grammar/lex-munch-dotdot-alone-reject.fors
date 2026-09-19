@@ -1,0 +1,8 @@
+//! name: lex_munch
+//! rule: 07.L7
+//! expect: parse-error
+//! detail: ".." not followed by "<" or "=" is a lexical error
+
+fn f() {
+    let a = 1..2;
+}

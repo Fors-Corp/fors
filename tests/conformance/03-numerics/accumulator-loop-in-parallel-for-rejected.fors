@@ -1,0 +1,15 @@
+//! name: accumulator_loop_not_parallelized
+//! rule: 03.R15
+//! expect: check-error
+//! detail: a scalar accumulator (`acc = acc + x`) inside `parallel for` must be diagnosed, naming the loop
+
+module m;
+needs { };
+
+fn f(let xs: Slice[f64]) -> f64 {
+    var acc: f64 = 0.0;
+    parallel for x in xs {
+        acc = acc + x;
+    }
+    return acc;
+}

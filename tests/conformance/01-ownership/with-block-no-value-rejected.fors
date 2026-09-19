@@ -1,0 +1,15 @@
+//! name: with_block_no_value
+//! rule: 01.R15
+//! expect: parse-error
+//! detail: `with arena { }` is a statement (Rule 15: it yields no value) and has no expression form, so it cannot appear on the right of `=`
+
+needs { };
+
+struct Node[A: brand] { val: i64 }
+
+fn use_it() -> i64 {
+    let r: i64 = with arena a: Arena[Node[a]] {
+        1
+    };
+    return r;
+}

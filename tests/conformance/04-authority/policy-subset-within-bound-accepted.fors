@@ -1,0 +1,11 @@
+//! name: policy_subset_within_bound_accepted
+//! rule: 04.R3
+//! expect: parse-ok
+//! detail: accepted counterpart with the manifest policy widened to include net
+//! manifest:
+//! [targets.default]
+//! policy = ["fs.read", "net"]
+
+module app.cfg;
+needs { fs.read, net };
+use std.fs;

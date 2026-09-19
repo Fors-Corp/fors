@@ -1,0 +1,10 @@
+//! name: bracket_roles
+//! rule: 07.D5
+//! expect: parse-ok
+//! detail: "[" after a postfix expression is Bracket, after a path in type position is a generic arg list, and at primary start it is an array literal
+
+fn f(let xs: Slice[i32], let i: usize) {
+    let e = xs[i];
+    let v: Vec[i32] = [1, 2, 3];
+    let z = [0; 4];
+}

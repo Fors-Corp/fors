@@ -1,0 +1,16 @@
+//! name: excl_inout_inout_overlap_rejected
+//! rule: 01.R7
+//! expect: check-error
+//! detail: two simultaneous `inout` accesses to the same path `a.b` in one call
+
+needs { };
+
+fn combine(inout x: i64, inout y: i64) {
+    x = x + y;
+}
+
+struct Pair { b: i64 }
+
+fn use_it(inout a: Pair) {
+    combine(&a.b, &a.b);
+}

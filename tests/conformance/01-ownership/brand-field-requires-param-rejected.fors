@@ -1,0 +1,10 @@
+//! name: brand_field_requires_param
+//! rule: 01.R15d
+//! expect: check-error
+//! detail: a struct field's type mentions brand `A` but the struct itself declares no `[A: brand]` parameter
+
+needs { };
+
+struct Node[A: brand] { val: i64 }
+
+struct Holder { r: Ref[Node[A], A] }

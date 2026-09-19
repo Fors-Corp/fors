@@ -1,0 +1,16 @@
+//! name: arena_generation_checked_in_release
+//! rule: 01.R17
+//! expect: trap
+//! detail: arena-generation
+
+needs { };
+
+struct Node[A: brand] { val: i64 }
+
+fn main(sink w: World) {
+    with arena a: Arena[Node[a]] {
+        let r: Ref[Node[a], a] = a.alloc(Node { val: 1 });
+        a.reset();
+        let v: i64 = a[r].val;
+    }
+}

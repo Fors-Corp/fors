@@ -1,0 +1,11 @@
+//! name: unsafe_attribute_rejects_block_form
+//! rule: 04.R10
+//! expect: check-error
+//! detail: bare `unsafe { }` (parses as a struct literal of an undefined type `unsafe`) must be diagnosed by the checker
+
+module app;
+needs { };
+
+fn f() {
+    unsafe { };
+}

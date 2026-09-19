@@ -1,0 +1,17 @@
+//! name: raises-no-infer
+//! rule: 02.R1
+//! expect: check-error
+//! detail: a call to a `raises` function is not immediately followed by `?` or `else |e| { }`
+
+needs { };
+
+enum Err { empty }
+
+fn take(let n: usize) -> i64 raises Err {
+    if n == 0 { raise Err.empty; }
+    return 1;
+}
+
+fn use_it(let n: usize) {
+    take(n);
+}

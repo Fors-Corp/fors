@@ -1,0 +1,26 @@
+//! name: accumulator_loop_accepted_outside_parallel_for
+//! rule: 03.R15
+//! expect: run-ok
+//! detail: ok  -- accepted counterpart of accumulator-loop-in-parallel-for-rejected.fors with `parallel for` replaced by plain `for`
+
+module m;
+needs { io.stdout };
+
+fn f(let xs: Slice[f64]) -> f64 {
+    var acc: f64 = 0.0;
+    for x in xs {
+        acc = acc + x;
+    }
+    return acc;
+}
+
+fn main(sink w: World) {
+    var out: io.Writer = move w.stdout;
+    var xs: Slice[f64] = [1.0, 2.0, 3.0];
+    var r: f64 = f(xs);
+    if r == 6.0 {
+        out.write_line("ok");
+    } else {
+        out.write_line("fail");
+    }
+}

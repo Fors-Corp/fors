@@ -1,0 +1,15 @@
+//! name: contextual_kw_as_identifier
+//! rule: 07.D10
+//! expect: parse-ok
+//! detail: each contextual keyword is an ordinary identifier outside its one recognised slot
+
+fn f() {
+    let arena = 1;
+    let brand = 2;
+    let out = 3;
+    let set = 4;
+    let scoped = 5;
+    let needs = 6;
+    let pre = 7;
+    let grain = 8;
+}

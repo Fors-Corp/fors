@@ -1,0 +1,20 @@
+//! name: float_default_no_fma
+//! rule: 03.R7
+//! expect: run-ok
+//! detail: ok  -- unfused a*b+c = -2.220446049250313e-16 (python: a=1.6394267984578836; b=1.025010755222667; c=-1.6804301008195948; a*b+c)
+
+module m;
+needs { io.stdout };
+
+fn main(sink w: World) {
+    var out: io.Writer = move w.stdout;
+    var a: f64 = 1.6394267984578836;
+    var b: f64 = 1.025010755222667;
+    var c: f64 = -1.6804301008195948;
+    var r: f64 = a * b + c;
+    if r == -2.220446049250313e-16 {
+        out.write_line("ok");
+    } else {
+        out.write_line("fail");
+    }
+}

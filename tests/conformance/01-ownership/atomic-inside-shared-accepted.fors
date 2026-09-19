@@ -1,0 +1,9 @@
+//! name: atomic_inside_shared_accepted
+//! rule: 01.R21
+//! expect: parse-ok
+//! detail: n/a  -- parse only; ch01 R21 does not say how a type is Shared-marked, the @Shared attribute here is a placeholder
+
+needs { };
+
+@Shared
+struct Counter { n: atomic[i64] }

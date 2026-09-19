@@ -1,0 +1,26 @@
+//! name: scoped_result_extends_inout_access_accepted
+//! rule: 01.R19a
+//! expect: parse-ok
+//! detail: n/a
+
+needs { };
+
+@unsafe(invariant: "the two ranges partition s and never overlap")
+fn split_at[T](inout s: Slice[T], let mid: usize)
+    -> (scoped(s) Slice[T], scoped(s) Slice[T])
+    pre mid <= s.len
+{
+    return (s[0 ..< mid], s[mid ..< s.len]);
+}
+
+fn fill(inout s: Slice[f64], let k: f64) {
+    s[0] = k;
+}
+
+fn use_it(inout buf: Slice[f64]) {
+    let (lo, hi) = split_at(&buf, buf.len / 2);
+    parallel {
+        spawn fill(&lo, 0.0);
+        fill(&hi, 1.0);
+    }
+}

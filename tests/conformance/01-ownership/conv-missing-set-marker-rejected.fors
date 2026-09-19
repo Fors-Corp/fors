@@ -1,0 +1,15 @@
+//! name: conv-missing-set-marker-rejected
+//! rule: 01.R2
+//! expect: check-error
+//! detail: call site passes place `v` to a `set` parameter without the `&out` marker
+
+needs { };
+
+fn fill(set out: i64) {
+    out = 7;
+}
+
+fn use_it() {
+    var v: i64;
+    fill(v);
+}

@@ -1,0 +1,8 @@
+//! name: named_argument_label
+//! rule: 07.D6
+//! expect: parse-ok
+//! detail: "ident :" at the start of an arg_value is a named-argument label, chosen with 2 tokens of lookahead
+
+fn f(let x: i32) {
+    g(x: 1);
+}

@@ -1,0 +1,12 @@
+//! name: needs_undeclared_capability_rejected
+//! rule: 04.R1
+//! expect: check-error
+//! detail: moving w.stdout / calling write_line without declaring io.stdout in needs must be diagnosed
+
+module app;
+needs { };
+
+fn main(sink w: World) {
+    var out: io.Writer = move w.stdout;
+    out.write_line("ok");
+}

@@ -1,0 +1,8 @@
+//! name: fn_type_tail_binding
+//! rule: 07.D14
+//! expect: parse-ok
+//! detail: "-> T raises E" in a fn_type binds to the innermost fn, so a callback parameter's own raises clause parses without ambiguity
+
+fn run(let cb: fn(let i32) -> i32 raises Err) {
+    discard cb;
+}

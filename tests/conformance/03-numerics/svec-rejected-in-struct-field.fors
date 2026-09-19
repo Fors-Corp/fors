@@ -1,0 +1,11 @@
+//! name: svec_rejected_in_struct_field
+//! rule: 03.R20
+//! expect: check-error
+//! detail: SVec[f64] as a struct field type must be diagnosed
+
+module m;
+needs { };
+
+struct Batch {
+    data: SVec[f64],
+}

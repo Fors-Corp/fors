@@ -1,0 +1,7 @@
+//! name: must_parse_ch01_06_examples
+//! rule: 07.Grammar
+//! expect: parse-ok
+//! detail: an attribute on an extern_fn_decl, matching ch04's attributed extern declarations
+
+@unsafe
+extern "c" fn dgemm(let n: i32);

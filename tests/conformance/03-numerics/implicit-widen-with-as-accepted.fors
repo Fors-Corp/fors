@@ -1,0 +1,22 @@
+//! name: explicit_as_widen_accepted
+//! rule: 03.R5
+//! expect: run-ok
+//! detail: ok
+
+module m;
+needs { io.stdout };
+
+fn f(let x: u8) -> u32 {
+    var y: u32 = x as u32;
+    return y;
+}
+
+fn main(sink w: World) {
+    var out: io.Writer = move w.stdout;
+    var r: u32 = f(5u8);
+    if r == 5 {
+        out.write_line("ok");
+    } else {
+        out.write_line("fail");
+    }
+}

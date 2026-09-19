@@ -1,0 +1,11 @@
+//! name: needs_absent_means_empty
+//! rule: 04.R1
+//! expect: check-error
+//! detail: a module with no needs clause at all using io.stdout must be diagnosed, same as an explicit needs {};
+
+module app;
+
+fn main(sink w: World) {
+    var out: io.Writer = move w.stdout;
+    out.write_line("ok");
+}

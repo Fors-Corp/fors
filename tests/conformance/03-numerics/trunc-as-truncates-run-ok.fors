@@ -1,0 +1,18 @@
+//! name: trunc_as_truncates
+//! rule: 03.R6
+//! expect: run-ok
+//! detail: ok
+
+module m;
+needs { io.stdout };
+
+fn main(sink w: World) {
+    var out: io.Writer = move w.stdout;
+    var f: f64 = 3.9;
+    var i: i32 = f.trunc_as[i32]();
+    if i == 3 {
+        out.write_line("ok");
+    } else {
+        out.write_line("fail");
+    }
+}

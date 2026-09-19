@@ -1,0 +1,17 @@
+//! name: else-binds-call-only-after-question-rejected
+//! rule: 02.R5
+//! expect: parse-error
+//! detail: `?` and `else |e| { }` are alternatives on one call (ch02 Rule 5); `g(n)? else |e| {}` combines both, which does not parse
+
+needs { };
+
+enum Err { empty }
+
+fn g(let n: usize) -> i64 raises Err {
+    if n == 0 { raise Err.empty; }
+    return 1;
+}
+
+fn use_it(let n: usize) -> i64 raises Err {
+    return g(n)? else |e| { return 0; };
+}

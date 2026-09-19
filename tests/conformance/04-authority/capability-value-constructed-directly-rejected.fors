@@ -1,0 +1,11 @@
+//! name: capability_value_no_public_constructor
+//! rule: 04.R7
+//! expect: check-error
+//! detail: fs.Dir { } constructed directly (not narrowed from World) must be diagnosed
+
+module app;
+needs { fs.read };
+
+fn f() {
+    var d: fs.Dir = fs.Dir { };
+}

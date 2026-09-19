@@ -1,0 +1,12 @@
+//! name: varying_zero_coefficient_rejected
+//! rule: 01.R9
+//! expect: check-error
+//! detail: `out[0 * i + 3]` has a zero coefficient on `i`, so every iteration writes the same index
+
+needs { };
+
+fn broadcast_bad(inout out: Slice[f64]) {
+    parallel for i in 0 ..< out.len {
+        out[0 * i + 3] = 1.0;
+    }
+}

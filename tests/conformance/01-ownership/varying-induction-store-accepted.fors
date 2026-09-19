@@ -1,0 +1,12 @@
+//! name: varying_induction_store_accepted
+//! rule: 01.R9
+//! expect: parse-ok
+//! detail: n/a
+
+needs { };
+
+fn scale(inout out: Slice[f64], let k: f64) {
+    parallel for i in 0 ..< out.len {
+        out[i] = out[i] * k;
+    }
+}

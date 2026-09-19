@@ -1,0 +1,13 @@
+//! name: arena_no_constructor
+//! rule: 01.R15a
+//! expect: check-error
+//! detail: an `Arena[T, A]` value is constructed directly with a struct literal instead of arising from a `with arena` block
+
+needs { };
+
+struct Node[A: brand] { val: i64 }
+
+fn use_it[A: brand](inout a: Arena[Node[A], A]) {
+    var bad: Arena[Node[A], A] = Arena[Node[A], A] { };
+    discard bad;
+}

@@ -1,0 +1,27 @@
+//! name: error-from-single-hop-two-hops-rejected
+//! rule: 02.R3
+//! expect: check-error
+//! detail: propagating `NetError` into `raises AppError` needs two chained `ErrorFrom` hops (via `MidError`); `?` performs only one lookup
+
+needs { };
+
+enum NetError { timeout }
+enum MidError { wrapped(NetError) }
+enum AppError { wrapped(MidError) }
+
+impl ErrorFrom[NetError] for MidError {
+    fn from(let e: NetError) -> MidError { return MidError.wrapped(e); }
+}
+
+impl ErrorFrom[MidError] for AppError {
+    fn from(let e: MidError) -> AppError { return AppError.wrapped(e); }
+}
+
+fn get(let n: i64) -> i64 raises NetError {
+    if n == 0 { raise NetError.timeout; }
+    return n;
+}
+
+fn fetch(let n: i64) -> i64 raises AppError {
+    return get(n)?;
+}

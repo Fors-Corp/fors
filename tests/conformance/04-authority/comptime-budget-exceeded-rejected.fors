@@ -1,0 +1,16 @@
+//! name: comptime_budget_exceeded_named
+//! rule: 04.R14
+//! expect: check-error
+//! detail: a 100,000,000-iteration comptime loop must exceed COMPTIME_STEP_BUDGET and fail, naming the declaration (the chapter defers the budget's numeric value, so this assumes it is well under 1e8 steps)
+
+module app;
+needs { };
+
+fn setup() {
+    comptime {
+        var i: i64 = 0;
+        while i < 100000000 {
+            i = i.wrap_add(1);
+        }
+    }
+}

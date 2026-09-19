@@ -1,0 +1,8 @@
+//! name: reserved_keyword_while_as_identifier
+//! rule: 07.Reserved
+//! expect: parse-error
+//! detail: "while" is reserved and never resolves as an identifier, so it cannot fill the binding slot of a let statement
+
+fn f() {
+    let while = 1;
+}

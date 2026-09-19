@@ -1,0 +1,14 @@
+//! name: conv-inout-marker-present-accepted
+//! rule: 01.R2
+//! expect: parse-ok
+//! detail: n/a
+
+needs { };
+
+fn bump(inout x: i64) {
+    x = x + 1;
+}
+
+fn use_it(inout n: i64) {
+    bump(&n);
+}

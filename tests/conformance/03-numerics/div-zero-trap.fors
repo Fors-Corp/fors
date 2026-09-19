@@ -1,0 +1,13 @@
+//! name: div_zero_traps
+//! rule: 03.R2
+//! expect: trap
+//! detail: div-zero
+
+module m;
+needs { };
+
+fn main(sink w: World) {
+    var x: i32 = 10;
+    var y: i32 = 0;
+    var z: i32 = x / y;
+}

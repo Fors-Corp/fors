@@ -1,0 +1,9 @@
+//! name: recover_missing_semicolon
+//! rule: 07.ER1
+//! expect: parse-error
+//! detail: exactly one diagnostic ("missing ;") must be reported between "let a = 1" and "let b = 2;"; the parser inserts it virtually and "let b = 2;" is still parsed
+
+fn f() {
+    let a = 1
+    let b = 2;
+}

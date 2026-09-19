@@ -1,0 +1,14 @@
+//! name: postfix-try-non-raises-rejected
+//! rule: 02.R2
+//! expect: check-error
+//! detail: postfix `?` is applied to a call whose static type is not `raises`
+
+needs { };
+
+fn add_one(let n: i64) -> i64 {
+    return n + 1;
+}
+
+fn use_it(let n: i64) -> i64 {
+    return add_one(n)?;
+}

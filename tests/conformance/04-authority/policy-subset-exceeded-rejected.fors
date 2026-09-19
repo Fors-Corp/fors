@@ -1,0 +1,11 @@
+//! name: policy_subset_enforced
+//! rule: 04.R3
+//! expect: check-error
+//! detail: checked requirement {fs.read, net} exceeds the manifest policy {fs.read} and must be diagnosed
+//! manifest:
+//! [targets.default]
+//! policy = ["fs.read"]
+
+module app.cfg;
+needs { fs.read, net };
+use std.fs;

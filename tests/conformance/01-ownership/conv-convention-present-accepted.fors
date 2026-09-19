@@ -1,0 +1,10 @@
+//! name: conv-convention-present-accepted
+//! rule: 01.R1
+//! expect: parse-ok
+//! detail: n/a
+
+needs { };
+
+fn touch(let i: usize) {
+    discard i;
+}

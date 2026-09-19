@@ -1,0 +1,12 @@
+//! name: int_no_implicit_widen
+//! rule: 03.R5
+//! expect: check-error
+//! detail: assigning a u8 into a u32 binding with no `as` must be diagnosed at the let_stmt initializer
+
+module m;
+needs { };
+
+fn f(let x: u8) -> u32 {
+    var y: u32 = x;
+    return y;
+}

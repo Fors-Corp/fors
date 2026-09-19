@@ -1,0 +1,8 @@
+//! name: lex_numbers
+//! rule: 07.L4
+//! expect: parse-error
+//! detail: "1__0" has two consecutive underscores inside a digit run, which the dec grammar (digit {["_"] digit}) does not allow
+
+fn f() {
+    let a = 1__0;
+}

@@ -1,0 +1,8 @@
+//! name: contextual_keyword_arena_as_identifier
+//! rule: 07.D10
+//! expect: parse-ok
+//! detail: "arena" is a keyword only in its one listed slot; used as an ordinary let-binding name it must parse
+
+fn f() {
+    let arena = 1;
+}

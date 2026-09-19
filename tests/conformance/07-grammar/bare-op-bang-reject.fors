@@ -1,0 +1,8 @@
+//! name: bare_operator_argument
+//! rule: 07.D7
+//! expect: parse-error
+//! detail: "!" is deliberately not a token at all, so it cannot appear as a bare_op or anywhere else
+
+fn f(let xs: Slice[i32]) {
+    let r = reduce(!, xs);
+}

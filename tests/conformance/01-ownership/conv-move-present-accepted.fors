@@ -1,0 +1,16 @@
+//! name: conv-move-present-accepted
+//! rule: 01.R2
+//! expect: parse-ok
+//! detail: n/a
+
+needs { };
+
+struct Box { val: i64 }
+
+fn consume_box(sink b: Box) {
+    discard b;
+}
+
+fn use_it(sink b: Box) {
+    consume_box(move b);
+}

@@ -1,0 +1,10 @@
+//! name: unsafe_attribute_declaration_form_accepted
+//! rule: 04.R10
+//! expect: parse-ok
+//! detail: accepted counterpart: @unsafe(invariant: "...") on a declaration, never a block
+
+module app;
+needs { };
+
+@unsafe(invariant: "n matches the caller-allocated buffer length")
+extern "c" fn raw(let n: i32);

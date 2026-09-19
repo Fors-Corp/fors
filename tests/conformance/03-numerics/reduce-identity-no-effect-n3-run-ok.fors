@@ -1,0 +1,19 @@
+//! name: reduce_identity_does_not_alter_nonempty_result
+//! rule: 03.R11a
+//! expect: run-ok
+//! detail: ok
+
+module m;
+needs { io.stdout };
+
+fn main(sink w: World) {
+    var out: io.Writer = move w.stdout;
+    var xs: Slice[f64] = [1.0; 3];
+    var r1: f64 = reduce(-, xs);
+    var r2: f64 = reduce(-, xs, identity: 999.0);
+    if r1 == r2 {
+        out.write_line("ok");
+    } else {
+        out.write_line("fail");
+    }
+}

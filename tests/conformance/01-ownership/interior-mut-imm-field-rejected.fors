@@ -1,0 +1,12 @@
+//! name: interior_mut_imm_field_rejected
+//! rule: 01.R20
+//! expect: check-error
+//! detail: mutating through an `imm`-qualified path outside an arena subscript
+
+needs { };
+
+struct Box { val: i64 }
+
+fn use_it(let b: imm Box) {
+    b.val = 1;
+}

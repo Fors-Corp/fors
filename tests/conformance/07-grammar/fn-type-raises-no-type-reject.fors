@@ -1,0 +1,8 @@
+//! name: fn_type_tail_binding
+//! rule: 07.D14
+//! expect: parse-error
+//! detail: "raises" always introduces a type; a bare "raises" with nothing after it cannot complete the fn_type tail
+
+fn run(let cb: fn(let i32) -> i32 raises) {
+    discard cb;
+}

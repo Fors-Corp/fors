@@ -1,0 +1,8 @@
+//! name: unary_minus_and_literal_suffix
+//! rule: 07.D8
+//! expect: parse-error
+//! detail: "-" is a level-2 prefix operator and always needs an operand; "let x = -;" has none
+
+fn f() {
+    let x = -;
+}

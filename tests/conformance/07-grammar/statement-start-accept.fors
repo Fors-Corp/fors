@@ -1,0 +1,16 @@
+//! name: statement_start
+//! rule: 07.D9
+//! expect: parse-ok
+//! detail: one token (or, for a bare expr, the token after it) selects the statement; a final expr with no ";" before the block's "}" is the tail value
+
+struct P { x: i32 }
+
+fn f(let a: Slice[i32], let i: usize, let p: P) -> i32 {
+    var x = 0;
+    x = 1;
+    a[i].c = 1;
+    f(a, i, p);
+    P { x: 1 };
+    [1, 2].len;
+    x
+}

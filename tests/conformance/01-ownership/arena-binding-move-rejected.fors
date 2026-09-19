@@ -1,0 +1,15 @@
+//! name: arena_binding_move_rejected
+//! rule: 01.R15a
+//! expect: check-error
+//! detail: the arena binding `nodes` itself is moved as a whole value
+
+needs { };
+
+struct Node[A: brand] { val: i64 }
+
+fn use_it() {
+    with arena nodes: Arena[Node[nodes]] {
+        let other: Arena[Node[nodes], nodes] = move nodes;
+        discard other;
+    }
+}

@@ -1,0 +1,13 @@
+//! name: with_allocator_brand_match_accepted
+//! rule: 01.R18
+//! expect: parse-ok
+//! detail: n/a
+
+needs { };
+
+fn boxed(let n: i64) {
+    with allocator heap: PageAllocator {
+        var b: Own[i64, heap] = heap.create(n);
+        heap.deinit(move b);
+    }
+}

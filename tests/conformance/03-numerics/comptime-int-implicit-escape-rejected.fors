@@ -1,0 +1,14 @@
+//! name: comptime_int_no_implicit_escape
+//! rule: 03.R9
+//! expect: check-error
+//! detail: assigning a comptime_int const into a runtime i32 binding with no explicit conversion must be diagnosed
+
+module m;
+needs { };
+
+const N: comptime_int = 5;
+
+fn f() -> i32 {
+    var x: i32 = N;
+    return x;
+}

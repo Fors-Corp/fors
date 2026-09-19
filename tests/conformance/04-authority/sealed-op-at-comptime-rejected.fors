@@ -1,0 +1,20 @@
+//! name: sealed_op_at_comptime_rejected
+//! rule: 04.R2a
+//! expect: check-error
+//! detail: comptime evaluation reaching the ffi-sealed extern probe must be a build error
+//! manifest:
+//! [capabilities.ffi]
+//! packages = ["std", "vendor"]
+
+module vendor.blas;
+needs { ffi };
+use std.ffi;
+
+fn setup() {
+    comptime {
+        probe(1);
+    }
+}
+
+@unsafe(invariant: "probe has no preconditions")
+extern "c" fn probe(let n: i32);

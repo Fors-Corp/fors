@@ -1,0 +1,8 @@
+//! name: attribute_arg_is_not_an_expr
+//! rule: 07.D6
+//! expect: parse-error
+//! detail: an attribute argument is "[label:] (literal | path)", never an arbitrary expr; "1 + 2" is neither
+
+@attr(x: 1 + 2)
+fn f() {
+}

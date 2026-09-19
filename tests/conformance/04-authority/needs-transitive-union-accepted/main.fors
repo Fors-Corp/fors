@@ -1,0 +1,8 @@
+//! name: needs_transitive_union_accepted
+//! rule: 04.R2
+//! expect: parse-ok
+//! detail: importer inherits an imported module's exported capability into its own checked requirement
+
+module app.client;
+needs { net };
+use net.provider;

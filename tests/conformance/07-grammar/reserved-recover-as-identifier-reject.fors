@@ -1,0 +1,8 @@
+//! name: reserved_keyword_recover_as_identifier
+//! rule: 07.Keywords
+//! expect: parse-error
+//! detail: "recover" is reserved for future use (no production), so it is never an identifier and cannot be a let-binding name
+
+fn f() {
+    let recover = 1;
+}

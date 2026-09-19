@@ -1,0 +1,12 @@
+//! name: unchecked_op_allowed_under_unsafe_decl
+//! rule: 03.R4
+//! expect: parse-ok
+//! detail: accepted counterpart of unchecked-add-outside-unsafe-rejected
+
+module m;
+needs { };
+
+@unsafe(invariant: "caller guarantees x + y does not overflow i32")
+fn good(let x: i32, let y: i32) -> i32 {
+    return x.unchecked_add(y);
+}

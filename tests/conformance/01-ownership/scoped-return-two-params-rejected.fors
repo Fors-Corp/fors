@@ -1,0 +1,10 @@
+//! name: scoped_return_two_params_rejected
+//! rule: 01.R19
+//! expect: check-error
+//! detail: the return combines scoped material derived from parameter `b` under a `scoped(a)` marker naming a different parameter
+
+needs { };
+
+fn join[T](inout a: Slice[T], inout b: Slice[T]) -> scoped(a) Slice[T] {
+    return b[0 ..< b.len];
+}

@@ -1,0 +1,9 @@
+//! name: pipe_three_roles
+//! rule: 07.D3
+//! expect: parse-error
+//! detail: a handler exists only directly after a call's ")"; here it follows "?", not a call, so "else |e| {}" cannot attach
+
+fn f() {
+    g()? else |e| {
+    }
+}

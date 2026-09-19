@@ -1,0 +1,22 @@
+//! name: scoped_result_stored_rejected
+//! rule: 01.R19a
+//! expect: check-error
+//! detail: a scoped slice returned from `split_at` is stored into a struct field, which the scoped-value rules forbid
+
+needs { };
+
+@unsafe(invariant: "the two ranges partition s and never overlap")
+fn split_at[T](inout s: Slice[T], let mid: usize)
+    -> (scoped(s) Slice[T], scoped(s) Slice[T])
+    pre mid <= s.len
+{
+    return (s[0 ..< mid], s[mid ..< s.len]);
+}
+
+struct Holder { view: Slice[f64] }
+
+fn use_it(inout buf: Slice[f64], inout h: Holder) {
+    let (lo, hi) = split_at(&buf, buf.len / 2);
+    h.view = lo;
+    discard hi;
+}

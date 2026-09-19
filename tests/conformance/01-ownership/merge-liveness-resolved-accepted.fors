@@ -1,0 +1,20 @@
+//! name: merge_liveness_resolved_accepted
+//! rule: 01.R8
+//! expect: parse-ok
+//! detail: n/a
+
+needs { };
+
+struct Box { val: i64 }
+
+fn take(sink b: Box) {
+    discard b;
+}
+
+fn use_it(sink x: Box, let cond: bool) {
+    if cond {
+        take(move x);
+    } else {
+        discard x;
+    }
+}

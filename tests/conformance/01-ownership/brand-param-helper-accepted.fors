@@ -1,0 +1,19 @@
+//! name: brand_param_helper_accepted
+//! rule: 01.R15d
+//! expect: parse-ok
+//! detail: n/a
+
+needs { };
+
+struct Node[A: brand] { val: i64 }
+
+fn touch[A: brand](inout a: Arena[Node[A], A], let r: Ref[Node[A], A]) {
+    let v: i64 = a[r].val;
+}
+
+fn use_it() {
+    with arena one: Arena[Node[one]] {
+        let x: Ref[Node[one], one] = one.alloc(Node { val: 1 });
+        touch(&one, x);
+    }
+}

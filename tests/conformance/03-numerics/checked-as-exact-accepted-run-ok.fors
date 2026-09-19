@@ -1,0 +1,18 @@
+//! name: checked_as_exact_accepted
+//! rule: 03.R6
+//! expect: run-ok
+//! detail: ok
+
+module m;
+needs { io.stdout };
+
+fn main(sink w: World) {
+    var out: io.Writer = move w.stdout;
+    var x: u32 = 44;
+    var y: u8 = x as u8;
+    if y == 44u8 {
+        out.write_line("ok");
+    } else {
+        out.write_line("fail");
+    }
+}
