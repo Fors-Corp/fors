@@ -46,11 +46,15 @@ def load(argv):
         if not paths:
             sys.exit("no results yet: run `python3 bench/harness/run.py bench` first")
     docs = [json.loads(p.read_text()) for p in paths]
-    cells, toolchains = {}, {}
-    for doc in docs:
+    cells, toolchains, baselines = {}, {}, {}
+    for index, doc in enumerate(docs):
+        for r in doc["results"]:
+            r["_file"] = index
+            if r["lang"] == BASELINE and r["correct"] and r["stats"]:
+                baselines.setdefault((index, r["kernel"]), []).append(r)
         cells.update({(r["kernel"], r["lang"], r["threads"]): r for r in doc["results"]})
         toolchains.update({lang: v for lang, v in doc["toolchains"].items() if v or lang not in toolchains})
-    merged = {**docs[-1], "results": list(cells.values()), "toolchains": toolchains}
+    merged = {**docs[-1], "results": list(cells.values()), "toolchains": toolchains, "_baselines": baselines}
     return " + ".join(p.name for p in paths), merged
 
 
@@ -102,6 +106,10 @@ def main():
         for lang, c in sorted(best.items(), key=lambda kv: kv[1]["stats"]["median"]):
             s = c["stats"]
             build_s = c["build"]["wall_s"] or None
+            # Compare against the baseline measured in the SAME session (same results file): machine
+            # conditions differ between runs, so a cross-file ratio mixes two experiments.
+            own = doc["_baselines"].get((c["_file"], kernel))
+            base = min(own, key=lambda b: b["stats"]["median"]) if own else best.get(BASELINE)
             axes = {
                 "runtime": ratio(s["median"], base and base["stats"]["median"]),
                 "memory": ratio(s["max_rss_bytes"], base and base["stats"]["max_rss_bytes"]),

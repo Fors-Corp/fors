@@ -58,6 +58,8 @@ optional `threads = [1, 2, 4, 6, 8]`, optional `exclude = ["lang"]`), the refere
 A parallel kernel receives the thread count as its last argument. TOML trap: `threads` and `exclude` must
 appear BEFORE the `[sizes]` header, or they silently become keys of `sizes`.
 
+Ratios are always computed against the C cell measured in the SAME results file, because machine conditions
+differ between sessions: include `--lang c` in every partial run (a file without C falls back to the newest C).
 `report.py a.json b.json` merges results files (later wins per cell): run the slow languages separately
 (`bench --lang python --timeout 3600`), or lay a `--lang fors` run over a full baseline.
 
