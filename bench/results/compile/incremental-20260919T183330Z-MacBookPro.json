@@ -1,0 +1,379 @@
+{
+ "schema": 1,
+ "timestamp": "2026-09-19T18:33:30Z",
+ "host": {
+  "hostname": "MacBookPro.home",
+  "os": "Darwin 25.6.0",
+  "arch": "arm64",
+  "cpus": 8,
+  "python": "3.14.5",
+  "cpu": "Apple M1 Pro",
+  "performance_cores": "6",
+  "efficiency_cores": "2",
+  "ram_bytes": "17179869184",
+  "on_battery": false
+ },
+ "seed": 2045166049,
+ "project_shape": {
+  "modules": 200,
+  "functions": 50,
+  "pub_slots_k": 10,
+  "leaf_module": 199,
+  "reps": 10
+ },
+ "notes": [
+  "zig -fincremental: a small probe's edit-and-relink succeeded, so it is not categorically broken on this machine -- but a full run at this project's scale showed its incremental cache growing without bound and each rebuild getting slower than the last (confirmed live: cache passed 400MB and per-rebuild time kept climbing partway through one E1-E4 sweep at the default M/F). That is a superlinear-cost pathology, not a fixed per-edit cost, so it is not practically usable for a repeated-edit benchmark here; this row measures the normal cached build instead, like every other language's row. Separately, a bare hello-world's second -fincremental invocation also hit 'error(compilation): TODO implement saving linker state for macho' outright, so the failure mode is not even consistent.",
+  "java: javac has no incremental mode; this row is the honest full-rebuild comparator."
+ ],
+ "failures": [],
+ "rows": [
+  {
+   "lang": "c",
+   "edit_classes": {
+    "E1": {
+     "n": 10,
+     "p50_s": 0.1403167914832011,
+     "p95_s": 0.14393433299846947,
+     "median_cpu_s": 0.192774,
+     "median_rss_bytes": 45080576.0,
+     "failed": false
+    },
+    "E2": {
+     "n": 10,
+     "p50_s": 0.14220783300697803,
+     "p95_s": 0.14736549998633564,
+     "median_cpu_s": 0.19135999999999997,
+     "median_rss_bytes": 45146112.0,
+     "failed": false
+    },
+    "E3": {
+     "n": 10,
+     "p50_s": 0.13345522902091034,
+     "p95_s": 0.15278254100121558,
+     "median_cpu_s": 0.17914999999999998,
+     "median_rss_bytes": 45072384.0,
+     "failed": false
+    },
+    "E4": {
+     "n": 10,
+     "p50_s": 0.1293097290035803,
+     "p95_s": 0.15913579100742936,
+     "median_cpu_s": 0.173508,
+     "median_rss_bytes": 45056000.0,
+     "failed": false
+    },
+    "E5": {
+     "n": 10,
+     "p50_s": 1.33706964601879,
+     "p95_s": 1.6787454159930348,
+     "median_cpu_s": 7.7242215000000005,
+     "median_rss_bytes": 44867584.0,
+     "failed": false
+    }
+   },
+   "cold": {
+    "wall_s": 1.431060791015625,
+    "user_s": 4.14765,
+    "sys_s": 3.9031949999999997,
+    "max_rss_bytes": 44859392
+   },
+   "noop": {
+    "wall_s": 0.0567235829657875,
+    "user_s": 0.039866,
+    "sys_s": 0.01279,
+    "max_rss_bytes": 2768896,
+    "ok": true
+   }
+  },
+  {
+   "lang": "rust/build",
+   "edit_classes": {
+    "E1": {
+     "n": 10,
+     "p50_s": 0.9822171454725321,
+     "p95_s": 1.0189698340254836,
+     "median_cpu_s": 1.3316634999999999,
+     "median_rss_bytes": 475381760.0,
+     "failed": false
+    },
+    "E2": {
+     "n": 10,
+     "p50_s": 0.9721439580025617,
+     "p95_s": 1.001654583029449,
+     "median_cpu_s": 1.3567170000000002,
+     "median_rss_bytes": 503283712.0,
+     "failed": false
+    },
+    "E3": {
+     "n": 10,
+     "p50_s": 0.9746936454903334,
+     "p95_s": 1.0451322089647874,
+     "median_cpu_s": 1.3826359999999998,
+     "median_rss_bytes": 504512512.0,
+     "failed": false
+    },
+    "E4": {
+     "n": 10,
+     "p50_s": 0.9839631665090565,
+     "p95_s": 1.0006342499982566,
+     "median_cpu_s": 1.3742014999999999,
+     "median_rss_bytes": 503750656.0,
+     "failed": false
+    },
+    "E5": {
+     "n": 10,
+     "p50_s": 1.0747995415295009,
+     "p95_s": 1.2931075840024278,
+     "median_cpu_s": 1.597109,
+     "median_rss_bytes": 509853696.0,
+     "failed": false
+    }
+   },
+   "cold": {
+    "wall_s": 3.922245000023395,
+    "user_s": 5.714755,
+    "sys_s": 0.631138,
+    "max_rss_bytes": 506429440
+   },
+   "noop": {
+    "wall_s": 0.035269832995254546,
+    "user_s": 0.014752,
+    "sys_s": 0.012549,
+    "max_rss_bytes": 21938176,
+    "ok": true
+   }
+  },
+  {
+   "lang": "rust/check",
+   "edit_classes": {
+    "E1": {
+     "n": 10,
+     "p50_s": 0.5071488124667667,
+     "p95_s": 0.5155562920263037,
+     "median_cpu_s": 0.4785325,
+     "median_rss_bytes": 294232064.0,
+     "failed": false
+    },
+    "E2": {
+     "n": 10,
+     "p50_s": 0.5204953750071581,
+     "p95_s": 0.5471842080005445,
+     "median_cpu_s": 0.5055945,
+     "median_rss_bytes": 315523072.0,
+     "failed": false
+    },
+    "E3": {
+     "n": 10,
+     "p50_s": 0.5175419579900336,
+     "p95_s": 0.537283124984242,
+     "median_cpu_s": 0.5053645,
+     "median_rss_bytes": 317161472.0,
+     "failed": false
+    },
+    "E4": {
+     "n": 10,
+     "p50_s": 0.5499486665357836,
+     "p95_s": 0.5767732090316713,
+     "median_cpu_s": 0.5240825,
+     "median_rss_bytes": 315883520.0,
+     "failed": false
+    },
+    "E5": {
+     "n": 10,
+     "p50_s": 0.5395771665207576,
+     "p95_s": 0.5993222499964759,
+     "median_cpu_s": 0.5204645,
+     "median_rss_bytes": 317931520.0,
+     "failed": false
+    }
+   },
+   "cold": {
+    "wall_s": 2.0695662919897586,
+    "user_s": 1.9356309999999999,
+    "sys_s": 0.117157,
+    "max_rss_bytes": 443662336
+   },
+   "noop": {
+    "wall_s": 0.025660292012616992,
+    "user_s": 0.011111,
+    "sys_s": 0.009106999999999999,
+    "max_rss_bytes": 21807104,
+    "ok": true
+   }
+  },
+  {
+   "lang": "go",
+   "edit_classes": {
+    "E1": {
+     "n": 10,
+     "p50_s": 0.13983333299984224,
+     "p95_s": 0.1452635420137085,
+     "median_cpu_s": 0.4690065,
+     "median_rss_bytes": 35020800.0,
+     "failed": false
+    },
+    "E2": {
+     "n": 10,
+     "p50_s": 0.27079318749019876,
+     "p95_s": 0.29803870897740126,
+     "median_cpu_s": 0.597761,
+     "median_rss_bytes": 111075328.0,
+     "failed": false
+    },
+    "E3": {
+     "n": 10,
+     "p50_s": 0.27320787450298667,
+     "p95_s": 0.2772475419915281,
+     "median_cpu_s": 0.6329525,
+     "median_rss_bytes": 113033216.0,
+     "failed": false
+    },
+    "E4": {
+     "n": 10,
+     "p50_s": 0.2705381669802591,
+     "p95_s": 0.2781552500091493,
+     "median_cpu_s": 0.628118,
+     "median_rss_bytes": 113868800.0,
+     "failed": false
+    },
+    "E5": {
+     "n": 10,
+     "p50_s": 1.3761183540336788,
+     "p95_s": 2.514456250006333,
+     "median_cpu_s": 7.5662575,
+     "median_rss_bytes": 113188864.0,
+     "failed": false
+    }
+   },
+   "cold": {
+    "wall_s": 1.6230163750005886,
+    "user_s": 4.953397,
+    "sys_s": 2.415323,
+    "max_rss_bytes": 109838336
+   },
+   "noop": {
+    "wall_s": 0.15351412497693673,
+    "user_s": 0.104683,
+    "sys_s": 0.360685,
+    "max_rss_bytes": 32980992,
+    "ok": true
+   }
+  },
+  {
+   "lang": "zig/cached (fincremental impractical here)",
+   "edit_classes": {
+    "E1": {
+     "n": 10,
+     "p50_s": 4.62800068751676,
+     "p95_s": 4.947734999994282,
+     "median_cpu_s": 4.673762,
+     "median_rss_bytes": 663027712.0,
+     "failed": false
+    },
+    "E2": {
+     "n": 10,
+     "p50_s": 4.732049542013556,
+     "p95_s": 4.9085600830148906,
+     "median_cpu_s": 4.7207365,
+     "median_rss_bytes": 643661824.0,
+     "failed": false
+    },
+    "E3": {
+     "n": 10,
+     "p50_s": 4.533792729489505,
+     "p95_s": 4.621096124988981,
+     "median_cpu_s": 4.554657,
+     "median_rss_bytes": 662618112.0,
+     "failed": false
+    },
+    "E4": {
+     "n": 10,
+     "p50_s": 4.62446104150149,
+     "p95_s": 4.906733457988594,
+     "median_cpu_s": 4.6580145,
+     "median_rss_bytes": 661250048.0,
+     "failed": false
+    },
+    "E5": {
+     "n": 10,
+     "p50_s": 4.6390120209835,
+     "p95_s": 5.339768291974906,
+     "median_cpu_s": 4.6830865,
+     "median_rss_bytes": 665042944.0,
+     "failed": false
+    }
+   },
+   "cold": {
+    "wall_s": 9.01874058303656,
+    "user_s": 8.140674,
+    "sys_s": 0.738219,
+    "max_rss_bytes": 678051840
+   },
+   "noop": {
+    "wall_s": 0.1525198749732226,
+    "user_s": 0.084117,
+    "sys_s": 0.060851999999999996,
+    "max_rss_bytes": 35717120,
+    "ok": true
+   }
+  },
+  {
+   "lang": "java/javac (full rebuild)",
+   "edit_classes": {
+    "E1": {
+     "n": 10,
+     "p50_s": 1.2172166460077278,
+     "p95_s": 1.379625582951121,
+     "median_cpu_s": 3.681819,
+     "median_rss_bytes": 288890880.0,
+     "failed": false
+    },
+    "E2": {
+     "n": 10,
+     "p50_s": 1.24601427098969,
+     "p95_s": 1.3085492919781245,
+     "median_cpu_s": 2.9163105,
+     "median_rss_bytes": 280936448.0,
+     "failed": false
+    },
+    "E3": {
+     "n": 10,
+     "p50_s": 1.268580979492981,
+     "p95_s": 1.3353338330052793,
+     "median_cpu_s": 2.9880414999999996,
+     "median_rss_bytes": 289456128.0,
+     "failed": false
+    },
+    "E4": {
+     "n": 10,
+     "p50_s": 1.2634253745200112,
+     "p95_s": 1.3018234589835629,
+     "median_cpu_s": 3.0043045,
+     "median_rss_bytes": 281640960.0,
+     "failed": false
+    },
+    "E5": {
+     "n": 10,
+     "p50_s": 1.2325108545192052,
+     "p95_s": 1.2899478749604896,
+     "median_cpu_s": 2.9316875,
+     "median_rss_bytes": 288366592.0,
+     "failed": false
+    }
+   },
+   "cold": {
+    "wall_s": 1.3454790830146521,
+    "user_s": 3.486853,
+    "sys_s": 0.201642,
+    "max_rss_bytes": 282820608
+   },
+   "noop": {
+    "wall_s": 1.1991145419888198,
+    "user_s": 3.221716,
+    "sys_s": 0.156548,
+    "max_rss_bytes": 273154048,
+    "ok": true
+   }
+  }
+ ]
+}
