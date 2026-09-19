@@ -78,10 +78,16 @@ def main():
         print(f"\nRun-to-run noise (stdev/mean, cells with >= 3 runs): median {noise[len(noise) // 2][0]:.1%}, "
               f"worst {worst[0]:.1%} ({worst[1]})")
     canary = [c["wall_s"] for c in doc.get("canary", [])]
-    if canary:
-        drift = max(canary) / min(canary) - 1
-        print(f"\nThermal canary (newest file, {len(canary)} samples): {min(canary):.3f}-{max(canary):.3f} s, "
-              f"drift {drift:.1%}" + ("  **CONTAMINATED RUN (> 5%)**" if drift > 0.05 else ""))
+    if len(canary) >= 2:
+        # One slow sample is ordinary desktop interference. Contamination is a sustained first-to-last
+        # trend (throttling) or repeated spikes (something else running), so those are what get flagged.
+        median = statistics.median(canary)
+        spikes = sum(w > 1.05 * median for w in canary)
+        third = max(1, len(canary) // 3)
+        trend = statistics.median(canary[-third:]) / statistics.median(canary[:third]) - 1
+        bad = abs(trend) > 0.05 or spikes > 0.2 * len(canary)
+        print(f"\nThermal canary (newest file, {len(canary)} samples): median {median:.3f} s, "
+              f"{spikes} spike(s) > 5%, first-to-last trend {trend:+.1%}" + ("  **CONTAMINATED RUN**" if bad else ""))
 
     kernels, ratios = {}, {}
     for r in good:

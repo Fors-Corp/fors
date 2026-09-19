@@ -2,7 +2,7 @@
 
 ## Status
 
-Normative; owns the definitions below (no other document may redefine them, per `docs/PLAN.md` §6). Authority: `docs/PLAN.md` §§3, 5, 6. Supersedes conflicting wording in `docs/design/reviews.md` and `bench/README.md`, which stay descriptive.
+Draft, M0.5, 2026-09-19. Normative; owns the definitions below (no other document may redefine them, per `docs/PLAN.md` §6). Authority: `docs/PLAN.md` §§3, 5, 6. Supersedes conflicting wording in `docs/design/reviews.md` and `bench/README.md`, which stay descriptive.
 
 ## Scope
 
@@ -36,7 +36,7 @@ What may be measured, on which kernels/applications, under what freeze disciplin
 4. Every published number MUST record the source commit of the kernel and baseline sources.
 5. Every baseline implementation MUST be published next to every number it produced.
 6. Exact compiler versions/flags MUST live in `bench/langs/*.toml`, copied verbatim into every results file.
-7. Strict-IEEE (`c`) and compiler-default-contraction (`c-fma`) columns MUST both be published wherever contraction affects output; Fors MUST default to strict IEEE.
+7. Strict-IEEE (`c`) and compiler-default-contraction (`c-fma`) columns MUST both be published wherever contraction affects output; the Fors column is compared against `c` because Fors's float default is strict IEEE (ch03 Rule 7, cited not redefined).
 8. Parallel baselines (Rayon, OpenMP, OpenCilk, Kokkos) MUST publish naive and tuned columns, tuned sources cited by upstream commit where one exists.
 9. A language measured on fewer kernels than the current tables MUST NOT share a geomean with a fully-measured one; partial coverage MUST be labelled and excluded from ranking. Stdlib-only and best-of-ecosystem geomeans MUST NOT be merged.
 10. Compile-speed MUST be wall-clock including link time; lines-per-second MUST NOT be published.
@@ -53,8 +53,8 @@ What may be measured, on which kernels/applications, under what freeze disciplin
 21. Every run set MUST interleave a fixed thermal-canary kernel at least every N measurements (N stated in the results file); drift beyond its own noise floor marks the run contaminated and unpublishable as clean.
 22. The confinement suite MUST draw from an external malicious-package corpus with per-case provenance; an in-house-only suite MUST NOT back a confinement claim.
 23. No "100%" confinement claim MUST be published before a red-team round has run against that suite.
-24. Every confinement claim MUST publish, beside the pass rate, the attack classes the model does not stop.
-25. Safety cost MUST be measured against the internal checks-off instrumentation build and reported separately from any competitiveness-vs-C claim; the two MUST NOT be conflated.
+24. Every confinement claim MUST publish, beside the pass rate, the attack classes the model does not stop (ch04, "Attack classes this model does not stop").
+25. Safety cost MUST be measured against the internal checks-off instrumentation build (ch02 Rule 12: unshippable) and reported separately from any competitiveness-vs-C claim; the two MUST NOT be conflated.
 
 ## Tier A table
 
@@ -67,7 +67,7 @@ From `bench/kernels/*/spec.toml` (added 2026-09-19, this document's commit):
 | fannkuch | compute | compute-bound |
 | mandelbrot | parallel | compute-bound (per-pixel escape) |
 | matmul | parallel | compute-bound (naive i-k-j; blocked pending) |
-| reduce | parallel | compute-bound (hash chain) |
+| reduce | parallel | compute-bound (hash chain). Kernel name only: an integer hash reduction, not a test of the `reduce` primitive's float tree (ch03 Rules 11-13) |
 | stream | parallel | **bandwidth-bound** — spec.toml forbids gating any ≥90% efficiency claim on it |
 | binary-trees | alloc | allocation-bound |
 | hashmap | alloc | allocation-bound |
@@ -98,7 +98,7 @@ Five applications, none ported yet, each pending its own pre-registration commit
 ## Rejected alternatives
 
 - Lines-per-second for compile speed — discredited V's claims; rule 10.
-- Bit-identical checksums as sole correctness gate — conflicts with legitimate reduction-order differences (reviews.md #5); kept separate from the determinism gate.
+- Bit-identical checksums as sole correctness gate — conflicts with legitimate reduction-order differences *between languages* (reviews.md #5); kept separate from Fors's own determinism gate (D1 and `REDUCE_BLOCK`/`REDUCE_LANES`, ch03 Rules 10-13; differential agreement, ch05 Rule 17).
 - Merged P+E-core scaling curve — hides which core class drove the speedup; rule 17.
 - Naive-only Rayon/OpenMP baseline — a strawman; rule 8 requires both columns.
 - Fixed CoV target as exit criterion — unachievable on an unthrottled M1 Pro; the floor is measured, not targeted (rule 19).

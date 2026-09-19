@@ -12,8 +12,9 @@ Owns: conventions `let`/`inout`/`sink`/`set` and call-site markers;
 destructive moves; the exclusivity conflict check, including the
 varying-index rule for `parallel`/`simd`/`kernel`; sharing qualifiers
 `iso`/`imm` and the sendability rule; `secret`'s position (not its CT rules
-— ch05); branded arenas (`Arena[T]`, `Ref[T, brand]`), brand non-escape,
-all-modes generation check; branded allocators (`Own[T, A]`); the
+— ch05); the `brand` kind and brand parameters (`[A: brand]`); branded
+arenas (`Arena[T, A]`, `Ref[T, A]`), brand non-escape, all-modes generation
+check; branded allocators (`Own[T, A]`), `with allocator`; the
 scoped-return rule; interior-mutability policy and `atomic[T]`'s position.
 Slice signatures, other escape kinds, the failure ABI, and capability
 manifests belong to other chapters.
@@ -26,8 +27,12 @@ manifests belong to other chapters.
   `set`.
 - **Sharing qualifier**: `iso` or `imm`, orthogonal to convention.
 - **Secret taint**: the qualifier `secret`, orthogonal to sharing.
-- **Brand**: the nominal type introduced by `with arena b: Arena[T] { }`,
-  scoped to that block.
+- **Brand**: a phantom type argument of kind `brand`. It has no values, no
+  size and no runtime representation. A brand is either a **fresh brand**
+  (introduced by one `with arena` / `with allocator` block, Rule 15) or a
+  **brand parameter** (`[A: brand]`, Rule 15d).
+- **Brand-mentioning type**: a type with a brand anywhere in its type
+  arguments (`Ref[Node, A]`, `Vec[Ref[Node, A]]`, a closure capturing one).
 - **Scoped value**: a non-owning projection that cannot outlive the call
   that produced it, except under the scoped-return rule.
 
@@ -35,7 +40,9 @@ manifests belong to other chapters.
 
 1. Every parameter MUST declare exactly one convention.
 2. A call site MUST mark a non-`let` argument: `&x` (inout), `move x`
-   (sink), `&out x` (set); `let` carries no marker.
+   (sink), `&out x` (set); `let` carries no marker. `move` marks a place
+   expression (binding or projection path); an rvalue argument (literal,
+   call result) to a `sink` parameter carries no marker.
 3. A `let` parameter MUST NOT be assigned to or moved from.
 4. A `sink` parameter MUST be moved-from or deinitialized on every path,
    unless `Copyable`.
@@ -73,23 +80,62 @@ manifests belong to other chapters.
 14. `secret` MUST NOT be a sharing qualifier and MUST NOT join with
     `iso`/`imm`; it composes orthogonally (`iso secret T` is legal). CT
     obligations are ch05's.
-15. `with arena b: Arena[T] { }` MUST introduce a brand `b`, a name in
-    scope only inside that block, that MUST NOT appear in any type
-    returned, stored, or captured outside that block. Non-escape is local
-    because: (a) every binding's type is fixed at its declaration (no
-    deferred inference), so no outer binding can have a type mentioning
-    `b`; (b) a type mentioning a brand (including a closure type with a
-    branded capture) MUST NOT be converted to any erased form — `dyn`
-    trait object, function-pointer type, or witness-table existential;
-    (c) the arena binding itself MUST NOT be moved, and a task that can
-    outlive the block MUST NOT capture a brand-mentioning value.
-16. `Ref[T, b]` MUST be usable only against the `Arena[T]` carrying brand
-    `b`; use against any other arena MUST be a compile error.
+15. `with arena x: Arena[T] { ... }` and `with allocator x: Alloc { ... }`
+    are statements (they yield no value). Each such block in the source
+    introduces exactly one fresh brand; inside the block `x` has type
+    `Arena[T, β]` (resp. `Alloc[β]`) where `β` is that fresh brand. In type
+    position inside the block, and inside the header's own type `T`
+    (needed for self-referential element types, `Arena[Node[x]]`), the
+    identifier `x` denotes `β` (`Ref[Node, x]`); `β` has no other spelling and MUST NOT be nameable
+    outside the block. `β` equals only itself: it MUST NOT be unified with,
+    or inferred for, any brand parameter or type variable of an enclosing
+    declaration. Non-escape is therefore local: (a) every binding's type
+    is fixed at its declaration (no deferred inference), and every
+    signature, field and outer binding is declared where `β` has no
+    spelling, so none can have a brand-mentioning type naming `β`; (b) a
+    brand-mentioning type MUST NOT be converted to any erased form —
+    `dyn` trait object, function-pointer type, or existential; (c) a task
+    that can outlive the block MUST NOT capture a brand-mentioning value
+    (a structured `spawn` inside the block MAY, Rule 13).
+15a. `Arena[T, A]` and every allocator type MUST have no constructor: a
+    value of such a type exists only as the binding of a `with` block. It
+    MUST NOT be `Copyable`, moved, passed `sink`, assigned or swapped as a
+    whole, stored in a field, or captured by a task that can outlive the
+    block; it is passed only as `let` or `inout`. Hence at most one live
+    arena (allocator) value exists per brand per dynamic block instance.
+15b. The omitted brand argument (`Arena[Node]`, `PageAllocator`) is legal
+    only in the `with` header; every other use of a branded type MUST
+    write its brand argument.
+15c. A `with` block re-entered (loop, recursion) reuses the same static
+    brand. This is sound because no value of a brand-mentioning type
+    survives its block instance (Rule 15) and an inner instance's
+    signature cannot name the outer instance's `β`.
+15d. A generic parameter MAY have the kind bound `brand`
+    (`fn insert[A: brand](...)`, `struct Tree[A: brand] { root: Ref[Node, A] }`).
+    A brand parameter MUST appear only as a type argument in a position
+    whose declared kind is `brand`; using it as the type of a value, in
+    `size_of`/`align_of`, as a trait bound subject, or passing a
+    non-brand type for it (or a brand for an ordinary type parameter)
+    MUST be rejected. A brand argument at a call site is solved only by
+    type equality against the argument types; there is no brand
+    subtyping, variance, coercion or join, so one call whose arguments
+    carry two different brands for the same parameter MUST be rejected.
+    A type that stores a brand-mentioning field MUST itself take that
+    brand as a parameter.
+15e. Brands are erased after checking: a brand argument MUST NOT be part
+    of an instantiation shape or cache key, MUST NOT cause a separate
+    monomorphized body, and has no witness table or witness-table slot
+    (ch03 Rules 16-17). Two instantiations differing only in brand
+    arguments MUST share one compiled body.
+16. `Ref[T, A]` MUST be usable only against an `Arena[T, A]` with the
+    equal brand `A` (plain type equality, checked per call, no
+    interprocedural analysis); any other use MUST be a compile error.
 17. Every arena MUST carry a generation counter bumped on `reset`; every
     `Ref` dereference MUST be generation-checked in every build mode, never
     elided by optimization level.
 18. `Own[T, A]` MUST record its producing allocator's brand `A`; `deinit`
     with an allocator whose brand differs from `A` MUST be a compile error.
+    Allocator brands follow Rules 15-15e unchanged.
 19. A function MAY return a scoped value iff every scoped derivation in
     that return flows from exactly one designated parameter `p`, named by
     a `scoped(p)` return-type prefix; `p` MUST have convention `let` or
@@ -139,10 +185,28 @@ fn halves(inout buf: Slice[f64]) {
 needs { };
 
 fn build() {
-    with arena nodes: Arena[Node] {
-        let x: Ref[Node, nodes] = nodes.alloc(Node { next: none, val: 1 });
-        let y: Ref[Node, nodes] = nodes.alloc(Node { next: none, val: 2 });
+    with arena nodes: Arena[Node[nodes]] {
+        let x: Ref[Node[nodes], nodes] = nodes.alloc(Node { next: none, val: 1 });
+        let y: Ref[Node[nodes], nodes] = insert(&nodes, x, Node { next: none, val: 2 });
         nodes[x].next = some(y);        // inout subscript, Rule 16/17
+    }
+}
+
+struct Node[A: brand] { next: Option[Ref[Node[A], A]], val: i64 }
+
+// Brand-polymorphic helper (Rule 15d): A is solved by type equality from
+// `arena` and `parent`; passing a Ref of another arena is a type error.
+fn insert[A: brand](inout arena: Arena[Node[A], A], let parent: Ref[Node[A], A],
+                    sink value: Node[A]) -> Ref[Node[A], A] {
+    let r: Ref[Node[A], A] = arena.alloc(move value);
+    arena[parent].next = some(r);
+    return r;
+}
+
+fn boxed(let n: i64) {
+    with allocator heap: PageAllocator {
+        var b: Own[i64, heap] = heap.create(n);
+        heap.deinit(move b);            // same brand: accepted, Rule 18
     }
 }
 ```
@@ -206,26 +270,33 @@ fn spawn_work(sink data: iso Buffer[u8], let key: secret u64) raises Error {
    this, Rule 9's `parallel for` stores and `split_at` halves could not be
    used from tasks at all.
 8. Brand non-escape forbids type erasure of brand-mentioning types (Rule
-   15b); an erased `Ref` re-entering a later dynamic instance of the same
+   15(b)); an erased `Ref` re-entering a later dynamic instance of the same
    `with arena` block would otherwise defeat the brand.
 6. `Own[T, A]` brand mismatch is a compile error, since brands are always
    statically known at the `deinit` call site.
+9. Owner decision 2026-09-19 (D1): brands are phantom generic parameters
+   of kind `brand`, fresh only from `with arena` / `with allocator`,
+   erased after checking (Rules 15-15e, 16, 18). Verifier additions that
+   close leaks D1 left open: no constructor / no whole-value move or swap
+   of an arena or allocator (15a — otherwise a brand-polymorphic callee
+   could mint a second arena under the caller's brand and defeat Rule
+   16); a fresh brand never unifies with an outer variable (15); `with`
+   yields no value (15); brand-kind positions are closed (15d); erasure
+   from shapes and witness tables (15e).
+10. Owner decision 2026-09-19 (D4): `scoped(p)` prefix (Rule 19) and the
+   structured-`spawn` capture clause (Rule 13: an `inout` capture is an
+   access lasting to the end of the enclosing `parallel` block) accepted.
 
 ## Open questions for the owner
 
 1. Confirm/override Rule 7's default (allow vs. forbid overlapping
    `let`/`let`) — your call; affects backend aliasing facts.
 2. Confirm dropping `recover`, vs. reserving it for a future qualifier.
-3. Confirm `scoped(p)` prefix syntax before ch07 locks slice signatures.
-4. **Brand abstraction.** No rule says how a helper function accepts an
-   arena plus `Ref`s into it (or an allocator plus `Own[T, A]`): a
-   signature cannot name a brand that is scoped to a caller's block.
-   Candidates: a brand parameter (`fn link[brand b](inout a: Arena[Node, b],
-   let x: Ref[Node, b])`) or parameter-path brands (`Ref[Node, a]` where
-   `a` is the arena parameter). Also undecided: how an allocator brand `A`
-   is introduced at all. Blocks every arena/allocator-using std API.
-5. Confirm Rule 13's structured-capture clause as part of "one sendability
-   rule" (R1), or require `iso` partitioning even inside `parallel { }`.
+3. Self-referential element types: Rule 15 lets the `with` header name
+   its own binding as a brand (`with arena nodes: Arena[Node[nodes]]`),
+   because a node that links to siblings must take the brand (Rule 15d).
+   Drafted as allowed; confirm, or choose another spelling before std's
+   tree/graph containers are written.
 
 ## Conformance tests
 
@@ -251,7 +322,27 @@ fn spawn_work(sink data: iso Buffer[u8], let key: secret u64) raises Error {
 - `arena_brand_mismatch_rejected` — foreign `Ref` against an arena
   rejected.
 - `arena_brand_nonescape_rejected` — naming a brand outside its block
+  rejected; returning, `&out`-storing or outer-assigning a `Ref[T, β]`
   rejected.
+- `brand_param_helper_accepted` — `insert[A: brand]` called with an arena
+  and a `Ref` of the same block accepted.
+- `brand_param_two_arenas_rejected` — one call passing arena `a` and a
+  `Ref` from arena `b` for the same `A` rejected.
+- `brand_fresh_not_unified_with_param` — inside `fn f[A: brand]`, returning
+  a `Ref` of a local `with arena` as `Ref[T, A]` rejected.
+- `brand_kind_closed` — `let v: A`, `size_of[A]()`, `Vec[A]`, and an
+  ordinary type passed for `A: brand` each rejected.
+- `brand_erased_single_body` — instantiations differing only in brand
+  share one compiled body; no witness slot for `A`.
+- `arena_no_constructor` — constructing, copying, swapping or `sink`-passing
+  an `Arena[T, A]` / allocator value rejected.
+- `brand_field_requires_param` — `struct S { r: Ref[Node, A] }` without
+  `[A: brand]` rejected.
+- `brand_detached_capture_rejected` — detached task capturing a
+  brand-mentioning value rejected; structured `spawn` accepted.
+- `with_block_no_value` — `let r = with arena a: Arena[T] { ... };` rejected.
+- `with_allocator_brand` — `Own[T, heap]` deinit by a second allocator's
+  brand rejected.
 - `arena_generation_checked_in_release` — stale `Ref` traps in release.
 - `allocator_brand_mismatch_rejected` — `deinit` with wrong-brand
   allocator rejected.

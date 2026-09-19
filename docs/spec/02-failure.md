@@ -170,10 +170,11 @@ fn take(let s: Str, let n: usize) -> Str raises app.Error {
 - `raise expr;` is the sole error-origination statement (verifier
   addition: drafts used `return Err`, `raises X;` and a bare trailing
   expression interchangeably; PLAN fixes only `raises` and `?`).
+  Accepted by the owner 2026-09-19 (D4).
 - `ErrorFrom[E]` is a trait implemented on the target type `F` (`impl
   ErrorFrom[E] for F`), since the language has no overloading.
-- Examples return into caller buffers rather than `Own[T, A]` until ch01's
-  brand-abstraction question is decided.
+- Examples return into caller buffers; `Own[T, A]`-returning signatures
+  are now expressible with a brand parameter (ch01 Rules 15d, 18).
 - Trap side-table entries are static/read-only; no allocation on the trap
   path.
 - Sentinel frame fields fixed to (parent fiber id, parent fp, spawn-site
@@ -187,8 +188,7 @@ fn take(let s: Str, let n: usize) -> Str raises app.Error {
    finalization on the aarch64 `abi-fuzz` measurement.
 3. Confirm module-header placement for `contracts: ...;` (undecided in any
    design doc).
-4. Confirm `raise expr;` as the error-origination statement.
-5. The classifier is size-only: a lone `f64` success value travels in a
+4. The classifier is size-only: a lone `f64` success value travels in a
    GPR, not `v0`. Accept, or add a float class before `fors-abi` freezes?
 
 ## Conformance tests

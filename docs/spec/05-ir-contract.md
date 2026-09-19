@@ -58,6 +58,10 @@ chapters) — this chapter pins only where their compiled facts live.
 5. An alias class MUST derive only from parameter convention, affine
    ownership, arena brand id, split-token provenance, or SoA field
    identity; one untraceable to these five MUST fail verification.
+   Brands are erased before lowering (ch01 Rule 15e); "arena brand id"
+   is compile-time IR metadata only. Two distinct fresh brands are
+   disjoint; two distinct brand *parameters* MUST NOT be assumed
+   disjoint, since one call may instantiate both with the same brand.
 6. Every FMIR/OIR/LIR value MUST carry a secret bit and `ct_region` id as
    non-optional fields; `--verify-each` MUST reject any lacking them.
 6a. Secret propagation is a local FMIR type rule: the result of any

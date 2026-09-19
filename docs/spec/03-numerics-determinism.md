@@ -13,9 +13,10 @@ Not owned: conventions/aliasing (ch01), `raises`/`?`/`raise` and what a trap doe
 ## Definitions
 
 - **D1**: results bit-identical across thread count, steal pattern, core class, locale count, for a fixed binary and input.
-- **Reduction tree**: `reduce`'s fixed shape, a function of `(n, B)` only.
-- **Leaf block**: up to `B` elements folded serially, in index order, into one partial.
-- **Instantiation shape**: `(size, align, pointerness, qualifier, deinit-ness)` of a generic argument type.
+- **Reduction tree**: `reduce`'s fixed shape, a function of `(n, B, L)` only (`B` = `REDUCE_BLOCK`, `L` = `REDUCE_LANES`).
+- **Leaf block**: up to `B` consecutive elements reduced into one partial by the lane shape of Rule 11.
+- **Lane**: lane `j` (`0 <= j < L`) of a block holds the block's elements at block-relative indices `j, j+L, j+2L, ...`. A lane is *empty* when the block has `<= j` elements.
+- **Instantiation shape**: `(size, align, pointerness, qualifier, deinit-ness)` of a generic argument type. Brand arguments are not part of it (ch01 Rule 15e).
 - **Witness table**: `{size, align, copy, move, deinit, method_slots}`, layout-identical to a `dyn T` fat pointer.
 
 ## Rules
@@ -30,10 +31,10 @@ Not owned: conventions/aliasing (ch01), `raises`/`?`/`raise` and what a trap doe
 8. Rule 7 relaxes only inside lexical `@fastmath(flags) { ... }`, `flags ⊆ {reassoc, contract, nsz, finite, recip}`; no relaxed transform MAY escape the block's lexical extent.
 9. `comptime_int`/`comptime_float` are arbitrary-precision, comptime-only; escaping to runtime without an explicit conversion to a fixed-width type MUST be rejected.
 10. Default determinism is D1: bit pattern MUST NOT change with thread count, steal pattern, core class mix, or locale count alone.
-11. `reduce(op, xs)` is a distinct primitive. For `n >= 1`: partition `xs` (length `n`) into `k = ceil(n/B)` leaf blocks (last block holds `n mod B`, or `B` if exact); fold each leaf serially in index order starting from its first element (`p = x0; p = op(p, xi)`); then combine the `k` partials level by level: at each level adjacent partials `(0,1), (2,3), ...` are combined as `op(left, right)` and an unpaired last partial is carried up unchanged, until one remains. This shape is a pure function of `(n, B)`; for `n <= B` it is exactly the serial fold. `B` is the named constant `REDUCE_BLOCK`, a target-independent literal, **256**; it MUST NOT depend on lane width, grain, threads, locales, target or build flags, and is not overridable (Open question 3). `op` MUST be pure (no capability use, no `inout` capture); associativity is NOT required because the tree is fixed.
+11. `reduce(op, xs)` is a distinct primitive. For `n >= 1`: partition `xs` (length `n`) into `k = ceil(n/B)` leaf blocks of consecutive elements (the last block holds `n mod B` elements, or `B` if exact). Each block, full or partial, is reduced in two steps. (i) **Lane fold**: for each non-empty lane `j`, `l_j = x_j; l_j = op(l_j, x_{j+L}); l_j = op(l_j, x_{j+2L}); ...` in ascending index order (accumulator is the left operand). (ii) **Lane combine**: the fixed pairwise tree `((l0 ∘ l1) ∘ (l2 ∘ l3)) ∘ ((l4 ∘ l5) ∘ (l6 ∘ l7))`, where `a ∘ b = op(a, b)` with the lower-numbered lane on the left; a node with exactly one empty operand yields its other operand unchanged (no `op` application), and a node with two empty operands is empty. Because non-empty lanes are always the prefix `l0 .. l_{min(m,L)-1}` of a block with `m` elements, this gives exactly one shape per `m`. Then the `k` block partials combine level by level: at each level adjacent partials `(0,1), (2,3), ...` are combined as `op(left, right)` and an unpaired last partial is carried up unchanged, until one remains. The shape is a pure function of `(n, B, L)`; it equals the serial left fold only for `n <= 3`. `B` is the named constant `REDUCE_BLOCK` = **256** and `L` the named constant `REDUCE_LANES` = **8**; both are target-independent literals that MUST NOT depend on hardware lane width, grain, threads, locales, target or build flags, and neither is overridable (Open question 2). A target with fewer than 8 (or no) vector lanes MUST compute the same 8 logical lanes (scalar emulation or several narrower registers); a wider target MUST NOT use more. `op` MUST be pure (no capability use, no `inout` capture); neither associativity nor commutativity is required because the tree and every operand order are fixed.
 11a. For `n = 0`: `reduce(op, xs)` MUST trap (kind: empty-reduce, ch02); `reduce(op, xs, identity: e)` MUST return `e`. For `n >= 1` the `identity` argument MUST NOT participate in the fold, so both forms are bit-identical on non-empty input.
 12. `reduce` MUST lower to this explicit tree in FMIR **before** parallel lowering, so `--serial-elide` is bit-exact against any parallel execution of the same tree.
-13. Tail rules: (a) no identity-padding — a partial last block folds only its present `n mod B` elements; (b) IEEE `-0.0` handling with no inserted normalization; (c) NaN handling is exactly `op`'s applied in the Rule 11 order (for IEEE `+`/`*` any NaN input therefore yields NaN); no transform MAY reorder or drop an operand; (d) the last block's partial enters the combine tree at its own block index, never reordered or merged early.
+13. Tail rules: (a) no identity-padding — a partial block uses the same 8-lane shape over only its present elements; a lane shorter than its neighbours simply stops, and an empty lane contributes nothing: it is skipped in the lane combine (Rule 11(ii)) and MUST NOT be replaced by `identity`, zero or any other value (a vector implementation masks with select, never by feeding a neutral element to `op`); (b) IEEE `-0.0` handling with no inserted normalization; (c) NaN handling is exactly `op`'s applied in the Rule 11 order (for IEEE `+`/`*` any NaN input therefore yields NaN); no transform MAY reorder or drop an operand; (d) the last block's partial enters the combine tree at its own block index, never reordered or merged early.
 14. `reduce.serial`/`reduce.fast`/`reduce.exact` are separate named primitives, never selected implicitly by optimization level; only unqualified `reduce` carries D1.
 15. A scalar accumulator loop MUST NOT be auto-parallelized or auto-`reduce`d at any level; the compiler MUST emit a diagnostic naming the loop and stating that explicit `reduce` is required.
 16. Monomorphize when instantiation shape is scalar, ≤ `MONOMORPHIZE_SIZE_MAX` (16) bytes, or the body's instruction count is below the named constant `MONOMORPHIZE_INSTR_THRESHOLD`; otherwise lower via witness table (layout-identical to `dyn T`).
@@ -69,7 +70,7 @@ fn dot(let a: Slice[f64], let b: Slice[f64]) -> f64 raises DimError {
 needs { };
 
 fn sum_deterministic(let xs: Slice[f64]) -> f64 {
-    return reduce(+, xs, identity: 0.0);   // tree = f(n, REDUCE_BLOCK); n = 0 yields 0.0
+    return reduce(+, xs, identity: 0.0);   // tree = f(n, REDUCE_BLOCK, REDUCE_LANES); n = 0 yields 0.0
 }
 
 fn sum_naive(let xs: Slice[f64]) -> f64 {
@@ -89,6 +90,7 @@ fn max_lane[T: Ord](let v: vector[T, 8], let m: mask[8]) -> T {
 
 ## Rejected alternatives
 
+- Serial in-leaf fold — forbids vectorizing a strict-IEEE `reduce`; replaced by 8 fixed logical lanes (D3).
 - Lane/thread-derived block size for `reduce` — makes bit-identity machine-dependent, defeats D1.
 - Release-mode wrapping as overflow default — recreates dev/release semantic divergence.
 - `@fastmath` as a global flag — per-region scoping keeps the reference interpreter and review tractable.
@@ -99,6 +101,7 @@ fn max_lane[T: Ord](let v: vector[T, 8], let m: mask[8]) -> T {
 
 - `@fastmath` flag set fixed to `{reassoc, contract, nsz, finite, recip}`, superseding surface-language.md's `{reassoc, fma, no_nan}` example; PLAN.md left naming open, this is locally decidable.
 - `B` default fixed at **256** per PLAN.md R5's literal text, overriding parallel-heterogeneous.md's `B = 4 * native_lanes` (target-dependent, which R5 forbids).
+- Owner decision 2026-09-19 (D3): leaves use `REDUCE_LANES` = 8 fixed lanes with a fixed pairwise lane combine (Rule 11), replacing the serial leaf; bit patterns of every float `reduce` change relative to the earlier draft. Verifier additions: operand order is stated for every `op` application (lower lane / accumulator on the left) so non-commutative `op` and NaN payloads are fixed; "skip an empty lane" is defined per combine node; wider hardware may not use more than 8 lanes. Note for implementers: the usual SIMD horizontal reduction adds the low half to the high half (`l0+l4, ...`); Rule 11 requires adjacent pairing (`l0+l1, ...`).
 - Tail rules (13) drafted from scratch: PLAN.md requires them but gives no content; chosen rules are the simplest requiring no extra analysis (no padding, standard IEEE zero/NaN behavior, fixed block-index ordering).
 - `MONOMORPHIZE_INSTR_THRESHOLD` is named as a single constant here; its numeric value is deferred to whoever first writes std against it (a tuning, not semantics, decision).
 - Verifier additions: the combine tree is now spelled out (adjacent pairing, odd partial carried) because "balanced tree" is not unique for non-power-of-two `k`; `n = 0` traps unless an `identity:` is supplied (Rule 11a), which is the only closure that never changes a non-empty result; `B` is named `REDUCE_BLOCK` and the 16-byte bound `MONOMORPHIZE_SIZE_MAX`.
@@ -106,11 +109,8 @@ fn max_lane[T: Ord](let v: vector[T, 8], let m: mask[8]) -> T {
 
 ## Open questions for the owner
 
-1. **Leaf shape vs SIMD.** Rule 11's serial in-leaf fold forbids vectorizing a strict-IEEE float `reduce` (up to 256 dependent adds per leaf); the C `-O3` baseline has the same restriction only without `-ffast-math`. Keep serial leaves, or define the leaf as a fixed pairwise tree down to element level (vectorizable at any power-of-two lane width, still `f(n, B)`)? Changes every float `reduce` bit pattern, so it must be settled before the interpreter implements `reduce`.
-2. Pin `MONOMORPHIZE_INSTR_THRESHOLD`'s value now, or defer to std authoring per R6's rationale?
-
-3. Is `REDUCE_BLOCK` ever overridable (only conceivable form: a literal at the call site)? Drafted as: no.
-4. Confirm Rule 11a (`n = 0` traps unless `identity:` given) versus requiring an identity on every `reduce`.
+1. Pin `MONOMORPHIZE_INSTR_THRESHOLD`'s value now, or defer to std authoring per R6's rationale?
+2. Are `REDUCE_BLOCK` / `REDUCE_LANES` ever overridable (only conceivable form: a literal at the call site)? Drafted as: no.
 
 ## Conformance tests
 
@@ -121,8 +121,9 @@ fn max_lane[T: Ord](let v: vector[T, 8], let m: mask[8]) -> T {
 - `float_default_no_fma`: `a*b+c` outside `@fastmath` MUST NOT fuse.
 - `fastmath_scope_ends`: code after a `@fastmath(contract){}` block MUST NOT be contracted.
 - `reduce_bitexact_across_threads`: `reduce(+, xs)` MUST bit-match across `FORS_NUM_THREADS` ∈ {1,2,8}.
-- `reduce_tail_no_padding`: partial last block MUST equal serial fold of exactly its `n mod B` elements.
-- `reduce_shape_small_n`: for every `n` in `1..=B`, `reduce(+, xs)` MUST bit-match the serial left fold; for `n` in `{B+1, 2B, 2B+1, 3B, 5B-1}` it MUST bit-match the reference tree of Rule 11.
+- `reduce_tail_no_padding`: with `op` = IEEE `+` and all elements `-0.0`, every `n` in `1..=2B+1` MUST yield `-0.0` (a padded `+0.0` lane would give `+0.0`).
+- `reduce_shape_reference`: with a non-associative, non-commutative `op` (string-building `"(" a " " b ")"` in the interpreter; float `-` natively), `n` in `{1, 2, 3, 4, 7, 8, 9, 15, 16, 17, 255, 256, 257, 511, 512, 513, 600, 3B, 5B-1}` MUST bit-match the reference tree of Rule 11; e.g. `n = 7` is `((x0 x1)(x2 x3))((x4 x5) x6)`, `n = 9` is `(((x0 x8) x1)(x2 x3))((x4 x5)(x6 x7))`, `n = 257` is `op(block0, x256)`, `n = 600` is `op(op(block0, block1), block2)` with `block2` over 88 elements (11 per lane).
+- `reduce_scalar_vector_agree`: the scalar-emulated and the vectorized lowering of one `reduce(+, xs)` over `f64` MUST bit-match for every `n` in `0..=600`.
 - `reduce_empty`: `n = 0` without `identity:` MUST trap; with `identity: e` MUST return `e`; `identity:` MUST NOT alter any `n >= 1` result (checked with `identity: NaN`).
 - `reduce_nan_propagates`: for `reduce(+, xs)` any NaN element MUST make the result NaN.
 - `reduce_serial_elide_matches_parallel`: `--serial-elide` output MUST bit-match default parallel output.
