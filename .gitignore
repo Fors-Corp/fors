@@ -1,2 +1,7 @@
 # graft's local graph cache — regenerable, not committed (run `graft build`).
 /graft/
+
+# cargo build output
+/target/
+
+__pycache__/
