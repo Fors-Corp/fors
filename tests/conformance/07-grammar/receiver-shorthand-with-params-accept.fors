@@ -1,0 +1,10 @@
+//! name: receiver_shorthand_with_params
+//! rule: 07.D21
+//! expect: parse-ok
+//! detail: round 5 (D1) -- one token of lookahead: `self` followed by `,` takes the shorthand, and ordinary parameters follow it normally
+
+module m;
+
+trait At {
+    fn at(let self, let i: usize) -> i64;
+}

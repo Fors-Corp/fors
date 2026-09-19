@@ -1,0 +1,8 @@
+//! name: reserved_spmd_as_member_access_reject
+//! rule: 07.Grammar
+//! expect: parse-error
+//! detail: round 5 (D2) -- postfix "." ident needs an ident token; `spmd` is reserved, so `x.spmd` is a parse error even though a member name is not a name (ch08 R23)
+
+module m;
+
+fn f(let x: i32) -> i32 { return x.spmd; }

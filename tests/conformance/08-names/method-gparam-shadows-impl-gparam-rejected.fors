@@ -8,5 +8,5 @@ module m;
 struct Box[T] { pub v: T }
 
 impl[T] Box[T] {
-    pub fn size[T](let self: Self) -> i32 { return 1; }
+    pub fn size[T](let self) -> i32 { return 1; }
 }

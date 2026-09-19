@@ -257,3 +257,36 @@ fn distinct_module_names_across_corpus_dont_collide_symbols() {
     }
     assert!(!seen.is_empty());
 }
+
+/// Round 5 (D3): the module graph is EXACTLY the explicit `use` edges.
+/// A body that spells `io.len` on a local named `io`, and a header
+/// `needs { env };`, add no edge — before round 5 the whole-file token
+/// scan turned `io .` into an implicit edge main -> std.io, which with
+/// std.io's `use main;` was a cycle. Adding `use std.io;` to main's header
+/// is what makes the cycle, and only that.
+#[test]
+fn edges_are_exactly_the_use_edges_no_body_scan() {
+    fn graph(main_src: &str) -> (Vec<(usize, usize)>, Vec<String>) {
+        let std_io = "module std.io;\nuse main;\n\npub struct Stdout { fd: i32 }\n";
+        let mut interner = Interner::new();
+        let mut files = Vec::new();
+        let main_path: &[&[u8]] = &[b"main"];
+        let std_path: &[&[u8]] = &[b"std", b"io"];
+        for (i, (src, path)) in [(main_src, main_path), (std_io, std_path)].into_iter().enumerate() {
+            let p = parse_file(src.as_bytes());
+            let facts = extract_module_facts(&p.tree, &p.tokens, src.as_bytes(), &mut interner);
+            let name = module_segments(&mut interner, &[], path).unwrap();
+            files.push((fors_index::FileId(i as u32), name, facts));
+        }
+        let (_, edges, diags) = build_module_graph(&interner, files);
+        (edges.iter().map(|(a, b)| (a.index(), b.index())).collect(), diags.iter().map(|d| d.code.as_str().to_string()).collect())
+    }
+    let body_only = "module main;\nneeds { env };\n\nfn f() -> usize {\n    let io: Str = \"a\";\n    return io.len;\n}\n";
+    let (edges, diags) = graph(body_only);
+    assert_eq!(edges, vec![(1, 0)], "only std.io -> main: the body's `io .` and the header's `needs {{ env }}` add nothing");
+    assert!(diags.is_empty(), "no cycle can arise from a body: {diags:?}");
+    let with_use = "module main;\nneeds { env };\nuse std.io;\n\nfn f() -> usize {\n    let io: Str = \"a\";\n    return io.len;\n}\n";
+    let (edges, diags) = graph(with_use);
+    assert_eq!(edges, vec![(0, 1), (1, 0)], "the explicit `use` is the one way to add the edge");
+    assert_eq!(diags, vec!["N0007".to_string()]);
+}

@@ -5,6 +5,7 @@
 
 module app;
 needs { io.stdout };
+use std.io;
 
 fn sneak() {
     var out: io.Stdout = io.Stdout { };

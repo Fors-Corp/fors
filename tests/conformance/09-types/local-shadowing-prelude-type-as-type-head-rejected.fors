@@ -1,0 +1,11 @@
+//! name: local_shadowing_prelude_type_as_type_head_rejected
+//! rule: 09.R11
+//! expect: check-error
+//! detail: T0011 -- the parameter `Option` shadows the prelude type (ch08 Rule 18), so the type-path head `Option` in the body is a value binding, not a type-level entity (round 5, D3: the prelude has no modules to shadow any more)
+
+module m;
+
+fn f(let Option: i32) -> i32 {
+    let out: Option[i32] = none;
+    return Option;
+}

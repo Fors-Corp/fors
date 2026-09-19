@@ -5,9 +5,9 @@
 
 module m;
 
-trait Greet { fn hello(let self: Self) -> i32; }
+trait Greet { fn hello(let self) -> i32; }
 struct Thing { pub x: i32 }
 
 impl Greet for Thing {
-    pub fn hello(let self: Self) -> i32 { return 1; }
+    pub fn hello(let self) -> i32 { return 1; }
 }

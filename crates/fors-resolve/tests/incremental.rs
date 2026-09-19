@@ -167,9 +167,11 @@ fn diagnostics_land_in_the_file_that_caused_them() {
 
 #[test]
 fn one_diagnostic_per_root_cause() {
-    // `let io` no longer shadows the prelude module `io` (owner decision
-    // 2026-09-19, round 3, D3): a function-local binding may now do that,
-    // so this is down to the three `use` root causes only.
+    // `let io` conflicts with nothing: round 3 (D3) let a function-local
+    // binding shadow a prelude name, and round 5 (D3) removed prelude
+    // modules altogether, so `io` here is an ordinary free name (this
+    // module imports no `std.io`) and only the three `use` root causes
+    // are reported.
     let main = "module main;\nuse nowhere.thing, lib.hid, lib.gone;\nfn f() -> i32 { return thing() + hid() + gone() + thing.x; }\nfn g(let t: thing) -> gone { let io: i32 = 1; return io + io; }\n";
     let lib = "module lib;\nfn hid() -> i32 { return 1; }\n";
     let (out, _) = resolve_pkg(&[("main", main), ("lib", lib)]);
@@ -277,4 +279,26 @@ fn never_panics_on_parse_error_corpus_or_mutated_files() {
         let _ = resolve_pkg(&[("m", &m), ("lib", &other)]);
         cases += 1;
     }
+}
+
+/// Round 5 (D3): a dependency lives in the header or nowhere. A body
+/// edit that starts spelling `io.len` on a local named `io` (the token
+/// pair the deleted whole-file scan keyed on) changes nothing for any
+/// other module and adds no edge; only a header edit adding `use
+/// std.io;` does — and it then closes the cycle with std.io's `use main;`.
+#[test]
+fn use_edges_come_from_headers_only_body_edits_add_none() {
+    let std_io = "module std.io;\nuse main;\n\npub struct Stdout { fd: i32 }\n";
+    let main_a = "module main;\nneeds { env };\n\nfn f() -> usize { return 1; }\n";
+    let main_b = "module main;\nneeds { env };\n\nfn f() -> usize {\n    let io: Str = \"a\";\n    return io.len;\n}\n";
+    let main_c = "module main;\nneeds { env };\nuse std.io;\n\nfn f() -> usize { return 1; }\n";
+    let (oa, ia) = resolve_pkg(&[("main", main_a), ("std.io", std_io)]);
+    let (ob, ib) = resolve_pkg(&[("main", main_b), ("std.io", std_io)]);
+    assert!(oa.files.iter().all(|f| f.diagnostics.is_empty()), "{:?}", oa.files.iter().map(|f| f.diagnostics.iter().map(|d| d.code.as_string()).collect::<Vec<_>>()).collect::<Vec<_>>());
+    assert!(ob.files.iter().all(|f| f.diagnostics.is_empty()), "a body mention of `io.` adds no edge and so no cycle");
+    assert_eq!(file_result_text(&oa, 1), file_result_text(&ob, 1), "std.io's result is untouched by main's body edit");
+    assert_eq!(oa.export_signature(0, &ia), ob.export_signature(0, &ib));
+    let (oc, _) = resolve_pkg(&[("main", main_c), ("std.io", std_io)]);
+    let codes: Vec<Code> = oc.files.iter().flat_map(|f| f.diagnostics.iter().map(|d| d.code)).collect();
+    assert!(codes.contains(&Code::N(7)), "the header's `use std.io;` is what closes the cycle: {codes:?}");
 }

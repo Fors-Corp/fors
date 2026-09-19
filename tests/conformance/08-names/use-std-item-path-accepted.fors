@@ -1,0 +1,9 @@
+//! name: use_std_item_path_accepted
+//! rule: 08.R17
+//! expect: check-ok
+//! detail: round 5 drafting decision -- a std path deeper than a module binds its last segment and is left to the checker: this phase has no std items to check `Writer` against, so it reports nothing
+
+module m;
+use std.io.Writer;
+
+fn f(let w: Writer) -> i32 { return 0; }

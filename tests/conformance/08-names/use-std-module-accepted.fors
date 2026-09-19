@@ -1,0 +1,10 @@
+//! name: use_std_module_accepted
+//! rule: 08.R17
+//! expect: check-ok
+//! detail: round 5 (D3) -- `use std.io;` binds the module name `io` from the synthetic std table; every member access through it (io.Stdout, io.Error) is deferred to the checker (renamed from use-std-io-beside-prelude-accepted)
+
+module m;
+needs { io.stdout };
+use std.io;
+
+fn show(inout out: io.Stdout) raises io.Error { out.write_line("x")?; }

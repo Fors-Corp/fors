@@ -180,9 +180,11 @@ fn f(let c: bool) -> i64 {
     to a type-level entity: a struct, enum, trait (after `dyn`, in a bound or
     an `impl` header), prelude type, type parameter or `Self`, possibly
     reached through modules. A head that ch08 resolved to a value — in
-    particular a local or parameter that shadows a prelude module (ch08 Rule
-    18) and is then written as the head of `io.Stdout` — MUST be rejected with
-    this code, naming the binding. A type path with deferred segments (ch08
+    particular a local or parameter that shadows a prelude type (ch08 Rule
+    18: `fn f(let Option: i32)` then `Option[i32]` in the body), or a local
+    named `io` written as the head of `io.Stdout` in a module that does not
+    import `std.io` (round 5, D3: `io` is then an ordinary binding, not a
+    module) — MUST be rejected with this code, naming the binding. A type path with deferred segments (ch08
     Rule 16) is a projection and is Rule 61's.
 12. **T0012** — Bounds MUST hold at every use: for each argument `X` given to a
     parameter `P: Tr1 + ... + Trk`, `X` MUST implement every `Tri`. "`X`
@@ -264,7 +266,11 @@ fn grow[T, N: usize](let a: Array[T, N]) -> Array[T, N + 1] { return a; } // rej
     no supertraits: a constant is a parameterless method (`fn zero() ->
     Self;`), and a function needing two traits writes `T: Eq + Ord`. A method
     whose first parameter is named `self` MUST give it the type `Self` (in an
-    impl: the self type), optionally qualified; it is a *receiver method*.
+    impl: the self type), optionally qualified, or OMIT the annotation
+    entirely — ch07's receiver shorthand `convention "self"` (Disambiguation
+    21, owner decision 2026-09-19, round 5, D1), which means exactly
+    `self: Self` and is the same signature for every rule of this chapter;
+    it is a *receiver method*.
     Other functions of a trait or impl are *associated functions*.
 17. **T0017** — `impl Tr[As] for S` MUST define every required method of `Tr`,
     MAY redefine provided ones, MUST define every associated type of `Tr`
@@ -410,8 +416,8 @@ fn grow[T, N: usize](let a: Array[T, N]) -> Array[T, N + 1] { return a; } // rej
 
 ```fors
 trait Shape {
-    fn area(let self: Self) -> f64;                                  // required
-    fn twice(let self: Self) -> f64 { return self.area() * 2.0; }    // provided
+    fn area(let self) -> f64;                                  // required (round 5, D1)
+    fn twice(let self) -> f64 { return self.area() * 2.0; }    // provided
 }
 struct Circle { r: f64 }
 struct Pair[T] { a: T, b: T }
@@ -437,7 +443,7 @@ impl[I: Iterator] Iterator for Skip[I] {
     fn next(inout self: Skip[I]) -> Option[I.Item] { return self.inner.next(); }
 }
 // Skip[Skip[Counter2]].Item  ->  Skip[Counter2].Item  ->  Counter2.Item  ->  i64   (Rule 20)
-trait Keyed { type Key: Eq + Ord; fn key(let self: Self) -> Self.Key; }
+trait Keyed { type Key: Eq + Ord; fn key(let self) -> Self.Key; }
 impl Keyed for Circle { type Key = f64; fn key(let self: Circle) -> f64 { return self.r; } }
 impl Keyed for Counter2 {                                // rejected T0017: Circle is not Eq
     type Key = Circle;
@@ -1203,7 +1209,9 @@ R1 `let-without-type-or-init-rejected` T0001,
 R9 `brand-identity-mismatch-rejected` T0026,
 `nominal-structs-distinct-rejected` T0026; R10 `array-to-slice-rejected`
 T0026, `concrete-to-dyn-accepted`, `never-coerces-accepted`; R11
-`local-shadowing-prelude-module-as-type-head-rejected` T0011,
+`local-shadowing-prelude-type-as-type-head-rejected` T0011 (renamed and
+re-aimed at a prelude TYPE by round 5's D3, the prelude having no modules
+left to shadow),
 `type-arity-rejected` T0011; R12 `bound-unsatisfied-rejected` T0012,
 `bound-via-generic-impl-accepted`; R13
 `const-arg-arithmetic-on-param-rejected` T0013, `const-param-float-rejected`

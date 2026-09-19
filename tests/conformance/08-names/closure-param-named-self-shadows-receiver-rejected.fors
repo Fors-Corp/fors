@@ -1,0 +1,15 @@
+//! name: closure_param_named_self_shadows_receiver_rejected
+//! rule: 08.R18
+//! expect: check-error
+//! detail: round 5 (D1) verification -- a closure parameter is a cparam, never a receiver: `|self| ...` parses in any body (ch07 D21 does not touch cparam), and inside a method it is an ordinary binding that shadows the receiver parameter, N0018
+
+module m;
+
+struct S { n: i32 }
+
+impl S {
+    fn f(let self) -> i32 {
+        let g = |self| self;
+        return g(1);
+    }
+}

@@ -1,9 +1,10 @@
 //! name: pattern_names_module_rejected
 //! rule: 08.R16
 //! expect: check-error
-//! detail: round 3 (D1) -- a bare one-segment pattern is always a reference; one that resolves to a (prelude) module is a path that ends on a module, N0016
+//! detail: round 3 (D1) -- a bare one-segment pattern is always a reference; one that resolves to a module is a path that ends on a module, N0016 (round 5, D3: the module now has to be imported for the name to be in scope at all)
 
 module m;
+use std.io;
 
 fn f(let v: i32) -> i32 {
     match v {

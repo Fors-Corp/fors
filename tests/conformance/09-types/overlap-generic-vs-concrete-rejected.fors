@@ -5,7 +5,7 @@
 
 module m;
 
-trait Shape { fn area(let self: Self) -> f64; }
+trait Shape { fn area(let self) -> f64; }
 struct Pair[T] { a: T, b: T }
 impl[T] Shape for Pair[T] { fn area(let self: Pair[T]) -> f64 { return 0.0; } }
 impl Shape for Pair[i32] { fn area(let self: Pair[i32]) -> f64 { return 1.0; } }

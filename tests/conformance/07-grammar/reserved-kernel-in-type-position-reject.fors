@@ -1,0 +1,8 @@
+//! name: reserved_keyword_kernel_in_type_position
+//! rule: 07.Reserved
+//! expect: parse-error
+//! detail: round 5 (D2) -- a reserved word is not an `ident`, so `kernel` cannot head a type path either
+
+module m;
+
+fn f(let x: kernel) -> i32 { return 0; }

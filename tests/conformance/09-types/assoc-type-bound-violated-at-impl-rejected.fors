@@ -5,7 +5,7 @@
 
 module m;
 
-trait Keyed { type Key: Eq + Ord; fn key(let self: Self) -> Self.Key; }
+trait Keyed { type Key: Eq + Ord; fn key(let self) -> Self.Key; }
 struct Circle { r: f64 }
 struct Tag { id: i64 }
 impl Keyed for Tag {

@@ -5,7 +5,7 @@
 
 module m;
 
-trait Tagged { fn tag(let self: Self) -> i64; }
+trait Tagged { fn tag(let self) -> i64; }
 struct Three[T] { a: T }
 impl[I: Iterator] Tagged for Three[I.Item] {
     fn tag(let self: Three[I.Item]) -> i64 { return 0; }

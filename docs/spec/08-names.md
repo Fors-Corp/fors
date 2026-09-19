@@ -2,8 +2,9 @@
 
 ## Status
 
-Draft, 2026-09-19; verified and repaired the same day (see Drafting
-decisions). Name resolution is a phase of its own: it runs after parsing
+Draft, 2026-09-19; verified and repaired the same day, then round-5 owner
+decisions applied (see Drafting decisions — "Closed by owner decision
+2026-09-19, round 5"). Name resolution is a phase of its own: it runs after parsing
 (ch07) and before type checking, and every MUST in this chapter is
 decidable from the CSTs of the build's files plus the set of module
 names. No rule here consults a type. What needs a type is listed in
@@ -34,7 +35,9 @@ brands (ch01); receiver-type dispatch (checker); grammar productions
   one package whose name is empty and whose source root is the directory
   of the root file.
 - **Universe**: the modules of the root package, of every resolved
-  dependency (ch04 Rule 17), and of package `std`, which every build has.
+  dependency (ch04 Rule 17), and of package `std`, which every build has
+  — as source once `std` ships, and until then as Rule 17's synthetic
+  table of module names.
 - **Module**: the declarations of exactly one source file; its **name**
   is given by Rule 1.
 - **Item**: a module-level `decl` of kind `fn`, `extern fn`, `struct`,
@@ -107,9 +110,14 @@ brands (ch01); receiver-type dispatch (checker); grammar productions
    only by its own `use` of the original, or of `M`'s `pub use`
    (Rule 5) — under whatever name that `use`/`pub use` gives it, which
    may itself be a further alias.
-7. **N0007** — The module graph has one edge per `use` path: to the
-   module itself in Rule 4(a), to `M` in Rule 4(b); plus the implicit
-   edges of Rule 17. Which prefix of a `use` path is a module depends
+7. **N0007** — The module graph has one edge per `use` path, and NO other
+   edge: to the module itself in Rule 4(a), to `M` in Rule 4(b). The edge
+   set is therefore exactly the explicit `use` edges of the file headers
+   — there is no implicit edge of any kind, no body scan, and no
+   over-approximation (owner decision 2026-09-19, round 5, D3: the
+   imports-first property is that a file's dependencies are readable from
+   its header without parsing its body, so every dependency must be
+   written there). Which prefix of a `use` path is a module depends
    only on the set of module names, so the explicit edge set is known
    from file names and headers before any item is examined. The graph
    MUST be acyclic; a cycle MUST be one compile error naming every
@@ -176,7 +184,7 @@ brands (ch01); receiver-type dispatch (checker); grammar productions
     later) or a prelude name. An import that binds a name to the entity
     that name already denotes (a repeated `use`, the original plus its
     re-export, two aliases spelling the same name for the same entity,
-    `use std.io;` beside the prelude's `io`) is not a collision. No
+    the same std module imported twice) is not a collision. No
     item, import or binding may be named `Self` (Rule 26).
 14. **N0014** — A name is looked up through the scopes enclosing its
     use, innermost first: bindings of enclosing blocks, match arms,
@@ -202,9 +210,12 @@ brands (ch01); receiver-type dispatch (checker); grammar productions
     reached so far: **module** — the next segment MUST be a `pub`
     module-scope name of that module (Rules 5, 10), reaching that
     entity; a path that ends on a module, outside `use`, MUST be a
-    compile error, and a module is reachable only through a name bound
-    by `use` or the prelude (`a.b.f` needs `use a.b;` and is then
-    written `b.f`). **enum item** — if the next segment is one of the
+    compile error, and a module is reachable ONLY through a name bound
+    by `use` (`a.b.f` needs `use a.b;` and is then written `b.f`;
+    `io.Stdout` needs `use std.io;` — round 5, D3: the prelude binds no
+    module). A module bound by a `use` of the synthetic `std` table
+    (Rule 17) has no known names, so every segment after it is deferred.
+    **enum item** — if the next segment is one of the
     enum's variants (Rule 27) it reaches that variant; otherwise it is a
     deferred segment. **anything else** (struct, trait, `fn`, `const`,
     prelude type or value, generic parameter, `Self`, variant, local,
@@ -222,28 +233,46 @@ brands (ch01); receiver-type dispatch (checker); grammar productions
     brand) is the checker's, since a bare `targ` path is classified
     there (ch07 Disambiguation 11).
 17. **N0017** — The prelude is a closed list, present in every module
-    scope. Types and traits: `i8 i16 i32 i64 u8 u16 u32 u64 isize usize
+    scope, and it contains NO modules (owner decision 2026-09-19, round 5,
+    D3). Types and traits: `i8 i16 i32 i64 u8 u16 u32 u64 isize usize
     f32 f64 bool Str Slice Array vector mask atomic rawptr Own Ref Arena
     Option Shared ErrorFrom never Range RangeIncl Copyable Eq Ord Add Sub
     Mul Div Rem Neg BitAnd BitOr BitXor Shl Shr Iterator Index IndexMut`
     (the second line is round 4's addition: the names ch09 Rules 4, 5, 21
-    and 23 make language-known). Values: `some none reduce`. Modules: `io fs
-    net proc time rand env gpu`, denoting `std.io`, `std.fs`, `std.net`,
-    `std.proc`, `std.time`, `std.rand`, `std.env`, `std.gpu` (the homes
-    of ch04 Rule 21's root-capability types). Resolving a path through a
-    prelude module name adds an implicit edge (Rule 7) to that module,
-    identical in every respect, ch04 Rule 2 included, to a `use std.x;`
-    in the header. Package `std` has no dependencies, so an implicit
-    edge from a non-`std` module cannot close a cycle; inside package
-    `std` the prelude module names are not provided and `use` is written
-    out, keeping Rule 7's header-only edge set exact wherever a cycle is
-    possible. No other name is available without `use`. A function-local
-    binding is allowed to shadow a prelude module name (Rule 18); this
-    rule's implicit edge is computed from the path's name alone and MAY
-    therefore over-approximate when a local shadows a prelude module: the
-    edge to that `std` module is still added even where the name
-    actually resolves to the local shadow instead of the module. This is
-    harmless (an unneeded dependency edge, never a missing or wrong one).
+    and 23 make language-known). Values: `some none reduce`. No other name
+    is available without `use`: in particular a std module — `io`, `fs`,
+    `net` and the rest — is a name only in a module whose header imports
+    it (`use std.io;`), and using such a name without importing it is the
+    ordinary unresolved-name error of Rule 14, N0014, reported at the head
+    segment (a diagnostic for a name in this rule's known list SHOULD name
+    the missing import). There is no implicit edge (Rule 7) and no scan of
+    any body.
+
+    **The synthetic `std` table.** Package `std` is in every universe
+    (Definitions) but no `std` source exists yet, so until it ships the
+    compiler knows its module names and nothing else: `use std.<m>;` MUST
+    resolve, for `m` one of
+
+        io  fs  net  proc  time  rand  env  gpu  mem  ffi
+
+    — `io fs net proc time rand env gpu` are the homes of ch04 Rule 21's
+    root-capability types, `mem` the home of the explicit allocators of
+    ch01 (round 5, D5), and `ffi` the module ch04's sealed-capability
+    examples import (`use std.ffi;`). The `use` binds its last segment as a module name
+    exactly as Rule 4(a) does, and every member access through it
+    (`io.Stdout`, `fs.Dir`, `mem.Allocator`) is a deferred segment left to
+    the checker (Rule 16, Rule 22), because this phase has no `std` items
+    to look up. A `use std.<name>;` whose `name` is not in the list above
+    MUST be a compile error with this rule's code, N0017, naming the
+    known list; `use std;` alone is Rule 4(c)'s unresolved import
+    (`std` is a package, not a module). A path deeper than a module
+    (`use std.io.Writer;`) binds its last segment and is likewise left to
+    the checker, with no diagnostic from this phase. Once `std` ships as
+    source, its modules resolve like any other module of the universe and
+    this table is not consulted: a build that contains `std` sources
+    resolves `use std.<m>;` against them, and an absent `std.<m>` is then
+    Rule 4(c)'s error. Nothing else about `std` is built in — no item, no
+    trait, no capability.
 18. **N0018** — No shadowing, with one exception. A binding MUST NOT
     have a name that Rule 14 would resolve at the point of the binding:
     a binding of an enclosing scope of the same function, a parameter, a
@@ -253,13 +282,18 @@ brands (ch01); receiver-type dispatch (checker); grammar productions
     function-local binding (a `let`/`var` binding, a `for`/`parallel
     for`/`simd for` binding, a `param`, a `cparam`, a `"let" ident`
     pattern binding, or a `with arena`/`with allocator` identifier) MAY
-    share a name with a prelude name (a prelude type, value or module,
-    Rule 17): within its scope the name then denotes the binding, Rule 14
-    already looking innermost first (`fn f(let net: net.Net) { net.
-    connect(...) }` — the parameter's own type annotation is resolved
-    before the parameter is in scope, so `net.Net` there still resolves
-    to the prelude module, and only the body's `net.connect` sees the
-    parameter). A generic parameter MAY NOT shadow a prelude name
+    share a name with a prelude name (a prelude type or value, Rule 17):
+    within its scope the name then denotes the binding, Rule 14
+    already looking innermost first (`fn f(let usize: i32) -> i32 {
+    return usize; }` — the parameter's own type annotation is resolved
+    before the parameter is in scope, so a prelude name used there still
+    means the prelude entity, and only the body sees the parameter).
+    Since round 5 (D3) a std module is NOT a prelude name but an import,
+    so this exception no longer covers one: in a module whose header says
+    `use std.io;`, a binding named `io` shadows a module-scope name and is
+    an error like any other import clash, while in a module that does not
+    import it `io` is an ordinary free identifier.
+    A generic parameter MAY NOT shadow a prelude name
     (type-level names stay unambiguous); every other case above — items,
     imports, other bindings, `Self` — keeps no exception. Bindings
     introduced together MUST be pairwise distinct: the parameters of one
@@ -318,7 +352,14 @@ brands (ch01); receiver-type dispatch (checker); grammar productions
     and `fpat` field names; postfix `.name`; `dot_lit`s; numeric
     suffixes; the `extern` ABI string; every segment of a `module`
     header and of a `use` path (Rule 3). `needs { clock };` does not
-    bind `clock`.
+    bind `clock`. Not being a name is not a licence to spell one with a
+    reserved word: ch07 still requires an `ident` token in each of these
+    positions, so a field, member, label or `dot_lit` may not be called
+    `type`, `spmd` or `kernel` (round 5, D2) — that is ch07's parse
+    error, not this chapter's. A std module name (`io`, `mem`, ...) is
+    an ordinary identifier and MAY be a member name (`c.io`, `s.mem`) in
+    any module, imported or not, since a member name is never looked up
+    in a scope.
 24. **N0024** — File names. Every directory segment and the file stem of
     a source file's path relative to its source root MUST match
     `[a-z_][a-z0-9_]*`, MUST NOT be `_`, and MUST NOT be a reserved word
@@ -383,11 +424,12 @@ brands (ch01); receiver-type dispatch (checker); grammar productions
     that FOLLOW it in the same `params`, the `ret_type`, `raises` type
     and contracts of the `fn_sig`, and the body — NOT its own type
     annotation and not those of earlier parameters (parameters come into
-    scope left to right, like `let` statements; so in `fn f(let net:
-    net.Net, let peer: net.Addr)` the first `net.Net` is the prelude
-    module's and the second `net` is the parameter, Rule 18, and a
-    parameter used as a brand in another parameter's type must precede
-    it); any further name a contract clause may see is ch02's. The
+    scope left to right, like `let` statements; so in `fn f(let Option:
+    Option[i32])` the annotation's `Option` is still the prelude type and
+    only the body sees the parameter, Rule 18, and a parameter used as a
+    brand in another parameter's type must precede it — `fn f(let a:
+    Arena, let x: Own[i32, a])`); any further name a contract clause may
+    see is ch02's. The
     pairwise-distinct requirement of Rule 18 covers the whole `params`
     list regardless of this order. A `let`/`var`
     binding: from the end of its statement to the end of the enclosing
@@ -420,8 +462,9 @@ brands (ch01); receiver-type dispatch (checker); grammar productions
 // manifest-less build, file hello.fors
 module hello;
 needs { io.stdout };
+use std.io;                        // mandatory since round 5 (D3), Rule 17
 
-fn main(inout out: io.Stdout) raises io.Error {   // io: prelude module, Rule 17
+fn main(inout out: io.Stdout) raises io.Error {   // io: the imported module
     out.write_line(greeting())?;   // greeting is below: Rule 9
 }
 
@@ -438,7 +481,7 @@ pub fn hi() -> Str { return "hi"; }
 // package app, file start.fors
 module app.start;
 needs { io.stdout };
-use app.greet;                     // binds the module name `greet`, Rule 4(a)
+use std.io, app.greet;             // binds `io` (Rule 17) and `greet`, Rule 4(a)
 
 fn main(inout out: io.Stdout) raises io.Error {
     out.write_line(greet.hi())?;   // module, then pub item: Rule 16
@@ -501,9 +544,19 @@ fn f() -> N { return N { host: "x" }; }   // N.host is a deferred segment, Rule 
 // local shadowing a prelude name: D3, Rule 18
 module app.io_demo;
 
-fn f(let net: net.Net) {   // type annotation resolved before `net` is in scope
-    net.connect();          // here `net` denotes the parameter, Rule 14
+fn f(let Option: Option[i32]) -> i32 {  // annotation resolved before `Option`
+    match Option { some(let v) => v, none => 0 }   // the parameter, Rule 14
 }
+```
+```fors
+// round 5, D3: a std module is an import, never a prelude name
+module app.net_demo;
+use std.net;
+
+fn f(inout c: net.Conn) { }   // `net` is the imported module, Rule 16
+// `let net = 1;` in this module would be N0018 (it shadows the import);
+// in a module without `use std.net;` it is an ordinary free name, and
+// `net.Conn` there is N0014 with a "add `use std.net;`" hint (Rule 17).
 ```
 
 ## Rejected alternatives
@@ -537,9 +590,10 @@ fn f(let net: net.Net) {   // type annotation resolved before `net` is in scope
   owner was asked to weigh: `io fs net proc time rand env gpu`, `some`, `none`
   and `reduce` are unusable as local names in every module. ch04's
   `fetch` example named a parameter `net` and was renamed to `conn`.
-- Verifier: prelude modules (Rule 17) exist because 32 corpus tests and
-  ch04's examples write `io.Stdout`, `io.Error` with no `use`. The
-  alternative is to require `use std.io;` and fix those files.
+- Superseded by round 5 (D3, below): prelude modules (Rule 17) existed
+  because 32 corpus tests and ch04's examples wrote `io.Stdout`,
+  `io.Error` with no `use`. The alternative — require `use std.io;` and
+  fix those files — is what the owner chose.
 - Verifier: `use` binds a module or an item, by the longest-module rule
   of Rule 4; the first draft's examples used an imported module's items
   unqualified, which no rule allowed. A module/item tie is an error.
@@ -603,14 +657,66 @@ fn f(let net: net.Net) {   // type annotation resolved before `net` is in scope
   reserved (ch07), so Rule 24 already forbids a module named `type`.
 - Diagnostic codes `N00xx` equal the rule numbers; tests cite `08.Rk`.
 
+### Closed by owner decision 2026-09-19, round 5
+
+- **D3 — std modules require an import.** The owner chose mandatory
+  `use std.io;` over prelude modules, for the plan's imports-first
+  property: a file's dependencies MUST be readable from its header
+  without parsing its body. Consequences, all applied above: the prelude
+  keeps only types, values and traits and NO modules (Rule 17); the
+  module graph is exactly the explicit `use` edges, with no implicit
+  edge, no body scan and no over-approximation (Rule 7 — the deleted
+  sentence "an extra edge to a std module is harmless" was the only
+  place in the spec where the edge set was allowed to be inexact); a
+  module is reachable only through a `use` (Rule 14/16); using a std
+  module without importing it is N0014 at the head segment (Rule 17),
+  with a hint naming the missing import; and `std` is a known package
+  whose module names the compiler carries as a synthetic table until
+  `std` ships, with `use std.<unknown>;` an N0017 error naming the list
+  (Rule 17). Costs accepted with the decision: 37 corpus files and four
+  example blocks of ch02/ch04/ch08 gained a `use std.<m>;` line (a file
+  that only NAMES a capability in `needs { io.stdout }` needs no import,
+  so the count is lower than the count of files mentioning `io`); a
+  local named `io` is now an error in a module that imports `std.io` (it
+  shadows an import — Rule 18's prelude carve-out no longer covers a std
+  module), which flipped two corpus tests, renamed and re-aimed four
+  more (one of them ch09's) and deleted one whose premise is now
+  impossible; and the resolver's weakest component, a whole-file token
+  scan that manufactured the implicit edges (it also saw `needs` words
+  and shadowed locals), is deleted rather than repaired.
+- **D3 drafting decision (not in the owner's answer).** The synthetic
+  table is consulted only while `std` has NOT shipped: a build that
+  contains `std` sources resolves `use std.<m>;` against them, so an
+  absent `std.<m>` in such a build is Rule 4(c)'s error rather than a
+  silently synthesised module. Two further gaps the answer left open,
+  decided here: `use std;` alone is Rule 4(c)'s unresolved import
+  (`std` is a package, not a module), and a path deeper than a module
+  (`use std.io.Writer;`) binds its last segment with no diagnostic,
+  since this phase has no `std` items to check it against. `mem` is in
+  the known list because round 5's D5 puts the explicit allocators
+  there; ch04's root-capability homes supply the other eight.
+- **D1 — receiver shorthand.** `inout self` means `inout self: Self`
+  (ch07 Disambiguation 21). For this chapter nothing changes: the
+  shorthand introduces the same binding `self` under Rules 18 and 26, and
+  a parameter with no type annotation simply has no annotation to
+  resolve.
+- **D2 — `spmd`/`kernel` reserved.** Rule 24 already forbids a module
+  named with a reserved word, so both are now illegal file/directory
+  names; Rule 23 gains the sentence that "not a name" does not let a
+  member, field or label be spelled with a reserved word.
+
 ## Open questions for the owner
 
 1. Prelude contents (Rule 17). Used unqualified elsewhere but defined
    nowhere, so currently unresolved names: `Buffer` (ch04 example, 5
    tests), `Vec`, `PageAllocator` (`Copyable` and the other ch09
    language-known names were added in round 4, Rule 17). Add to the prelude, or
-   require `use`? And confirm prelude modules versus mandatory
-   `use std.io;`.
+   require `use`? ~~And confirm prelude modules versus mandatory
+   `use std.io;`.~~ The module half is closed by owner decision
+   2026-09-19, round 5 (D3): mandatory `use std.io;`, no prelude modules,
+   a synthetic `std` table until `std` ships. The three type names above
+   are still open, and once `std` ships they are expected to come from it
+   by `use`, not from the prelude.
 2. ~~Confirm total no-shadowing including prelude names (Decision 1).~~
    Closed by owner decision 2026-09-19, round 3 (D3): total no-shadowing
    stays for items, imports, other bindings and `Self`; a function-local
@@ -650,17 +756,21 @@ rejected`; R12 `private-type-in-public-signature-rejected`,
 `private-type-in-private-field-accepted`; R13 `duplicate-fn-rejected`,
 `struct-fn-same-name-rejected`, `item-named-as-prelude-rejected`,
 `import-collides-with-item-rejected`, `import-same-entity-twice-
-accepted`, `use-std-io-beside-prelude-accepted`; R14 `unresolved-name-
-rejected`; R15 `ambiguous-import-rejected`, `ambiguous-import-unused-
+accepted`, `use-std-module-accepted` (round 5, D3: renamed from
+`use-std-io-beside-prelude-accepted`, whose "beside the prelude's `io`"
+premise is gone); R14 `unresolved-name-rejected`; R15 `ambiguous-import-rejected`, `ambiguous-import-unused-
 rejected`; R16 `path-ends-on-module-rejected`, `enum-variant-path-
 accepted`, `unimported-module-path-rejected`; R17 `prelude-usable-
-without-use-accepted`, `prelude-module-without-use-accepted`; R18
+without-use-accepted` (round 5, D3: round 2's `prelude-module-without-
+use-accepted` FLIPS and is renamed `std-module-without-use-rejected`,
+listed with the round-5 tests below); R18
 `shadow-{local,param,gparam,for,closure-param,else-handler,with-
 arena,item,later-item,import}-rejected` (round 3, D3: `shadow-pattern-
 rejected` moved to R25 below; `shadow-prelude-rejected` and
-`shadow-prelude-module-rejected` flip to `local-shadows-prelude-{type,
-module}-accepted` under R18 — a function-local binding may now shadow a
-prelude name),
+`shadow-prelude-module-rejected` flip to `local-shadows-prelude-type-
+accepted` and — round 5, D3 — `local-named-as-std-module-without-import-
+accepted`, a function-local binding being free to shadow a prelude type
+and free to take a std module's name in a module that does not import it),
 `duplicate-param-rejected`, `duplicate-gparam-rejected`, `pattern-let-
 duplicate-in-one-pattern-rejected` (renamed from round 2's
 `duplicate-in-one-pattern-rejected`; D1 rewrites it with `let`),
@@ -683,10 +793,13 @@ beside-directory-accepted`, `use-module-private-item-no-tie-accepted`,
 `use-module-reexport-tie-rejected`, `use-unresolved-used-many-times-
 rejected`; R12 `private-type-in-pub-{enum-payload,trait-method,const,
 method}-rejected`, `private-type-in-private-positions-accepted`; R13
-`item-named-as-prelude-module-rejected`; R16 `private-import-via-module-
-path-rejected`, `enum-variant-via-reexport-accepted`, `path-ends-on-
-prelude-module-rejected`, `prelude-module-backed-by-std-rejected`; R17
-`prelude-module-backed-by-std-accepted`; R18
+`item-named-as-std-module-without-import-accepted` (round 5, D3: flips
+and renames round 2's `item-named-as-prelude-module-rejected`); R16
+`private-import-via-module-path-rejected`,
+`enum-variant-via-reexport-accepted`, `path-ends-on-std-module-rejected`
+(renamed, round 5), `use-std-module-backed-by-source-rejected` (renamed
+from `prelude-module-backed-by-std-rejected`); R17
+`use-std-module-backed-by-source-accepted` (likewise); R18
 `shadow-in-closure-body-rejected`, `shadow-nested-closure-
 rejected`, `shadow-deeply-nested-block-rejected`, `duplicate-cparam-
 rejected`, `with-brand-nested-same-name-rejected`, `name-free-after-scope-
@@ -750,4 +863,40 @@ payload-accepted`, `pattern-bare-name-of-shadowing-local-rejected`; R26
 `param-named-as-prelude-type-own-annotation-accepted`,
 `param-in-scope-in-later-param-type-accepted`, `param-not-in-scope-in-
 earlier-param-type-rejected`, `pattern-let-binding-not-in-sibling-arm-
-rejected`.
+rejected`. Round 3's `local-shadows-prelude-module-path-head-accepted`
+is gone: round 5's D3 makes its premise impossible (a parameter cannot
+shadow an import), and it is replaced by
+`param-shadows-imported-std-module-rejected` below.
+
+Added by owner decision 2026-09-19, round 5 (D3; the flipped and renamed
+round-2/round-3 tests are listed at their rule above): R17
+`std-module-without-use-rejected` (`io.Stdout` with no `use std.io;` is
+N0014 at the head segment) and one per known module name —
+`std-module-without-use-{fs,net,proc,time,rand,env,gpu,mem,ffi}-rejected`;
+`use-std-module-accepted` (`use std.io;` then `io.Stdout`, every member
+access deferred), `use-std-mem-accepted` (the round-5 D5 name),
+`use-std-unknown-module-rejected` (N0017, the message naming the known
+list), `use-std-alone-rejected` (N0004: `std` is a package, not a
+module), `use-std-item-path-accepted` (`use std.io.Writer;` binds
+`Writer` and is left to the checker); R13
+`item-named-as-std-module-with-import-rejected`; R18
+`local-shadows-imported-std-module-rejected`,
+`param-shadows-imported-std-module-rejected`; R16
+`path-ends-on-std-module-rejected`.
+
+Added by the round-5 verification (2026-09-20): R7
+`body-mention-of-std-module-adds-no-edge-accepted` (a build with `std.io`
+source whose `std.io` says `use main;` while `main`'s body spells `io.len`
+on a local `io` and its header `needs { env };` — no edge, no cycle;
+before D3 the body scan made this an N0007 cycle; the same fact is
+asserted on the raw edge set in `crates/fors-index/tests/corpus.rs` and
+across a body-vs-header edit in `crates/fors-resolve/tests/incremental.rs`);
+R18 `closure-param-named-self-shadows-receiver-rejected` (`|self|` inside
+a method is a `cparam` that shadows the receiver, N0018) and
+`closure-param-named-self-in-free-fn-accepted` (ch07 Disambiguation 21
+touches `param` only, never `cparam`). ch04's
+`main-forged-std-module-rejected` and `main-aliased-std-import-accepted`
+(ch04 Rule 8) rely on this chapter's Rule 4 binding: a `main` parameter
+type's head is judged by what the header binds it to, so a user module
+named `io` cannot forge `io.Stdout` and an alias `use std.io as w;` still
+names it.

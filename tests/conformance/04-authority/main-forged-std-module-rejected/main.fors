@@ -1,0 +1,10 @@
+//! name: main_forged_std_module_rejected
+//! rule: 04.R8
+//! expect: check-error
+//! detail: A0008 -- round 5 (D3) verification: a user module named `io` with a `pub struct Stdout` is legal (ch08 R13/R24, `io` is no prelude name), but `use io;` binds the USER module, so `io.Stdout` in main's signature is not the root-capability type -- Rule 8 judges the head by what the root scope binds it to, not by spelling, and Rule 7 stays unforgeable
+
+module main;
+needs { io.stdout };
+use io;
+
+fn main(inout out: io.Stdout) { }

@@ -6,6 +6,6 @@
 module m;
 
 trait T {
-    fn get(let self: Self) -> i32;
-    fn get(let self: Self) -> i32;
+    fn get(let self) -> i32;
+    fn get(let self) -> i32;
 }

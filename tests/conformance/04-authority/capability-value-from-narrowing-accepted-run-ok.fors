@@ -5,6 +5,7 @@
 
 module app;
 needs { net, io.stdout };
+use std.io, std.net;
 
 fn main(inout client: net.Net, inout out: io.Stdout) {
     out.write_line("ok");

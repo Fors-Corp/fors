@@ -5,5 +5,5 @@
 
 module m;
 
-trait Named { fn id(let self: Self) -> i64; }
+trait Named { fn id(let self) -> i64; }
 fn f[T: Named](let t: T) -> i64 { return t.id(); }

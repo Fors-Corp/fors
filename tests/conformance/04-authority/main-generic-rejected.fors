@@ -5,6 +5,7 @@
 
 module app;
 needs { io.stdout };
+use std.io;
 
 fn main[W: io.Writer](inout out: W) {
 }

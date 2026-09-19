@@ -93,7 +93,16 @@ manifests belong to other chapters.
    argument is exactly its declared convention.
 7. Two simultaneous overlapping accesses MUST be rejected if either is
    `inout`, `sink`, or `set`. Two overlapping `let` accesses MUST be
-   accepted (Decisions §1).
+   ACCEPTED (Decisions §1; owner decision 2026-09-19, round 5, D4: two
+   read-only accesses cannot race, and forbidding them would outlaw
+   `f(&x, &x)`-shaped calls that are plainly sound). **Note for the
+   backend:** no-alias facts therefore never come from a `let` parameter.
+   They come only from `inout`, `sink` and `set` and from the other four
+   alias sources of ch05 Rule 5 (affine ownership, arena brand id,
+   split-token provenance, SoA field identity — "parameter convention"
+   being the first of its five); a `let` parameter MUST NOT be
+   annotated `noalias` (or its IR equivalent) on the strength of its
+   convention alone.
 8. At a CFG merge every path MUST agree on each local's liveness;
    disagreement MUST be an error, resolved by explicit `consume x` /
    `discard x` (no drop flags).
@@ -394,16 +403,41 @@ fn spawn_work(sink data: iso Buffer[u8], let key: secret u64) raises Error {
    Rule 13, because the owner made the receiver move mean exactly `(move
    x).run()`. Tests: ch09's Rule 46 list (tests/conformance/09-types).
 
+## Closed by owner decision 2026-09-19, round 5
+
+- **D4 — overlapping `let`/`let` accesses are accepted.** Open question 1
+  closed as drafted (Rule 7): two read-only accesses cannot race, and
+  forbidding them would outlaw `f(&x, &x)`. The cost is stated where the
+  backend will look for it: a `let` parameter yields no no-alias fact
+  (Rule 7's note; ch05 Rule 5's other four sources are unaffected).
+- **D4 — the self-referential arena header is kept.** Open question 3
+  closed as drafted: `with arena nodes: Arena[Node[nodes]]` stays legal
+  (Rule 15, 15d), so a node type that links to its siblings can take the
+  brand of the arena being introduced. No alternative spelling is
+  reserved; std's tree/graph containers may rely on this form.
+- **D5 — allocation is explicit and is not authority** (recorded for the
+  next milestone; std is NOT designed here). Every heap-allocating std
+  type MUST take an EXPLICIT allocator VALUE, Zig-style and branded per
+  PLAN R2 (`Own[T, A]`, `with allocator`, Rules 15-18): there is no
+  default global allocator and no ambient allocation anywhere in the
+  language or std, and the root heap arrives as a `main` parameter (ch04
+  Rule 21's list, which the std surface chapter will extend with its
+  type). Allocation is not authority: no `needs` entry exists or will
+  exist for it (ch04).
+
 ## Open questions for the owner
 
-1. Confirm/override Rule 7's default (allow vs. forbid overlapping
-   `let`/`let`) — your call; affects backend aliasing facts.
+1. ~~Confirm/override Rule 7's default (allow vs. forbid overlapping
+   `let`/`let`) — your call; affects backend aliasing facts.~~ Closed by
+   owner decision 2026-09-19, round 5 (D4): overlapping `let`/`let` is
+   ACCEPTED; see Rule 7 and the closed-decision section above.
 2. Confirm dropping `recover`, vs. reserving it for a future qualifier.
-3. Self-referential element types: Rule 15 lets the `with` header name
+3. ~~Self-referential element types: Rule 15 lets the `with` header name
    its own binding as a brand (`with arena nodes: Arena[Node[nodes]]`),
    because a node that links to siblings must take the brand (Rule 15d).
    Drafted as allowed; confirm, or choose another spelling before std's
-   tree/graph containers are written.
+   tree/graph containers are written.~~ Closed by owner decision
+   2026-09-19, round 5 (D4): kept exactly as drafted.
 4. Rule 4a's three conservative bans (partial moves, moves out of an
    `inout` parameter with a refill, moving closure captures). Recommended:
    keep for v0.1; each needs per-field liveness or a call-once closure

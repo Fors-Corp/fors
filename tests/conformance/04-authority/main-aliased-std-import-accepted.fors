@@ -1,0 +1,10 @@
+//! name: main_aliased_std_import_accepted
+//! rule: 04.R8
+//! expect: check-ok
+//! detail: round 5 (D3) verification: `use std.io as w;` binds the std module under another name (ch08 R4), and `w.Stdout` is exactly and nominally the root-capability type io.Stdout -- the import's alias does not change which module the head denotes
+
+module main;
+needs { io.stdout };
+use std.io as w;
+
+fn main(inout out: w.Stdout) raises w.Error { }

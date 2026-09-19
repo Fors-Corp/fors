@@ -5,5 +5,5 @@
 
 module m;
 
-trait Visit { fn each[T](let self: Self, let x: T) -> i64; }
+trait Visit { fn each[T](let self, let x: T) -> i64; }
 fn f(let v: dyn Visit) { }

@@ -5,6 +5,7 @@
 
 module m;
 needs { io.stdout };
+use std.io;
 
 fn f(let xs: Slice[f64]) -> f64 {
     var acc: f64 = 0.0;

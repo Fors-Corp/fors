@@ -66,8 +66,10 @@ pub struct ModuleScope {
     /// `pub` item rows this decides Rule 4's module/item tie without
     /// depending on the order modules are linked in.
     pub_use_names: Vec<Symbol>,
-    /// Inside package `std` the prelude module names are not provided
-    /// (Rule 17).
+    /// Whether this module belongs to package `std`. Round 5 (D3) removed
+    /// the prelude modules this used to suppress; it now serves only the
+    /// orphan rule, which lets an impl of a prelude type live in `std`
+    /// (Rule 21).
     in_std: bool,
 }
 
@@ -150,16 +152,18 @@ pub struct Universe {
 }
 
 /// Rule 17's closed list, interned once. Lookup only, never iterated.
+/// Types, traits and values only: since owner decision 2026-09-19 round 5
+/// (D3) the prelude holds NO modules, so a std module is in scope only
+/// where the header imports it.
 #[derive(Default)]
 pub struct Prelude(HashMap<Symbol, Entity>);
 
 impl Prelude {
-    /// Rule 17 lookup for a name used inside `scope`'s module.
-    pub fn get(&self, scope: &ModuleScope, name: Symbol) -> Option<Entity> {
-        match self.0.get(&name) {
-            Some(Entity::PreludeModule(..)) if scope.in_std => None,
-            e => e.copied(),
-        }
+    /// Rule 17 lookup for a name used inside `scope`'s module. The
+    /// `scope` parameter is kept for callers (and for package `std`,
+    /// which the round-5 prelude no longer treats differently).
+    pub fn get(&self, _scope: &ModuleScope, name: Symbol) -> Option<Entity> {
+        self.0.get(&name).copied()
     }
 }
 
@@ -190,7 +194,7 @@ impl Universe {
     }
 }
 
-fn build_prelude(interner: &mut Interner, modules: &ModuleTable) -> Prelude {
+fn build_prelude(interner: &mut Interner) -> Prelude {
     let mut out = HashMap::new();
     for n in prelude::PRELUDE_TYPES.iter().chain(&prelude::PRELUDE_TYPES2).chain(&prelude::PRELUDE_TYPES3).chain(&prelude::PRELUDE_TYPES4) {
         let s = interner.intern(n);
@@ -199,11 +203,6 @@ fn build_prelude(interner: &mut Interner, modules: &ModuleTable) -> Prelude {
     for n in &prelude::PRELUDE_VALUES {
         let s = interner.intern(n);
         out.insert(s, Entity::PreludeValue(s));
-    }
-    let std_sym = interner.intern(b"std");
-    for n in &prelude::PRELUDE_MODULES {
-        let s = interner.intern(n);
-        out.insert(s, Entity::PreludeModule(s, modules.find(&[std_sym, s])));
     }
     Prelude(out)
 }
@@ -521,7 +520,7 @@ pub fn build_universe(
 ) -> (Universe, Vec<(usize, Diagnostic)>) {
     let n = files.len();
     let mut diags = Vec::new();
-    let mut universe = Universe { scopes: (0..n).map(|_| ModuleScope::default()).collect(), prelude: build_prelude(interner, modules), has_std: false };
+    let mut universe = Universe { scopes: (0..n).map(|_| ModuleScope::default()).collect(), prelude: build_prelude(interner), has_std: false };
     let std_sym = interner.intern(b"std");
     universe.has_std = modules.name.iter().any(|n| n.first() == Some(&std_sym));
 
@@ -719,21 +718,41 @@ fn resolve_use_path(
         bind_use_name(universe, from, entity, kind, sig, variants, bound_name, range, is_pub, diags);
     };
 
-    // `use std.<name>;` for one of Rule 17's prelude modules denotes that
-    // prelude module even when this build ships no `std` (package `std`
-    // is in every universe, Definitions).
-    if segs.len() == 2 && segs[0] == std_sym && modules.find(segs).is_none() {
-        if let Some(&e @ Entity::PreludeModule(..)) = universe.prelude.0.get(&sn) {
-            bind(universe, e, RowKind::Module, 0, &[], diags);
-            return;
-        }
-    }
-
-    // Package `std` is in every universe but not in every build (the
-    // corpus ships none): its modules cannot be checked then, and are not
-    // guessed at.
+    // Ch08 Rule 17, owner decision 2026-09-19 round 5 (D3): package `std`
+    // is in every universe (Definitions) but ships no source yet, so until
+    // it does, `use std.<m>;` resolves against the SYNTHETIC table of
+    // module names. A build that does contain `std` sources skips this
+    // entirely and resolves against them like any other module, so an
+    // absent `std.<m>` there is Rule 4(c)'s error, not a synthesised
+    // module.
     if segs[0] == std_sym && !universe.has_std {
-        bind(universe, Entity::Poisoned, RowKind::Poisoned, 0, &[], diags);
+        let known = prelude::is_std_module(interner.resolve(sn));
+        match segs.len() {
+            1 => {
+                // `use std;` -- a package is not a module (Rule 4(c)).
+                diags.push((from, Diagnostic::new(range.0, range.1, Code::N(4), "unresolved import `std`: `std` is a package name, not a module".to_string())));
+                bind(universe, Entity::Poisoned, RowKind::Poisoned, 0, &[], diags);
+            }
+            2 if known => {
+                // The module itself: binds the last segment as a module
+                // name; every member access through it is deferred to the
+                // checker, there being no `std` items to look up.
+                bind(universe, Entity::PreludeModule(sn, None), RowKind::Module, 0, &[], diags);
+            }
+            2 => {
+                let name = String::from_utf8_lossy(interner.resolve(sn)).into_owned();
+                diags.push((from, Diagnostic::new(
+                    range.0,
+                    range.1,
+                    Code::N(17),
+                    format!("there is no std module `{name}`; the std modules the compiler knows until `std` ships are: {}", prelude::std_modules_list()),
+                )));
+                bind(universe, Entity::Poisoned, RowKind::Poisoned, 0, &[], diags);
+            }
+            // Deeper than a module (`use std.io.Writer;`): binds the last
+            // segment, left to the checker with no diagnostic.
+            _ => bind(universe, Entity::Poisoned, RowKind::Poisoned, 0, &[], diags),
+        }
         return;
     }
 

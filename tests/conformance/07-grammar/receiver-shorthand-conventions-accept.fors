@@ -1,0 +1,12 @@
+//! name: receiver_shorthand_conventions
+//! rule: 07.D21
+//! expect: parse-ok
+//! detail: round 5 (D1) -- the shorthand follows the mandatory convention, whichever it is
+
+module m;
+
+trait Three {
+    fn read(let self) -> i64;
+    fn bump(inout self) -> i64;
+    fn finish(sink self) -> i64;
+}

@@ -5,6 +5,7 @@
 
 module m;
 needs { io.stdout };
+use std.io;
 
 const N: comptime_int = 5;
 

@@ -5,7 +5,7 @@
 
 module m;
 
-trait Two { type A; type B; fn n(let self: Self) -> i64; }
+trait Two { type A; type B; fn n(let self) -> i64; }
 struct Foo { n: i64 }
 impl Two for Foo {
     type A = Self.B;

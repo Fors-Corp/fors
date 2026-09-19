@@ -1,0 +1,9 @@
+//! name: use_std_module_backed_by_source_rejected
+//! rule: 08.R16
+//! expect: check-error
+//! detail: round 5 (D3) -- std.io is part of this build, so `io.Missing` is Rule 16's "module has no pub module-scope name", not a deferred segment
+
+module main;
+use std.io;
+
+fn f(let x: io.Missing) -> i32 { return 0; }

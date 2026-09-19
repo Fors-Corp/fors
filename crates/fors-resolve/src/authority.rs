@@ -4,12 +4,52 @@
 //! needing a type or the manifest (the requirement/policy subset check,
 //! sealed capabilities, comptime, `asm`) is out of scope here.
 
-use fors_index::{DeclTable, Interner};
+use fors_index::{DeclTable, Interner, ModuleTable};
 use fors_lex::{TokenKind, Tokens};
 use fors_syntax::{NodeKind, Tree};
 
 use crate::diag::{Code, Diagnostic};
+use crate::items::ModuleScope;
 use crate::paths::byte_range;
+use crate::target::Entity;
+
+/// What the root module's scope binds the head word of a `main`
+/// parameter's type path to, as far as ch04 Rules 8/21 need to know.
+/// Round 5 (D3) made std modules imports, so a root-capability type is a
+/// root-capability type only when its module IS the std module — bound
+/// by `use std.<m>;` under whatever name that `use` gives it — and never
+/// when a user module or item merely spells the same name (Rule 7's
+/// unforgeability; ch04 R8 "exactly and nominally").
+enum HeadBinding {
+    /// No such name in the root scope: ch08 Rule 14 already reported
+    /// N0014 at this head, so Rule 8 has nothing further to judge.
+    Unbound,
+    /// Bound to something that is not a std module (a user module or
+    /// item, a poisoned import): never a root-capability type.
+    Other,
+    /// Bound to std module `m` — the synthetic table's `std.<m>` or a
+    /// real `std.<m>` of this build. The canonical head is `m`.
+    StdModule(Vec<u8>),
+}
+
+fn head_binding(interner: &mut Interner, scope: Option<&ModuleScope>, modules: &ModuleTable, head: &[u8]) -> HeadBinding {
+    let Some(scope) = scope else { return HeadBinding::Unbound };
+    let sym = interner.intern(head);
+    let Some(row) = scope.lookup(sym) else { return HeadBinding::Unbound };
+    match row.entity {
+        Entity::PreludeModule(m, _) => HeadBinding::StdModule(interner.resolve(m).to_vec()),
+        Entity::Module(mid) => {
+            let name = &modules.name[mid.index()];
+            if name.len() == 2 && interner.resolve(name[0]) == b"std" {
+                HeadBinding::StdModule(interner.resolve(name[1]).to_vec())
+            } else {
+                HeadBinding::Other
+            }
+        }
+        Entity::Poisoned => HeadBinding::Unbound,
+        _ => HeadBinding::Other,
+    }
+}
 
 /// The `needs` capability vocabulary (ch04 Definitions).
 const CAPABILITIES: [&[&[u8]]; 14] = [
@@ -98,15 +138,50 @@ fn needs_words(tree: &Tree, tokens: &Tokens, source: &[u8]) -> Vec<Vec<Vec<u8>>>
     Vec::new()
 }
 
-/// Ch04 Rule 8/21: `main`'s structural and parameter rules, checked only
-/// for the function literally named `main` in the build's root module
-/// (`root` is that file's already-parsed tree/tokens/source/decls).
+/// Ch04 Rule 8/21 by SPELLING only: the pre-round-5 entry point, kept for
+/// callers that have no module scope (it treats every head word as the
+/// std module of that name, which was exact while the prelude bound
+/// them). The resolver itself uses [`check_main_bound`], which consults
+/// the root module's imports and so cannot be fooled by a user module
+/// named `io`.
 pub fn check_main(
     interner: &mut Interner,
     root_tree: &Tree,
     root_tokens: &Tokens,
     root_source: &[u8],
     root_decls: &DeclTable,
+    diags: &mut Vec<Diagnostic>,
+) {
+    check_main_impl(interner, root_tree, root_tokens, root_source, root_decls, None, diags);
+}
+
+/// Ch04 Rule 8/21: `main`'s structural and parameter rules, checked only
+/// for the function literally named `main` in the build's root module
+/// (`root` is that file's already-parsed tree/tokens/source/decls), with
+/// each parameter type's head word resolved through `root_scope` (ch08
+/// Rule 14's last step) so that only a type reached through the std
+/// module — `use std.io;` then `io.Stdout`, or `use std.io as w;` then
+/// `w.Stdout` — counts as a root-capability type (round 5, D3).
+pub fn check_main_bound(
+    interner: &mut Interner,
+    root_tree: &Tree,
+    root_tokens: &Tokens,
+    root_source: &[u8],
+    root_decls: &DeclTable,
+    root_scope: Option<&ModuleScope>,
+    modules: &ModuleTable,
+    diags: &mut Vec<Diagnostic>,
+) {
+    check_main_impl(interner, root_tree, root_tokens, root_source, root_decls, Some((root_scope, modules)), diags);
+}
+
+fn check_main_impl(
+    interner: &mut Interner,
+    root_tree: &Tree,
+    root_tokens: &Tokens,
+    root_source: &[u8],
+    root_decls: &DeclTable,
+    binding: Option<(Option<&ModuleScope>, &ModuleTable)>,
     diags: &mut Vec<Diagnostic>,
 ) {
     let main_sym = interner.intern(b"main");
@@ -138,7 +213,25 @@ pub fn check_main(
             continue;
         }
         let has_targs = root_tree.children(ty).next().is_some();
-        let w = words(root_tree, root_tokens, root_source, ty);
+        let mut w = words(root_tree, root_tokens, root_source, ty);
+        // Round 5 (D3): the head must denote the std module, not merely
+        // spell its name. Canonicalise `w.Stdout` (an aliased import) to
+        // `io.Stdout`, and refuse `io.Stdout` when `io` is a user module.
+        if let Some((scope, modules)) = binding {
+            if w.len() == 2 {
+                match head_binding(interner, scope, modules, &w[0]) {
+                    HeadBinding::StdModule(m) => w[0] = m,
+                    // N0014 already names the unresolved head (and, for a
+                    // known std module, the missing `use`): one cause, one
+                    // code, so Rule 8 stays silent on this parameter.
+                    HeadBinding::Unbound => continue,
+                    HeadBinding::Other => {
+                        diags.push(Diagnostic::new(range.0, range.1, Code::A(8), "`main` parameter type is not one of the eleven root-capability types: its module is not the std module (a user module or item of the same name cannot supply a root capability, Rule 7)".to_string()));
+                        continue;
+                    }
+                }
+            }
+        }
         let matched = MAIN_PARAM_TYPES.iter().find(|(t, _)| eq_words(&w, t));
         match matched {
             Some((t, mapped_cap)) if !has_targs => {

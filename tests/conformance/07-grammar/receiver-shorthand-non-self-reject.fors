@@ -1,0 +1,10 @@
+//! name: receiver_shorthand_non_self
+//! rule: 07.D21
+//! expect: parse-error
+//! detail: round 5 (D1) -- only the identifier `self` may omit its type annotation; every other parameter without ":" type is the same fixed diagnostic
+
+module m;
+
+trait T {
+    fn f(let x) -> i64;
+}

@@ -2,10 +2,12 @@
 
 ## Status
 
-Draft, M0.5, 2026-09-19. Verified against every `fors` example in ch01-06
-(see Coverage). Implements PLAN "Surface" (grammar parseable with no symbol
-table; generics in `[...]`) and fixes, pending the owner, the PLAN §4.3(3)
-syntax calls (mandatory `;`, bitwise precedence).
+Draft, M0.5, 2026-09-19; round-5 owner decisions applied 2026-09-19 (see
+"Closed by owner decision 2026-09-19, round 5"). Verified against every
+`fors` example in ch01-06 (see Coverage). Implements PLAN "Surface"
+(grammar parseable with no symbol table; generics in `[...]`) and fixes
+the PLAN §4.3(3) syntax calls, now confirmed by the owner: mandatory `;`
+with no ASI, and the flat bitwise tier.
 
 ## Scope
 
@@ -79,7 +81,18 @@ iso imm secret dyn asm type` and `_`. (`type` is reserved since owner decision
 2026-09-19, round 4: it introduces an associated type inside a `trait` or
 `impl` body and has no other production; no field, binding, path segment or
 label may be spelled `type`.) Reserved without a production (future use):
-`import recover`.
+`import recover spmd kernel`.
+
+Reserved-unused words, in one place (they lex as their own token and are
+rejected wherever an `ident` is expected — binding, field, member, path
+segment, label, module name — but no production mentions them):
+
+| Word | Status | Why reserved now |
+|---|---|---|
+| `import` | reserved-unused | `use` is the import keyword; un-reserving later is compatible, reserving later is not |
+| `recover` | reserved-unused | ch01 open question 2: a possible future *ownership qualifier* (a Pony-style `recover` that promotes to `iso`, which ch01 Rejected alternatives dropped). It has NOTHING to do with trap recovery: ch02 Rule 7 (round 5, D4) reserves no domain-recovery boundary of any kind |
+| `spmd` | reserved-unused | the SPMD region of ch01/ch03 (M6); owner decision 2026-09-19, round 5, D2 |
+| `kernel` | reserved-unused | the device-kernel region of ch01/ch03 (M9); owner decision 2026-09-19, round 5, D2 |
 
 Not reserved, ordinary identifiers resolved by the checker: `reduce`
 (`reduce(...)`, `reduce.serial`), `unsafe` and every other attribute name,
@@ -175,7 +188,8 @@ gparam          = ident [ ":" ( "brand" | bounds ) ] ;
 gconstraint     = ident "." ident ":" bounds ;  (* introduces no name *)
 bounds          = type { "+" type } ;
 params          = "(" [ param { "," param } [ "," ] ] ")" ;
-param           = convention ident ":" type ;
+param           = convention ident ":" type
+                | convention "self" ;          (* Disambiguation 21 *)
 convention      = "let" | "inout" | "sink" | "set" ;
 contract        = ( "pre" | "post" | "invariant" ) expr_ns ;
 
@@ -459,10 +473,43 @@ Every choice below is made on the current token plus at most one more
     part of a `type`: a projection is written as the ordinary dotted
     `path` `I.Item` / `Self.Item` inside `type_app`, with no new type
     syntax (its second segment is deferred, ch08 Rule 16).
+21. **Receiver shorthand: `self` with no type.** Owner decision
+    2026-09-19, round 5 (D1). In a `param`, after the mandatory
+    `convention`, the current token is an `ident`; ONE token of lookahead
+    (LA 2) decides: `:` selects `convention ident ":" type`; anything
+    else (`,` or `)` in a well-formed list) selects the shorthand
+    `convention "self"`, whose type is `Self`. `fn next(inout self)` and
+    `fn next(inout self: Self)` are the same signature. Two restrictions,
+    both syntactic and both checked by the parser at the point it takes
+    the second alternative: the identifier MUST be spelled exactly
+    `self` (`self` is an ordinary identifier token, ch07 "Keywords — not
+    reserved"), and the `param` MUST belong to a `fn_sig` of a
+    `trait_item` or an `impl_item`. A parameter that is not `self` and
+    omits its `":" type`, and a `self` shorthand in a free function's
+    `params`, are both the same parse error with the fixed message:
+    `only a parameter named "self", in a trait or impl body, may omit
+    its type annotation`, recovered like any other malformed `param` (at
+    the next `,` or the closing `)`). A free function MAY still declare
+    an ordinary parameter *named* `self` with an explicit type
+    (`fn f(let self: i32)`): nothing in ch07-ch09 forbids it — ch09 Rule
+    16's "a method whose first parameter is named `self` MUST give it the
+    type `Self`" is about a `trait`/`impl` method only — so the
+    shorthand's restriction is the only new rule here, not a ban. Two
+    neighbouring productions are untouched, and their answers are fixed
+    here so nobody re-derives them: a closure parameter is a `cparam`
+    (`ident [ ":" type ]`), whose annotation was always optional, so
+    `|self| self` parses in ANY body — inside a method it is an ordinary
+    binding that shadows the receiver (ch08 Rule 18, N0018), in a free
+    function it is just a name; and a `trait`/`impl` method that writes
+    `self` WITH an explicit non-`Self` type (`fn area(let self: i32)`)
+    parses as the annotated form and is ch09 Rule 16's error (T0016), not
+    a parse error. Tests: 08-names `closure-param-named-self-{shadows-
+    receiver-rejected,in-free-fn-accepted}`, 09-types
+    `self-receiver-wrong-type-rejected`.
 
-**Largest lookahead:** 2 tokens (rules 2, 4, 6, 7, 15, 16, 19 and the `scoped` /
-closure-`set` slots); lexer, 2 characters past the current one (`..<`,
-exponent sign).
+**Largest lookahead:** 2 tokens (rules 2, 4, 6, 7, 15, 16, 19, 21 and the
+`scoped` / closure-`set` slots); lexer, 2 characters past the current one
+(`..<`, exponent sign).
 
 ## Error recovery
 
@@ -593,23 +640,70 @@ arg, `&buf.slice`, `&out` on a binding named `out`, attributed
   the one place bounds are written (ch09 Rule 15) and the head-is-earlier
   rule keeps it a single left-to-right pass.
 - Not added: char literals, labels, match guards, `|`-patterns, tuple
-  index fields, type aliases, nested `fn`, `spmd`/`kernel` keywords.
+  index fields, type aliases, nested `fn`.
 - Attribute args are `[label:] (literal | path)`, never `expr`.
+
+## Closed by owner decision 2026-09-19, round 5
+
+Five decisions of this round touch this chapter; each moves an item out
+of "Open questions for the owner" above.
+
+- **D1, receiver shorthand (new production).** `param` gains the
+  alternative `convention "self"`, meaning `convention self: Self`. The
+  production settled on is exactly:
+  `param = convention ident ":" type | convention "self" ;`
+  with Disambiguation 21 deciding on one token of lookahead and carrying
+  both restrictions (`self` only, `trait_item`/`impl_item` only) and the
+  fixed diagnostic. Nothing else changes: `fparam` (an `fn` type) is
+  still `convention type`, a `cparam` still takes an optional type, and
+  the explicit form stays legal and stays tested.
+- **D2, `spmd` and `kernel` are reserved (Q3 closed).** Both become
+  reserved words now, used by no production (the regions arrive in
+  M6/M9). They are in the reserved list and the reserved-unused table
+  above. Nothing was migrated: no spec example and no corpus file used
+  either word as an identifier (grep over `docs/spec` and
+  `tests/conformance`; ch05's `fn bad_kernel` and ch06's English
+  "kernel" are unaffected, since a reserved word matches a whole
+  identifier).
+- **D4, mandatory `;` and no ASI (Q1, first half).** Confirmed as
+  drafted: every `let`/`assign`/`expr`/`return`/`raise`/`use`/`module`/
+  header statement ends in `;`, newlines are never terminators, and
+  there is no automatic semicolon insertion anywhere (Lexical 1).
+- **D4, the flat bitwise tier (Q1, second half).** Confirmed exactly as
+  drafted: level 7b, operands at cast level, `& | ^` each chain with
+  themselves only, `<<`/`>>` single-use, no mixing with each other, with
+  arithmetic/range, or with comparisons — everything else parenthesised,
+  in the EBNF (`bit_expr`) and not as a checker rule.
+- **D4, the reserved set (Q2).** Confirmed as drafted, plus D2's two
+  words; `set` stays contextual (too common as a method or binding
+  name), and `reduce`/`unsafe`/`self` stay ordinary identifiers.
+- **D5, `fors fmt` (tooling convention).** There is ONE canonical style,
+  not a configurable one: 4-space indent, a 100-column target. Recorded
+  here rather than in ch06 because ch06 owns measurement (kernel tiers,
+  baselines, metric definitions) and nothing else, while this chapter
+  already owns whitespace, trivia and the token stream a formatter
+  rewrites; the formatter's own implementation is tooling, not spec.
 
 ## Open questions for the owner
 
-1. PLAN §4.3(3): confirm mandatory `;`, and the bitwise tier as drafted
-   (same-operator chains allowed, everything else parenthesised).
-2. Confirm the reservation of `iso imm secret raises in as extern inout
+1. ~~PLAN §4.3(3): confirm mandatory `;`, and the bitwise tier as drafted
+   (same-operator chains allowed, everything else parenthesised).~~
+   Closed by owner decision 2026-09-19, round 5 (D4): both confirmed as
+   drafted — see "Closed by owner decision 2026-09-19, round 5".
+2. ~~Confirm the reservation of `iso imm secret raises in as extern inout
    sink consume discard break continue dyn true false`, and `set`
-   contextual.
-3. `spmd`/`kernel` (ch01/ch03 name them as regions): keyword, attribute
+   contextual.~~ Closed by owner decision 2026-09-19, round 5 (D4): the
+   set as drafted plus `spmd`/`kernel`, `set` contextual.
+3. ~~`spmd`/`kernel` (ch01/ch03 name them as regions): keyword, attribute
    (`@device` style), or future chapter? Not reserved now; reserving later
-   breaks code that uses `kernel` as a name.
+   breaks code that uses `kernel` as a name.~~ Closed by owner decision
+   2026-09-19, round 5 (D2): both are RESERVED from v0.1, used by no
+   production yet.
 4. Char literals, labelled `break`, match guards: deliberately absent.
-5. `contracts:` placement (ch02 Q3) and `recover` (ch01 Q2) are encoded
-   as drafted there; a change moves one line of `file` / the reserved
-   list.
+5. `contracts:` placement (ch02 Q3) and `recover` (ch01 Q2, the
+   ownership-qualifier question — not trap recovery, which ch02 closed
+   in round 5) are encoded as drafted there; a change moves one line of
+   `file` / the reserved list.
 
 ## Conformance tests
 
@@ -710,6 +804,19 @@ arg, `&buf.slice`, `&out` on a binding named `out`, attributed
   diagnostic, the following declaration intact.
 - `recover_assoc_type_item` — `impl T for S { type A = ; fn f() { } }`
   yields exactly one diagnostic and `f` in the CST.
+- `receiver_shorthand` (round 5, D1; Rule 21) — `trait It { fn next(inout
+  self) -> i64; }`, an `impl` method `fn get(let self) -> i64 { }`, the
+  three conventions `let`/`inout`/`sink self` in one trait, `fn at(let
+  self, let i: usize) -> i64;` (shorthand followed by ordinary
+  parameters), and a trait declaring `fn a(inout self)` beside `fn
+  b(inout self: Self)` all parse; `fn f(let self) { }` at file level and
+  `trait T { fn f(let x); }` are parse errors with the fixed message.
+- `reserved_spmd_kernel` (round 5, D2) — `let spmd = 1;`, `let kernel =
+  1;` (identifier), `fn f(let x: kernel) { }`, `struct S { f: spmd }`
+  (type position) and `struct S { kernel: i32 }`, `x.spmd` (member name)
+  are all parse errors: a member name is not a *name* (ch08 Rule 23) but
+  it is still an `ident` token, and a reserved word is not one — exactly
+  as for `type`.
 - `pattern_let_typed_rejected` — `match p { let x: i32 => x }` is a parse
   error at `:`; so is `.Some(let n: i32)` inside a payload
   (`pattern_let_typed_in_payload_rejected`). (Rule 17)

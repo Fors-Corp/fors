@@ -1,0 +1,8 @@
+//! name: std_module_without_use_time_rejected
+//! rule: 08.R17
+//! expect: check-error
+//! detail: round 5 (D3) -- one test per known std module name: time.Clock without `use std.time;` is N0014 at the head segment
+
+module m;
+
+fn f(let x: time.Clock) -> i32 { return 0; }

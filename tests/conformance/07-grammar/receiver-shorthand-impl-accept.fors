@@ -1,0 +1,12 @@
+//! name: receiver_shorthand_impl
+//! rule: 07.D21
+//! expect: parse-ok
+//! detail: round 5 (D1) -- the shorthand is equally legal in an impl item, where it means the self type
+
+module m;
+
+struct Counter { pub n: i64 }
+
+impl Counter {
+    pub fn get(let self) -> i64 { return self.n; }
+}

@@ -5,7 +5,7 @@
 
 module m;
 
-trait Tagged { fn tag(let self: Self) -> i64; }
+trait Tagged { fn tag(let self) -> i64; }
 struct Wrap[T] { inner: T }
 impl[T: Iterator, T.Item: Eq] Tagged for Wrap[T] {
     fn tag(let self: Wrap[T]) -> i64 { return 0; }

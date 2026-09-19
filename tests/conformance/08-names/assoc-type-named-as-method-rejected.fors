@@ -5,4 +5,4 @@
 
 module m;
 
-trait Src { type Item; fn Item(let self: Self) -> i64; }
+trait Src { type Item; fn Item(let self) -> i64; }

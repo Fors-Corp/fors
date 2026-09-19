@@ -5,7 +5,7 @@
 
 module m;
 
-trait Conv[X] { fn conv(let self: Self) -> i64; }
+trait Conv[X] { fn conv(let self) -> i64; }
 struct Wrap[T] { inner: T }
 struct Foo { n: i64 }
 impl[U: Conv[Wrap[U]]] Conv[U] for Foo {

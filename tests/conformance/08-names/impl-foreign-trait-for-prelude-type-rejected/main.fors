@@ -7,5 +7,5 @@ module main;
 use lib.Tr;
 
 impl Tr for i32 {
-    fn go(let self: Self) -> i32 { return 1; }
+    fn go(let self) -> i32 { return 1; }
 }

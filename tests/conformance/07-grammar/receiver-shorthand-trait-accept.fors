@@ -1,0 +1,11 @@
+//! name: receiver_shorthand_trait
+//! rule: 07.D21
+//! expect: parse-ok
+//! detail: round 5 (D1) -- a trait method may write `inout self` for `inout self`
+
+module m;
+
+trait It {
+    type Item;
+    fn next(inout self) -> Option[Self.Item];
+}

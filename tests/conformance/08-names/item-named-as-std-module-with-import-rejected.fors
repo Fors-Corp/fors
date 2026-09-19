@@ -1,0 +1,9 @@
+//! name: item_named_as_std_module_with_import_rejected
+//! rule: 08.R13
+//! expect: check-error
+//! detail: the import binds `io` to the name of an item of this module (Rule 13); nothing about std is special here
+
+module m;
+use std.io;
+
+fn io() -> i32 { return 1; }

@@ -8,9 +8,9 @@ module m;
 struct S { get: i32 }
 
 impl S {
-    fn get(let self: Self) -> i32 { return 1; }
+    fn get(let self) -> i32 { return 1; }
 }
 
 impl S {
-    fn get(let self: Self) -> i32 { return 2; }
+    fn get(let self) -> i32 { return 2; }
 }

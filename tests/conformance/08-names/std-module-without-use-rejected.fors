@@ -1,0 +1,8 @@
+//! name: std_module_without_use_rejected
+//! rule: 08.R17
+//! expect: check-error
+//! detail: round 5 (D3) -- the prelude binds no module, so io.Stdout without `use std.io;` is N0014 at the head segment (flips round 2's prelude-module-without-use-accepted)
+
+module m;
+
+fn f(let x: io.Stdout) -> i32 { return 0; }

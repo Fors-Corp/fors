@@ -5,6 +5,6 @@
 
 module m;
 
-trait Named { fn id(let self: Self) -> i64; }
-trait Source { type Item: Named; fn pull(inout self: Self) -> Option[Self.Item]; }
+trait Named { fn id(let self) -> i64; }
+trait Source { type Item: Named; fn pull(inout self) -> Option[Self.Item]; }
 fn f[S: Source](let x: S.Item) -> i64 { return x.id(); }

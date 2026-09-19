@@ -1,0 +1,11 @@
+//! name: param_shadows_imported_std_module_rejected
+//! rule: 08.R18
+//! expect: check-error
+//! detail: round 5 (D3) -- the parameter `io` shadows the module bound by `use std.io;`; the earlier annotation io.Stdout still resolves to that module, so the only diagnostic is the shadow
+
+module m;
+use std.io;
+
+fn f(inout out: io.Stdout, let io: i32) -> i32 {
+    return io;
+}

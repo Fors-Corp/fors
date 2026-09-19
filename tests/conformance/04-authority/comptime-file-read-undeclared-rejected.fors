@@ -5,6 +5,7 @@
 
 module app;
 needs { };
+use std.fs;
 
 fn setup() {
     comptime {

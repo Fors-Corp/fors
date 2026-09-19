@@ -6,5 +6,5 @@
 module m;
 
 struct S { x: i32 }
-trait T { type A; fn f(let self: Self) -> i32; }
+trait T { type A; fn f(let self) -> i32; }
 impl T for S { type A = ; fn f(let self: S) -> i32 { return 0; } }

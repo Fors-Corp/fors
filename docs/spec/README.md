@@ -14,8 +14,8 @@ other document (chapter, design doc, comment, test) MAY only cite it
 4. `04-authority.md` — capabilities, sealed capabilities, `needs` vs manifest, comptime, build graph
 5. `05-ir-contract.md` — IR levels, alias classes, secret/CT, tiles, differential agreement
 6. `06-measurement.md` — benchmark tiers and metrics
-7. `07-grammar.md` — lexical grammar, keywords (reserved and contextual), operator table, complete EBNF, disambiguation rules (LL(2)), error-recovery synchronisation set. Present; verified 2026-09-19 against every example in ch01-05 (ch06 has none).
-8. `08-names.md` — file-to-module mapping, `use`/`pub use`, module graph edges and acyclicity, visibility, module scope, lookup, no-shadowing, path and pattern resolution, prelude, orphan rule, resolver/checker boundary. Draft, verified 2026-09-19; decidable from syntax plus the set of module names.
+7. `07-grammar.md` — lexical grammar, keywords (reserved and contextual), operator table, complete EBNF, disambiguation rules (LL(2)), error-recovery synchronisation set. Present; verified 2026-09-19 against every example in ch01-05 (ch06 has none); round-5 owner decisions applied (receiver shorthand, `spmd`/`kernel` reserved, `;`/bitwise confirmed).
+8. `08-names.md` — file-to-module mapping, `use`/`pub use`, module graph edges and acyclicity, visibility, module scope, lookup, no-shadowing, path and pattern resolution, prelude, orphan rule, resolver/checker boundary. Draft, verified 2026-09-19; round-5 owner decisions applied (std modules need `use std.<m>;`); decidable from syntax plus the set of module names.
 9. `09-types.md` — type universe and equality, the closed coercion list, well-formedness, traits and impls with associated types, overlap, the closed operator-trait table, `Copyable`, the two typing judgements per form, generic-argument determination, member lookup and receivers, pattern typing and exhaustiveness, generic bodies, the signature-only interface. Draft, 2026-09-19; round-4 owner decisions applied.
 
 ## Fact -> owning chapter
@@ -36,6 +36,9 @@ other document (chapter, design doc, comment, test) MAY only cite it
 | Every syntax production; header order `module`, `contracts:`, `needs`, `inputs`, `use` | ch07 Grammar |
 | Inline-`asm` grammar (`asm_expr`/`asm_item`, at least one string = parse error), `asm` reserved but legal as a `needs_item`, `out`/`clobber` contextual slots | ch07 Grammar |
 | Struct-literal-free heads (`expr_ns`), `\|`/`&`/`[` roles, statement start, generic-argument type-vs-expression rule, lookahead bound (2 tokens) | ch07 Disambiguation 1-18 |
+| Receiver shorthand (`convention "self"` = `self: Self`), legal only in a `trait`/`impl` body, one-token lookahead, fixed diagnostic | ch07 Grammar, Disambiguation 21 |
+| `fors fmt`: one canonical style, 4-space indent, 100-column target | ch07 Drafting decisions (round 5, D5) |
+| Explicit allocator values, no ambient allocation, root heap as a `main` parameter, allocation is not authority | ch01 (round 5, D5), ch04 R21 |
 | Syntax of associated types (`type A: B;`, `type A = T;`), constraint entries in `generics` (`I.Item: Add`) and their `.`-versus-`:` lookahead; `type` reserved | ch07 Grammar, Disambiguation 19-20 |
 | Parser synchronisation sets (missing `;` / `}`) | ch07 Error recovery |
 | Benchmark tiers, metric definitions | ch06 |
@@ -46,7 +49,7 @@ other document (chapter, design doc, comment, test) MAY only cite it
 | `COMPTIME_STEP_BUDGET`, `COMPTIME_ALLOC_BUDGET` (unset) | ch04 R14 |
 | `@unsafe(invariant:)` form | ch04 R10 |
 | Check deletion, contract policy | ch02 R10-12 |
-| Root-capability types (closed list of eleven, type -> capability pairing), opacity, `main`-param rules, no `World` value | ch04 R7-8, R21 |
+| Root-capability types (closed list of eleven, type -> capability pairing), opacity, `main`-param rules (the type's head judged by what the header binds it to — `use std.io;` or an alias — never by spelling, so a user module named `io` cannot forge one), no `World` value | ch04 R7-8, R21 |
 | Inline-`asm` authority (sealed `asm`/`syscall`, architecture, register, secret-input rules) | ch04 R22-26 (sealed-operation bans: R2a) |
 | Inline-`asm` value and type (CHECK mode only; statement form checks against `()`) | ch04 R27 |
 | Inline-`asm` opaque-region IR contract, `unknown` alias class, CT inventory entry, secret taint of `out`/`clobber` registers | ch05 R19-20a |
@@ -57,12 +60,13 @@ other document (chapter, design doc, comment, test) MAY only cite it
 | Comptime file-read declaration (`inputs { ... };` header clause) | ch04 R13 |
 | File-to-module mapping, optional `module` header must match, legal (lowercase) file names, case-insensitive file systems | ch08 R1, R24 |
 | What a `use` path binds (module or `pub` item, never a member), optional `"as" ident` alias (binds the alias only), `pub use` re-export, imports not transitive | ch08 R3-6 |
-| Module-graph edge set (explicit `use` edges, implicit prelude-module edges), acyclicity, cycle diagnostic (capability flow along edges stays ch04 R2-2a) | ch08 R7-8, R17 |
+| Module-graph edge set (EXACTLY the explicit `use` edges; no implicit edge, no body scan), acyclicity, cycle diagnostic (capability flow along edges stays ch04 R2-2a) | ch08 R7-8 |
 | Order-independent module scope; order-dependent bindings; scope of every binding form; implicit `Self` | ch08 R9, R19, R26 |
 | Visibility: `pub` items, fields, variants, inherent and trait-impl methods; private item in a public signature | ch08 R10-12 |
 | One namespace per module scope; item/import/prelude collisions are eager errors | ch08 R13, R15 |
 | Lookup, segment-by-segment path resolution, deferred (type-directed) segments | ch08 R14, R16 |
-| Prelude: closed list of types and traits (operator traits, `Eq Ord Copyable never Iterator Index IndexMut Range RangeIncl` included), values (`some none reduce`) and modules (`io fs net proc time rand env gpu`) | ch08 R17 |
+| Prelude: closed list of types and traits (operator traits, `Eq Ord Copyable never Iterator Index IndexMut Range RangeIncl` included) and values (`some none reduce`); NO modules | ch08 R17 |
+| Std modules require an import (`use std.io;`); the synthetic `std` table (`io fs net proc time rand env gpu mem ffi`) until `std` ships, member accesses deferred, unknown module = N0017 | ch08 R17 |
 | No shadowing (total, except a function-local binding may shadow a prelude name; generic parameters excepted from the exception); pairwise-distinct bindings | ch08 R18 |
 | `scoped(p)` names a parameter only | ch08 R20 (semantics: ch01 R19) |
 | Orphan rule; impls are not names | ch08 R21 |
@@ -137,31 +141,64 @@ Copyable never Iterator Index IndexMut Range RangeIncl` (ch08 R17; settles
 is an error (ch09 R48; closes ch08 Q5); `MATCH_STEP_FACTOR` = 256 until
 measured (ch09 R55).
 
+## Closed by owner decision 2026-09-19, round 5
+
+D1 receiver shorthand: `param` gains `convention "self"`, meaning
+`self: Self`; legal only for the identifier `self` and only inside a
+`trait_item`/`impl_item`, decided on one token of lookahead, with a fixed
+diagnostic for every other missing annotation (ch07 grammar and
+Disambiguation 21; ch09 R16). D2 `spmd` and `kernel` are RESERVED from
+v0.1, used by no production (ch07 reserved list and reserved-unused
+table; ch08 R23-24 consequences; closes ch07 Q3). D3 std modules require
+an import: the prelude keeps only types, values and traits and NO
+modules, the module graph is exactly the explicit `use` edges (no
+implicit edge, no body scan), using a std module without importing it is
+N0014, and `std` is a known package whose module names live in a
+synthetic table (`io fs net proc time rand env gpu mem ffi`) until
+`std` ships, with `use std.<unknown>;` an N0017 error (ch08 R7, R14, R16, R17,
+R18, R23; ch04 R21's import note; closes the module half of ch08 Q1).
+D4 confirmations, each closing an open question as drafted: mandatory
+`;` and no ASI, and the flat bitwise tier (ch07 Q1); the reserved set
+plus D2's two words, `set` contextual (ch07 Q2); trap = whole-process
+abort, no unwinder, nothing catchable, no reserved domain-recovery
+boundary, expected errors travel as values (ch02 Q1, R7); overlapping
+`let`/`let` accepted, so no-alias facts never come from a `let`
+parameter (ch01 Q1, R7); the self-referential arena header
+`with arena nodes: Arena[Node[nodes]]` kept (ch01 Q3). D5 recorded for
+the next milestone, not designed: heap-allocating std types take an
+explicit allocator value, branded per PLAN R2, with no default global
+allocator and no ambient allocation, the root heap arriving as a `main`
+parameter and carrying no `needs` entry (ch01 round-5 section, ch04
+R21); `fors fmt` has one canonical style, 4-space indent, 100-column
+target (ch07, chosen over ch06 because ch06 owns measurement only).
+
 ## Open owner questions (most blocking first)
 
-1. Syntax calls of PLAN §4.3(3), drafted in ch07 and needed before the
-   lexer/parser freeze: mandatory `;`; flat bitwise tier; the reserved
-   set (`iso imm secret raises in as extern inout sink consume discard
-   break continue dyn true false`; `set` contextual); `spmd`/`kernel` as
-   keyword vs attribute (ch07 Q1-3). Blocks `fors-lex`/`fors-parse` and
-   every line of std.
+1. ~~Syntax calls of PLAN §4.3(3) (ch07 Q1-3).~~ CLOSED by owner
+   decision 2026-09-19, round 5 (D4, D2): mandatory `;` and no ASI, the
+   flat bitwise tier, the reserved set as drafted plus `spmd`/`kernel`
+   reserved-unused, `set` contextual. `fors-lex`/`fors-parse` are
+   unblocked.
 2. Header and keyword leftovers: `contracts:` placement (ch02 Q3, encoded
    in ch07 `file`); `recover` reserved-unused vs dropped (ch01 Q2).
    One-line grammar changes, but they touch every module header.
 3. ch08 calls needed before the name resolver is frozen: prelude
    contents — `Buffer`, `Vec`, `PageAllocator` are used
    unqualified in ch04 and the corpus but defined nowhere (`Copyable`
-   settled round 4) — and prelude
-   modules (`io.Stdout` with no `use`) versus mandatory `use std.io;`
-   (ch08 Q1); the manifest must define package name and source root
-   (ch08 Q3, now Q3). (ch08 Q2, no-shadowing, closed round 3 above.) The
-   resolver can start on the drafted answers; Q1 changes one list.
-4. Self-referential brand in the `with` header, `Arena[Node[nodes]]`
-   (ch01 Q3; ch08 R19 scopes the name over the header accordingly).
-   Blocks the checker's `with` scoping and std tree/graph
-   containers.
-5. Confirm trap = whole-process abort (ch02 Q1). Blocks the ABI and std.
-6. Overlapping `let`/`let` default (ch01 Q1). Blocks backend alias facts.
+   settled round 4) — remain open (ch08 Q1); the module half of that
+   question is CLOSED by round 5's D3 (mandatory `use std.io;`, no
+   prelude modules, a synthetic `std` table until `std` ships). The
+   manifest must still define package name and source root (ch08 Q3).
+   (ch08 Q2, no-shadowing, closed round 3 above.)
+4. ~~Self-referential brand in the `with` header, `Arena[Node[nodes]]`
+   (ch01 Q3).~~ CLOSED by owner decision 2026-09-19, round 5 (D4): kept
+   as drafted; ch08 R19 scopes the name over the header accordingly.
+5. ~~Confirm trap = whole-process abort (ch02 Q1).~~ CLOSED by owner
+   decision 2026-09-19, round 5 (D4): confirmed plainly (ch02 R7); no
+   unwinder, nothing catchable, no reserved recovery boundary.
+6. ~~Overlapping `let`/`let` default (ch01 Q1).~~ CLOSED by owner
+   decision 2026-09-19, round 5 (D4): accepted (ch01 R7); a `let`
+   parameter yields no no-alias fact.
 7. `FAILURE_*` defaults; float return class (ch02 Q2, Q4). Blocks `fors-abi`.
 8. Deliberately absent syntax: char literals, labelled `break`, match
    guards, tuple index fields, type aliases (ch07 Q4). Blocks nothing

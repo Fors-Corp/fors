@@ -1,12 +1,12 @@
 //! name: closure_param_shadows_prelude_accepted
 //! rule: 08.R18
 //! expect: check-ok
-//! detail: round 3 (D3) -- a closure parameter is a function-local binding and may shadow a prelude name; outside the closure the name is the prelude module again
+//! detail: round 3 (D3) -- a closure parameter is a function-local binding and may shadow a prelude name; round 5 (D3) rewrote this test to shadow a prelude type and a prelude value, a std module no longer being a prelude name
 
 module m;
 
-fn f(inout out: io.Stdout) -> i32 {
-    let g = |io: i32| io + 1;
+fn f() -> i32 {
+    let g = |Str: i32| Str + 1;
     let h = |let some, _| some;
     return g(1) + h(2, 3);
 }

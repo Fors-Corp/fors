@@ -1,0 +1,9 @@
+//! name: use_std_mem_accepted
+//! rule: 08.R17
+//! expect: check-ok
+//! detail: round 5 (D5/D3) -- `mem` is in Rule 17's known list because heap-allocating std types take an explicit allocator value; `use std.mem;` resolves and mem.Allocator is deferred
+
+module m;
+use std.mem;
+
+fn f(inout a: mem.Allocator) -> i32 { return 0; }

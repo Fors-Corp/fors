@@ -8,5 +8,5 @@ module m;
 struct Thing { pub x: i32 }
 
 impl Thing {
-    pub fn get(let self: Self) -> i32 { return self.x; }
+    pub fn get(let self) -> i32 { return self.x; }
 }

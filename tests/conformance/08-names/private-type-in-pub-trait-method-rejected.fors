@@ -8,5 +8,5 @@ module m;
 struct Hidden { x: i32 }
 
 pub trait T {
-    fn get(let self: Self) -> Hidden;
+    fn get(let self) -> Hidden;
 }

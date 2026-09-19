@@ -4,6 +4,7 @@
 //! detail: a module with no needs clause at all using io.stdout must be diagnosed, same as an explicit needs {};
 
 module app;
+use std.io;
 
 fn main(inout out: io.Stdout) {
     out.write_line("ok");

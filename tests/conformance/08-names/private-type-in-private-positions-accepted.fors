@@ -15,11 +15,11 @@ fn mk() -> Hidden { return Hidden { x: 1 }; }
 pub const C: i32 = mk().x;
 
 impl S {
-    fn inner(let self: Self) -> Hidden { return mk(); }
+    fn inner(let self) -> Hidden { return mk(); }
 }
 
 impl Q {
-    pub fn inner(let self: Self) -> Hidden { return mk(); }
+    pub fn inner(let self) -> Hidden { return mk(); }
 }
 
 pub fn f() -> i32 {

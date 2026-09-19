@@ -9,5 +9,5 @@ use lib.Tr;
 struct Mine { x: i32 }
 
 impl Tr for Own[Mine] {
-    fn go(let self: Self) -> i32 { return 1; }
+    fn go(let self) -> i32 { return 1; }
 }

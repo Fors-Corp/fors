@@ -144,8 +144,12 @@ fn code_matches(code: Code, chapter: u8, num: u16) -> bool {
     match (chapter, code) {
         // Round 3 (D1): Rule 25 itself says a bare pattern name that does
         // not resolve "MUST be the ordinary unresolved-name error, N0014"
-        // -- the same citing-vs-firing split as rules 6, 9 and 26.
-        (8, Code::N(k)) => k == num || (matches!(num, 6 | 9 | 25 | 26) && k == 14),
+        // -- the same citing-vs-firing split as rules 6, 9 and 26. Round 5
+        // (D3) adds Rule 17, which likewise says outright that using a std
+        // module without importing it "is the ordinary unresolved-name
+        // error of Rule 14, N0014, reported at the head segment"; Rule 17
+        // keeps its own code for the `use std.<unknown>;` case.
+        (8, Code::N(k)) => k == num || (matches!(num, 6 | 9 | 17 | 25 | 26) && k == 14),
         // Ch04 Rule 8 states the `main`-parameter capability requirement
         // as "MUST be declared in the root module's `needs` (Rule 1)", and
         // the corpus cites either rule for that one shape: it is reported

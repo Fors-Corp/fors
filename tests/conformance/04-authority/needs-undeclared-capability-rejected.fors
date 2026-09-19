@@ -5,6 +5,7 @@
 
 module app;
 needs { };
+use std.io;
 
 fn main(inout out: io.Stdout) {
     out.write_line("ok");

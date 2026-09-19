@@ -5,5 +5,5 @@
 
 module m;
 
-trait Src { fn pull(inout self: Self) -> Option[Self.Item]; }
+trait Src { fn pull(inout self) -> Option[Self.Item]; }
 fn f[I](let x: I.Item, let y: I.Nothing) { }

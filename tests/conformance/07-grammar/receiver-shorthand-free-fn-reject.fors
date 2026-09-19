@@ -1,0 +1,8 @@
+//! name: receiver_shorthand_free_fn
+//! rule: 07.D21
+//! expect: parse-error
+//! detail: round 5 (D1) -- the shorthand is legal only inside a trait or impl body; a free function must annotate even a parameter named self
+
+module m;
+
+fn f(let self) -> i64 { return 0; }

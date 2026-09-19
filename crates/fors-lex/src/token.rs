@@ -136,6 +136,15 @@ pub enum TokenKind {
     /// `type` (ch07 Disambiguation 20): reserved; introduces an associated
     /// type inside a `trait` or `impl` body and has no other production.
     KwType,
+
+    // ---- appended, owner decision 2026-09-19 round 5 (D2): additive only,
+    // never reorder anything above. ----
+    /// `spmd` (ch07 reserved-unused): the SPMD region of ch01/ch03 (M6).
+    /// Reserved from v0.1; no production mentions it.
+    KwSpmd,
+    /// `kernel` (ch07 reserved-unused): the device-kernel region of
+    /// ch01/ch03 (M9). Reserved from v0.1; no production mentions it.
+    KwKernel,
 }
 
 impl TokenKind {
@@ -202,6 +211,8 @@ pub fn keyword_kind(word: &[u8]) -> Option<TokenKind> {
         b"import" => KwImport,
         b"recover" => KwRecover,
         b"type" => KwType,
+        b"spmd" => KwSpmd,
+        b"kernel" => KwKernel,
         _ => return None,
     })
 }

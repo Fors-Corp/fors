@@ -124,7 +124,17 @@ ABI belong to other chapters and are only referenced here.
    a qualified or wrapped form — and each type MUST appear at most once in
    `main`'s parameter list; a `main` parameter of any other type MUST be a
    compile error. The runtime supplies each argument by that nominal
-   type. For every `main` parameter, the capability Rule 21 pairs with its
+   type. "Nominally" is decided by what ch08 resolved, not by spelling:
+   the head of the parameter's type path MUST be a name the root module's
+   header binds to the std module in question (`use std.io;` then
+   `io.Stdout`; equally `use std.io as w;` then `w.Stdout`, ch08 Rule 4),
+   whether that module is ch08 Rule 17's synthetic entry or `std` source.
+   A user module or item that merely spells the same name — `module io;`
+   with its own `pub struct Stdout`, reached by `use io;` — MUST NOT
+   satisfy this rule (round 5, D3: `io` is no longer a prelude name, so
+   such a module is legal to write; Rule 7's unforgeability is kept here,
+   at the one place a spelled name could otherwise stand in for the
+   type). For every `main` parameter, the capability Rule 21 pairs with its
    type MUST be declared in the root module's `needs { ... }` (Rule 1);
    `main` MUST be the sole
    root of capability values, and no function other than `main` MAY obtain
@@ -185,6 +195,27 @@ ABI belong to other chapters and are only referenced here.
     type, so the runtime never has to choose between them. No other type
     MAY be used as a `main` parameter (Rule 8), and this list MUST NOT be
     extended except by editing this chapter.
+
+    **Every type in this list is named through a std module**, so since
+    owner decision 2026-09-19, round 5 (D3) the root module of a build
+    with a `main` MUST import each module its signature names — `use
+    std.io;` for `io.Stdout`, `use std.fs;` for `fs.Dir`, and so on (ch08
+    Rule 17; the header order of ch07 puts `use` after `needs`). Without
+    the import the parameter type is ch08's unresolved name N0014, and
+    this chapter's Rule 8 check never sees a root capability at all. The
+    import does NOT change a capability's `needs` entry: `needs` names
+    CAPABILITIES (`io.stdout`, `fs.read`, `net`), which ch08 Rule 23
+    makes non-names — they are not looked up, bind nothing, and are
+    unaffected by which modules are imported. A root module therefore
+    writes both, and they are independent: `needs { io.stdout };` for the
+    authority, `use std.io;` for the name.
+
+    **Reserved for the std surface chapter** (owner decision 2026-09-19,
+    round 5, D5; nothing is designed here): heap-allocating std types take
+    an explicit allocator value (ch01's closed round-5 decision), and the
+    ROOT HEAP arrives as a `main` parameter, so that chapter will add its
+    type to the list above. Allocation is NOT authority: that type gets no
+    `needs` entry, and no capability word for allocation exists.
 22. Inline assembly (`asm_expr`, ch07 grammar) MUST appear only inside a
     declaration marked `@unsafe(invariant: "...")` (Rule 10) in a module
     whose own `needs` holds the sealed `asm` capability (Rules 1-2); an
@@ -236,6 +267,7 @@ use core.mem, core.simd;
 ```fors
 module hello;
 needs { io.stdout };
+use std.io;                      // mandatory since round 5, D3 (ch08 R17)
 
 fn main(inout out: io.Stdout) raises io.Error {
     out.write_line("hello")?;    // root capability handed in by the runtime, Rule 8
@@ -245,9 +277,9 @@ fn main(inout out: io.Stdout) raises io.Error {
 ```fors
 module fetch;
 needs { net, io.stderr };        // capabilities, not type names (Rule 21)
-use std.net;
+use std.net, std.io;             // both types are named through a module
 
-fn main(inout conn: net.Net, inout err: io.Stderr) raises net.Error {   // `net` is the module: ch08 R18
+fn main(inout conn: net.Net, inout err: io.Stderr) raises net.Error {   // `net` is the imported module, not a capability word
     var buf: Buffer[u8] = Buffer.fixed(4096);
     let n: usize = get(&conn, "https://example.org", &buf)?;
 }
@@ -385,6 +417,13 @@ within its granted authority.
   `io.stdout` fails.
 - `asm-without-capability-rejected`: inline assembly without `asm` fails before codegen.
 - `capability-value-no-public-constructor`: constructing `fs.Dir`/`time.Clock`/`rand.Rng`/`gpu.Device` outside `main`-parameter narrowing fails.
+- `main-forged-std-module-rejected` (round 5, D3 verification): a user
+  module `io` with its own `pub struct Stdout`, imported by `use io;`,
+  does not make `io.Stdout` a root-capability type — Rule 8 judges the
+  head by the binding, not the spelling (A0008).
+- `main-aliased-std-import-accepted` (round 5, D3 verification): `use
+  std.io as w;` then `fn main(inout out: w.Stdout)` is the root
+  type under another name, and is accepted.
 - `ffi-taint-propagates`: a transitive importer of an `ffi` module is marked `unguaranteed`.
 - `unsafe-attribute-rejects-block-form`: bare `unsafe { ... }` is a parse/checker error.
 - `comptime-rejects-clock-read`: a comptime clock read fails to build.

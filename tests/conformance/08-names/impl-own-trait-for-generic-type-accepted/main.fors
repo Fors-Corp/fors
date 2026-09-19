@@ -7,13 +7,13 @@ module main;
 use lib.Box;
 
 trait Show {
-    fn show(let self: Self) -> i32;
+    fn show(let self) -> i32;
 }
 
 impl[T] Show for Box[T] {
-    fn show(let self: Self) -> i32 { return 1; }
+    fn show(let self) -> i32 { return 1; }
 }
 
 impl Show for i32 {
-    fn show(let self: Self) -> i32 { return 2; }
+    fn show(let self) -> i32 { return 2; }
 }

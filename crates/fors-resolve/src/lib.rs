@@ -93,10 +93,6 @@ pub fn resolve(interner: &mut Interner, inputs: &[FileInput], root: Option<usize
     for (i, inp) in inputs.iter().enumerate() {
         authority::check_needs_vocabulary(inp.tree, inp.tokens, inp.source, &mut per_file[i]);
     }
-    if let Some(r) = root.filter(|&r| r < n) {
-        authority::check_main(interner, inputs[r].tree, inputs[r].tokens, inputs[r].source, &decls[r], &mut per_file[r]);
-    }
-
     let file_ctxs: Vec<items::FileCtx> = inputs
         .iter()
         .zip(decls.iter())
@@ -105,6 +101,14 @@ pub fn resolve(interner: &mut Interner, inputs: &[FileInput], root: Option<usize
     let (universe, item_diags) = items::build_universe(interner, &modules, &edges, &file_ctxs);
     for (i, d) in item_diags {
         per_file[i].push(d);
+    }
+
+    // After the universe: `main`'s parameter types are judged by what the
+    // root module's imports bind their head to (round 5, D3), not by
+    // spelling alone.
+    if let Some(r) = root.filter(|&r| r < n) {
+        let scope = universe.scope(FileId(r as u32));
+        authority::check_main_bound(interner, inputs[r].tree, inputs[r].tokens, inputs[r].source, &decls[r], scope, &modules, &mut per_file[r]);
     }
 
     let mut name_uses: Vec<NameUseTable> = (0..n).map(|_| NameUseTable::default()).collect();

@@ -1,0 +1,12 @@
+//! name: local_shadows_imported_std_module_rejected
+//! rule: 08.R18
+//! expect: check-error
+//! detail: round 5 (D3) -- a std module is an import, not a prelude name, so Rule 18's prelude carve-out does not cover it: a local named `io` shadows a module-scope name
+
+module m;
+use std.io;
+
+fn f() -> i32 {
+    let io: i32 = 5;
+    return io;
+}

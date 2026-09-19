@@ -1,0 +1,4 @@
+module std.io;
+use main;
+
+pub struct Stdout { fd: i32 }

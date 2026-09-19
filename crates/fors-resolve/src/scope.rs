@@ -163,7 +163,16 @@ impl<'a> BodyCtx<'a> {
         }
         let (name0, range0) = segs[0];
         let Some(found) = self.lookup(name0) else {
-            self.diags.push(Diagnostic::new(range0.0, range0.1, Code::N(14), "unresolved name".to_string()));
+            // Ch08 Rule 17 (round 5, D3): a std module is a name only
+            // where the header imports it, so an unresolved head that
+            // spells one gets the missing `use` named in the message.
+            let msg = if segs.len() > 1 && crate::prelude::is_std_module(self.interner.resolve(name0)) {
+                let m = String::from_utf8_lossy(self.interner.resolve(name0)).into_owned();
+                format!("unresolved name (add `use std.{m};` to import the std module `{m}`)")
+            } else {
+                "unresolved name".to_string()
+            };
+            self.diags.push(Diagnostic::new(range0.0, range0.1, Code::N(14), msg));
             self.record(node, ResolvedTarget::Deferred);
             return;
         };
@@ -530,10 +539,10 @@ impl<'a> BodyCtx<'a> {
     /// Resolves and declares each parameter in order, one at a time: a
     /// parameter's own type annotation is walked (and so resolved)
     /// *before* that parameter is declared, so it cannot see itself in
-    /// scope — owner decision 2026-09-19, round 3 (D3): `fn f(let net:
-    /// net.Net)` resolves the `net.Net` type against the prelude module
-    /// `net`, and only after that is the parameter `net` in scope (for
-    /// later parameters' types and the body).
+    /// scope — owner decision 2026-09-19, round 3 (D3): `fn f(let Option:
+    /// Option[i32])` resolves the annotation against the prelude type
+    /// `Option`, and only after that is the parameter in scope (for later
+    /// parameters' types and the body).
     pub fn resolve_params(&mut self, params_node: usize) -> Vec<usize> {
         let params: Vec<usize> = self.tree.children(params_node).collect();
         for &p in &params {

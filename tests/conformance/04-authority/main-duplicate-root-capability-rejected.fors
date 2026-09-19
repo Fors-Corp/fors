@@ -5,6 +5,7 @@
 
 module app;
 needs { io.stdout };
+use std.io;
 
 fn main(inout out1: io.Stdout, inout out2: io.Stdout) {
 }

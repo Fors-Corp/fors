@@ -1,0 +1,9 @@
+//! name: use_std_alone_rejected
+//! rule: 08.R4
+//! expect: check-error
+//! detail: round 5 drafting decision -- `std` is a package name, not a module, so `use std;` is Rule 4(c)'s unresolved import
+
+module m;
+use std;
+
+fn f() -> i32 { return 0; }

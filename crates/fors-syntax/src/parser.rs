@@ -103,6 +103,7 @@ fn parse_tokens(tokens: &Tokens, lex_diags: &[fors_lex::Diagnostic], source: &[u
         depth: 0,
         depth_reported: false,
         in_struct_header: false,
+        in_member_body: 0,
     };
     p.file();
     let tree = p.b.finish();
@@ -128,7 +129,14 @@ struct Parser<'a> {
     /// Parsing a struct's `invariant` clauses: the `{` after them opens a
     /// field list, not a block.
     in_struct_header: bool,
+    /// Enclosing `trait`/`impl` bodies. The receiver shorthand `convention
+    /// "self"` (ch07 Disambiguation 21, owner decision 2026-09-19 round 5,
+    /// D1) is legal only inside one.
+    in_member_body: u32,
 }
+
+/// The one fixed diagnostic of ch07 Disambiguation 21 (round 5, D1).
+const RECEIVER_SHORTHAND_MSG: &str = "only a parameter named \"self\", in a trait or impl body, may omit its type annotation";
 
 fn is_mul_op(k: TokenKind) -> bool {
     matches!(k, TokenKind::Star | TokenKind::Slash | TokenKind::Percent)
@@ -781,6 +789,7 @@ impl<'a> Parser<'a> {
         if !self.expect(LBrace, "expected '{'") {
             return;
         }
+        self.in_member_body += 1;
         while !self.at(RBrace) && !self.at(Eof) && !self.at_body_overrun() {
             let before = self.p;
             self.b.start_node(if impl_body { NodeKind::FnDecl } else { NodeKind::TraitItem });
@@ -811,6 +820,7 @@ impl<'a> Parser<'a> {
             }
             self.b.finish_node();
         }
+        self.in_member_body -= 1;
         self.close(os, oe, RBrace);
     }
 
@@ -1023,11 +1033,29 @@ impl<'a> Parser<'a> {
         }
     }
 
+    /// `param = convention ident ":" type | convention "self"` (ch07
+    /// Disambiguation 21). One token of lookahead decides: a `:` after the
+    /// identifier takes the annotated form, anything else the receiver
+    /// shorthand — which is legal only for the identifier `self` and only
+    /// inside a `trait`/`impl` body, both checked here with one fixed
+    /// diagnostic.
     fn param(&mut self) {
+        use TokenKind::*;
         self.b.start_node(NodeKind::Param);
         self.convention();
-        self.expect(TokenKind::Ident, "expected parameter name");
-        self.expect(TokenKind::Colon, "expected ':' and the parameter's type");
+        if self.at(Ident) && self.nth(1) != Colon {
+            if self.in_member_body > 0 && self.is_word(b"self") {
+                self.bump(); // `self`, type `Self` (ch09 Rule 16)
+                self.b.finish_node();
+                return;
+            }
+            self.err_here(DiagCode::Expected, RECEIVER_SHORTHAND_MSG);
+            self.bump();
+            self.b.finish_node();
+            return;
+        }
+        self.expect(Ident, "expected parameter name");
+        self.expect(Colon, "expected ':' and the parameter's type");
         self.type_(false);
         self.b.finish_node();
     }

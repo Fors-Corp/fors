@@ -1,0 +1,8 @@
+//! name: reserved_keyword_spmd_as_member_name
+//! rule: 07.Reserved
+//! expect: parse-error
+//! detail: round 5 (D2) -- a member name is not a *name* (ch08 R23) but it is still an `ident` token, so a field may not be called `spmd`
+
+module m;
+
+struct S { spmd: i32 }

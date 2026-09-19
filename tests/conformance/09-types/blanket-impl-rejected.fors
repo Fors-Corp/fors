@@ -5,5 +5,5 @@
 
 module m;
 
-trait Shape { fn area(let self: Self) -> f64; }
+trait Shape { fn area(let self) -> f64; }
 impl[T] Shape for T { fn area(let self: T) -> f64 { return 0.0; } }

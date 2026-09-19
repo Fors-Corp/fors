@@ -10,5 +10,5 @@ struct Hidden { x: i32 }
 pub struct S { v: i32 }
 
 impl S {
-    pub fn leak(let self: Self) -> Own[Hidden] { return self.make(); }
+    pub fn leak(let self) -> Own[Hidden] { return self.make(); }
 }

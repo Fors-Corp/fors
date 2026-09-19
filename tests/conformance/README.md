@@ -33,7 +33,35 @@ Run tests assume `io.Writer.write_line`, which no chapter defines. A
 `Slice[T]` is obtained only by range-indexing a bound array (ch03 Rule 24);
 `main` takes root capabilities by type (ch04 Rules 8, 21).
 
-## Counts: 648 tests, 710 files
+## Counts: 683 tests, 771 files
+
+(Round-5 verification (2026-09-20): +7 tests. 04-authority
+`main-forged-std-module-rejected` (a user module `io` cannot forge
+`io.Stdout`; ch04 R8 now judges the head by its binding) and
+`main-aliased-std-import-accepted` (`use std.io as w;` then `w.Stdout`);
+07-grammar `reserved-{spmd,kernel}-as-member-access-reject` (`x.spmd`);
+08-names `closure-param-named-self-{shadows-receiver-rejected,in-free-fn-
+accepted}` and `body-mention-of-std-module-adds-no-edge-accepted` (the
+module graph is exactly the `use` edges: a body's `io.` and a header's
+`needs { env }` add none).)
+
+(Round 5 (2026-09-19): applied the grammar and std-module decisions --
+D1 the receiver shorthand `convention "self"` (ch07 Disambiguation 21),
+D2 `spmd`/`kernel` reserved-unused, D3 std modules require an import.
++13 in 07-grammar (7 receiver-shorthand, 6 reserved-word tests); +15 in
+08-names (10 "std module used without `use`" tests, one per known module
+name; `use-std-{module,mem,item-path}-accepted`,
+`use-std-{unknown-module,alone}-rejected`,
+`item-named-as-std-module-with-import-rejected`,
+`local-shadows-imported-std-module-rejected`,
+`param-shadows-imported-std-module-rejected`), with four round-2/3 tests
+flipped or renamed as ch08's list records and one
+(`local-shadows-prelude-module-path-head-accepted`) deleted, its premise
+being impossible now. 37 files gained a `use std.<m>;` header line and 62
+files took the receiver shorthand; ch09's
+`local-shadowing-prelude-module-as-type-head-rejected` was re-aimed at a
+prelude type and renamed. Three tests keep the explicit `self: Self`
+receiver on purpose.)
 
 (Round 4 (2026-09-19): applied the type-system decisions -- integer literal
 default `i32`, homogeneous operators, associated types with projections
@@ -53,11 +81,11 @@ on the others (crates/fors-resolve/tests/conformance.rs).)
 | 01-ownership (58) | 24 | 0 | 2 | 31 | 0 | 1 |
 | 02-failure (25) | 8 | 0 | 2 | 9 | 1 | 5 |
 | 03-numerics (46) | 7 | 0 | 0 | 13 | 19 | 7 |
-| 04-authority (32) | 9 | 0 | 0 | 20 | 3 | 0 |
-| 07-grammar (144) | 60 | 0 | 80 | 4 | 0 | 0 |
-| 08-names (157) | 0 | 58 | 0 | 99 | 0 | 0 |
+| 04-authority (34) | 9 | 1 | 0 | 21 | 3 | 0 |
+| 07-grammar (159) | 65 | 0 | 90 | 4 | 0 | 0 |
+| 08-names (175) | 0 | 61 | 0 | 114 | 0 | 0 |
 | 09-types (186) | 0 | 69 | 0 | 117 | 0 | 0 |
-| total | 108 | 127 | 84 | 293 | 23 | 13 |
+| total | 113 | 131 | 94 | 309 | 23 | 13 |
 
 ## Change rule
 

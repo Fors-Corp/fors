@@ -5,10 +5,10 @@
 
 module m;
 
-trait Conv[X] { fn conv(let self: Self) -> X; }
+trait Conv[X] { fn conv(let self) -> X; }
 trait Two {
     type A;
     type B: Conv[Self.A];
-    fn b(let self: Self) -> Self.B;
-    fn a(let self: Self) -> Self.A { return self.b().conv(); }
+    fn b(let self) -> Self.B;
+    fn a(let self) -> Self.A { return self.b().conv(); }
 }

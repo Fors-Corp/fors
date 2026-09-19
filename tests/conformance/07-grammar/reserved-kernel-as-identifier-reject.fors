@@ -1,0 +1,10 @@
+//! name: reserved_keyword_kernel_as_identifier
+//! rule: 07.Reserved
+//! expect: parse-error
+//! detail: round 5 (D2) -- `kernel` is reserved (reserved-unused): it cannot fill a binding slot
+
+module m;
+
+fn f() {
+    let kernel = 1;
+}

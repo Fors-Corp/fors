@@ -1,6 +1,10 @@
 //! Module names (ch08 R1, R24) and the module graph (ch08 R7, R8): use
-//! paths resolved to modules by the longest-module-prefix rule, implicit
-//! prelude edges, and cycle/self-import detection.
+//! paths resolved to modules by the longest-module-prefix rule, and
+//! cycle/self-import detection. Since owner decision 2026-09-19 round 5
+//! (D3) the edge set is EXACTLY the explicit `use` edges of the file
+//! headers: there is no implicit prelude-module edge and no scan of a
+//! file's body, so a build's dependency graph is readable from headers
+//! alone (ch08 R7).
 //!
 //! Building a file's canonical name and extracting its header/`use` paths
 //! is per-file work (`extract_module_facts`); linking those facts across
@@ -17,9 +21,6 @@ use crate::ids::{FileId, ModuleId};
 use crate::interner::{Interner, Symbol};
 
 pub type Segments = Vec<Symbol>;
-
-/// The eight prelude module names (ch08 R17), each denoting `std.<name>`.
-pub const PRELUDE_MODULES: [&[u8]; 8] = [b"io", b"fs", b"net", b"proc", b"time", b"rand", b"env", b"gpu"];
 
 /// Ch08 R24: a legal directory segment or file stem — `[a-z_][a-z0-9_]*`,
 /// not `_` alone, not a reserved word (contextual keywords lex as `Ident`
@@ -98,10 +99,6 @@ fn path_segments(tree: &Tree, tokens: &Tokens, source: &[u8], interner: &mut Int
 pub struct FileFacts {
     pub header: Option<(Segments, (u32, u32))>,
     pub uses: Vec<(Segments, (u32, u32))>,
-    /// `std.<name>` segments for each unqualified prelude module name
-    /// (ch08 R17) immediately followed by `.`, in source order. Each is a
-    /// candidate implicit edge once the module set is known.
-    pub prelude_refs: Vec<(Segments, (u32, u32))>,
 }
 
 /// Per-file extraction: depends only on this file's tree/tokens.
@@ -134,48 +131,7 @@ pub fn extract_module_facts(tree: &Tree, tokens: &Tokens, source: &[u8], interne
             }
         }
     }
-    let prelude_refs = find_prelude_refs(tokens, source, interner);
-    FileFacts { header, uses, prelude_refs }
-}
-
-/// Scans the whole raw token stream for `Ident '.'`, where `Ident` spells
-/// one of ch08 R17's eight prelude names, and records it as a candidate
-/// implicit edge (ch08 R17: "identical in every respect ... to a `use
-/// std.x;` in the header"). This is an approximation for a phase that
-/// does not run full name resolution: it does not check that the name is
-/// actually unshadowed at that point (ch08 R14/R18), so a local variable
-/// legitimately named `io` would over-approximate an edge that a full
-/// resolver would not add. See the crate-level report for this tradeoff.
-fn find_prelude_refs(tokens: &Tokens, source: &[u8], interner: &mut Interner) -> Vec<(Segments, (u32, u32))> {
-    let mut out = Vec::new();
-    let std_sym = interner.intern(b"std");
-    let n = tokens.len();
-    let mut i = 0usize;
-    // A name right after `.` is a member or a later path segment, never
-    // a scope lookup (ch08 R16, R23).
-    let mut after_dot = false;
-    while i < n {
-        if tokens.kinds[i].is_trivia() {
-            i += 1;
-            continue;
-        }
-        let member = std::mem::replace(&mut after_dot, tokens.kinds[i] == TokenKind::Dot);
-        if tokens.kinds[i] == TokenKind::Ident && !member {
-            let text = tokens.text(i, source);
-            if PRELUDE_MODULES.contains(&text) {
-                let mut j = i + 1;
-                while j < n && tokens.kinds[j].is_trivia() {
-                    j += 1;
-                }
-                if j < n && tokens.kinds[j] == TokenKind::Dot {
-                    let sym = interner.intern(text);
-                    out.push((vec![std_sym, sym], tokens.range(i)));
-                }
-            }
-        }
-        i += 1;
-    }
-    out
+    FileFacts { header, uses }
 }
 
 pub struct ModuleTable {
@@ -248,15 +204,6 @@ pub fn build_module_graph(
         let from = ModuleId(m as u32);
         for (path, range) in &facts.uses {
             resolve_use_edge(by_name, from, table.file[m], path, *range, &mut edges, &mut diags, interner);
-        }
-        // Inside package `std` the prelude module names are not provided
-        // (ch08 R17), so no implicit edge starts there: only that keeps
-        // the header-only edge set exact where a cycle is possible.
-        let in_std = table.name[m].first().is_some_and(|&s| interner.resolve(s) == b"std");
-        for (std_path, range) in facts.prelude_refs.iter().filter(|_| !in_std) {
-            if let Some(&to) = by_name.get(std_path.as_slice()) {
-                push_edge_dedup(&mut edges, Edge { from, to, range: *range });
-            }
         }
     }
 

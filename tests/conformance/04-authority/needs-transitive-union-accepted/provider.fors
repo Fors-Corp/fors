@@ -1,2 +1,3 @@
 module net.provider;
 needs { net };
+use std.net;

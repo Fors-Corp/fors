@@ -1,0 +1,9 @@
+//! name: use_std_unknown_module_rejected
+//! rule: 08.R17
+//! expect: check-error
+//! detail: round 5 (D3) -- `threads` is not one of the std modules the compiler knows until std ships; N0017 names the known list
+
+module m;
+use std.threads;
+
+fn f() -> i32 { return 0; }

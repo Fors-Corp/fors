@@ -5,6 +5,6 @@
 
 module m;
 
-trait Shape { fn area(let self: Self) -> f64; }
+trait Shape { fn area(let self) -> f64; }
 struct Sq { s: f64 }
 impl Shape for Sq { }

@@ -5,6 +5,7 @@
 
 module m;
 needs { io.stdout };
+use std.io;
 
 fn f(let x: i64) -> i64 {
     return x;

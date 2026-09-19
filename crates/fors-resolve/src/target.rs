@@ -18,10 +18,14 @@ pub enum Entity {
     PreludeType(Symbol),
     /// Ch08 Rule 17 prelude value (`some`, `none`, `reduce`).
     PreludeValue(Symbol),
-    /// Ch08 Rule 17 prelude module (`io`, `fs`, ...), denoting `std.<name>`.
-    /// Carries the real `ModuleId` only when that `std` module is part of
-    /// this build; the corpus never ships `std`, so further segments on an
-    /// unbacked prelude module are left deferred (see crate docs).
+    /// A module of Ch08 Rule 17's SYNTHETIC `std` table (`io`, `fs`,
+    /// `mem`, ...), bound by a `use std.<m>;` in a build that ships no
+    /// `std` source (owner decision 2026-09-19, round 5, D3). The variant
+    /// keeps its round-2 name so the enum stays additive; it is no longer
+    /// a prelude name — nothing puts it in scope but an import. The
+    /// `Option<ModuleId>` is `None` for exactly that case (a real
+    /// `std.<m>` in the build binds `Entity::Module` instead), so every
+    /// further segment on one is deferred to the checker (Rule 16, 22).
     PreludeModule(Symbol, Option<ModuleId>),
     /// The name of a `use` that failed (already diagnosed): using it is
     /// not a second error.

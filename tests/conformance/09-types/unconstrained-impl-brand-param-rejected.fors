@@ -5,7 +5,7 @@
 
 module m;
 
-trait Holder { type Held; fn n(let self: Self) -> i64; }
+trait Holder { type Held; fn n(let self) -> i64; }
 struct One { a: i64 }
 impl[A: brand] Holder for One {
     type Held = Option[Ref[i64, A]];

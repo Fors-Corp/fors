@@ -1,0 +1,8 @@
+//! name: std_module_without_use_env_rejected
+//! rule: 08.R17
+//! expect: check-error
+//! detail: round 5 (D3) -- one test per known std module name: env.Env without `use std.env;` is N0014 at the head segment
+
+module m;
+
+fn f(let x: env.Env) -> i32 { return 0; }

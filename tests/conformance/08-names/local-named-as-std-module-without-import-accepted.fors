@@ -1,0 +1,11 @@
+//! name: local_named_as_std_module_without_import_accepted
+//! rule: 08.R18
+//! expect: check-ok
+//! detail: round 5 (D3) -- `io` is no longer a prelude name, so in a module that does not import std.io it is an ordinary free identifier; this replaces round 3's local-shadows-prelude-module-accepted
+
+module m;
+
+fn f() -> i32 {
+    let io: i32 = 5;
+    return io;
+}

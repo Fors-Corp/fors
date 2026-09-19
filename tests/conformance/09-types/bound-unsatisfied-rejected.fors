@@ -5,10 +5,10 @@
 
 module m;
 
-trait Shape { fn area(let self: Self) -> f64; }
+trait Shape { fn area(let self) -> f64; }
 struct Sq { s: f64 }
 impl Shape for Sq { fn area(let self: Sq) -> f64 { return self.s * self.s; } }
-trait Named { fn id(let self: Self) -> i32; }
+trait Named { fn id(let self) -> i32; }
 fn show[T: Named](let x: T) -> i32 { return x.id(); }
 fn f() -> i32 {
     let q = Sq { s: 1.0 };

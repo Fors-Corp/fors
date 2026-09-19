@@ -6,7 +6,7 @@
 module m;
 
 trait Conv[X] {
-    fn conv(let self: Self) -> X;
+    fn conv(let self) -> X;
 }
 
 fn f[A: Conv[B], B](let a: A) -> B { return a.conv(); }

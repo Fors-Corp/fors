@@ -1,0 +1,12 @@
+//! name: body_mention_of_std_module_adds_no_edge_accepted
+//! rule: 08.R7
+//! expect: check-ok
+//! detail: round 5 (D3) verification -- the module graph is exactly the explicit `use` edges: `needs { env };` in the header and `io.len` on a local named `io` in a body add NO edge main -> std.io, so std.io's own `use main;` closes no cycle (before round 5 the whole-file scan manufactured main -> std.io from the token pair `io .` and this build was a cycle, N0007); adding `use std.io;` to this header is the one thing that would make it one
+
+module main;
+needs { env };
+
+fn f() -> usize {
+    let io: Str = "a";
+    return io.len;
+}

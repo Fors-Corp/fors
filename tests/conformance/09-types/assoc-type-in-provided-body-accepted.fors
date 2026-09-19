@@ -7,8 +7,8 @@ module m;
 
 trait Source {
     type Item;
-    fn pull(inout self: Self) -> Option[Self.Item];
-    fn second(inout self: Self) -> Option[Self.Item] {
+    fn pull(inout self) -> Option[Self.Item];
+    fn second(inout self) -> Option[Self.Item] {
         let first: Option[Self.Item] = self.pull();
         return self.pull();
     }

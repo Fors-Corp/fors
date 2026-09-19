@@ -1,0 +1,11 @@
+//! name: closure_param_named_self_in_free_fn_accepted
+//! rule: 08.R18
+//! expect: check-ok
+//! detail: round 5 (D1) verification -- `self` is an ordinary identifier (ch07 "not reserved"); as a closure parameter in a free function it shadows nothing and needs no type (a cparam's annotation is optional), and ch09 R16 does not apply outside a trait/impl method
+
+module m;
+
+fn f() -> i32 {
+    let g = |self| self;
+    return g(1);
+}

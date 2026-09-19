@@ -1,5 +1,5 @@
 import sys,re,os
-RES=set("module use pub fn struct enum trait impl const extern let var inout sink if else match for in while break continue return raise raises with parallel simd spawn comptime move consume discard as and or not true false iso imm secret dyn asm import recover type".split())
+RES=set("module use pub fn struct enum trait impl const extern let var inout sink if else match for in while break continue return raise raises with parallel simd spawn comptime move consume discard as and or not true false iso imm secret dyn asm import recover type spmd kernel".split())
 SUF=set("i8 i16 i32 i64 u8 u16 u32 u64 isize usize f32 f64".split())
 ISUF=SUF-{"f32","f64"}
 PUN=sorted("( ) [ ] { } , ; : . @ ? -> => = == != < > <= >= + - * / % & | ^ << >> ..< ..= += -= *= /= %= &= |= ^= <<= >>=".split(),key=len,reverse=True)
@@ -89,7 +89,9 @@ def lex(s):
 CMP=["==","!=","<",">","<=",">="]
 ASG=["=","+=","-=","*=","/=","%=","&=","|=","^=","<<=",">>="]
 class P:
-    def __init__(s,t): s.t=t;s.i=0
+    # `member` counts enclosing trait/impl bodies: the receiver shorthand
+    # `convention "self"` (ch07 D21, round 5 D1) is legal only inside one.
+    def __init__(s,t): s.t=t;s.i=0;s.member=0
     def k(s,o=0): return s.t[min(s.i+o,len(s.t)-1)]
     def isp(s,x,o=0): a=s.k(o);return a[0] in("p","kw","_") and a[1]==x
     def isid(s,w=None,o=0): a=s.k(o);return a[0]=="id" and (w is None or a[1]==w)
@@ -175,6 +177,7 @@ class P:
             s.ident()
             if s.isp("["): s.generics()
             s.eat("{")
+            s.member+=1
             while not s.isp("}"):
                 if s.isp("type"):
                     s.i+=1;s.ident()
@@ -185,17 +188,20 @@ class P:
                 while s.isp("@"): s.attr()
                 s.fnsig()
                 if not s.opt(";"): s.block()
+            s.member-=1
             s.eat("}")
         elif s.opt("impl"):
             if s.isp("["): s.generics()
             s.type()
             if s.opt("for"): s.type()
             s.eat("{")
+            s.member+=1
             while not s.isp("}"):
                 if s.isp("type"):
                     s.i+=1;s.ident();s.eat("=");s.type();s.eat(";");continue
                 while s.isp("@"): s.attr()
                 s.opt("pub");s.fnsig();s.block()
+            s.member-=1
             s.eat("}")
         elif s.opt("const"):
             s.ident();s.eat(":");s.type();s.eat("=");s.expr();s.eat(";")
@@ -216,6 +222,15 @@ class P:
                     s.type()
                     while s.opt("+"): s.type()
         s.clist(g,"]",1)
+    def param(s):
+        # param = convention ident ":" type | convention "self"   (ch07 D21)
+        s.conv()
+        if s.isid("self") and not s.isp(":",1) and s.member:
+            s.i+=1;return
+        s.ident()
+        if not s.isp(":"):
+            s.err('only a parameter named "self", in a trait or impl body, may omit its type annotation')
+        s.eat(":");s.type()
     def conv(s):
         if s.isp("let") or s.isp("inout") or s.isp("sink") or s.isid("set"): s.i+=1
         else: s.err("expected convention (let/inout/sink/set)")
@@ -223,8 +238,7 @@ class P:
         s.eat("fn");s.ident()
         if s.isp("["): s.generics()
         s.eat("(")
-        def p(): s.conv();s.ident();s.eat(":");s.type()
-        s.clist(p,")")
+        s.clist(s.param,")")
         if s.opt("->"): s.rettype()
         if s.opt("raises"): s.type()
         while s.isid("pre") or s.isid("post") or s.isid("invariant"): s.i+=1;s.expr(True)

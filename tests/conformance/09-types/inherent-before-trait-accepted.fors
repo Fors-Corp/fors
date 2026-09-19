@@ -5,7 +5,7 @@
 
 module m;
 
-trait Named { fn id(let self: Self) -> i64; }
+trait Named { fn id(let self) -> i64; }
 struct Tag { n: i64 }
 impl Tag { fn id(let self: Tag) -> i64 { return self.n; } }
 impl Named for Tag { fn id(let self: Tag) -> i64 { return 0; } }

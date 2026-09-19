@@ -7,5 +7,5 @@ module m;
 
 trait Src {
     type Item;
-    fn both[Self.Item: Eq](let self: Self, let other: Self) -> bool;
+    fn both[Self.Item: Eq](let self, let other: Self) -> bool;
 }

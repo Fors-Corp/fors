@@ -7,9 +7,9 @@ module main;
 use type_mod.Thing;
 
 trait Greet {
-    fn hello(let self: Self) -> i32;
+    fn hello(let self) -> i32;
 }
 
 impl Greet for Thing {
-    fn hello(let self: Self) -> i32 { return 1; }
+    fn hello(let self) -> i32 { return 1; }
 }

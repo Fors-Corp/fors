@@ -5,5 +5,5 @@
 
 module m;
 
-trait Keyed { type Key: Eq + Ord; fn key(let self: Self) -> Self.Key; }
+trait Keyed { type Key: Eq + Ord; fn key(let self) -> Self.Key; }
 fn less[T: Keyed](let a: T, let b: T) -> bool { return a.key() < b.key(); }

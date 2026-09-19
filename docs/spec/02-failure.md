@@ -69,9 +69,17 @@ chapters).
 6. A trap MUST lower to one breakpoint-class instruction (aarch64: `brk
    #imm`) plus a static read-only pc-to-info side-table entry (site id,
    kind, span); it MUST NOT allocate or call.
-7. A trap MUST terminate the whole process; no trap MUST be catchable; the
-   compiler MUST NOT emit an unwinder, personality routine, or landing pad
-   for any trap or raise. "Domain abort" MUST NOT be implemented or exposed.
+7. A trap is a WHOLE-PROCESS ABORT. It MUST terminate the whole process;
+   no trap MUST be catchable, by any syntax, in any mode; the compiler
+   MUST NOT emit an unwinder, personality routine, or landing pad for any
+   trap or raise. "Domain abort" MUST NOT be implemented or exposed, and
+   NO boundary is reserved for a future domain-recovery mechanism (owner
+   decision 2026-09-19, round 5, D4: the plain confirmation, with no
+   hedge). **Expected errors are not traps**: an error a caller is meant
+   to handle travels as a VALUE, through `raises E`, `?` and `else |e|`
+   (Rules 1-5). A trap is for a violated invariant — a contract, an index,
+   an overflow (Rule 15's closed kind list) — which is a bug, not a
+   condition, and therefore ends the process.
 8. A backtrace crossing a fiber boundary MUST recognize the fiber-switch
    sentinel frame (parent fiber id, parent frame pointer, spawn-site pc) and
    continue through it, else report a truncated trace rather than reading
@@ -109,6 +117,7 @@ chapters).
 ```fors
 module app.io;
 needs { fs.read };
+use std.fs;
 
 fn read_config(let d: fs.Dir, let name: Str, inout buf: Slice[u8])
     -> usize raises fs.Error
@@ -120,6 +129,7 @@ fn read_config(let d: fs.Dir, let name: Str, inout buf: Slice[u8])
 ```fors
 module app.net;
 needs { net };
+use std.net;
 
 impl ErrorFrom[net.TimeoutError] for app.Error {
     fn from(let e: net.TimeoutError) -> app.Error { return app.Error.timeout(e); }
@@ -192,10 +202,22 @@ fn take(let s: Str, let n: usize) -> Str raises app.Error {
   the eight canonical strings verbatim and states that a nesting-limit
   violation is a distinct, non-trap failure mode.
 
+## Closed by owner decision 2026-09-19, round 5
+
+- **D4 — trap is a whole-process abort, confirmed plainly.** Open question
+  1 is closed as drafted: no unwinder, nothing catchable, no reserved
+  domain-recovery boundary, and no hedging language anywhere in this
+  chapter. Rule 7 now states it prominently, together with the
+  consequence the owner asked to be stated: expected errors travel as
+  values via `raises`/`?`/`else`, so "no recovery" costs a server author
+  nothing they were meant to have — it removes only recovery from bugs.
+
 ## Open questions for the owner
 
-1. §4.3(4): whole-process abort may disqualify some server users — confirm
-   before it is load-bearing in the ABI and stdlib.
+1. ~~§4.3(4): whole-process abort may disqualify some server users —
+   confirm before it is load-bearing in the ABI and stdlib.~~ Closed by
+   owner decision 2026-09-19, round 5 (D4): confirmed, plainly; see
+   Rule 7 and the closed-decision section above.
 2. Confirm `FAILURE_TAG_REG`/`FAILURE_INLINE_MAX` defaults, or block
    finalization on the aarch64 `abi-fuzz` measurement.
 3. Confirm module-header placement for `contracts: ...;` (undecided in any

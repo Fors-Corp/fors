@@ -6,6 +6,6 @@
 module m;
 
 trait Shape {
-    fn area(let self: Self) -> f64;
-    fn twice(let self: Self) -> f64 { return self.area() * 2.0; }
+    fn area(let self) -> f64;
+    fn twice(let self) -> f64 { return self.area() * 2.0; }
 }

@@ -7,8 +7,8 @@ module m;
 
 trait Source {
     type Item;
-    fn pull(inout self: Self) -> Option[Self.Item];
-    fn pull_or(inout self: Self, sink d: Self.Item) -> Self.Item {
+    fn pull(inout self) -> Option[Self.Item];
+    fn pull_or(inout self, sink d: Self.Item) -> Self.Item {
         match self.pull() {
             some(let v) => v,
             none => d,

@@ -5,4 +5,4 @@
 
 module m;
 
-trait Iterator { fn next(inout self: Self) -> Option[i64]; }
+trait Iterator { fn next(inout self) -> Option[i64]; }

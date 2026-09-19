@@ -5,8 +5,8 @@
 
 module m;
 
-trait P { type X; fn p(let self: Self) -> i64; }
-trait Q { type Y; fn q(let self: Self) -> i64; }
+trait P { type X; fn p(let self) -> i64; }
+trait Q { type Y; fn q(let self) -> i64; }
 struct Base { n: i64 }
 struct A[T] { t: T }
 struct B[T] { t: T }

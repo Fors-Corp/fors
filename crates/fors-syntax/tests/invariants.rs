@@ -19,7 +19,8 @@ fn corpus_trees_are_valid() {
 const VOCAB: &[&str] = &[
     "+", "-", "*", "&", "|", "^", "<<", "..<", "==", "<", "and", "or", "not", "as", "move", "?", ".", ",", ";", ":",
     "(", ")", "[", "]", "{", "}", "=", "+=", "->", "=>", "@", "_", "x", "1", "1.5", "\"s\"", ".v", "if", "else",
-    "match", "let", "fn", "struct", "pub", "impl", "use", "set", "out", "scoped", "soa", "iso", "dyn", "\\\\ml\n", "/*",
+    "match", "let", "fn", "struct", "pub", "impl", "use", "set", "out", "scoped", "soa", "iso", "dyn", "type", "spmd",
+    "kernel", "self", "trait", "\\\\ml\n", "/*",
     "\"", "0x", "1e", "..", "é", "$",
 ];
 

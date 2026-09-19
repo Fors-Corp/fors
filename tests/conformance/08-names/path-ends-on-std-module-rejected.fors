@@ -1,0 +1,12 @@
+//! name: path_ends_on_std_module_rejected
+//! rule: 08.R16
+//! expect: check-error
+//! detail: round 5 (D3) -- `io` is a module bound by `use std.io;`: a path that ends on it, outside `use`, is an error (renamed from path-ends-on-prelude-module-rejected)
+
+module m;
+use std.io;
+
+fn f() -> i32 {
+    let x = io;
+    return 0;
+}

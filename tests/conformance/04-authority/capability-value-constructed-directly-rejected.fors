@@ -5,6 +5,7 @@
 
 module app;
 needs { fs.read };
+use std.fs;
 
 fn f() {
     var d: fs.Dir = fs.Dir { };

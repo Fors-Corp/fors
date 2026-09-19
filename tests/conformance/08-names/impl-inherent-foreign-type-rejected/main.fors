@@ -7,5 +7,5 @@ module main;
 use lib.Point;
 
 impl Point {
-    fn sum(let self: Self) -> i32 { return 0; }
+    fn sum(let self) -> i32 { return 0; }
 }

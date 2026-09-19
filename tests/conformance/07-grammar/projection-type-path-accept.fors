@@ -5,5 +5,5 @@
 
 module m;
 
-trait It { type Item; fn next(inout self: Self) -> Option[Self.Item]; }
+trait It { type Item; fn next(inout self) -> Option[Self.Item]; }
 fn first[I: It](inout it: I, let d: Option[I.Item]) -> Option[I.Item] { return it.next(); }

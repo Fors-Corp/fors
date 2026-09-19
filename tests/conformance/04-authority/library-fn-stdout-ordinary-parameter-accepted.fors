@@ -5,6 +5,7 @@
 
 module app;
 needs { io.stdout };
+use std.io;
 
 fn log(inout out: io.Stdout, let msg: Str) {
     out.write_line(msg);

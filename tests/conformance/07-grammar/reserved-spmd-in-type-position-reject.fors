@@ -1,0 +1,8 @@
+//! name: reserved_keyword_spmd_in_type_position
+//! rule: 07.Reserved
+//! expect: parse-error
+//! detail: round 5 (D2) -- a reserved word is not an `ident`, so `spmd` cannot head a type path either
+
+module m;
+
+fn f(let x: spmd) -> i32 { return 0; }
