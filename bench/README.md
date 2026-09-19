@@ -41,7 +41,8 @@ Runs repeat at least 3x and until 20 s are spent per cell (max 10); a cell slowe
   `PATH="$HOME/.sdkman/candidates/java/25.0.4-tem/bin:$PATH" python3 bench/harness/run.py bench`.
 - `c-fma` is the same C source built with clang's default FMA contraction, published next to the strict `c`
   column so the baseline is never handicapped; Fors itself is strict IEEE by default.
-- Zig (0.16) has only the `hello` kernel so far; its stdout API changes between releases.
+- Zig (0.16) has ports of every kernel except `stream`. On `matmul` (2.1x) and `reduce` (1.6x) it is slower than
+  C with clean, idiomatic sources: a measured toolchain difference, not an implementation handicap.
 
 ## Adding a language (this is how Fors joins)
 
@@ -93,3 +94,61 @@ cost is covered by the `hello` kernel instead). Results land in `results/compile
 - Java's method/class layout (about 1000 functions per top-level class, about 300 block-helpers per
   class) exists only to stay under the JVM's 64 KB method and 65535-entry constant-pool limits at large
   `F`; it is not idiomatic Java and should not be read as one.
+
+## Incremental rebuild comparator
+
+`compile-speed/incremental.py` is the multi-file companion to `compile_speed.py` above: instead of one
+huge source file, it generates a *project* -- `--modules` modules (default 200) of `--functions`
+functions each (default 50), identical shape in every language -- and measures each ecosystem's normal
+edit-run loop: a cold build, an immediate no-op rebuild, then `--reps` repetitions (default 10) of five
+edit classes, each rebuilt, run and checksum-verified:
+
+```bash
+python3 bench/compile-speed/incremental.py --modules 40 --functions 20 --reps 3   # smoke test
+python3 bench/compile-speed/incremental.py                                        # default M=200 F=50
+```
+
+**Project shape.** Module 0 ("core") is imported, via a fixed `module_index % K` pub-slot assignment,
+by every other module; module `i` also imports two lower-numbered modules chosen from a seeded MINSTD
+stream (recorded per run). Module `M-1` is a guaranteed leaf (nothing has a higher index to import it).
+Each module has `F` small integer-arithmetic private functions (same generator family as
+`compile_speed.py`, values kept under 2^31) grouped into `K = min(reps, F)` public functions; `main`
+calls every module's public functions in order and prints a checksum that a pure-Python reference
+(`simulate()`, mirroring the exact call graph) also computes, so every rebuilt binary is executed and
+its output checked -- a stale-cache bug that reuses an old binary is a hard failure, not a slow pass.
+
+**Edit classes**, each a source mutation to the leaf module (or, for E5, the core module) that keeps
+the program valid and changes its expected checksum (except E1, whose whole point is that it must
+NOT change the checksum): **E1** comment-only, **E2** a private function's constant, **E3** a private
+function's signature (adds a parameter, updates its one in-module caller), **E4** a leaf module's
+public function's signature (updates main's single call site), **E5** a core module's public
+function's signature (updates every module that calls that pub slot -- the "every caller" case).
+
+**Build drivers**, each that ecosystem's normal dev/debug workflow: C = generated Makefile with
+`-MMD -MP`, `make -j8`, clang `-O0`; Rust = `cargo build` (dev profile, incremental on) plus a second
+`cargo check` row (build-timing only -- `check` has no artifact to run, so its correctness is covered
+by the paired `build` row over the same edits); Go = `go build -o prog .` (compiles the whole package
+graph since `main` imports every module); Zig 0.16 = `zig build-exe`, `-fincremental` tried and
+reported on rather than assumed; Java = plain `javac` of the whole tree (no incremental mode --
+labelled as the honest full-rebuild comparator, not a bug).
+
+**Methodology notes and decisions:**
+- The "cold" variant is *stdlib-prebuilt-project-cold*: the project's own build cache is wiped (`.o`/
+  `.d`/binary for C, `target/` for Rust, Zig's `--cache-dir`/`--global-cache-dir`, `out/` for Java)
+  but the toolchain's standard-library cache is left warm. Go is the one exception: its build cache is
+  content-addressed, so wiping it would force a cold *stdlib* rebuild too (the *everything-from-source*
+  variant, not this one); each run's freshly-seeded source is already a guaranteed cache miss on its
+  own, which is the same approach `compile_speed.py` and this README already document for Go.
+- Edit classes run sequentially and **cumulatively** on top of one warm build (E1's reps, then E2's,
+  etc., without resetting the source to pristine between classes). This trades strict per-class
+  isolation for not paying an extra untimed resync rebuild between every class; each class still
+  targets its own distinct function(s) so the classes don't overwrite each other's edits.
+- macOS's `make` (GNU Make 3.81) compares file modification times at whole-second resolution; the tool
+  waits to cross a one-second boundary before writing each edit, or a same-second edit is invisible to
+  `make` and it silently reuses the stale binary (this is exactly the kind of stale-cache bug the
+  checksum verification exists to catch, so it must not be allowed to hide behind measurement noise).
+- Zig identifiers are generated as `fx{i}`, not `f{i}`: at `i` = 16/32/64/128 a plain `f16`/`f32`/...
+  would shadow Zig's built-in float-type primitives, which zig 0.16 rejects as a hard error.
+
+Results land in `results/compile/incremental-<stamp>-<host>.json` (schema 1), next to but distinct
+from `compile_speed.py`'s files.
