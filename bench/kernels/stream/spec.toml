@@ -1,0 +1,21 @@
+name = "stream"
+category = "parallel"
+description = """
+STREAM triad, a memory-bandwidth-bound kernel: on this machine parallel efficiency
+here is capped by memory bandwidth, not by the language, and no ">= 90% parallel
+efficiency" claim in this project may be gated on this kernel's scaling. Arguments:
+N, R, threads. Three arrays of N doubles: b[i] = (i % 7) + 1, c[i] = (i % 5) + 1,
+a[i] = 0, scalar s = 3.0. The index range [0, N) is split into contiguous blocks,
+one per thread: block i (0-indexed) owns indices [i*N/threads, (i+1)*N/threads).
+Threads are spawned once (not per repetition); each thread initialises b, c and a
+for its own block (first-touch - initialisation is part of the timed program) then
+performs R repetitions of a[i] = b[i] + s * c[i] over its own block. After joining,
+a single serial pass sums a[] (all values are small integers, so the result is
+exact in doubles). Print the sum as an integer (no decimal point, no exponent).
+"""
+reference = "c"
+threads = [1, 2, 4, 6, 8]
+
+[sizes]
+check = ["100000", "3"]
+bench = ["20000000", "130"]

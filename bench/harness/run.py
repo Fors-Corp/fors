@@ -166,6 +166,28 @@ def host_info():
     return info
 
 
+# Thermal canary: a fixed slice of compute timed before every kernel. Its time should not move; if it
+# drifts, the machine throttled or something else was running, and the results file says so.
+CANARY = ("reduce", "c", ["200000000", "1"])
+
+
+def build_canary(timeout):
+    """The canary command, or None when its kernel or toolchain is unavailable."""
+    kernel_name, lang_name, argv = CANARY
+    kernel, lang = load_kernels([kernel_name]).get(kernel_name), load_langs([lang_name]).get(lang_name)
+    if not kernel or not lang or toolchain_version(lang) is None:
+        return None
+    out, b = build(kernel, lang, timeout)
+    if not b["ok"]:
+        return None
+    keep = BUILD / "_canary"
+    keep.mkdir(parents=True, exist_ok=True)
+    shutil.copy2(expand([lang["artifact"]], kernel["dir"], out)[0], keep / "main")  # survives the cell's clean build
+    cmd = [str(keep / "main"), *argv]
+    measure(cmd, keep / "run.out", timeout)  # untimed: first exec of a fresh binary pays signature validation
+    return cmd
+
+
 def git_commit():
     """HEAD hash (+ "-dirty" if kernels/langs/harness differ from it): every results file names the exact
     sources it measured, which is what makes the kernel set pre-registered rather than picked after the fact."""
@@ -281,7 +303,8 @@ def cmd_bench(args):
     results = []
     now = datetime.now(timezone.utc)
     doc = {"schema": 1, "timestamp": now.strftime("%Y-%m-%dT%H:%M:%SZ"), "commit": git_commit(), "host": host,
-           "toolchains": versions, "langs": langs, "results": results}
+           "toolchains": versions, "langs": langs, "canary": [], "results": results}
+    canary = build_canary(args.timeout)
     (ROOT / "results").mkdir(exist_ok=True)
     stem = f"{now.strftime('%Y%m%dT%H%M%SZ')}-{platform.node().split('.')[0]}"
     path, n = ROOT / "results" / f"{stem}.json", 1
@@ -294,6 +317,9 @@ def cmd_bench(args):
         if want is None:
             print(f"SKIP  {kernel['name']}: no expected/bench.txt (run `bless`)")
             continue
+        if canary:
+            wall = measure(canary, BUILD / "_canary" / "run.out", args.timeout)["wall_s"]
+            doc["canary"].append({"before": kernel["name"], "wall_s": wall})
         for lang in langs.values():
             if not implemented(kernel, lang) or versions[lang["name"]] is None:
                 continue

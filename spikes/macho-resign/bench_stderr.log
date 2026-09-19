@@ -1,0 +1,14 @@
+
+--- size: 1MB (pad_bytes=1048576) ---
+built /var/folders/5b/2rf_bssd5sb3d09tfy604x9c0000gn/T/macho_resign_bench_wed9ywsf/toy_1MB: 1090248 bytes
+resign 1-page:  median=0.540ms p95=0.998ms
+resign 16-page: median=0.776ms p95=1.381ms
+codesign -f -s -: median=14.960ms p95=16.074ms
+full clang relink: median=62.614ms p95=67.574ms
+
+--- size: 50MB (pad_bytes=52428800) ---
+built /var/folders/5b/2rf_bssd5sb3d09tfy604x9c0000gn/T/macho_resign_bench_wed9ywsf/toy_50MB: 52871880 bytes
+resign 1-page:  median=1.249ms p95=1.933ms
+resign 16-page: median=1.346ms p95=1.930ms
+codesign -f -s -: median=83.456ms p95=185.715ms
+full clang relink: median=90.817ms p95=206.514ms

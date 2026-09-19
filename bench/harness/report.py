@@ -77,6 +77,11 @@ def main():
         worst = noise[-1]
         print(f"\nRun-to-run noise (stdev/mean, cells with >= 3 runs): median {noise[len(noise) // 2][0]:.1%}, "
               f"worst {worst[0]:.1%} ({worst[1]})")
+    canary = [c["wall_s"] for c in doc.get("canary", [])]
+    if canary:
+        drift = max(canary) / min(canary) - 1
+        print(f"\nThermal canary (newest file, {len(canary)} samples): {min(canary):.3f}-{max(canary):.3f} s, "
+              f"drift {drift:.1%}" + ("  **CONTAMINATED RUN (> 5%)**" if drift > 0.05 else ""))
 
     kernels, ratios = {}, {}
     for r in good:
