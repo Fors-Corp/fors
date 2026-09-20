@@ -9,15 +9,17 @@
 //! collide with it and the canonical encoding (§5.4) of a prelude head is
 //! stable across builds without reserving numeric `DefId`s.
 
+use fors_index::Symbol;
 use fors_index::decl::DeclKind;
 use fors_index::ids::DefId;
 use fors_index::interner::Interner;
-use fors_index::Symbol;
 
-use crate::defpath::{DeclKey, NO_DECL_KEY, NO_DEF};
-use crate::sig::{Assoc, Conv, GParam, GParamKind, Member, Param, SigKind, NO_BOUNDS, NO_CONSTRAINTS, NO_SLOT};
-use crate::ty::{PrimKind, TraitRefId, TyId, NO_ARGS, NO_TY, TY_NEVER, TY_UNIT};
 use crate::Fir;
+use crate::defpath::{DeclKey, NO_DECL_KEY, NO_DEF};
+use crate::sig::{
+    Assoc, Conv, GParam, GParamKind, Member, NO_BOUNDS, NO_CONSTRAINTS, NO_SLOT, Param, SigKind,
+};
+use crate::ty::{NO_ARGS, NO_TY, PrimKind, TY_NEVER, TY_UNIT, TraitRefId, TyId};
 
 /// The synthetic module segment every prelude declaration lives in.
 pub const PRELUDE_MODULE: &[u8] = b"#prelude";
@@ -159,13 +161,24 @@ pub mod gty {
 
 /// The std types ch10 R2 puts in the prelude. They are declared in package
 /// `std`; in a build without it they are [`PreludeEntity::Opaque`].
-const OPAQUE: [&[u8]; 8] =
-    [b"Allocator", b"AllocError", b"PageAllocator", b"Buffer", b"Vec", b"Map", b"String", b"Utf8Error"];
+const OPAQUE: [&[u8]; 8] = [
+    b"Allocator",
+    b"AllocError",
+    b"PageAllocator",
+    b"Buffer",
+    b"Vec",
+    b"Map",
+    b"String",
+    b"Utf8Error",
+];
 
 impl PreludeDefs {
     /// What `name` denotes, or `None` when it is not a prelude name.
     pub fn lookup(&self, name: Symbol) -> Option<PreludeEntity> {
-        self.names.binary_search_by_key(&name.0, |&(s, _)| s.0).ok().map(|i| self.names[i].1)
+        self.names
+            .binary_search_by_key(&name.0, |&(s, _)| s.0)
+            .ok()
+            .map(|i| self.names[i].1)
     }
 
     /// Whether `def` is one of the language-known traits, and which.
@@ -190,8 +203,20 @@ impl PreludeDefs {
     }
 }
 
-fn decl(fir: &mut Fir, module: crate::defpath::ModulePathId, kind: DeclKind, name: Symbol, sig: SigKind) -> DefId {
-    let key = fir.keys.intern(DeclKey { parent: NO_DECL_KEY, module, kind, name: Some(name), disamb: 0 });
+fn decl(
+    fir: &mut Fir,
+    module: crate::defpath::ModulePathId,
+    kind: DeclKind,
+    name: Symbol,
+    sig: SigKind,
+) -> DefId {
+    let key = fir.keys.intern(DeclKey {
+        parent: NO_DECL_KEY,
+        module,
+        kind,
+        name: Some(name),
+        disamb: 0,
+    });
     fir.declare(key, sig)
 }
 
@@ -210,7 +235,13 @@ fn method(
     // failed against its own trait. The designated slot is passed in.
     scoped: u8,
 ) -> DefId {
-    let key = fir.keys.intern(DeclKey { parent: owner_key, module, kind: DeclKind::Fn, name: Some(name), disamb: 0 });
+    let key = fir.keys.intern(DeclKey {
+        parent: owner_key,
+        module,
+        kind: DeclKind::Fn,
+        name: Some(name),
+        disamb: 0,
+    });
     let def = fir.declare(key, SigKind::Fn);
     let sig = fir.sigs.fn_sigs.push(
         params,
@@ -251,8 +282,16 @@ pub fn build(fir: &mut Fir, names: &mut Interner) -> PreludeDefs {
     let mut generics = [NO_DEF; 11];
     for (i, (n, arity)) in GENERIC_TYPES.iter().enumerate() {
         let s = names.intern(n);
-        let kind = if *n == b"Option" { DeclKind::Enum } else { DeclKind::Struct };
-        let sig = if *n == b"Option" { SigKind::Enum } else { SigKind::Struct };
+        let kind = if *n == b"Option" {
+            DeclKind::Enum
+        } else {
+            DeclKind::Struct
+        };
+        let sig = if *n == b"Option" {
+            SigKind::Enum
+        } else {
+            SigKind::Struct
+        };
         let def = decl(fir, module, kind, s, sig);
         generics[i] = def;
         table.push((s, PreludeEntity::Generic { def, arity: *arity }));
@@ -270,7 +309,11 @@ pub fn build(fir: &mut Fir, names: &mut Interner) -> PreludeDefs {
                 (b"Own", 1) | (b"Ref", 1) | (b"Arena", 1) => GParamKind::Brand,
                 _ => GParamKind::Type,
             };
-            ps.push(GParam { name: pname, kind, bounds: NO_BOUNDS });
+            ps.push(GParam {
+                name: pname,
+                kind,
+                bounds: NO_BOUNDS,
+            });
         }
         let g = fir.sigs.generics_store.push(&ps, NO_CONSTRAINTS);
         fir.sigs.set_generics(generics[i], g);
@@ -281,7 +324,10 @@ pub fn build(fir: &mut Fir, names: &mut Interner) -> PreludeDefs {
     let some = names.intern(b"some");
     let none = names.intern(b"none");
     let args = fir.tys.intern_args(&[t0]);
-    let vs = fir.sigs.member_store.push(&[Member::tuple_variant(some, args), Member::unit_variant(none)]);
+    let vs = fir.sigs.member_store.push(&[
+        Member::tuple_variant(some, args),
+        Member::unit_variant(none),
+    ]);
     fir.sigs.set_members(option, vs);
 
     // R21/R23/R24: the language-known traits.
@@ -313,14 +359,24 @@ pub fn build(fir: &mut Fir, names: &mut Interner) -> PreludeDefs {
             continue;
         }
         let def = traits[i];
-        let own_args: Vec<TyId> = (0..*arity).map(|o| fir.tys.param(def, (o + 1) as u16)).collect();
+        let own_args: Vec<TyId> = (0..*arity)
+            .map(|o| fir.tys.param(def, (o + 1) as u16))
+            .collect();
         let a = fir.tys.intern_args(&own_args);
         let tr = fir.tys.intern_trait_ref(def, a);
         let self_bounds = fir.sigs.bounds.intern(&[tr]);
-        let mut ps = vec![GParam { name: recv_name, kind: GParamKind::Type, bounds: self_bounds }];
+        let mut ps = vec![GParam {
+            name: recv_name,
+            kind: GParamKind::Type,
+            bounds: self_bounds,
+        }];
         for o in 0..*arity {
             let pname = names.intern(if o == 0 { b"I" } else { b"J" });
-            ps.push(GParam { name: pname, kind: GParamKind::Type, bounds: NO_BOUNDS });
+            ps.push(GParam {
+                name: pname,
+                kind: GParamKind::Type,
+                bounds: NO_BOUNDS,
+            });
         }
         let g = fir.sigs.generics_store.push(&ps, NO_CONSTRAINTS);
         fir.sigs.set_generics(def, g);
@@ -353,8 +409,16 @@ pub fn build(fir: &mut Fir, names: &mut Interner) -> PreludeDefs {
         if let Some(m) = binary {
             let mn = names.intern(m);
             let ps = [
-                Param { name: recv_name, conv: Conv::Let, ty: self_ty },
-                Param { name: rhs_name, conv: Conv::Let, ty: self_ty },
+                Param {
+                    name: recv_name,
+                    conv: Conv::Let,
+                    ty: self_ty,
+                },
+                Param {
+                    name: rhs_name,
+                    conv: Conv::Let,
+                    ty: self_ty,
+                },
             ];
             let d = method(fir, module, def, key, mn, &ps, self_ty, true, NO_SLOT);
             ms.push(Member::item(mn, crate::sig::VIS_PUBLIC, d));
@@ -362,15 +426,27 @@ pub fn build(fir: &mut Fir, names: &mut Interner) -> PreludeDefs {
         match *n {
             b"Neg" => {
                 let mn = names.intern(b"neg");
-                let ps = [Param { name: recv_name, conv: Conv::Let, ty: self_ty }];
+                let ps = [Param {
+                    name: recv_name,
+                    conv: Conv::Let,
+                    ty: self_ty,
+                }];
                 let d = method(fir, module, def, key, mn, &ps, self_ty, true, NO_SLOT);
                 ms.push(Member::item(mn, crate::sig::VIS_PUBLIC, d));
             }
             b"Eq" => {
                 let mn = names.intern(b"eq");
                 let ps = [
-                    Param { name: recv_name, conv: Conv::Let, ty: self_ty },
-                    Param { name: rhs_name, conv: Conv::Let, ty: self_ty },
+                    Param {
+                        name: recv_name,
+                        conv: Conv::Let,
+                        ty: self_ty,
+                    },
+                    Param {
+                        name: rhs_name,
+                        conv: Conv::Let,
+                        ty: self_ty,
+                    },
                 ];
                 let d = method(fir, module, def, key, mn, &ps, bool_ty, true, NO_SLOT);
                 ms.push(Member::item(mn, crate::sig::VIS_PUBLIC, d));
@@ -379,8 +455,16 @@ pub fn build(fir: &mut Fir, names: &mut Interner) -> PreludeDefs {
                 for m in [b"lt".as_slice(), b"le".as_slice()] {
                     let mn = names.intern(m);
                     let ps = [
-                        Param { name: recv_name, conv: Conv::Let, ty: self_ty },
-                        Param { name: rhs_name, conv: Conv::Let, ty: self_ty },
+                        Param {
+                            name: recv_name,
+                            conv: Conv::Let,
+                            ty: self_ty,
+                        },
+                        Param {
+                            name: rhs_name,
+                            conv: Conv::Let,
+                            ty: self_ty,
+                        },
                     ];
                     let d = method(fir, module, def, key, mn, &ps, bool_ty, true, NO_SLOT);
                     ms.push(Member::item(mn, crate::sig::VIS_PUBLIC, d));
@@ -390,19 +474,31 @@ pub fn build(fir: &mut Fir, names: &mut Interner) -> PreludeDefs {
                 // `type Item: Droppable; fn next(inout self) -> Option[Self.Item];`
                 let dr = fir.tys.intern_trait_ref(traits[tr::DROPPABLE], NO_ARGS);
                 let bounds = fir.sigs.bounds.intern(&[dr]);
-                let a = fir.sigs.assocs.push(&[Assoc { name: item_name, bounds, rhs: NO_TY }]);
+                let a = fir.sigs.assocs.push(&[Assoc {
+                    name: item_name,
+                    bounds,
+                    rhs: NO_TY,
+                }]);
                 fir.sigs.set_assoc(def, a);
                 let own = fir.tys.intern_trait_ref(def, NO_ARGS);
                 let pk = fir.tys.intern_proj_key(own, item_name);
                 let item = fir.tys.proj(self_ty, pk);
                 let opt = fir.tys.nominal_of(option, &[item]);
                 let mn = names.intern(b"next");
-                let ps = [Param { name: recv_name, conv: Conv::Inout, ty: self_ty }];
+                let ps = [Param {
+                    name: recv_name,
+                    conv: Conv::Inout,
+                    ty: self_ty,
+                }];
                 let d = method(fir, module, def, key, mn, &ps, opt, true, NO_SLOT);
                 ms.push(Member::item(mn, crate::sig::VIS_PUBLIC, d));
             }
             b"Index" => {
-                let a = fir.sigs.assocs.push(&[Assoc { name: output_name, bounds: NO_BOUNDS, rhs: NO_TY }]);
+                let a = fir.sigs.assocs.push(&[Assoc {
+                    name: output_name,
+                    bounds: NO_BOUNDS,
+                    rhs: NO_TY,
+                }]);
                 fir.sigs.set_assoc(def, a);
                 let i_ty = fir.tys.param(def, 1);
                 let iargs = fir.tys.intern_args(&[i_ty]);
@@ -411,8 +507,16 @@ pub fn build(fir: &mut Fir, names: &mut Interner) -> PreludeDefs {
                 let out = fir.tys.proj(self_ty, pk);
                 let mn = names.intern(b"at");
                 let ps = [
-                    Param { name: recv_name, conv: Conv::Let, ty: self_ty },
-                    Param { name: i_name, conv: Conv::Let, ty: i_ty },
+                    Param {
+                        name: recv_name,
+                        conv: Conv::Let,
+                        ty: self_ty,
+                    },
+                    Param {
+                        name: i_name,
+                        conv: Conv::Let,
+                        ty: i_ty,
+                    },
                 ];
                 let d = method(fir, module, def, key, mn, &ps, out, true, 0);
                 ms.push(Member::item(mn, crate::sig::VIS_PUBLIC, d));
@@ -427,8 +531,16 @@ pub fn build(fir: &mut Fir, names: &mut Interner) -> PreludeDefs {
                 let out = fir.tys.proj(self_ty, pk);
                 let mn = names.intern(b"at_mut");
                 let ps = [
-                    Param { name: recv_name, conv: Conv::Inout, ty: self_ty },
-                    Param { name: i_name, conv: Conv::Let, ty: i_ty },
+                    Param {
+                        name: recv_name,
+                        conv: Conv::Inout,
+                        ty: self_ty,
+                    },
+                    Param {
+                        name: i_name,
+                        conv: Conv::Let,
+                        ty: i_ty,
+                    },
                 ];
                 let d = method(fir, module, def, key, mn, &ps, out, true, 0);
                 ms.push(Member::item(mn, crate::sig::VIS_PUBLIC, d));
@@ -442,7 +554,11 @@ pub fn build(fir: &mut Fir, names: &mut Interner) -> PreludeDefs {
             b"ErrorFrom" => {
                 let e_ty = fir.tys.param(def, 1);
                 let mn = names.intern(b"from");
-                let ps = [Param { name: e_name, conv: Conv::Let, ty: e_ty }];
+                let ps = [Param {
+                    name: e_name,
+                    conv: Conv::Let,
+                    ty: e_ty,
+                }];
                 let d = method(fir, module, def, key, mn, &ps, self_ty, false, NO_SLOT);
                 ms.push(Member::item(mn, crate::sig::VIS_PUBLIC, d));
             }
@@ -467,61 +583,16 @@ pub fn build(fir: &mut Fir, names: &mut Interner) -> PreludeDefs {
 
     table.sort_by_key(|&(s, _)| s.0);
     table.dedup_by_key(|&mut (s, _)| s.0);
-    PreludeDefs { module, names: table, prims, generics, traits, option, item_name, output_name, self_name }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn every_prelude_name_resolves_to_one_row() {
-        let mut names = Interner::new();
-        let mut fir = Fir::new();
-        let p = build(&mut fir, &mut names);
-        for (n, _) in PRIMS {
-            let s = names.intern(n);
-            assert!(matches!(p.lookup(s), Some(PreludeEntity::Ty(_))), "{}", String::from_utf8_lossy(n));
-        }
-        for (n, arity) in GENERIC_TYPES {
-            let s = names.intern(n);
-            match p.lookup(s) {
-                Some(PreludeEntity::Generic { def, arity: a }) => {
-                    assert_eq!(a, arity);
-                    assert_eq!(fir.sigs.generics_store.count(fir.sigs.generics(def)), arity as usize);
-                }
-                other => panic!("{}: {other:?}", String::from_utf8_lossy(n)),
-            }
-        }
-        for (n, arity) in TRAITS {
-            if n == b"Sized2Reserved" {
-                continue;
-            }
-            let s = names.intern(n);
-            match p.lookup(s) {
-                // A trait's own list is `[Self, P1..]`, so the count is arity + 1.
-                Some(PreludeEntity::Trait { def, arity: a }) => {
-                    assert_eq!(a, arity);
-                    assert_eq!(fir.sigs.generics_store.count(fir.sigs.generics(def)), arity as usize + 1);
-                }
-                other => panic!("{}: {other:?}", String::from_utf8_lossy(n)),
-            }
-        }
-    }
-
-    #[test]
-    fn iterator_declares_item_bounded_by_droppable() {
-        let mut names = Interner::new();
-        let mut fir = Fir::new();
-        let p = build(&mut fir, &mut names);
-        let it = p.traits[tr::ITERATOR];
-        let a = fir.sigs.assoc(it);
-        assert_eq!(fir.sigs.assocs.count(a), 1);
-        let row = fir.sigs.assocs.get(a, 0);
-        assert_eq!(row.name, p.item_name);
-        let bounds = fir.sigs.bounds.get(row.bounds);
-        assert_eq!(bounds.len(), 1);
-        assert_eq!(fir.tys.trait_ref(bounds[0]).0, p.traits[tr::DROPPABLE]);
+    PreludeDefs {
+        module,
+        names: table,
+        prims,
+        generics,
+        traits,
+        option,
+        item_name,
+        output_name,
+        self_name,
     }
 }
 
@@ -548,38 +619,49 @@ pub fn push_builtin_impls(fir: &mut Fir, p: &PreludeDefs, index: &mut crate::imp
         PrimKind::U64,
         PrimKind::Usize,
     ];
-    let signed = [PrimKind::I8, PrimKind::I16, PrimKind::I32, PrimKind::I64, PrimKind::Isize];
+    let signed = [
+        PrimKind::I8,
+        PrimKind::I16,
+        PrimKind::I32,
+        PrimKind::I64,
+        PrimKind::Isize,
+    ];
     let floats = [PrimKind::F32, PrimKind::F64];
     let arith = [tr::ADD, tr::SUB, tr::MUL, tr::DIV, tr::REM];
     let bitwise = [tr::BITAND, tr::BITOR, tr::BITXOR, tr::SHL, tr::SHR];
     let mut order = 0u32;
-    let mut add = |fir: &mut Fir, index: &mut crate::impls::ImplIndex, self_ty: TyId, which: usize| {
-        let key = fir.keys.intern(DeclKey {
-            parent: NO_DECL_KEY,
-            module: p.module,
-            kind: DeclKind::Impl,
-            name: None,
-            disamb: order,
-        });
-        let def = fir.declare(key, SigKind::Impl);
-        fir.sigs.set_self_ty(def, self_ty);
-        let tref = fir.tys.intern_trait_ref(p.traits[which], NO_ARGS);
-        fir.sigs.set_trait_ref(def, tref);
-        let head = fir.tys.head_key(self_ty);
-        index.push(crate::impls::ImplRow {
-            def,
-            trait_def: p.traits[which],
-            inherent: false,
-            trait_args: NO_ARGS,
-            self_ty,
-            head,
-            order,
-        });
-        order += 1;
-    };
+    let mut add =
+        |fir: &mut Fir, index: &mut crate::impls::ImplIndex, self_ty: TyId, which: usize| {
+            let key = fir.keys.intern(DeclKey {
+                parent: NO_DECL_KEY,
+                module: p.module,
+                kind: DeclKind::Impl,
+                name: None,
+                disamb: order,
+            });
+            let def = fir.declare(key, SigKind::Impl);
+            fir.sigs.set_self_ty(def, self_ty);
+            let tref = fir.tys.intern_trait_ref(p.traits[which], NO_ARGS);
+            fir.sigs.set_trait_ref(def, tref);
+            let head = fir.tys.head_key(self_ty);
+            index.push(crate::impls::ImplRow {
+                def,
+                trait_def: p.traits[which],
+                inherent: false,
+                trait_args: NO_ARGS,
+                self_ty,
+                head,
+                order,
+            });
+            order += 1;
+        };
     for k in ints {
         let t = fir.tys.prim(k);
-        for w in arith.iter().chain(bitwise.iter()).chain([tr::EQ, tr::ORD, tr::COPYABLE].iter()) {
+        for w in arith
+            .iter()
+            .chain(bitwise.iter())
+            .chain([tr::EQ, tr::ORD, tr::COPYABLE].iter())
+        {
             add(fir, index, t, *w);
         }
     }
@@ -589,7 +671,10 @@ pub fn push_builtin_impls(fir: &mut Fir, p: &PreludeDefs, index: &mut crate::imp
     }
     for k in floats {
         let t = fir.tys.prim(k);
-        for w in arith.iter().chain([tr::NEG, tr::EQ, tr::ORD, tr::COPYABLE].iter()) {
+        for w in arith
+            .iter()
+            .chain([tr::NEG, tr::EQ, tr::ORD, tr::COPYABLE].iter())
+        {
             add(fir, index, t, *w);
         }
     }
@@ -603,4 +688,69 @@ pub fn push_builtin_impls(fir: &mut Fir, p: &PreludeDefs, index: &mut crate::imp
     }
     add(fir, index, TY_UNIT, tr::COPYABLE);
     add(fir, index, TY_NEVER, tr::COPYABLE);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn every_prelude_name_resolves_to_one_row() {
+        let mut names = Interner::new();
+        let mut fir = Fir::new();
+        let p = build(&mut fir, &mut names);
+        for (n, _) in PRIMS {
+            let s = names.intern(n);
+            assert!(
+                matches!(p.lookup(s), Some(PreludeEntity::Ty(_))),
+                "{}",
+                String::from_utf8_lossy(n)
+            );
+        }
+        for (n, arity) in GENERIC_TYPES {
+            let s = names.intern(n);
+            match p.lookup(s) {
+                Some(PreludeEntity::Generic { def, arity: a }) => {
+                    assert_eq!(a, arity);
+                    assert_eq!(
+                        fir.sigs.generics_store.count(fir.sigs.generics(def)),
+                        arity as usize
+                    );
+                }
+                other => panic!("{}: {other:?}", String::from_utf8_lossy(n)),
+            }
+        }
+        for (n, arity) in TRAITS {
+            if n == b"Sized2Reserved" {
+                continue;
+            }
+            let s = names.intern(n);
+            match p.lookup(s) {
+                // A trait's own list is `[Self, P1..]`, so the count is arity + 1.
+                Some(PreludeEntity::Trait { def, arity: a }) => {
+                    assert_eq!(a, arity);
+                    assert_eq!(
+                        fir.sigs.generics_store.count(fir.sigs.generics(def)),
+                        arity as usize + 1
+                    );
+                }
+                other => panic!("{}: {other:?}", String::from_utf8_lossy(n)),
+            }
+        }
+    }
+
+    #[test]
+    fn iterator_declares_item_bounded_by_droppable() {
+        let mut names = Interner::new();
+        let mut fir = Fir::new();
+        let p = build(&mut fir, &mut names);
+        let it = p.traits[tr::ITERATOR];
+        let a = fir.sigs.assoc(it);
+        assert_eq!(fir.sigs.assocs.count(a), 1);
+        let row = fir.sigs.assocs.get(a, 0);
+        assert_eq!(row.name, p.item_name);
+        let bounds = fir.sigs.bounds.get(row.bounds);
+        assert_eq!(bounds.len(), 1);
+        assert_eq!(fir.tys.trait_ref(bounds[0]).0, p.traits[tr::DROPPABLE]);
+    }
 }

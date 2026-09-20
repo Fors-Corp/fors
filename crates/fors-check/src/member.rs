@@ -5,12 +5,12 @@
 //! Method lookup (R43/R44's two tiers) is I4's; a method call here is
 //! silent and absorbing, never a guess.
 
-use fors_fir::subst::{subst_norm, Binding};
-use fors_fir::ty::{ArgsId, FnTyId, PrimKind, TyId, TyTag, NO_ARGS, NO_TY, TY_ERROR};
 use fors_fir::sig::{MemberKind, SigKind, VIS_PRIVATE};
+use fors_fir::subst::{Binding, subst_norm};
+use fors_fir::ty::{ArgsId, FnTyId, NO_ARGS, NO_TY, PrimKind, TY_ERROR, TyId, TyTag};
+use fors_index::Symbol;
 use fors_index::diag::Code;
 use fors_index::ids::DefId;
-use fors_index::Symbol;
 use fors_lex::TokenKind;
 use fors_resolve::target::{Entity, ResolvedTarget};
 use fors_syntax::NodeKind;
@@ -48,7 +48,9 @@ impl Wf<'_> {
             return ty;
         }
         for k in consumed..upto {
-            let Some(name) = self.segment_name(cx, node, k) else { return TY_ERROR };
+            let Some(name) = self.segment_name(cx, node, k) else {
+                return TY_ERROR;
+            };
             ty = self.member_of(cx, node, ty, name);
             if ty == TY_ERROR {
                 return TY_ERROR;
@@ -60,14 +62,21 @@ impl Wf<'_> {
 
     fn read_event(&mut self, cx: &mut BodyCx, node: usize, ty: TyId) {
         if let Some(p) = self.place_of(cx, node) {
-            let k = if self.copyable(ty) { crate::tape::UseKind::Copy } else { crate::tape::UseKind::Read };
-            cx.tape.push(node as u32, p, k, crate::tape::Cause::Explicit(node as u32));
+            let k = if self.copyable(ty) {
+                crate::tape::UseKind::Copy
+            } else {
+                crate::tape::UseKind::Read
+            };
+            cx.tape
+                .push(node as u32, p, k, crate::tape::Cause::Explicit(node as u32));
         }
     }
 
     /// What the resolved prefix of a path denotes.
     pub fn path_head(&mut self, cx: &mut BodyCx, node: usize) -> PathHead {
-        let Some(target) = cx.f.uses.target_of(node as u32) else { return PathHead::Silent };
+        let Some(target) = cx.f.uses.target_of(node as u32) else {
+            return PathHead::Silent;
+        };
         match target {
             ResolvedTarget::Local { node: intro } => match cx.local(intro) {
                 Some((t, _)) => PathHead::Value(t),
@@ -158,9 +167,13 @@ impl Wf<'_> {
     /// production builds (`consume a.b;`, `f(&x.y)`) and the one a postfix
     /// `.` after a non-path operand builds (`f().x`).
     pub fn field_expr(&mut self, cx: &mut BodyCx, node: usize) -> TyId {
-        let Some(operand) = cx.f.tree.children(node).next() else { return TY_ERROR };
+        let Some(operand) = cx.f.tree.children(node).next() else {
+            return TY_ERROR;
+        };
         let recv = self.synth(cx, operand);
-        let Some(name) = self.field_name(cx, node) else { return TY_ERROR };
+        let Some(name) = self.field_name(cx, node) else {
+            return TY_ERROR;
+        };
         self.member_of(cx, node, recv, name)
     }
 
@@ -180,7 +193,9 @@ impl Wf<'_> {
                 // `len` on `Array`/`Slice`/`vector` is built in (R42).
                 if let Some(g) = self.prelude.generic_index(def) {
                     use fors_fir::prelude::gty;
-                    if self.names.resolve(name) == b"len" && matches!(g, gty::ARRAY | gty::SLICE | gty::VECTOR) {
+                    if self.names.resolve(name) == b"len"
+                        && matches!(g, gty::ARRAY | gty::SLICE | gty::VECTOR)
+                    {
                         return self.fir.tys.prim(PrimKind::Usize);
                     }
                     // Another prelude head's members are std's: silent.
@@ -192,7 +207,13 @@ impl Wf<'_> {
                     // is a qualified form (R45), which is I4's.
                     if self.fir.sigs.kind(def) == SigKind::Enum {
                         let n = self.show(recv);
-                        self.bemit(cx, node, 42, 42, format!("`{n}` is an enum and has no fields"));
+                        self.bemit(
+                            cx,
+                            node,
+                            42,
+                            42,
+                            format!("`{n}` is an enum and has no fields"),
+                        );
                     }
                     return TY_ERROR;
                 }
@@ -205,12 +226,24 @@ impl Wf<'_> {
                     if m.vis == VIS_PRIVATE && !self.same_module(def, cx.owner) {
                         let f = String::from_utf8_lossy(self.names.resolve(name)).into_owned();
                         let h = self.head_name(def);
-                        self.bemit_code(cx, node, Code::N(11), 49, format!("the field `{f}` of `{h}` is not `pub`"));
+                        self.bemit_code(
+                            cx,
+                            node,
+                            Code::N(11),
+                            49,
+                            format!("the field `{f}` of `{h}` is not `pub`"),
+                        );
                         return TY_ERROR;
                     }
                     let ty = self.substituted(def, ArgsId(self.fir.tys.b(bare)), m.ty);
-                    let carried = fors_fir::ty::Quals(quals.0 & (fors_fir::ty::Q_IMM | fors_fir::ty::Q_SECRET));
-                    return if carried.is_none() { ty } else { self.fir.tys.qualified(ty, carried) };
+                    let carried = fors_fir::ty::Quals(
+                        quals.0 & (fors_fir::ty::Q_IMM | fors_fir::ty::Q_SECRET),
+                    );
+                    return if carried.is_none() {
+                        ty
+                    } else {
+                        self.fir.tys.qualified(ty, carried)
+                    };
                 }
                 // Not a field. R42 is explicit that naming a method
                 // without calling it is rejected too ("there are no method
@@ -222,11 +255,23 @@ impl Wf<'_> {
             }
             TyTag::Param | TyTag::Proj => {
                 let n = self.show(recv);
-                self.bemit(cx, node, 42, 42, format!("`{n}` is rigid and has no fields"));
+                self.bemit(
+                    cx,
+                    node,
+                    42,
+                    42,
+                    format!("`{n}` is rigid and has no fields"),
+                );
                 TY_ERROR
             }
             TyTag::Tuple => {
-                self.bemit(cx, node, 42, 42, "a tuple has no field names; bind or pattern-match its components".to_string());
+                self.bemit(
+                    cx,
+                    node,
+                    42,
+                    42,
+                    "a tuple has no field names; bind or pattern-match its components".to_string(),
+                );
                 TY_ERROR
             }
             // MARC: verification of I3 (2026-09-20): R42's "a primitive has
@@ -234,7 +279,13 @@ impl Wf<'_> {
             TyTag::Prim | TyTag::Fn | TyTag::Dyn => {
                 let n = self.show(recv);
                 let f = String::from_utf8_lossy(self.names.resolve(name)).into_owned();
-                self.bemit(cx, node, 42, 42, format!("`{n}` has no fields (`{f}`); a method is called, not read"));
+                self.bemit(
+                    cx,
+                    node,
+                    42,
+                    42,
+                    format!("`{n}` has no fields (`{f}`); a method is called, not read"),
+                );
                 TY_ERROR
             }
             _ => TY_ERROR,
@@ -272,10 +323,13 @@ impl Wf<'_> {
     /// the last sibling), so the name is the last identifier AFTER it.
     pub fn field_name(&mut self, cx: &BodyCx, node: usize) -> Option<Symbol> {
         let (_, end) = cx.f.tree.token_range(node);
-        let after = cx.f.tree.children(node).next().map_or(0, |c| cx.f.tree.token_range(c).1);
+        let after =
+            cx.f.tree
+                .children(node)
+                .next()
+                .map_or(0, |c| cx.f.tree.token_range(c).1);
         let i = (after as usize..(end as usize).min(cx.f.tokens.kinds.len()))
-            .filter(|&i| cx.f.tokens.kinds[i] == TokenKind::Ident)
-            .next_back()?;
+            .rfind(|&i| cx.f.tokens.kinds[i] == TokenKind::Ident)?;
         Some(self.names.intern(cx.f.tokens.text(i, cx.f.source)))
     }
 
@@ -284,7 +338,9 @@ impl Wf<'_> {
     /// The reading never depends on the arguments.
     pub fn bracket(&mut self, cx: &mut BodyCx, node: usize) -> TyId {
         let kids = cx.kids(node);
-        let Some(&operand) = kids.first() else { return TY_ERROR };
+        let Some(&operand) = kids.first() else {
+            return TY_ERROR;
+        };
         if self.is_instantiation(cx, operand) {
             // Explicit generic arguments are R38(a)'s, which is I5's.
             return TY_ERROR;
@@ -359,7 +415,13 @@ impl Wf<'_> {
             // impls may be `std`'s and absent; a rigid subject is I4's.
             if rows.is_empty() && self.no_index_anywhere(s) {
                 let n = self.show(s);
-                self.bemit(cx, _node, 29, 29, format!("`{n}` does not implement `Index`, which `[ ]` needs"));
+                self.bemit(
+                    cx,
+                    _node,
+                    29,
+                    29,
+                    format!("`{n}` does not implement `Index`, which `[ ]` needs"),
+                );
             }
             return TY_ERROR;
         }
@@ -371,18 +433,20 @@ impl Wf<'_> {
             }
             return TY_ERROR;
         }
-        let want = self.fir.tys.args(r.trait_args).first().copied().unwrap_or(TY_ERROR);
+        let want = self
+            .fir
+            .tys
+            .args(r.trait_args)
+            .first()
+            .copied()
+            .unwrap_or(TY_ERROR);
         if let Some(i) = index {
             cx.site(NodeKind::Bracket, Slot::IndexOperand);
             self.check(cx, i, want);
         }
         let out = self.fir.sigs.assoc(r.def);
         let rhs = self.fir.sigs.assocs.rhs_of(out, self.prelude.output_name);
-        if rhs == NO_TY {
-            TY_ERROR
-        } else {
-            rhs
-        }
+        if rhs == NO_TY { TY_ERROR } else { rhs }
     }
 
     /// Whether `s` is a type no `Index` impl outside this build could name.
@@ -410,13 +474,23 @@ impl Wf<'_> {
                     def != fors_fir::NO_DEF
                         && matches!(
                             self.fir.sigs.kind(def),
-                            SigKind::Fn | SigKind::ExternFn | SigKind::Struct | SigKind::Enum | SigKind::Trait
+                            SigKind::Fn
+                                | SigKind::ExternFn
+                                | SigKind::Struct
+                                | SigKind::Enum
+                                | SigKind::Trait
                         )
-                        && self.fir.sigs.generics_store.count(self.fir.sigs.generics(def)) > 0
+                        && self
+                            .fir
+                            .sigs
+                            .generics_store
+                            .count(self.fir.sigs.generics(def))
+                            > 0
                 }
-                Some(ResolvedTarget::Entity(Entity::PreludeType(s))) => {
-                    !matches!(self.prelude.lookup(s), Some(fors_fir::prelude::PreludeEntity::Ty(_)))
-                }
+                Some(ResolvedTarget::Entity(Entity::PreludeType(s))) => !matches!(
+                    self.prelude.lookup(s),
+                    Some(fors_fir::prelude::PreludeEntity::Ty(_))
+                ),
                 _ => false,
             },
             // `x.m[i32]()`: a method instantiation (R45), I4's.
@@ -431,7 +505,6 @@ impl Wf<'_> {
         (self.fir.tys.tag(bare) == TyTag::Fn).then(|| FnTyId(self.fir.tys.a(bare)))
     }
 }
-
 
 /// What a path's resolved prefix denotes (design §7.7's first column).
 pub enum PathHead {

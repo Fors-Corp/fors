@@ -241,9 +241,18 @@ impl GenericsStore {
     /// (`F: fn(sink I.Item) -> U`), so the row is pushed with the parameters'
     /// names and trait bounds first and those two columns are filled a moment
     /// later, once the list itself can be read.
-    pub fn set_param(&mut self, id: GenericsId, ordinal: usize, kind: GParamKind, bounds: TraitRefListId) {
+    pub fn set_param(
+        &mut self,
+        id: GenericsId,
+        ordinal: usize,
+        kind: GParamKind,
+        bounds: TraitRefListId,
+    ) {
         let base = self.start[id.index()] as usize;
-        assert!(ordinal < self.len[id.index()] as usize, "generic parameter out of range");
+        assert!(
+            ordinal < self.len[id.index()] as usize,
+            "generic parameter out of range"
+        );
         self.gp_kind[base + ordinal] = kind;
         self.gp_bounds[base + ordinal] = bounds;
     }

@@ -36,10 +36,13 @@ pub mod ty;
 
 pub use cons::ConsTable;
 pub use constval::ConstValue;
-pub use defpath::{DeclKey, DeclKeyId, DeclKeyTable, DefKeys, HeadKey, ModulePathId, ModulePathTable, NO_DECL_KEY, NO_DEF, ROOT_PATH};
+pub use defpath::{
+    DeclKey, DeclKeyId, DeclKeyTable, DefKeys, HeadKey, ModulePathId, ModulePathTable, NO_DECL_KEY,
+    NO_DEF, ROOT_PATH,
+};
 pub use encode::{
-    decl_fingerprint, decode_sig, encode_sig, encode_sig_into, sig_hash, sig_hash_with, DecodeError, EncodeScratch,
-    FingerprintPolicy, FINGERPRINT_POLICY,
+    DecodeError, EncodeScratch, FINGERPRINT_POLICY, FingerprintPolicy, decl_fingerprint,
+    decode_sig, encode_sig, encode_sig_into, sig_hash, sig_hash_with,
 };
 pub use sig::{
     Assoc, AssocListId, AssocStore, ConstraintListId, ConstraintStore, Conv, FnSigId, FnSigStore,

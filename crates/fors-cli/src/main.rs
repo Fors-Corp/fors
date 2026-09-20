@@ -220,7 +220,11 @@ fn run_check(args: &[String]) -> ExitCode {
     // are a property of a check, not a separate operation, and the gate
     // wants them for the same run whose diagnostics it is reading.
     let count = args.iter().any(|a| a == "--count");
-    let args: Vec<String> = args.iter().filter(|a| a.as_str() != "--count").cloned().collect();
+    let args: Vec<String> = args
+        .iter()
+        .filter(|a| a.as_str() != "--count")
+        .cloned()
+        .collect();
     if args.is_empty() {
         eprintln!("fors check: no input paths");
         return ExitCode::from(2);
@@ -256,8 +260,11 @@ fn run_check(args: &[String]) -> ExitCode {
         // matters only for `std` itself: inside package `std` the module paths
         // carry no `std` segment, so nothing else could tell that an `impl` of
         // a prelude type is at home (ch08 Rule 21, ch10 Rule 1).
-        let package = std::path::Path::new(path).file_name().map(|n| n.as_encoded_bytes().to_vec());
-        let output = fors_resolve::resolve_in_package(&mut interner, &inputs, root, package.as_deref());
+        let package = std::path::Path::new(path)
+            .file_name()
+            .map(|n| n.as_encoded_bytes().to_vec());
+        let output =
+            fors_resolve::resolve_in_package(&mut interner, &inputs, root, package.as_deref());
         // Design §4.4/§13: `fors check` runs the checker after resolution
         // and merges its diagnostics into the same sorted line list. As of
         // I2 that is signature lowering and whole-head well-formedness
@@ -296,10 +303,17 @@ fn run_check(args: &[String]) -> ExitCode {
             }
         }
         for d in &checked.diagnostics {
-            let Some(f) = files.get(d.file.index()) else { continue };
+            let Some(f) = files.get(d.file.index()) else {
+                continue;
+            };
             any = true;
             let (l, c) = line_col(&f.source, d.start);
-            lines.push((f.display.clone(), d.start, d.start, format!("{l}:{c}: error[{}]: {}", d.code.as_string(), d.message)));
+            lines.push((
+                f.display.clone(),
+                d.start,
+                d.start,
+                format!("{l}:{c}: error[{}]: {}", d.code.as_string(), d.message),
+            ));
         }
         let c = checked.counters;
         totals.nodes_visited += c.nodes_visited;

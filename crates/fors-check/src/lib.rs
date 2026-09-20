@@ -92,7 +92,11 @@ pub struct Counters {
 /// Type-checks a whole resolved build (design §7.1's phases 1-5; phases 6-7
 /// are I3 onward's). `inputs` is the same slice handed to
 /// [`fors_resolve::resolve`], in the same order.
-pub fn check_build(inputs: &[FileInput], resolved: &ResolveOutput, interner: &mut fors_index::Interner) -> CheckOutput {
+pub fn check_build(
+    inputs: &[FileInput],
+    resolved: &ResolveOutput,
+    interner: &mut fors_index::Interner,
+) -> CheckOutput {
     // `FORS_PHASES=1` prints the elapsed time at each phase boundary of §7.1.
     // Read once per process, not once per phase: `check_build` runs 900 times
     // in the conformance harness.
@@ -119,8 +123,12 @@ pub fn check_build(inputs: &[FileInput], resolved: &ResolveOutput, interner: &mu
     let modules: Vec<defs::FileModule> = (0..inputs.len())
         .map(|i| {
             let id = file_to_module[i];
-            let segs: Vec<fors_index::Symbol> =
-                resolved.modules.name.get(id.index()).cloned().unwrap_or_else(|| inputs[i].name.clone());
+            let segs: Vec<fors_index::Symbol> = resolved
+                .modules
+                .name
+                .get(id.index())
+                .cloned()
+                .unwrap_or_else(|| inputs[i].name.clone());
             let path = fir.keys.paths.intern(&segs);
             defs::FileModule { id, path }
         })
@@ -196,7 +204,11 @@ pub fn check_build(inputs: &[FileInput], resolved: &ResolveOutput, interner: &mu
             bodies_checked: w.bodies_checked,
             bodies_skipped: w.bodies_skipped,
         };
-        (c, std::mem::take(&mut w.check_sites), std::mem::take(&mut w.deps))
+        (
+            c,
+            std::mem::take(&mut w.check_sites),
+            std::mem::take(&mut w.deps),
+        )
     };
     phase!("bodies");
 
@@ -208,7 +220,10 @@ pub fn check_build(inputs: &[FileInput], resolved: &ResolveOutput, interner: &mu
         defs: Some(def_table),
         types_interned,
         decls_lowered,
-        counters: Counters { types_interned: types_interned as u64, ..counters },
+        counters: Counters {
+            types_interned: types_interned as u64,
+            ..counters
+        },
         check_sites,
         deps,
     }
@@ -242,11 +257,19 @@ mod tests {
 
     #[test]
     fn a_plain_struct_and_fn_lower_clean() {
-        assert!(check(b"module m;\nstruct P { x: i32, y: i32 }\nfn f(let p: P) -> i32 { return p.x; }\n").is_empty());
+        assert!(
+            check(
+                b"module m;\nstruct P { x: i32, y: i32 }\nfn f(let p: P) -> i32 { return p.x; }\n"
+            )
+            .is_empty()
+        );
     }
 
     #[test]
     fn arity_mismatch_is_t0011() {
-        assert_eq!(check(b"module m;\nfn f(let x: Option[i32, i32]) { }\n"), ["T0011"]);
+        assert_eq!(
+            check(b"module m;\nfn f(let x: Option[i32, i32]) { }\n"),
+            ["T0011"]
+        );
     }
 }

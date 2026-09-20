@@ -6,7 +6,9 @@
 //! Nothing here decides anything: the text is for the reader.
 
 use fors_fir::prelude::{GENERIC_TYPES, PRIMS, TRAITS};
-use fors_fir::ty::{ArgsId, BrandKind, PrimKind, ProjKeyId, Quals, TyId, TyTag, TY_ERROR, TY_NEVER, TY_UNIT};
+use fors_fir::ty::{
+    ArgsId, BrandKind, PrimKind, ProjKeyId, Quals, TY_ERROR, TY_NEVER, TY_UNIT, TyId, TyTag,
+};
 use fors_index::ids::DefId;
 
 use crate::wf::Wf;
@@ -94,7 +96,11 @@ impl Wf<'_> {
                 let id = fors_fir::ty::FnTyId(self.fir.tys.a(t));
                 let (convs, ps) = self.fir.tys.fn_tys().params(id);
                 let (convs, ps) = (convs.to_vec(), ps.to_vec());
-                out.push_str(if self.fir.tys.fn_tys().is_closure(id) { "closure(" } else { "fn(" });
+                out.push_str(if self.fir.tys.fn_tys().is_closure(id) {
+                    "closure("
+                } else {
+                    "fn("
+                });
                 for (i, p) in ps.iter().enumerate() {
                     if i > 0 {
                         out.push_str(", ");
@@ -120,7 +126,10 @@ impl Wf<'_> {
                 }
             }
             TyTag::Dyn => {
-                let (def, args) = self.fir.tys.trait_ref(fors_fir::ty::TraitRefId(self.fir.tys.a(t)));
+                let (def, args) = self
+                    .fir
+                    .tys
+                    .trait_ref(fors_fir::ty::TraitRefId(self.fir.tys.a(t)));
                 out.push_str("dyn ");
                 out.push_str(&self.head_name(def));
                 self.show_args(args, depth, out);
@@ -151,7 +160,10 @@ impl Wf<'_> {
                 });
             }
             TyTag::ConstVal => {
-                let v = self.fir.tys.const_value(fors_fir::ty::ConstId(self.fir.tys.a(t)));
+                let v = self
+                    .fir
+                    .tys
+                    .const_value(fors_fir::ty::ConstId(self.fir.tys.a(t)));
                 match v {
                     fors_fir::ConstValue::I(i) => out.push_str(&i.to_string()),
                     fors_fir::ConstValue::B(b) => out.push_str(if b { "true" } else { "false" }),
@@ -183,10 +195,10 @@ impl Wf<'_> {
     /// The written name of a nominal or trait head: the declaration's own
     /// name, or the prelude's spelling for a prelude row.
     pub fn head_name(&self, def: DefId) -> String {
-        if let Some(r) = self.defs.get(def) {
-            if let Some(n) = r.name {
-                return String::from_utf8_lossy(self.names.resolve(n)).into_owned();
-            }
+        if let Some(r) = self.defs.get(def)
+            && let Some(n) = r.name
+        {
+            return String::from_utf8_lossy(self.names.resolve(n)).into_owned();
         }
         if let Some(i) = self.prelude.generic_index(def) {
             return String::from_utf8_lossy(GENERIC_TYPES[i].0).into_owned();
@@ -197,10 +209,10 @@ impl Wf<'_> {
         // A prelude row that is neither (a built-in impl, a prelude method):
         // the key still holds its name.
         let key = self.fir.defs.key_of(def);
-        if key != fors_fir::NO_DECL_KEY {
-            if let Some(n) = self.fir.keys.row(key).name {
-                return String::from_utf8_lossy(self.names.resolve(n)).into_owned();
-            }
+        if key != fors_fir::NO_DECL_KEY
+            && let Some(n) = self.fir.keys.row(key).name
+        {
+            return String::from_utf8_lossy(self.names.resolve(n)).into_owned();
         }
         "<item>".to_string()
     }

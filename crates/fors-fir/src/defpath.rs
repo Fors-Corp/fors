@@ -154,7 +154,9 @@ impl DeclKeyTable {
             ((key.kind as u64) << 32) | key.name.map_or(u32::MAX, |s| s.0) as u64,
             key.disamb as u64,
         );
-        self.cons.lookup(h, |v| self.row(DeclKeyId(v)) == key).map(DeclKeyId)
+        self.cons
+            .lookup(h, |v| self.row(DeclKeyId(v)) == key)
+            .map(DeclKeyId)
     }
 
     pub fn row(&self, id: DeclKeyId) -> DeclKey {

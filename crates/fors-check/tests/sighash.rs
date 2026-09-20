@@ -7,13 +7,18 @@
 use std::fs;
 use std::path::{Path, PathBuf};
 
-use fors_index::ids::DefId;
 use fors_index::Interner;
+use fors_index::ids::DefId;
 use fors_resolve::FileInput;
 use fors_syntax::parse_file;
 
 fn repo_root() -> PathBuf {
-    Path::new(env!("CARGO_MANIFEST_DIR")).parent().unwrap().parent().unwrap().to_path_buf()
+    Path::new(env!("CARGO_MANIFEST_DIR"))
+        .parent()
+        .unwrap()
+        .parent()
+        .unwrap()
+        .to_path_buf()
 }
 
 /// Checks one source and returns `(declaration name, sig_hash)` for every
@@ -22,9 +27,18 @@ fn repo_root() -> PathBuf {
 fn hashes(src: &[u8]) -> Vec<(String, u128)> {
     let mut interner = Interner::new();
     let parsed = parse_file(src);
-    assert!(parsed.diags.is_empty(), "test source must parse: {:?}", parsed.diags);
+    assert!(
+        parsed.diags.is_empty(),
+        "test source must parse: {:?}",
+        parsed.diags
+    );
     let name = vec![interner.intern(b"m")];
-    let inputs = [FileInput { tree: &parsed.tree, tokens: &parsed.tokens, source: src, name }];
+    let inputs = [FileInput {
+        tree: &parsed.tree,
+        tokens: &parsed.tokens,
+        source: src,
+        name,
+    }];
     let resolved = fors_resolve::resolve(&mut interner, &inputs, None);
     let out = fors_check::check_build(&inputs, &resolved, &mut interner);
     let defs = out.defs.as_ref().unwrap();
@@ -43,7 +57,11 @@ fn hashes(src: &[u8]) -> Vec<(String, u128)> {
 }
 
 fn hash_of(src: &[u8], decl: &str) -> u128 {
-    hashes(src).into_iter().find(|(n, _)| n == decl).unwrap_or_else(|| panic!("no declaration named {decl}")).1
+    hashes(src)
+        .into_iter()
+        .find(|(n, _)| n == decl)
+        .unwrap_or_else(|| panic!("no declaration named {decl}"))
+        .1
 }
 
 const BASE: &[u8] = b"module m;
@@ -84,14 +102,19 @@ fn f[T: Eq + Ord](let a: T, let b: T) -> T {
 
 #[test]
 fn sig_hash_stable_under_bound_reorder() {
-    let reordered = String::from_utf8(BASE.to_vec()).unwrap().replace("[T: Eq + Ord]", "[T: Ord + Eq]");
+    let reordered = String::from_utf8(BASE.to_vec())
+        .unwrap()
+        .replace("[T: Eq + Ord]", "[T: Ord + Eq]");
     assert_eq!(hash_of(BASE, "f"), hash_of(reordered.as_bytes(), "f"));
 }
 
 #[test]
 fn sig_hash_stable_under_gparam_rename() {
     // R38(a) is positional, so a generic parameter's NAME is not in the hash.
-    let renamed = String::from_utf8(BASE.to_vec()).unwrap().replace("[T: Eq + Ord](let a: T, let b: T) -> T", "[U: Eq + Ord](let a: U, let b: U) -> U");
+    let renamed = String::from_utf8(BASE.to_vec()).unwrap().replace(
+        "[T: Eq + Ord](let a: T, let b: T) -> T",
+        "[U: Eq + Ord](let a: U, let b: U) -> U",
+    );
     assert_eq!(hash_of(BASE, "f"), hash_of(renamed.as_bytes(), "f"));
 }
 
@@ -99,18 +122,26 @@ fn sig_hash_stable_under_gparam_rename() {
 fn sig_hash_changes_on_param_rename() {
     // R37 makes a named argument's label observable, so a VALUE parameter's
     // name is in the hash.
-    let renamed = String::from_utf8(BASE.to_vec()).unwrap().replace("(let a: T, let b: T)", "(let x: T, let b: T)");
+    let renamed = String::from_utf8(BASE.to_vec())
+        .unwrap()
+        .replace("(let a: T, let b: T)", "(let x: T, let b: T)");
     assert_ne!(hash_of(BASE, "f"), hash_of(renamed.as_bytes(), "f"));
 }
 
 #[test]
 fn sig_hash_changes_on_assoc_type_rhs() {
-    let changed = String::from_utf8(BASE.to_vec()).unwrap().replace("type Key = i64;", "type Key = i32;").replace("-> i64 { return self.id; }", "-> i32 { return 0; }");
+    let changed = String::from_utf8(BASE.to_vec())
+        .unwrap()
+        .replace("type Key = i64;", "type Key = i32;")
+        .replace("-> i64 { return self.id; }", "-> i32 { return 0; }");
     let a = hashes(BASE);
     let b = hashes(changed.as_bytes());
     let ia = a.iter().find(|(n, _)| n.starts_with("impl#")).unwrap().1;
     let ib = b.iter().find(|(n, _)| n.starts_with("impl#")).unwrap().1;
-    assert_ne!(ia, ib, "an impl's `type A = T;` right-hand side is part of its signature (R2)");
+    assert_ne!(
+        ia, ib,
+        "an impl's `type A = T;` right-hand side is part of its signature (R2)"
+    );
 }
 
 /// Re-interns a writer's `DeclKey` (and its parent chain and module path)
@@ -127,15 +158,28 @@ fn rebuild_key(
     }
     let row = src.keys.row(key);
     let parent = rebuild_key(reader, names2, src, src_names, row.parent);
-    let segs: Vec<fors_index::Symbol> =
-        src.keys.paths.segments(row.module).iter().map(|&s| names2.intern(src_names.resolve(s))).collect();
+    let segs: Vec<fors_index::Symbol> = src
+        .keys
+        .paths
+        .segments(row.module)
+        .iter()
+        .map(|&s| names2.intern(src_names.resolve(s)))
+        .collect();
     let module = reader.keys.paths.intern(&segs);
     let name = row.name.map(|s| names2.intern(src_names.resolve(s)));
-    reader.keys.intern(fors_fir::DeclKey { parent, module, kind: row.kind, name, disamb: row.disamb })
+    reader.keys.intern(fors_fir::DeclKey {
+        parent,
+        module,
+        kind: row.kind,
+        name,
+        disamb: row.disamb,
+    })
 }
 
 fn corpus_files(dir: &Path, out: &mut Vec<PathBuf>) {
-    let Ok(entries) = fs::read_dir(dir) else { return };
+    let Ok(entries) = fs::read_dir(dir) else {
+        return;
+    };
     let mut entries: Vec<_> = entries.flatten().map(|e| e.path()).collect();
     entries.sort();
     for p in entries {
@@ -163,7 +207,12 @@ fn encode_decode_roundtrip_over_the_corpus() {
         }
         let mut interner = Interner::new();
         let name = vec![interner.intern(b"m")];
-        let inputs = [FileInput { tree: &parsed.tree, tokens: &parsed.tokens, source: &src, name }];
+        let inputs = [FileInput {
+            tree: &parsed.tree,
+            tokens: &parsed.tokens,
+            source: &src,
+            name,
+        }];
         let resolved = fors_resolve::resolve(&mut interner, &inputs, None);
         let out = fors_check::check_build(&inputs, &resolved, &mut interner);
         let defs = out.defs.as_ref().unwrap();
@@ -176,13 +225,25 @@ fn encode_decode_roundtrip_over_the_corpus() {
             let bytes = fors_fir::encode_sig(&out.fir, &interner, d, fors_fir::FINGERPRINT_POLICY);
             // The reader has its own key table and its own interner, so the
             // writer's `DeclKeyId` means nothing there: rebuild it.
-            let self_key = rebuild_key(&mut reader, &mut names2, &out.fir, &interner, out.fir.defs.key_of(d));
+            let self_key = rebuild_key(
+                &mut reader,
+                &mut names2,
+                &out.fir,
+                &interner,
+                out.fir.defs.key_of(d),
+            );
             let decoded = match fors_fir::decode_sig(&bytes, &mut reader, &mut names2, self_key) {
                 Ok(x) => x,
                 Err(e) => panic!("{}: decoding {d:?} failed: {e:?}", path.display()),
             };
-            let again = fors_fir::encode_sig(&reader, &names2, decoded, fors_fir::FINGERPRINT_POLICY);
-            assert_eq!(bytes, again, "{}: re-encoding {d:?} changed the bytes", path.display());
+            let again =
+                fors_fir::encode_sig(&reader, &names2, decoded, fors_fir::FINGERPRINT_POLICY);
+            assert_eq!(
+                bytes,
+                again,
+                "{}: re-encoding {d:?} changed the bytes",
+                path.display()
+            );
             checked += 1;
         }
     }
@@ -213,9 +274,15 @@ fn sig_hash_mutation_harness() {
         );
     }
     // A mutation confined to one declaration leaves the others alone.
-    let elsewhere = String::from_utf8(base.to_vec()).unwrap().replace("struct Tag { id: i64 }", "struct Tag { id: i64, extra: i32 }");
+    let elsewhere = String::from_utf8(base.to_vec()).unwrap().replace(
+        "struct Tag { id: i64 }",
+        "struct Tag { id: i64, extra: i32 }",
+    );
     assert_eq!(hash_of(base, "f"), hash_of(elsewhere.as_bytes(), "f"));
-    assert_eq!(hash_of(base, "Keyed"), hash_of(elsewhere.as_bytes(), "Keyed"));
+    assert_eq!(
+        hash_of(base, "Keyed"),
+        hash_of(elsewhere.as_bytes(), "Keyed")
+    );
 }
 
 /// The `DefId`s a build assigns are reproducible: two runs over the same
@@ -233,7 +300,12 @@ fn unknown_head_does_not_panic() {
     let mut interner = Interner::new();
     let parsed = parse_file(src);
     let name = vec![interner.intern(b"m")];
-    let inputs = [FileInput { tree: &parsed.tree, tokens: &parsed.tokens, source: src, name }];
+    let inputs = [FileInput {
+        tree: &parsed.tree,
+        tokens: &parsed.tokens,
+        source: src,
+        name,
+    }];
     let resolved = fors_resolve::resolve(&mut interner, &inputs, None);
     let out = fors_check::check_build(&inputs, &resolved, &mut interner);
     // The resolver already said N0014; the checker adds nothing.

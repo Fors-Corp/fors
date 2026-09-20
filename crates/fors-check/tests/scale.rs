@@ -59,10 +59,19 @@ fn module_source_i0(m: usize, items: usize) -> String {
         let _ = writeln!(s, "use pkg.m{p}, pkg.m{p}.Shape{p}_0;", p = m - 1);
     }
     for i in 0..items {
-        let _ = writeln!(s, "\npub struct Rec{m}_{i} {{ pub a: i32, pub b: i64, tag: Shape{m}_{i} }}");
-        let _ = writeln!(s, "pub enum Shape{m}_{i} {{ dot, line(i32), box {{ w: i32, h: i32 }} }}");
+        let _ = writeln!(
+            s,
+            "\npub struct Rec{m}_{i} {{ pub a: i32, pub b: i64, tag: Shape{m}_{i} }}"
+        );
+        let _ = writeln!(
+            s,
+            "pub enum Shape{m}_{i} {{ dot, line(i32), box {{ w: i32, h: i32 }} }}"
+        );
         let _ = writeln!(s, "const LIMIT{m}_{i}: i32 = {i};");
-        let _ = writeln!(s, "pub fn work{m}_{i}[T](let x: i32, let item: T, let sh: Shape{m}_{i}) -> i32 {{");
+        let _ = writeln!(
+            s,
+            "pub fn work{m}_{i}[T](let x: i32, let item: T, let sh: Shape{m}_{i}) -> i32 {{"
+        );
         let _ = writeln!(s, "    let base: i32 = x + LIMIT{m}_{i};");
         let _ = writeln!(s, "    let scale = |k: i32| k * base;");
         let _ = writeln!(s, "    var total: i32 = 0;");
@@ -75,7 +84,11 @@ fn module_source_i0(m: usize, items: usize) -> String {
         let _ = writeln!(s, "        let other => total,");
         let _ = writeln!(s, "    }};");
         if m > 0 {
-            let _ = writeln!(s, "    let prev: i32 = m{p}.work{p}_{i}(x, item, Shape{p}_0.dot);", p = m - 1);
+            let _ = writeln!(
+                s,
+                "    let prev: i32 = m{p}.work{p}_{i}(x, item, Shape{p}_0.dot);",
+                p = m - 1
+            );
         } else {
             let _ = writeln!(s, "    let prev: i32 = 0;");
         }
@@ -92,19 +105,37 @@ fn module_source(m: usize, items: usize) -> String {
         let _ = writeln!(s, "use pkg.m{p}, pkg.m{p}.Shape{p}_0;", p = m - 1);
     }
     for i in 0..items {
-        let _ = writeln!(s, "\npub struct Rec{m}_{i} {{ pub a: i32, pub b: i64, tag: Shape{m}_{i} }}");
-        let _ = writeln!(s, "pub enum Shape{m}_{i} {{ dot, line(i32), box {{ w: i32, h: i32 }} }}");
+        let _ = writeln!(
+            s,
+            "\npub struct Rec{m}_{i} {{ pub a: i32, pub b: i64, tag: Shape{m}_{i} }}"
+        );
+        let _ = writeln!(
+            s,
+            "pub enum Shape{m}_{i} {{ dot, line(i32), box {{ w: i32, h: i32 }} }}"
+        );
         let _ = writeln!(s, "const LIMIT{m}_{i}: i32 = {i};");
         // A trait with an associated type, an impl of it, and a signature
         // that projects on a bound: the shapes I2's lowering actually costs
         // something on (R61's bound search, R17's substitution, R19's bucket).
-        let _ = writeln!(s, "pub trait Keyed{m}_{i} {{ type Key: Eq + Ord; fn key(let self) -> Self.Key; }}");
+        let _ = writeln!(
+            s,
+            "pub trait Keyed{m}_{i} {{ type Key: Eq + Ord; fn key(let self) -> Self.Key; }}"
+        );
         let _ = writeln!(s, "impl Keyed{m}_{i} for Rec{m}_{i} {{");
         let _ = writeln!(s, "    type Key = i64;");
-        let _ = writeln!(s, "    fn key(let self: Rec{m}_{i}) -> i64 {{ return self.b; }}");
+        let _ = writeln!(
+            s,
+            "    fn key(let self: Rec{m}_{i}) -> i64 {{ return self.b; }}"
+        );
         let _ = writeln!(s, "}}");
-        let _ = writeln!(s, "pub struct Wrap{m}_{i}[K: Keyed{m}_{i}] {{ inner: K, seen: Option[K.Key] }}");
-        let _ = writeln!(s, "pub fn work{m}_{i}[T](let x: i32, let item: T, let sh: Shape{m}_{i}) -> i32 {{");
+        let _ = writeln!(
+            s,
+            "pub struct Wrap{m}_{i}[K: Keyed{m}_{i}] {{ inner: K, seen: Option[K.Key] }}"
+        );
+        let _ = writeln!(
+            s,
+            "pub fn work{m}_{i}[T](let x: i32, let item: T, let sh: Shape{m}_{i}) -> i32 {{"
+        );
         let _ = writeln!(s, "    let base: i32 = x + LIMIT{m}_{i};");
         let _ = writeln!(s, "    let scale = |k: i32| k * base;");
         let _ = writeln!(s, "    var total: i32 = 0;");
@@ -117,7 +148,11 @@ fn module_source(m: usize, items: usize) -> String {
         let _ = writeln!(s, "        let other => total,");
         let _ = writeln!(s, "    }};");
         if m > 0 {
-            let _ = writeln!(s, "    let prev: i32 = m{p}.work{p}_{i}(x, item, Shape{p}_0.dot);", p = m - 1);
+            let _ = writeln!(
+                s,
+                "    let prev: i32 = m{p}.work{p}_{i}(x, item, Shape{p}_0.dot);",
+                p = m - 1
+            );
         } else {
             let _ = writeln!(s, "    let prev: i32 = 0;");
         }
@@ -138,10 +173,19 @@ fn module_source_nongeneric(m: usize, items: usize) -> String {
         let _ = writeln!(s, "use pkg.m{p}, pkg.m{p}.Shape{p}_0;", p = m - 1);
     }
     for i in 0..items {
-        let _ = writeln!(s, "\npub struct Rec{m}_{i} {{ pub a: i32, pub b: i64, tag: Shape{m}_{i} }}");
-        let _ = writeln!(s, "pub enum Shape{m}_{i} {{ dot, line(i32), box {{ w: i32, h: i32 }} }}");
+        let _ = writeln!(
+            s,
+            "\npub struct Rec{m}_{i} {{ pub a: i32, pub b: i64, tag: Shape{m}_{i} }}"
+        );
+        let _ = writeln!(
+            s,
+            "pub enum Shape{m}_{i} {{ dot, line(i32), box {{ w: i32, h: i32 }} }}"
+        );
         let _ = writeln!(s, "const LIMIT{m}_{i}: i32 = {i};");
-        let _ = writeln!(s, "pub fn work{m}_{i}(let x: i32, let sh: Shape{m}_{i}) -> i32 {{");
+        let _ = writeln!(
+            s,
+            "pub fn work{m}_{i}(let x: i32, let sh: Shape{m}_{i}) -> i32 {{"
+        );
         let _ = writeln!(s, "    let base: i32 = x + LIMIT{m}_{i};");
         let _ = writeln!(s, "    let scale = |let k: i32| k * base;");
         let _ = writeln!(s, "    var total: i32 = 0;");
@@ -153,14 +197,24 @@ fn module_source_nongeneric(m: usize, items: usize) -> String {
         let _ = writeln!(s, "        Shape{m}_{i}.line(let len) => len,");
         let _ = writeln!(s, "        let other => total,");
         let _ = writeln!(s, "    }};");
-        let _ = writeln!(s, "    let made: Rec{m}_{i} = Rec{m}_{i} {{ a: 1, b: 2, tag: Shape{m}_{i}.dot }};");
+        let _ = writeln!(
+            s,
+            "    let made: Rec{m}_{i} = Rec{m}_{i} {{ a: 1, b: 2, tag: Shape{m}_{i}.dot }};"
+        );
         let _ = writeln!(s, "    let sum: i64 = made.b + 3i64;");
         if m > 0 {
-            let _ = writeln!(s, "    let prev: i32 = m{p}.work{p}_{i}(x, m{p}.Shape{p}_{i}.dot);", p = m - 1);
+            let _ = writeln!(
+                s,
+                "    let prev: i32 = m{p}.work{p}_{i}(x, m{p}.Shape{p}_{i}.dot);",
+                p = m - 1
+            );
         } else {
             let _ = writeln!(s, "    let prev: i32 = 0;");
         }
-        let _ = writeln!(s, "    return picked + prev + total + made.a + (sum as i32);");
+        let _ = writeln!(
+            s,
+            "    return picked + prev + total + made.a + (sum as i32);"
+        );
         let _ = writeln!(s, "}}");
     }
     s
@@ -178,22 +232,40 @@ fn scale_counters_are_flat() {
     let sizes = [31usize, 62, 125, 250, 500];
     let mut rows: Vec<(usize, fors_check::Counters, f64)> = Vec::new();
     for modules in sizes {
-        let sources: Vec<String> = (0..modules).map(|m| module_source_nongeneric(m, 20)).collect();
+        let sources: Vec<String> = (0..modules)
+            .map(|m| module_source_nongeneric(m, 20))
+            .collect();
         let lines: usize = sources.iter().map(|s| s.lines().count()).sum();
         let parsed: Vec<_> = sources.iter().map(|s| parse_file(s.as_bytes())).collect();
-        assert!(parsed.iter().all(|p| p.diags.is_empty()), "generated source must parse");
+        assert!(
+            parsed.iter().all(|p| p.diags.is_empty()),
+            "generated source must parse"
+        );
         let mut interner = Interner::new();
         let names: Vec<Segments> = (0..modules)
-            .map(|m| vec![interner.intern(b"pkg"), interner.intern(format!("m{m}").as_bytes())])
+            .map(|m| {
+                vec![
+                    interner.intern(b"pkg"),
+                    interner.intern(format!("m{m}").as_bytes()),
+                ]
+            })
             .collect();
         let inputs: Vec<FileInput> = parsed
             .iter()
             .zip(&sources)
             .zip(&names)
-            .map(|((p, s), n)| FileInput { tree: &p.tree, tokens: &p.tokens, source: s.as_bytes(), name: n.clone() })
+            .map(|((p, s), n)| FileInput {
+                tree: &p.tree,
+                tokens: &p.tokens,
+                source: s.as_bytes(),
+                name: n.clone(),
+            })
             .collect();
         let resolved = fors_resolve::resolve(&mut interner, &inputs, None);
-        assert!(resolved.files.iter().all(|f| f.diagnostics.is_empty()), "generated package must resolve cleanly");
+        assert!(
+            resolved.files.iter().all(|f| f.diagnostics.is_empty()),
+            "generated package must resolve cleanly"
+        );
         let t = Instant::now();
         let out = fors_check::check_build(&inputs, &resolved, &mut interner);
         let wall = t.elapsed().as_secs_f64();
@@ -202,7 +274,10 @@ fn scale_counters_are_flat() {
             "the non-generic corpus must check CLEAN, got {:?}",
             out.diagnostics.iter().take(4).collect::<Vec<_>>()
         );
-        assert_eq!(out.counters.bodies_skipped, 0, "no body may be skipped in a clean build");
+        assert_eq!(
+            out.counters.bodies_skipped, 0,
+            "no body may be skipped in a clean build"
+        );
         rows.push((lines, out.counters, wall));
     }
     let names: [(&str, fn(&fors_check::Counters) -> u64); 8] = [
@@ -215,24 +290,45 @@ fn scale_counters_are_flat() {
         ("tape_events", |c| c.tape_events),
         ("types_interned", |c| c.types_interned),
     ];
-    eprintln!("lines      wall      bodies  {}", names.iter().map(|&(n, _)| format!("{n:>17}")).collect::<String>());
+    eprintln!(
+        "lines      wall      bodies  {}",
+        names
+            .iter()
+            .map(|&(n, _)| format!("{n:>17}"))
+            .collect::<String>()
+    );
     for (lines, c, wall) in &rows {
         eprintln!(
             "{lines:<10} {:>7.1}ms {:>7}  {}",
             wall * 1000.0,
             c.bodies_checked,
-            names.iter().map(|&(_, f)| format!("{:>17.4}", f(c) as f64 / *lines as f64)).collect::<String>()
+            names
+                .iter()
+                .map(|&(_, f)| format!("{:>17.4}", f(c) as f64 / *lines as f64))
+                .collect::<String>()
         );
     }
     let mut bad = Vec::new();
     for (name, f) in names {
-        let per: Vec<f64> = rows.iter().map(|(l, c, _)| f(c) as f64 / *l as f64).collect();
-        let (lo, hi) = per.iter().fold((f64::MAX, 0.0f64), |(a, b), &x| (a.min(x), b.max(x)));
+        let per: Vec<f64> = rows
+            .iter()
+            .map(|(l, c, _)| f(c) as f64 / *l as f64)
+            .collect();
+        let (lo, hi) = per
+            .iter()
+            .fold((f64::MAX, 0.0f64), |(a, b), &x| (a.min(x), b.max(x)));
         if lo > 0.0 && hi / lo > 1.05 {
-            bad.push(format!("{name}: per-line {lo:.4}..{hi:.4} (x{:.3})", hi / lo));
+            bad.push(format!(
+                "{name}: per-line {lo:.4}..{hi:.4} (x{:.3})",
+                hi / lo
+            ));
         }
     }
-    assert!(bad.is_empty(), "counters are not flat across 12.5k-200k lines:\n{}", bad.join("\n"));
+    assert!(
+        bad.is_empty(),
+        "counters are not flat across 12.5k-200k lines:\n{}",
+        bad.join("\n")
+    );
 }
 
 #[test]
@@ -250,22 +346,40 @@ fn scale_100k_lines_signatures() {
 fn run(i0_shape: bool) {
     let _serial = SERIAL.lock().unwrap_or_else(|e| e.into_inner());
     let (modules, items) = (250, 20);
-    let shape = if i0_shape { module_source_i0 } else { module_source };
+    let shape = if i0_shape {
+        module_source_i0
+    } else {
+        module_source
+    };
     let sources: Vec<String> = (0..modules).map(|m| shape(m, items)).collect();
     let bytes: usize = sources.iter().map(|s| s.len()).sum();
     let lines: usize = sources.iter().map(|s| s.lines().count()).sum();
 
     let parsed: Vec<_> = sources.iter().map(|s| parse_file(s.as_bytes())).collect();
-    assert!(parsed.iter().all(|p| p.diags.is_empty()), "generated source must parse");
+    assert!(
+        parsed.iter().all(|p| p.diags.is_empty()),
+        "generated source must parse"
+    );
 
     let mut interner = Interner::new();
-    let names: Vec<Segments> =
-        (0..modules).map(|m| vec![interner.intern(b"pkg"), interner.intern(format!("m{m}").as_bytes())]).collect();
+    let names: Vec<Segments> = (0..modules)
+        .map(|m| {
+            vec![
+                interner.intern(b"pkg"),
+                interner.intern(format!("m{m}").as_bytes()),
+            ]
+        })
+        .collect();
     let inputs: Vec<FileInput> = parsed
         .iter()
         .zip(&sources)
         .zip(&names)
-        .map(|((p, s), n)| FileInput { tree: &p.tree, tokens: &p.tokens, source: s.as_bytes(), name: n.clone() })
+        .map(|((p, s), n)| FileInput {
+            tree: &p.tree,
+            tokens: &p.tokens,
+            source: s.as_bytes(),
+            name: n.clone(),
+        })
         .collect();
 
     let before = LIVE.load(Ordering::Relaxed);
@@ -295,9 +409,19 @@ fn run(i0_shape: bool) {
     let total_time = resolve_time + check_time;
     let total_retained = resolve_retained + check_retained;
     let total_peak = resolve_peak.max(resolve_retained + check_peak);
-    eprintln!("shape: {}", if i0_shape { "I0 baseline (no traits/impls/projections)" } else { "I2 (traits, impls, projections)" });
+    eprintln!(
+        "shape: {}",
+        if i0_shape {
+            "I0 baseline (no traits/impls/projections)"
+        } else {
+            "I2 (traits, impls, projections)"
+        }
+    );
     eprintln!("{modules} modules, {lines} lines, {bytes} bytes");
-    eprintln!("{} declarations lowered, {} types interned", checked.decls_lowered, checked.types_interned);
+    eprintln!(
+        "{} declarations lowered, {} types interned",
+        checked.decls_lowered, checked.types_interned
+    );
     eprintln!("index+resolve: {resolve_time:?}");
     eprintln!("signature lowering + wf: {check_time:?}");
     eprintln!(

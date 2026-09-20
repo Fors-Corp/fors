@@ -53,12 +53,26 @@ impl Sink {
         self.charged >= PER_DECL_BUDGET
     }
 
-    pub fn emit(&mut self, file: FileId, range: (u32, u32), code: Code, site: u16, message: String) {
+    pub fn emit(
+        &mut self,
+        file: FileId,
+        range: (u32, u32),
+        code: Code,
+        site: u16,
+        message: String,
+    ) {
         if self.poisoned() {
             return;
         }
         self.charged += 1;
-        self.out.push(Diagnostic { file, start: range.0, end: range.1, code, site, message });
+        self.out.push(Diagnostic {
+            file,
+            start: range.0,
+            end: range.1,
+            code,
+            site,
+            message,
+        });
     }
 
     pub fn len(&self) -> usize {
@@ -72,7 +86,8 @@ impl Sink {
     /// The diagnostics, sorted by `(file, offset, code)` as design §7.1 phase
     /// 7 requires.
     pub fn finish(mut self) -> Vec<Diagnostic> {
-        self.out.sort_by_key(|d| (d.file.0, d.start, d.code.as_string()));
+        self.out
+            .sort_by_key(|d| (d.file.0, d.start, d.code.as_string()));
         self.out
     }
 }

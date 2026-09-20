@@ -59,7 +59,9 @@ impl DepSet {
     }
 
     pub fn take(&mut self) -> DepSet {
-        let mut out = DepSet { defs: std::mem::take(&mut self.defs) };
+        let mut out = DepSet {
+            defs: std::mem::take(&mut self.defs),
+        };
         out.finish();
         out
     }

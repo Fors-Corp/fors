@@ -8,8 +8,8 @@
 //! at L:C, because `Builder.finish` takes `sink self` (declared at L:C)"),
 //! and a later pass cannot recover them from the CST alone.
 
-use fors_index::ids::DefId;
 use fors_index::Symbol;
+use fors_index::ids::DefId;
 
 /// What one event did to its place.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -29,13 +29,20 @@ pub enum UseKind {
 pub enum Cause {
     /// A use written as itself (an operand, a `move e`, a `consume`).
     Explicit(u32),
-    Argument { call: u32, param: u16 },
+    Argument {
+        call: u32,
+        param: u16,
+    },
     Iterable(u32),
     Capture(u32),
     /// R46: a `sink self` method called in receiver form moved the place.
     /// All three fields are required: the call node, the method and its
     /// owner (impl or trait).
-    ImplicitReceiver { call: u32, method: DefId, owner: DefId },
+    ImplicitReceiver {
+        call: u32,
+        method: DefId,
+        owner: DefId,
+    },
 }
 
 /// One step of a place path (design §7.9: `PlaceId` interns
@@ -96,7 +103,12 @@ impl UseTape {
     }
 
     pub fn push(&mut self, node: u32, place: PlaceId, kind: UseKind, cause: Cause) {
-        self.events.push(UseEvent { node, place, kind, cause });
+        self.events.push(UseEvent {
+            node,
+            place,
+            kind,
+            cause,
+        });
     }
 
     /// The root node and path of a place.

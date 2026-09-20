@@ -8,14 +8,16 @@
 
 use fors_fir::prelude::{gty, tr};
 use fors_fir::sig::Conv;
-use fors_fir::ty::{ArgsId, FnTyId, PrimKind, TraitRefId, TyId, TyTag, NO_ARGS, NO_TY, TY_ERROR, TY_NEVER, TY_UNIT};
+use fors_fir::ty::{
+    ArgsId, FnTyId, NO_ARGS, NO_TY, PrimKind, TY_ERROR, TY_NEVER, TY_UNIT, TraitRefId, TyId, TyTag,
+};
 use fors_index::ids::DefId;
 use fors_lex::TokenKind;
 use fors_resolve::target::{DeferReason, Entity, ResolvedTarget};
 use fors_syntax::NodeKind;
 
-use crate::body::{is_expr_kind, is_type_node, op_between, own_first, BodyCx, LocalKind, Slot};
-use crate::lower::{parse_int_literal, MAX_LIST, MAX_PARAMS};
+use crate::body::{BodyCx, LocalKind, Slot, is_expr_kind, is_type_node, op_between, own_first};
+use crate::lower::{MAX_LIST, MAX_PARAMS, parse_int_literal};
 use crate::wf::{Holds, Wf};
 
 /// What a numeric literal token is.
@@ -160,22 +162,42 @@ impl Wf<'_> {
         match self.fir.tys.tag(bare) {
             TyTag::Param => {
                 let n = self.show(s);
-                return Err((10, format!("a value of the rigid type `{n}` does not coerce to `dyn {trait_name}`: take `dyn {trait_name}` as a parameter instead")));
+                return Err((
+                    10,
+                    format!(
+                        "a value of the rigid type `{n}` does not coerce to `dyn {trait_name}`: take `dyn {trait_name}` as a parameter instead"
+                    ),
+                ));
             }
             TyTag::Proj => {
                 let n = self.show(s);
-                return Err((10, format!("a value of the neutral projection `{n}` does not coerce to `dyn {trait_name}`")));
+                return Err((
+                    10,
+                    format!(
+                        "a value of the neutral projection `{n}` does not coerce to `dyn {trait_name}`"
+                    ),
+                ));
             }
             _ => {}
         }
         if self.is_linear(bare) {
             let n = self.show(s);
-            return Err((10, format!("a value of the linear type `{n}` does not coerce to `dyn {trait_name}`: its cleanup obligation would become invisible (ch01 R22f)")));
+            return Err((
+                10,
+                format!(
+                    "a value of the linear type `{n}` does not coerce to `dyn {trait_name}`: its cleanup obligation would become invisible (ch01 R22f)"
+                ),
+            ));
         }
         match self.holds(bare, tref) {
             Holds::No => {
                 let n = self.show(s);
-                Err((26, format!("expected `dyn {trait_name}`, found `{n}`: `{n}` does not implement `{trait_name}`")))
+                Err((
+                    26,
+                    format!(
+                        "expected `dyn {trait_name}`, found `{n}`: `{n}` does not implement `{trait_name}`"
+                    ),
+                ))
             }
             _ => Ok(()),
         }
@@ -195,7 +217,9 @@ impl Wf<'_> {
                 TY_ERROR
             }
             NodeKind::NameExpr => self.name_expr(cx, node),
-            NodeKind::AddExpr | NodeKind::MulExpr | NodeKind::BitExpr | NodeKind::CmpExpr => self.operator(cx, node),
+            NodeKind::AddExpr | NodeKind::MulExpr | NodeKind::BitExpr | NodeKind::CmpExpr => {
+                self.operator(cx, node)
+            }
             NodeKind::UnaryExpr => self.unary(cx, node),
             NodeKind::NotExpr => {
                 for c in cx.kids(node) {
@@ -243,7 +267,13 @@ impl Wf<'_> {
                     Some(&c) => {
                         // R36: `e?` requires `e` to be a call.
                         if cx.kind(c) != NodeKind::Error {
-                            self.bemit(cx, node, 36, 36, "`?` applies only to a call of a `raises` function".to_string());
+                            self.bemit(
+                                cx,
+                                node,
+                                36,
+                                36,
+                                "`?` applies only to a call of a `raises` function".to_string(),
+                            );
                         }
                         self.synth(cx, c);
                         TY_ERROR
@@ -261,7 +291,14 @@ impl Wf<'_> {
             }
             NodeKind::BareOp => {
                 // R37: legal only in CHECK mode against a `fn(let X, let X)`.
-                self.bemit(cx, node, 37, 37, "a bare operator argument is legal only where a `fn` type is expected".to_string());
+                self.bemit(
+                    cx,
+                    node,
+                    37,
+                    37,
+                    "a bare operator argument is legal only where a `fn` type is expected"
+                        .to_string(),
+                );
                 TY_ERROR
             }
             NodeKind::AsmExpr | NodeKind::Error => TY_ERROR,
@@ -322,7 +359,13 @@ impl Wf<'_> {
                     }
                     _ if matches!(self.fir.tys.tag(bare), TyTag::Param | TyTag::Proj) => {
                         let w = self.show(want);
-                        self.bemit(cx, node, 27, 27, format!("a literal never checks against the rigid type `{w}`"));
+                        self.bemit(
+                            cx,
+                            node,
+                            27,
+                            27,
+                            format!("a literal never checks against the rigid type `{w}`"),
+                        );
                         TY_ERROR
                     }
                     _ => {
@@ -348,7 +391,9 @@ impl Wf<'_> {
         if kids.is_empty() {
             return TY_ERROR;
         }
-        let lit_left = kids.len() >= 2 && self.is_bare_literal(cx, kids[0]) && !self.is_bare_literal(cx, kids[1]);
+        let lit_left = kids.len() >= 2
+            && self.is_bare_literal(cx, kids[0])
+            && !self.is_bare_literal(cx, kids[1]);
         // MARC: verification of I3 (2026-09-20). `never` is absorbing here
         // (R10(a), R33: a `never` operand binds nothing and coerces to
         // whatever the other side is). Before, `1 + die()` CHECKed the
@@ -400,12 +445,19 @@ impl Wf<'_> {
 
     fn unary(&mut self, cx: &mut BodyCx, node: usize) -> TyId {
         let kids = cx.kids(node);
-        let Some(&c) = kids.first() else { return TY_ERROR };
+        let Some(&c) = kids.first() else {
+            return TY_ERROR;
+        };
         match own_first(cx, node) {
             Some(TokenKind::KwMove) => {
                 let t = self.synth(cx, c);
                 if let Some(p) = self.place_of(cx, c) {
-                    cx.tape.push(node as u32, p, crate::tape::UseKind::Move, crate::tape::Cause::Explicit(node as u32));
+                    cx.tape.push(
+                        node as u32,
+                        p,
+                        crate::tape::UseKind::Move,
+                        crate::tape::Cause::Explicit(node as u32),
+                    );
                 }
                 t
             }
@@ -421,7 +473,14 @@ impl Wf<'_> {
 
     /// Requires `s` to implement the trait `op` needs (R29); R57's "the fix
     /// is a bound" half, for a rigid `s`, is I5's.
-    pub fn require_operator(&mut self, cx: &mut BodyCx, node: usize, s: TyId, op: TokenKind, site: u16) {
+    pub fn require_operator(
+        &mut self,
+        cx: &mut BodyCx,
+        node: usize,
+        s: TyId,
+        op: TokenKind,
+        site: u16,
+    ) {
         let Some(which) = trait_of(op) else { return };
         self.require_trait(cx, node, s, which, op_text(op), site);
     }
@@ -430,7 +489,15 @@ impl Wf<'_> {
     /// operator `sym` in the diagnostic. MARC: verification of I3
     /// (2026-09-20): unary `-` asked for `Sub`, so `-x` on an unsigned
     /// integer passed; it asks for `Neg` now.
-    pub fn require_trait(&mut self, cx: &mut BodyCx, node: usize, s: TyId, which: usize, sym: &str, site: u16) {
+    pub fn require_trait(
+        &mut self,
+        cx: &mut BodyCx,
+        node: usize,
+        s: TyId,
+        which: usize,
+        sym: &str,
+        site: u16,
+    ) {
         if s == TY_ERROR || s == NO_TY || s == TY_NEVER {
             return;
         }
@@ -446,7 +513,13 @@ impl Wf<'_> {
         if self.holds(bare, want) == Holds::No {
             let n = self.show(s);
             let tn = self.head_name(tdef);
-            self.bemit(cx, node, 29, site, format!("`{n}` does not implement `{tn}`, which the operator `{sym}` needs"));
+            self.bemit(
+                cx,
+                node,
+                29,
+                site,
+                format!("`{n}` does not implement `{tn}`, which the operator `{sym}` needs"),
+            );
         }
     }
 
@@ -504,7 +577,10 @@ impl Wf<'_> {
             if a == TY_NEVER || b == TY_NEVER {
                 return TY_NEVER;
             }
-            if a != TY_ERROR && b != TY_ERROR && a != NO_TY && b != NO_TY
+            if a != TY_ERROR
+                && b != TY_ERROR
+                && a != NO_TY
+                && b != NO_TY
                 && self.fir.tys.unqual(a) != self.fir.tys.unqual(b)
             {
                 let (x, y) = (self.show(a), self.show(b));
@@ -521,7 +597,13 @@ impl Wf<'_> {
             && PrimKind::from_u8(self.fir.tys.a(bare) as u8).is_some_and(|p| p.is_integer());
         if !ok {
             let n = self.show(elem);
-            self.bemit(cx, node, 30, 30, format!("both operands of a range must be the same integer type; found `{n}`"));
+            self.bemit(
+                cx,
+                node,
+                30,
+                30,
+                format!("both operands of a range must be the same integer type; found `{n}`"),
+            );
             return TY_ERROR;
         }
         let incl = own_first(cx, node) == Some(TokenKind::DotDotEq)
@@ -533,7 +615,9 @@ impl Wf<'_> {
     /// R30's `e as U`, plus R10(c) written explicitly (`x as dyn Tr`).
     fn cast_expr(&mut self, cx: &mut BodyCx, node: usize) -> TyId {
         let kids = cx.kids(node);
-        let Some(&operand) = kids.first() else { return TY_ERROR };
+        let Some(&operand) = kids.first() else {
+            return TY_ERROR;
+        };
         let mut s = self.synth(cx, operand);
         for &ty_node in kids.iter().skip(1) {
             if !is_type_node(cx.kind(ty_node)) {
@@ -565,7 +649,13 @@ impl Wf<'_> {
             }
             let a = self.show(s);
             let b = self.show(u);
-            self.bemit(cx, node, 30, 30, format!("`as` converts between numeric primitives only; `{a}` to `{b}` is not one"));
+            self.bemit(
+                cx,
+                node,
+                30,
+                30,
+                format!("`as` converts between numeric primitives only; `{a}` to `{b}` is not one"),
+            );
             s = TY_ERROR;
         }
         s
@@ -574,7 +664,8 @@ impl Wf<'_> {
     fn numeric(&mut self, t: TyId) -> bool {
         let bare = self.fir.tys.unqual(t);
         self.fir.tys.tag(bare) == TyTag::Prim
-            && PrimKind::from_u8(self.fir.tys.a(bare) as u8).is_some_and(|p| p.is_integer() || p.is_float())
+            && PrimKind::from_u8(self.fir.tys.a(bare) as u8)
+                .is_some_and(|p| p.is_integer() || p.is_float())
     }
 
     /// Whether `node` is an unsuffixed numeric literal, optionally negated
@@ -589,7 +680,11 @@ impl Wf<'_> {
             }
             _ => node,
         };
-        cx.kind(n) == NodeKind::Literal && matches!(self.lit_of(cx, n), Lit::IntUnsuffixed | Lit::FloatUnsuffixed)
+        cx.kind(n) == NodeKind::Literal
+            && matches!(
+                self.lit_of(cx, n),
+                Lit::IntUnsuffixed | Lit::FloatUnsuffixed
+            )
     }
 
     // --------------------------------------------------- if, match, tuple
@@ -623,17 +718,19 @@ impl Wf<'_> {
                 }
                 if !has_else && w != TY_UNIT && w != TY_ERROR && w != NO_TY && w != TY_NEVER {
                     let n = self.show(w);
-                    self.bemit(cx, node, 26, 32, format!("expected `{n}`: an `if` with no `else` has type `()`"));
+                    self.bemit(
+                        cx,
+                        node,
+                        26,
+                        32,
+                        format!("expected `{n}`: an `if` with no `else` has type `()`"),
+                    );
                     return TY_ERROR;
                 }
                 // Every arm diverged, so the `if` itself does: a body whose
                 // last statement is `if c { return a; } else { return b; }`
                 // needs no tail expression.
-                if all_never {
-                    TY_NEVER
-                } else {
-                    w
-                }
+                if all_never { TY_NEVER } else { w }
             }
             None if !has_else => {
                 for &b in &blocks {
@@ -664,11 +761,22 @@ impl Wf<'_> {
 
     fn match_expr(&mut self, cx: &mut BodyCx, node: usize, want: Option<TyId>) -> TyId {
         let kids = cx.kids(node);
-        let Some(&scrutinee) = kids.first() else { return TY_ERROR };
+        let Some(&scrutinee) = kids.first() else {
+            return TY_ERROR;
+        };
         let s = self.synth(cx, scrutinee);
         if let Some(p) = self.place_of(cx, scrutinee) {
-            let k = if self.copyable(s) { crate::tape::UseKind::Copy } else { crate::tape::UseKind::Read };
-            cx.tape.push(scrutinee as u32, p, k, crate::tape::Cause::Explicit(node as u32));
+            let k = if self.copyable(s) {
+                crate::tape::UseKind::Copy
+            } else {
+                crate::tape::UseKind::Read
+            };
+            cx.tape.push(
+                scrutinee as u32,
+                p,
+                k,
+                crate::tape::Cause::Explicit(node as u32),
+            );
         }
         let mut fixed = want.unwrap_or(TY_NEVER);
         let mut arms = 0usize;
@@ -680,7 +788,9 @@ impl Wf<'_> {
             let parts = cx.kids(arm);
             let Some(&pat) = parts.first() else { continue };
             self.bind_pat(cx, pat, s);
-            let Some(&body) = parts.iter().find(|&&c| is_expr_kind(cx.kind(c))) else { continue };
+            let Some(&body) = parts.iter().find(|&&c| is_expr_kind(cx.kind(c))) else {
+                continue;
+            };
             arms += 1;
             if want.is_some() || fixed != TY_NEVER {
                 cx.site(NodeKind::MatchExpr, Slot::Tail);
@@ -821,7 +931,9 @@ impl Wf<'_> {
                 Some(ResolvedTarget::Entity(Entity::Item { file, decl })) => {
                     let def = self.defs.def_of(file, decl);
                     let v = self.fir.sigs.const_val(def);
-                    (v != fors_fir::ty::NO_CONST).then(|| self.fir.tys.const_value(v)).and_then(|c| c.as_int())
+                    (v != fors_fir::ty::NO_CONST)
+                        .then(|| self.fir.tys.const_value(v))
+                        .and_then(|c| c.as_int())
                 }
                 _ => None,
             },
@@ -834,8 +946,15 @@ impl Wf<'_> {
     /// R35, SYNTH half: every `cparam` must carry a type.
     fn synth_closure(&mut self, cx: &mut BodyCx, node: usize) -> TyId {
         let kids = cx.kids(node);
-        let cparams: Vec<usize> = kids.iter().copied().filter(|&c| cx.kind(c) == NodeKind::CParam).collect();
-        let body = kids.iter().copied().find(|&c| cx.kind(c) != NodeKind::CParam);
+        let cparams: Vec<usize> = kids
+            .iter()
+            .copied()
+            .filter(|&c| cx.kind(c) == NodeKind::CParam)
+            .collect();
+        let body = kids
+            .iter()
+            .copied()
+            .find(|&c| cx.kind(c) != NodeKind::CParam);
         let mut ps: Vec<(Conv, TyId)> = Vec::new();
         let mut bad = false;
         for &p in &cparams {
@@ -884,11 +1003,28 @@ impl Wf<'_> {
         let result = self.fir.tys.fn_tys().result(id);
         let raises = self.fir.tys.fn_tys().raises(id);
         let kids = cx.kids(node);
-        let cparams: Vec<usize> = kids.iter().copied().filter(|&c| cx.kind(c) == NodeKind::CParam).collect();
-        let body = kids.iter().copied().find(|&c| cx.kind(c) != NodeKind::CParam);
+        let cparams: Vec<usize> = kids
+            .iter()
+            .copied()
+            .filter(|&c| cx.kind(c) == NodeKind::CParam)
+            .collect();
+        let body = kids
+            .iter()
+            .copied()
+            .find(|&c| cx.kind(c) != NodeKind::CParam);
         if cparams.len() != ptys.len() {
             let w = self.show(want);
-            self.bemit(cx, node, 35, 35, format!("this closure takes {} parameter(s), but `{w}` declares {}", cparams.len(), ptys.len()));
+            self.bemit(
+                cx,
+                node,
+                35,
+                35,
+                format!(
+                    "this closure takes {} parameter(s), but `{w}` declares {}",
+                    cparams.len(),
+                    ptys.len()
+                ),
+            );
             return TY_ERROR;
         }
         for (i, &p) in cparams.iter().enumerate() {
@@ -906,16 +1042,20 @@ impl Wf<'_> {
                 None => ptys[i],
             };
             if conv_written(cx, p).is_some_and(|c| c != convs[i]) {
-                self.bemit(cx, p, 35, 35, "this closure parameter's convention disagrees with the expected `fn` type".to_string());
+                self.bemit(
+                    cx,
+                    p,
+                    35,
+                    35,
+                    "this closure parameter's convention disagrees with the expected `fn` type"
+                        .to_string(),
+                );
             }
             cx.bind(p as u32, ty, LocalKind::Value);
         }
         let saved = cx.enter_closure(false, result, raises);
-        match body {
-            Some(b) => {
-                self.check(cx, b, result);
-            }
-            None => {}
+        if let Some(b) = body {
+            self.check(cx, b, result);
         }
         cx.leave_closure(saved);
         want
@@ -927,7 +1067,13 @@ impl Wf<'_> {
     fn try_guard(&mut self, cx: &mut BodyCx, node: usize) {
         if cx.in_defer_body() {
             let kw = cx.defer_word();
-            self.bemit(cx, node, 33, 33, format!("no `?` inside a `{kw}` body (ch01 R23c); use a handler instead"));
+            self.bemit(
+                cx,
+                node,
+                33,
+                33,
+                format!("no `?` inside a `{kw}` body (ch01 R23c); use a handler instead"),
+            );
         }
     }
 
@@ -940,7 +1086,10 @@ impl Wf<'_> {
             NodeKind::PatLet => cx.bind(pat as u32, s, LocalKind::Value),
             NodeKind::PatTuple => {
                 let parts: Vec<TyId> = if self.fir.tys.tag(self.fir.tys.unqual(s)) == TyTag::Tuple {
-                    self.fir.tys.args(ArgsId(self.fir.tys.b(self.fir.tys.unqual(s)))).to_vec()
+                    self.fir
+                        .tys
+                        .args(ArgsId(self.fir.tys.b(self.fir.tys.unqual(s))))
+                        .to_vec()
                 } else {
                     Vec::new()
                 };
@@ -949,7 +1098,8 @@ impl Wf<'_> {
                 }
             }
             NodeKind::PatDot | NodeKind::PatPath => {
-                let name = last_ident(cx, pat).map(|i| self.names.intern(cx.f.tokens.text(i, cx.f.source)));
+                let name = last_ident(cx, pat)
+                    .map(|i| self.names.intern(cx.f.tokens.text(i, cx.f.source)));
                 let payload_tys = name.map(|n| self.variant_payload(s, n)).unwrap_or_default();
                 for c in cx.kids(pat) {
                     if cx.kind(c) != NodeKind::Payload {
@@ -958,8 +1108,11 @@ impl Wf<'_> {
                     for (i, sub) in cx.kids(c).into_iter().enumerate() {
                         let t = match cx.kind(sub) {
                             NodeKind::FPat => {
-                                let fname = last_ident(cx, sub).map(|i| self.names.intern(cx.f.tokens.text(i, cx.f.source)));
-                                fname.and_then(|f| self.record_field(s, name, f)).unwrap_or(TY_ERROR)
+                                let fname = last_ident(cx, sub)
+                                    .map(|i| self.names.intern(cx.f.tokens.text(i, cx.f.source)));
+                                fname
+                                    .and_then(|f| self.record_field(s, name, f))
+                                    .unwrap_or(TY_ERROR)
                             }
                             _ => payload_tys.get(i).copied().unwrap_or(TY_ERROR),
                         };
@@ -997,13 +1150,21 @@ impl Wf<'_> {
             let m = self.fir.sigs.member_store.get(ms, i);
             if m.name == name && m.kind == fors_fir::sig::MemberKind::Variant {
                 let xs = self.fir.tys.args(m.args).to_vec();
-                return xs.into_iter().map(|x| self.substituted(def, args, x)).collect();
+                return xs
+                    .into_iter()
+                    .map(|x| self.substituted(def, args, x))
+                    .collect();
             }
         }
         Vec::new()
     }
 
-    fn record_field(&mut self, s: TyId, variant: Option<fors_index::Symbol>, field: fors_index::Symbol) -> Option<TyId> {
+    fn record_field(
+        &mut self,
+        s: TyId,
+        variant: Option<fors_index::Symbol>,
+        field: fors_index::Symbol,
+    ) -> Option<TyId> {
         let bare = self.fir.tys.unqual(s);
         if self.fir.tys.tag(bare) != TyTag::Nominal {
             return None;
@@ -1038,28 +1199,33 @@ impl Wf<'_> {
 
 fn has_comma(cx: &BodyCx, node: usize) -> bool {
     let (a, b) = cx.f.tree.token_range(node);
-    (a as usize..(b as usize).min(cx.f.tokens.kinds.len())).any(|i| cx.f.tokens.kinds[i] == TokenKind::Comma)
+    (a as usize..(b as usize).min(cx.f.tokens.kinds.len()))
+        .any(|i| cx.f.tokens.kinds[i] == TokenKind::Comma)
 }
 
 /// `[x; n]` rather than `[a, b, c]`.
 fn is_repeat(cx: &BodyCx, node: usize) -> bool {
     let (a, b) = cx.f.tree.token_range(node);
-    (a as usize..(b as usize).min(cx.f.tokens.kinds.len())).any(|i| cx.f.tokens.kinds[i] == TokenKind::Semi)
+    (a as usize..(b as usize).min(cx.f.tokens.kinds.len()))
+        .any(|i| cx.f.tokens.kinds[i] == TokenKind::Semi)
 }
 
 fn last_ident(cx: &BodyCx, node: usize) -> Option<usize> {
     let (a, b) = fors_resolve::paths::own_span(cx.f.tree, node);
-    (a as usize..(b as usize).min(cx.f.tokens.kinds.len())).filter(|&i| cx.f.tokens.kinds[i] == TokenKind::Ident).next_back()
+    (a as usize..(b as usize).min(cx.f.tokens.kinds.len()))
+        .rfind(|&i| cx.f.tokens.kinds[i] == TokenKind::Ident)
 }
 
 fn conv_written(cx: &BodyCx, p: usize) -> Option<Conv> {
     let (a, b) = fors_resolve::paths::own_span(cx.f.tree, p);
-    (a as usize..(b as usize).min(cx.f.tokens.kinds.len())).find_map(|i| match cx.f.tokens.kinds[i] {
-        TokenKind::KwLet => Some(Conv::Let),
-        TokenKind::KwInout => Some(Conv::Inout),
-        TokenKind::KwSink => Some(Conv::Sink),
-        TokenKind::Ident if cx.f.tokens.text(i, cx.f.source) == b"set" => Some(Conv::Set),
-        _ => None,
+    (a as usize..(b as usize).min(cx.f.tokens.kinds.len())).find_map(|i| {
+        match cx.f.tokens.kinds[i] {
+            TokenKind::KwLet => Some(Conv::Let),
+            TokenKind::KwInout => Some(Conv::Inout),
+            TokenKind::KwSink => Some(Conv::Sink),
+            TokenKind::Ident if cx.f.tokens.text(i, cx.f.source) == b"set" => Some(Conv::Set),
+            _ => None,
+        }
     })
 }
 
@@ -1129,7 +1295,7 @@ fn int_lit(txt: &[u8]) -> Lit {
             _ => {}
         }
     }
-    while i < txt.len() && (txt[i] == b'_' || (txt[i] as char).to_digit(radix).is_some()) {
+    while i < txt.len() && (txt[i] == b'_' || (txt[i] as char).is_digit(radix)) {
         i += 1;
     }
     match suffix_prim(&txt[i..]) {
@@ -1166,5 +1332,8 @@ fn suffix_prim(s: &[u8]) -> Option<PrimKind> {
 
 /// A `Deferred` target the checker must be silent about (design §7.10).
 pub fn silent_defer(r: DeferReason) -> bool {
-    matches!(r, DeferReason::Diagnosed | DeferReason::StdAbsent | DeferReason::Member)
+    matches!(
+        r,
+        DeferReason::Diagnosed | DeferReason::StdAbsent | DeferReason::Member
+    )
 }

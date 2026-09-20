@@ -7,9 +7,9 @@
 //! `(module bytes, DeclKey bytes)` order, plus the `def_of[file][decl]` map
 //! `Entity::Item { file, decl }` needs.
 
-use fors_fir::defpath::{DeclKey, DeclKeyId, ModulePathId, NO_DECL_KEY, NO_DEF};
 use fors_fir::Fir;
-use fors_index::decl::{DeclKind, Visibility, NO_PARENT};
+use fors_fir::defpath::{DeclKey, DeclKeyId, ModulePathId, NO_DECL_KEY, NO_DEF};
+use fors_index::decl::{DeclKind, NO_PARENT, Visibility};
 use fors_index::ids::{DeclId, DefId, FileId, ModuleId};
 use fors_index::{DeclTable, Symbol};
 
@@ -49,14 +49,21 @@ impl DefTable {
 
     /// The declaration whose CST node is `node` in `file`.
     pub fn def_at(&self, file: FileId, node: u32) -> DefId {
-        match self.by_node.binary_search_by_key(&(file.0, node), |&(f, n, _)| (f, n)) {
+        match self
+            .by_node
+            .binary_search_by_key(&(file.0, node), |&(f, n, _)| (f, n))
+        {
             Ok(i) => self.by_node[i].2,
             Err(_) => NO_DEF,
         }
     }
 
     pub fn def_of(&self, file: FileId, decl: DeclId) -> DefId {
-        self.def_of.get(file.index()).and_then(|f| f.get(decl.index())).copied().unwrap_or(NO_DEF)
+        self.def_of
+            .get(file.index())
+            .and_then(|f| f.get(decl.index()))
+            .copied()
+            .unwrap_or(NO_DEF)
     }
 
     pub fn len(&self) -> usize {
@@ -104,7 +111,13 @@ pub fn build(fir: &mut Fir, decls: &[&DeclTable], modules: &[FileModule]) -> Def
             let kind = table.kind[d];
             if !matches!(
                 kind,
-                DeclKind::Fn | DeclKind::ExternFn | DeclKind::Struct | DeclKind::Enum | DeclKind::Trait | DeclKind::Impl | DeclKind::Const
+                DeclKind::Fn
+                    | DeclKind::ExternFn
+                    | DeclKind::Struct
+                    | DeclKind::Enum
+                    | DeclKind::Trait
+                    | DeclKind::Impl
+                    | DeclKind::Const
             ) {
                 continue;
             }
@@ -125,8 +138,18 @@ pub fn build(fir: &mut Fir, decls: &[&DeclTable], modules: &[FileModule]) -> Def
                 // already ch08 R27's error; they must still get one row each,
                 // or a member list would name a `DefId` that belongs to the
                 // other one. The disambiguator is what keeps the key injective.
-                let mut probe = DeclKey { parent: parent_key, module: path, kind, name: table.name[d], disamb };
-                while fir.keys.try_find(probe).is_some_and(|k| fir.defs.def_of(k) != NO_DEF) {
+                let mut probe = DeclKey {
+                    parent: parent_key,
+                    module: path,
+                    kind,
+                    name: table.name[d],
+                    disamb,
+                };
+                while fir
+                    .keys
+                    .try_find(probe)
+                    .is_some_and(|k| fir.defs.def_of(k) != NO_DEF)
+                {
                     disamb = disamb.wrapping_add(1);
                     probe.disamb = disamb;
                 }
@@ -135,13 +158,24 @@ pub fn build(fir: &mut Fir, decls: &[&DeclTable], modules: &[FileModule]) -> Def
                 // The header's raw token range is a stable-enough fold: two
                 // impls with identical headers differ only by source order,
                 // which the +1 below supplies.
-                disamb = fors_index::splitmix64((table.range_start[d] as u64) << 32 | table.range_end[d] as u64) as u32;
-                while seen_disamb.iter().any(|&(m, p, x)| m == path && p == parent_key && x == disamb) {
+                disamb = fors_index::splitmix64(
+                    (table.range_start[d] as u64) << 32 | table.range_end[d] as u64,
+                ) as u32;
+                while seen_disamb
+                    .iter()
+                    .any(|&(m, p, x)| m == path && p == parent_key && x == disamb)
+                {
                     disamb = disamb.wrapping_add(1);
                 }
                 seen_disamb.push((path, parent_key, disamb));
             }
-            let key = fir.keys.intern(DeclKey { parent: parent_key, module: path, kind, name: table.name[d], disamb });
+            let key = fir.keys.intern(DeclKey {
+                parent: parent_key,
+                module: path,
+                kind,
+                name: table.name[d],
+                disamb,
+            });
             let def = fir.declare(key, kind_to_sig(kind));
             per_file[d] = def;
             by_node.push((file.0, table.node[d], def));
@@ -155,7 +189,11 @@ pub fn build(fir: &mut Fir, decls: &[&DeclTable], modules: &[FileModule]) -> Def
                 kind,
                 name: table.name[d],
                 vis: table.vis[d],
-                parent: if parent_decl == NO_PARENT { NO_DEF } else { per_file[parent_decl as usize] },
+                parent: if parent_decl == NO_PARENT {
+                    NO_DEF
+                } else {
+                    per_file[parent_decl as usize]
+                },
                 key,
                 node: table.node[d],
             });
@@ -167,7 +205,12 @@ pub fn build(fir: &mut Fir, decls: &[&DeclTable], modules: &[FileModule]) -> Def
     }
     by_node.sort_unstable_by_key(|&(f, n, _)| (f, n));
     by_node.dedup_by_key(|&mut (f, n, _)| (f, n));
-    DefTable { rows, def_of, by_node, first_user }
+    DefTable {
+        rows,
+        def_of,
+        by_node,
+        first_user,
+    }
 }
 
 fn kind_to_sig(k: DeclKind) -> fors_fir::sig::SigKind {

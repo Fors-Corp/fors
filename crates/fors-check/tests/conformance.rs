@@ -8,12 +8,17 @@
 use std::fs;
 use std::path::{Path, PathBuf};
 
-use fors_index::{module::is_legal_segment, Interner, Segments};
+use fors_index::{Interner, Segments, module::is_legal_segment};
 use fors_resolve::FileInput;
 use fors_syntax::parse_file;
 
 fn repo_root() -> PathBuf {
-    Path::new(env!("CARGO_MANIFEST_DIR")).parent().unwrap().parent().unwrap().to_path_buf()
+    Path::new(env!("CARGO_MANIFEST_DIR"))
+        .parent()
+        .unwrap()
+        .parent()
+        .unwrap()
+        .to_path_buf()
 }
 
 struct Case {
@@ -28,18 +33,20 @@ fn parse_directives(src: &str) -> Case {
     let (mut name, mut chapter, mut rule, mut expect, mut detail) =
         (String::new(), 0u8, 0u16, String::new(), String::new());
     for line in src.lines() {
-        let Some(rest) = line.strip_prefix("//!") else { break };
+        let Some(rest) = line.strip_prefix("//!") else {
+            break;
+        };
         let rest = rest.trim();
         if let Some(v) = rest.strip_prefix("name:") {
             name = v.trim().to_string();
         } else if let Some(v) = rest.strip_prefix("rule:") {
-            if let Some((ch, r)) = v.trim().split_once('.') {
-                if let Some(k) = r.strip_prefix('R').or_else(|| r.strip_prefix('S')) {
-                    let k = &k[..k.find(|c: char| !c.is_ascii_digit()).unwrap_or(k.len())];
-                    if let (Ok(c), Ok(n)) = (ch.parse::<u8>(), k.parse::<u16>()) {
-                        chapter = c;
-                        rule = n;
-                    }
+            if let Some((ch, r)) = v.trim().split_once('.')
+                && let Some(k) = r.strip_prefix('R').or_else(|| r.strip_prefix('S'))
+            {
+                let k = &k[..k.find(|c: char| !c.is_ascii_digit()).unwrap_or(k.len())];
+                if let (Ok(c), Ok(n)) = (ch.parse::<u8>(), k.parse::<u16>()) {
+                    chapter = c;
+                    rule = n;
                 }
             }
         } else if let Some(v) = rest.strip_prefix("expect:") {
@@ -48,7 +55,13 @@ fn parse_directives(src: &str) -> Case {
             detail = v.trim().to_string();
         }
     }
-    Case { name, chapter, rule, expect, detail }
+    Case {
+        name,
+        chapter,
+        rule,
+        expect,
+        detail,
+    }
 }
 
 /// The code a `check-error` test's `detail` names, as `("T", 26)`.
@@ -106,7 +119,9 @@ fn check_target_full(path: &Path) -> (Vec<String>, Vec<String>, fors_check::Chec
 
     if path.is_dir() {
         fn walk(dir: &Path, out: &mut Vec<PathBuf>) {
-            let Ok(entries) = fs::read_dir(dir) else { return };
+            let Ok(entries) = fs::read_dir(dir) else {
+                return;
+            };
             let mut entries: Vec<_> = entries.flatten().map(|e| e.path()).collect();
             entries.sort();
             for p in entries {
@@ -126,8 +141,11 @@ fn check_target_full(path: &Path) -> (Vec<String>, Vec<String>, fors_check::Chec
             let mut segs = Vec::new();
             for (i, c) in comps.iter().enumerate() {
                 let os = c.as_os_str().to_string_lossy();
-                let seg =
-                    if i + 1 == comps.len() { os.strip_suffix(".fors").unwrap_or(&os).to_string() } else { os.to_string() };
+                let seg = if i + 1 == comps.len() {
+                    os.strip_suffix(".fors").unwrap_or(&os).to_string()
+                } else {
+                    os.to_string()
+                };
                 segs.push(interner.intern(seg.as_bytes()));
             }
             if comps.len() == 1 && rel.file_stem().is_some_and(|s| s == "main") {
@@ -140,7 +158,11 @@ fn check_target_full(path: &Path) -> (Vec<String>, Vec<String>, fors_check::Chec
         let src = fs::read(path).unwrap();
         let name = header_name(&src, &mut interner).unwrap_or_else(|| {
             let stem = path.file_stem().unwrap().to_string_lossy().into_owned();
-            let stem = if is_legal_segment(stem.as_bytes()) { stem } else { "m".to_string() };
+            let stem = if is_legal_segment(stem.as_bytes()) {
+                stem
+            } else {
+                "m".to_string()
+            };
             vec![interner.intern(stem.as_bytes())]
         });
         names.push(name);
@@ -153,12 +175,22 @@ fn check_target_full(path: &Path) -> (Vec<String>, Vec<String>, fors_check::Chec
         .iter()
         .zip(sources.iter())
         .zip(names.iter())
-        .map(|((p, s), n)| FileInput { tree: &p.tree, tokens: &p.tokens, source: s, name: n.clone() })
+        .map(|((p, s), n)| FileInput {
+            tree: &p.tree,
+            tokens: &p.tokens,
+            source: s,
+            name: n.clone(),
+        })
         .collect();
     let package = path.file_name().map(|n| n.as_encoded_bytes().to_vec());
-    let resolved = fors_resolve::resolve_in_package(&mut interner, &inputs, root, package.as_deref());
-    let resolver: Vec<String> =
-        resolved.files.iter().flat_map(|f| f.diagnostics.iter()).map(|d| d.code.as_string()).collect();
+    let resolved =
+        fors_resolve::resolve_in_package(&mut interner, &inputs, root, package.as_deref());
+    let resolver: Vec<String> = resolved
+        .files
+        .iter()
+        .flat_map(|f| f.diagnostics.iter())
+        .map(|d| d.code.as_string())
+        .collect();
     let out = fors_check::check_build(&inputs, &resolved, &mut interner);
     let checker: Vec<String> = out.diagnostics.iter().map(|d| d.code.as_string()).collect();
     (checker, resolver, out)
@@ -166,7 +198,9 @@ fn check_target_full(path: &Path) -> (Vec<String>, Vec<String>, fors_check::Chec
 
 fn corpus_targets(dir: &Path) -> Vec<PathBuf> {
     let mut out = Vec::new();
-    let Ok(entries) = fs::read_dir(dir) else { return out };
+    let Ok(entries) = fs::read_dir(dir) else {
+        return out;
+    };
     let mut entries: Vec<_> = entries.flatten().map(|e| e.path()).collect();
     entries.sort();
     for p in entries {
@@ -191,14 +225,22 @@ include!("data/pending_09.rs");
 fn ch09_types_corpus_checker_view() {
     let dir = repo_root().join("tests/conformance/09-types");
     let targets = corpus_targets(&dir);
-    assert!(targets.len() >= 150, "09-types corpus not found or truncated: {}", targets.len());
+    assert!(
+        targets.len() >= 150,
+        "09-types corpus not found or truncated: {}",
+        targets.len()
+    );
     let mut failures = Vec::new();
     let mut on = 0usize;
     let mut pending = 0usize;
     for target in &targets {
         let src = directive_source(target);
         let case = parse_directives(&src);
-        assert_eq!(case.chapter, 9, "{}: every 09-types test cites 09.Rk", case.name);
+        assert_eq!(
+            case.chapter, 9,
+            "{}: every 09-types test cites 09.Rk",
+            case.name
+        );
         let key = case.name.replace('_', "-");
         if PENDING_09.iter().any(|&(n, _)| n == key) {
             pending += 1;
@@ -234,12 +276,17 @@ fn ch09_types_corpus_checker_view() {
                 match want {
                     Some(w) => {
                         if got.len() != 1 || got[0] != w {
-                            failures.push(format!("{key} (09.R{}): expected exactly one {w}, got {got:?}", case.rule));
+                            failures.push(format!(
+                                "{key} (09.R{}): expected exactly one {w}, got {got:?}",
+                                case.rule
+                            ));
                         }
                     }
                     None => {
                         if got.len() != 1 {
-                            failures.push(format!("{key}: expected exactly one diagnostic, got {got:?}"));
+                            failures.push(format!(
+                                "{key}: expected exactly one diagnostic, got {got:?}"
+                            ));
                         }
                     }
                 }
@@ -247,8 +294,16 @@ fn ch09_types_corpus_checker_view() {
             other => failures.push(format!("{key}: unexpected expectation {other:?}")),
         }
     }
-    eprintln!("ch09 checker view: {on} on, {pending} pending, {} total", targets.len());
-    assert!(failures.is_empty(), "ch09 corpus (checker view) failures ({}):\n{}", failures.len(), failures.join("\n"));
+    eprintln!(
+        "ch09 checker view: {on} on, {pending} pending, {} total",
+        targets.len()
+    );
+    assert!(
+        failures.is_empty(),
+        "ch09 corpus (checker view) failures ({}):\n{}",
+        failures.len(),
+        failures.join("\n")
+    );
 }
 
 /// A non-ch09 `check-ok` test that ch09 rejects anyway. Each of these is a
@@ -288,9 +343,18 @@ const CROSS_CHAPTER: &[(&str, &str)] = &[
 
 /// A `std` declaration ch09 rejects. `std/**` is not this increment's to edit.
 const STD_CONFLICTS: &[(&str, &str)] = &[
-    ("std/mem/alloc.fors", "R48: `Block.align()` is an inherent method named like the field `align`"),
-    ("std/net.fors", "R48: `Addr.v6()` is an inherent method named like the field `v6`"),
-    ("std/net.fors", "R48: `Addr.port()` is an inherent method named like the field `port`"),
+    (
+        "std/mem/alloc.fors",
+        "R48: `Block.align()` is an inherent method named like the field `align`",
+    ),
+    (
+        "std/net.fors",
+        "R48: `Addr.v6()` is an inherent method named like the field `v6`",
+    ),
+    (
+        "std/net.fors",
+        "R48: `Addr.port()` is an inherent method named like the field `port`",
+    ),
 ];
 
 /// The no-regression assertion the I2 gate names: outside the tests this
@@ -344,11 +408,20 @@ fn no_new_diagnostics_outside_ch09() {
             }
             let (got, _) = check_target(&target);
             if !got.is_empty() {
-                failures.push(format!("{}/{}: the checker spoke: {got:?}", dir.file_name().unwrap().to_string_lossy(), case.name));
+                failures.push(format!(
+                    "{}/{}: the checker spoke: {got:?}",
+                    dir.file_name().unwrap().to_string_lossy(),
+                    case.name
+                ));
             }
         }
     }
-    assert!(failures.is_empty(), "regressions outside ch09 ({}):\n{}", failures.len(), failures.join("\n"));
+    assert!(
+        failures.is_empty(),
+        "regressions outside ch09 ({}):\n{}",
+        failures.len(),
+        failures.join("\n")
+    );
 }
 
 /// Every listed conflict is real: the test still exists and the checker still
@@ -359,17 +432,31 @@ fn cross_chapter_conflicts_are_live() {
     let root = repo_root();
     for (name, why) in CROSS_CHAPTER {
         let mut found = false;
-        for dir in ["01-ownership", "02-failure", "03-numerics", "04-authority", "07-grammar", "08-names", "10-std"] {
+        for dir in [
+            "01-ownership",
+            "02-failure",
+            "03-numerics",
+            "04-authority",
+            "07-grammar",
+            "08-names",
+            "10-std",
+        ] {
             for target in corpus_targets(&root.join("tests/conformance").join(dir)) {
                 if parse_directives(&directive_source(&target)).name != *name {
                     continue;
                 }
                 found = true;
                 let (got, _) = check_target(&target);
-                assert!(!got.is_empty(), "CROSS_CHAPTER lists {name} ({why}) but the checker is silent on it now");
+                assert!(
+                    !got.is_empty(),
+                    "CROSS_CHAPTER lists {name} ({why}) but the checker is silent on it now"
+                );
             }
         }
-        assert!(found, "CROSS_CHAPTER names a test that is not in the corpus: {name}");
+        assert!(
+            found,
+            "CROSS_CHAPTER names a test that is not in the corpus: {name}"
+        );
     }
 }
 
@@ -383,17 +470,26 @@ fn pending_09_is_shrinking() {
     let dir = repo_root().join("tests/conformance/09-types");
     let names: Vec<String> = corpus_targets(&dir)
         .iter()
-        .map(|t| parse_directives(&directive_source(t)).name.replace('_', "-"))
+        .map(|t| {
+            parse_directives(&directive_source(t))
+                .name
+                .replace('_', "-")
+        })
         .collect();
     for (n, _) in PENDING_09 {
-        assert!(names.iter().any(|x| x == n), "PENDING_09 names a test that is not in the corpus: {n}");
+        assert!(
+            names.iter().any(|x| x == n),
+            "PENDING_09 names a test that is not in the corpus: {n}"
+        );
     }
 }
 
 #[test]
 fn no_panic_over_whole_corpus() {
     fn walk(dir: &Path, out: &mut Vec<PathBuf>) {
-        let Ok(entries) = fs::read_dir(dir) else { return };
+        let Ok(entries) = fs::read_dir(dir) else {
+            return;
+        };
         let mut entries: Vec<_> = entries.flatten().map(|e| e.path()).collect();
         entries.sort();
         for p in entries {
@@ -412,7 +508,6 @@ fn no_panic_over_whole_corpus() {
     }
 }
 
-
 // ------------------------------------------------- increment I3's gate
 
 /// design §11: the recorded `(parent, slot)` trace of every CHECK position
@@ -421,13 +516,24 @@ fn no_panic_over_whole_corpus() {
 /// ch03 R25; a table row nothing reaches has rotted.
 #[test]
 fn check_positions_match_ch03_r25() {
-    use fors_check::body::{CheckSite, CHECK_SITES};
+    use fors_check::body::{CHECK_SITES, CheckSite};
     let mut seen: Vec<CheckSite> = Vec::new();
-    for dir in ["09-types", "01-ownership", "02-failure", "03-numerics", "04-authority", "08-names", "10-std"] {
+    for dir in [
+        "09-types",
+        "01-ownership",
+        "02-failure",
+        "03-numerics",
+        "04-authority",
+        "08-names",
+        "10-std",
+    ] {
         for target in corpus_targets(&repo_root().join("tests/conformance").join(dir)) {
             let (_, _, out) = check_target_full(&target);
             for s in out.check_sites {
-                if !seen.iter().any(|x| x.parent == s.parent && x.slot == s.slot) {
+                if !seen
+                    .iter()
+                    .any(|x| x.parent == s.parent && x.slot == s.slot)
+                {
                     seen.push(s);
                 }
             }
@@ -435,7 +541,10 @@ fn check_positions_match_ch03_r25() {
     }
     let mut unauthorised = Vec::new();
     for s in &seen {
-        if !CHECK_SITES.iter().any(|r| r.parent == s.parent && r.slot == s.slot) {
+        if !CHECK_SITES
+            .iter()
+            .any(|r| r.parent == s.parent && r.slot == s.slot)
+        {
             unauthorised.push(format!("{:?}/{:?}", s.parent, s.slot));
         }
     }
@@ -445,11 +554,18 @@ fn check_positions_match_ch03_r25() {
     );
     let mut unreached = Vec::new();
     for r in CHECK_SITES {
-        if r.corpus && !seen.iter().any(|s| s.parent == r.parent && s.slot == r.slot) {
+        if r.corpus
+            && !seen
+                .iter()
+                .any(|s| s.parent == r.parent && s.slot == r.slot)
+        {
             unreached.push(format!("{:?}/{:?} (R{})", r.parent, r.slot, r.rule));
         }
     }
-    assert!(unreached.is_empty(), "CHECK_SITES rows marked `corpus` that nothing reached: {unreached:?}");
+    assert!(
+        unreached.is_empty(),
+        "CHECK_SITES rows marked `corpus` that nothing reached: {unreached:?}"
+    );
 }
 
 /// design §11: recovery. Every `check-error` test now on yields EXACTLY
@@ -475,7 +591,12 @@ fn every_check_error_test_yields_exactly_one_diagnostic() {
             failures.push(format!("{key}: {} diagnostics {got:?}", got.len()));
         }
     }
-    assert!(failures.is_empty(), "not exactly one diagnostic ({}):\n{}", failures.len(), failures.join("\n"));
+    assert!(
+        failures.is_empty(),
+        "not exactly one diagnostic ({}):\n{}",
+        failures.len(),
+        failures.join("\n")
+    );
 }
 
 /// design §11's store invariant: after checking the corpus every `Param`
@@ -488,7 +609,13 @@ fn no_infer_variable_is_interned() {
     use fors_fir::ty::TyTag;
     use fors_index::ids::DefId;
     let mut failures = Vec::new();
-    for dir in ["09-types", "01-ownership", "03-numerics", "08-names", "10-std"] {
+    for dir in [
+        "09-types",
+        "01-ownership",
+        "03-numerics",
+        "08-names",
+        "10-std",
+    ] {
         for target in corpus_targets(&repo_root().join("tests/conformance").join(dir)) {
             let (_, _, out) = check_target_full(&target);
             let fir = &out.fir;
@@ -501,14 +628,23 @@ fn no_infer_variable_is_interned() {
                 let ord = fir.tys.b(t) as usize;
                 let g = fir.sigs.generics(owner);
                 if owner.index() >= fir.sigs.len() || ord >= fir.sigs.generics_store.count(g) {
-                    failures.push(format!("{}: Param({}, {}) names no declared parameter", target.display(), owner.0, ord));
+                    failures.push(format!(
+                        "{}: Param({}, {}) names no declared parameter",
+                        target.display(),
+                        owner.0,
+                        ord
+                    ));
                 }
             }
         }
     }
-    assert!(failures.is_empty(), "fabricated parameter rows ({}):\n{}", failures.len(), failures.join("\n"));
+    assert!(
+        failures.is_empty(),
+        "fabricated parameter rows ({}):\n{}",
+        failures.len(),
+        failures.join("\n")
+    );
 }
-
 
 /// design §9: a body's `DepSet` is recorded, is a SET in `DefId` order, and
 /// names only declarations this build has. Its `key` is order-free and
@@ -534,12 +670,22 @@ fn every_body_records_its_dep_set() {
                 target.display()
             );
             // A body always reads at least its own signature.
-            assert!(set.defs().contains(def), "{}: a body must record its own signature", target.display());
+            assert!(
+                set.defs().contains(def),
+                "{}: a body must record its own signature",
+                target.display()
+            );
             if set.len() > 1 {
                 with_deps += 1;
             }
         }
     }
-    assert!(bodies > 300, "only {bodies} bodies recorded a DepSet over the ch09 corpus");
-    assert!(with_deps > 100, "only {with_deps} bodies read another declaration's signature");
+    assert!(
+        bodies > 300,
+        "only {bodies} bodies recorded a DepSet over the ch09 corpus"
+    );
+    assert!(
+        with_deps > 100,
+        "only {with_deps} bodies read another declaration's signature"
+    );
 }

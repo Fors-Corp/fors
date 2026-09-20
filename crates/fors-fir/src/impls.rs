@@ -17,7 +17,7 @@ use fors_index::ids::DefId;
 
 use crate::defpath::{HeadKey, NO_DEF};
 use crate::sig::{GParamKind, SigStore};
-use crate::ty::{ArgsId, TyId, TyStore, TyTag, NO_ARGS, NO_TY};
+use crate::ty::{ArgsId, NO_ARGS, NO_TY, TyId, TyStore, TyTag};
 
 /// One impl as the index stores it.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -129,7 +129,9 @@ fn is_var(tys: &TyStore, t: TyId, owners: &[DefId]) -> Option<(DefId, u16)> {
         // A brand parameter of the impl is a variable too (R19 renames every
         // generic parameter apart, whatever its kind).
         TyTag::Brand => match tys.brand(crate::ty::BrandId(tys.b(t))) {
-            crate::ty::BrandRow::Param { owner, ordinal } => owners.contains(&owner).then_some((owner, ordinal)),
+            crate::ty::BrandRow::Param { owner, ordinal } => {
+                owners.contains(&owner).then_some((owner, ordinal))
+            }
             crate::ty::BrandRow::Fresh { .. } => None,
         },
         _ => None,
@@ -153,7 +155,14 @@ impl Unifier {
 
 /// R19's first-order unification with an occurs check. Bounds are ignored,
 /// associated types are never read.
-fn unify(tys: &TyStore, a: TyId, b: TyId, owners: &[DefId], u: &mut Unifier, fuel: &mut u32) -> bool {
+fn unify(
+    tys: &TyStore,
+    a: TyId,
+    b: TyId,
+    owners: &[DefId],
+    u: &mut Unifier,
+    fuel: &mut u32,
+) -> bool {
     if *fuel == 0 {
         return false;
     }
@@ -195,16 +204,32 @@ fn unify(tys: &TyStore, a: TyId, b: TyId, owners: &[DefId], u: &mut Unifier, fue
     }
 }
 
-fn unify_args(tys: &TyStore, a: ArgsId, b: ArgsId, owners: &[DefId], u: &mut Unifier, fuel: &mut u32) -> bool {
+fn unify_args(
+    tys: &TyStore,
+    a: ArgsId,
+    b: ArgsId,
+    owners: &[DefId],
+    u: &mut Unifier,
+    fuel: &mut u32,
+) -> bool {
     let xs = tys.args_vec(a);
     let ys = tys.args_vec(b);
     if xs.len() != ys.len() {
         return false;
     }
-    xs.iter().zip(ys.iter()).all(|(&x, &y)| unify(tys, x, y, owners, u, fuel))
+    xs.iter()
+        .zip(ys.iter())
+        .all(|(&x, &y)| unify(tys, x, y, owners, u, fuel))
 }
 
-fn occurs(tys: &TyStore, k: (u32, u16), t: TyId, owners: &[DefId], u: &Unifier, fuel: &mut u32) -> bool {
+fn occurs(
+    tys: &TyStore,
+    k: (u32, u16),
+    t: TyId,
+    owners: &[DefId],
+    u: &Unifier,
+    fuel: &mut u32,
+) -> bool {
     if *fuel == 0 {
         return true;
     }
@@ -220,8 +245,12 @@ fn occurs(tys: &TyStore, k: (u32, u16), t: TyId, owners: &[DefId], u: &Unifier, 
     }
     match tys.tag(t) {
         TyTag::Nominal | TyTag::Tuple => {
-            let args = if tys.tag(t) == TyTag::Nominal { ArgsId(tys.b(t)) } else { ArgsId(tys.b(t)) };
-            tys.args_vec(args).iter().any(|&x| occurs(tys, k, x, owners, u, fuel))
+            // Nominal and Tuple rows both keep their argument list in `b`
+            // (`unify` above reads it the same way).
+            let args = ArgsId(tys.b(t));
+            tys.args_vec(args)
+                .iter()
+                .any(|&x| occurs(tys, k, x, owners, u, fuel))
         }
         _ => false,
     }
@@ -244,26 +273,47 @@ pub fn overlap(tys: &TyStore, sigs: &SigStore, a: &ImplRow, b: &ImplRow) -> bool
     if !unify(tys, a.self_ty, b.self_ty, &owners, &mut u, &mut fuel) {
         return false;
     }
-    let xa = if a.trait_args == NO_ARGS { Vec::new() } else { tys.args_vec(a.trait_args) };
-    let xb = if b.trait_args == NO_ARGS { Vec::new() } else { tys.args_vec(b.trait_args) };
+    let xa = if a.trait_args == NO_ARGS {
+        Vec::new()
+    } else {
+        tys.args_vec(a.trait_args)
+    };
+    let xb = if b.trait_args == NO_ARGS {
+        Vec::new()
+    } else {
+        tys.args_vec(b.trait_args)
+    };
     if xa.len() != xb.len() {
         return false;
     }
-    xa.iter().zip(xb.iter()).all(|(&x, &y)| unify(tys, x, y, &owners, &mut u, &mut fuel))
+    xa.iter()
+        .zip(xb.iter())
+        .all(|(&x, &y)| unify(tys, x, y, &owners, &mut u, &mut fuel))
 }
 
 /// Whether every generic parameter of `def` occurs in `head_tys` (R18's
 /// "unconstrained impl parameter"): returns the ordinal of the first that does
 /// not, or `None`.
-pub fn first_unconstrained(tys: &mut TyStore, sigs: &SigStore, def: DefId, head_tys: &[TyId]) -> Option<u16> {
+pub fn first_unconstrained(
+    tys: &mut TyStore,
+    sigs: &SigStore,
+    def: DefId,
+    head_tys: &[TyId],
+) -> Option<u16> {
     let g = sigs.generics(def);
     let n = sigs.generics_store.count(g);
     for o in 0..n {
         let want = match sigs.generics_store.param(g, o).kind {
-            GParamKind::Brand => tys.brand_ty(crate::ty::BrandRow::Param { owner: def, ordinal: o as u16 }),
+            GParamKind::Brand => tys.brand_ty(crate::ty::BrandRow::Param {
+                owner: def,
+                ordinal: o as u16,
+            }),
             _ => tys.param(def, o as u16),
         };
-        if !head_tys.iter().any(|&h| mentions(tys, h, want, &mut (1 << 16))) {
+        if !head_tys
+            .iter()
+            .any(|&h| mentions(tys, h, want, &mut (1 << 16)))
+        {
             return Some(o as u16);
         }
     }
@@ -280,7 +330,10 @@ pub fn mentions(tys: &TyStore, hay: TyId, needle: TyId, fuel: &mut u32) -> bool 
         return true;
     }
     match tys.tag(hay) {
-        TyTag::Nominal | TyTag::Tuple => tys.args_vec(ArgsId(tys.b(hay))).iter().any(|&x| mentions(tys, x, needle, fuel)),
+        TyTag::Nominal | TyTag::Tuple => tys
+            .args_vec(ArgsId(tys.b(hay)))
+            .iter()
+            .any(|&x| mentions(tys, x, needle, fuel)),
         TyTag::Proj => mentions(tys, TyId(tys.a(hay)), needle, fuel),
         TyTag::Fn => {
             let id = crate::ty::FnTyId(tys.a(hay));
@@ -305,9 +358,9 @@ pub fn contains_proj(tys: &TyStore, t: TyId) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::Fir;
     use crate::sig::SigKind;
     use crate::ty::PrimKind;
-    use crate::Fir;
     use fors_index::decl::DeclKind;
     use fors_index::interner::Interner;
 
@@ -336,7 +389,15 @@ mod tests {
     }
 
     fn row(def: DefId, trait_def: DefId, self_ty: TyId, head: HeadKey, order: u32) -> ImplRow {
-        ImplRow { def, trait_def, inherent: trait_def == NO_DEF, trait_args: NO_ARGS, self_ty, head, order }
+        ImplRow {
+            def,
+            trait_def,
+            inherent: trait_def == NO_DEF,
+            trait_args: NO_ARGS,
+            self_ty,
+            head,
+            order,
+        }
     }
 
     #[test]
@@ -362,7 +423,11 @@ mod tests {
         let head = fir.tys.head_key(selves[0]);
         assert_eq!(index.bucket(tr, head).len(), 4, "all four share one bucket");
         for s in &selves {
-            assert_eq!(index.exact(tr, *s).len(), 1, "the exact probe answers in one step");
+            assert_eq!(
+                index.exact(tr, *s).len(),
+                1,
+                "the exact probe answers in one step"
+            );
         }
     }
 

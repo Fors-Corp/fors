@@ -7,10 +7,10 @@
 //! absorbing, and left to I4 (methods) and I5 (generic calls).
 
 use fors_fir::sig::{Conv, MemberKind, PayloadKind, SigKind, VIS_PRIVATE};
-use fors_fir::ty::{ArgsId, FnTyId, TyId, TyTag, NO_ARGS, NO_TY, TY_ERROR, TY_UNIT};
+use fors_fir::ty::{ArgsId, FnTyId, NO_ARGS, NO_TY, TY_ERROR, TY_UNIT, TyId, TyTag};
+use fors_index::Symbol;
 use fors_index::diag::Code;
 use fors_index::ids::DefId;
-use fors_index::Symbol;
 use fors_resolve::target::{Entity, ResolvedTarget};
 use fors_syntax::NodeKind;
 
@@ -51,10 +51,19 @@ impl Wf<'_> {
     /// handler and R37's named-argument rule.
     pub fn call_expr(&mut self, cx: &mut BodyCx, node: usize, expected: Option<TyId>) -> TyId {
         let kids = cx.kids(node);
-        let Some(&callee_node) = kids.first() else { return TY_ERROR };
-        let handler = kids.iter().copied().find(|&c| cx.kind(c) == NodeKind::Handler);
-        let args: Vec<usize> =
-            kids.iter().copied().skip(1).filter(|&c| cx.kind(c) != NodeKind::Handler).collect();
+        let Some(&callee_node) = kids.first() else {
+            return TY_ERROR;
+        };
+        let handler = kids
+            .iter()
+            .copied()
+            .find(|&c| cx.kind(c) == NodeKind::Handler);
+        let args: Vec<usize> = kids
+            .iter()
+            .copied()
+            .skip(1)
+            .filter(|&c| cx.kind(c) != NodeKind::Handler)
+            .collect();
 
         let try_node = cx.under_try.take();
         let callee = self.classify_callee(cx, callee_node);
@@ -70,7 +79,11 @@ impl Wf<'_> {
                         let p = self.fir.sigs.fn_sigs.param(sig, i);
                         ps.push((p.name, p.conv, p.ty));
                     }
-                    (ps, self.fir.sigs.fn_sigs.result(sig), self.fir.sigs.fn_sigs.raises(sig))
+                    (
+                        ps,
+                        self.fir.sigs.fn_sigs.result(sig),
+                        self.fir.sigs.fn_sigs.raises(sig),
+                    )
                 }
             }
             Callee::Variant(def, i) => {
@@ -82,8 +95,17 @@ impl Wf<'_> {
             }
             Callee::Value(id) => {
                 let (convs, tys) = self.fir.tys.fn_tys().params(id);
-                let ps = convs.iter().copied().zip(tys.iter().copied()).map(|(c, t)| (Symbol(0), c, t)).collect();
-                (ps, self.fir.tys.fn_tys().result(id), self.fir.tys.fn_tys().raises(id))
+                let ps = convs
+                    .iter()
+                    .copied()
+                    .zip(tys.iter().copied())
+                    .map(|(c, t)| (Symbol(0), c, t))
+                    .collect();
+                (
+                    ps,
+                    self.fir.tys.fn_tys().result(id),
+                    self.fir.tys.fn_tys().raises(id),
+                )
             }
             Callee::Undecided => {
                 self.undecided_args(cx, &args);
@@ -98,7 +120,14 @@ impl Wf<'_> {
         // lookup: I4.)
         if let Some(t) = try_node {
             if raises == NO_TY {
-                self.bemit(cx, t as usize, 36, 36, "`?` applies only to a call of a `raises` function; this call does not raise".to_string());
+                self.bemit(
+                    cx,
+                    t as usize,
+                    36,
+                    36,
+                    "`?` applies only to a call of a `raises` function; this call does not raise"
+                        .to_string(),
+                );
             } else if cx.raises == NO_TY && cx.result != NO_TY {
                 if cx.closures > 0 && cx.in_synth_closure() {
                     self.bemit(cx, t as usize, 35, 35, "`?` inside a closure in SYNTH mode: a closure raises only when checked against a `fn ... raises E` type".to_string());
@@ -134,7 +163,15 @@ impl Wf<'_> {
                                 }
                             }
                         };
-                        cx.tape.push(value as u32, p, kind, Cause::Argument { call: node as u32, param: i as u16 });
+                        cx.tape.push(
+                            value as u32,
+                            p,
+                            kind,
+                            Cause::Argument {
+                                call: node as u32,
+                                param: i as u16,
+                            },
+                        );
                     }
                 }
                 // R39's argument-count rule is I5's gate; the extra
@@ -191,7 +228,10 @@ impl Wf<'_> {
     fn undecided_args(&mut self, cx: &mut BodyCx, args: &[usize]) {
         for &a in args {
             let v = self.arg_value(cx, a);
-            if matches!(cx.kind(v), NodeKind::Closure | NodeKind::BareOp | NodeKind::DotLit) {
+            if matches!(
+                cx.kind(v),
+                NodeKind::Closure | NodeKind::BareOp | NodeKind::DotLit
+            ) {
                 continue;
             }
             self.synth(cx, v);
@@ -200,13 +240,24 @@ impl Wf<'_> {
 
     /// R36: `call else |x| { ... }`. `x` has the call's `raises` type and
     /// the block is checked against the success type.
-    fn handler(&mut self, cx: &mut BodyCx, handler: Option<usize>, success: TyId, raises: TyId, known: bool) {
+    fn handler(
+        &mut self,
+        cx: &mut BodyCx,
+        handler: Option<usize>,
+        success: TyId,
+        raises: TyId,
+        known: bool,
+    ) {
         let Some(h) = handler else { return };
         if known && raises == NO_TY {
             // R36: the handler form requires a call of a `raises` function.
             self.bemit(cx, h, 36, 36, "an `else |e| { }` handler applies only to a call of a `raises` function; this call does not raise".to_string());
         }
-        cx.bind(h as u32, if raises == NO_TY { TY_ERROR } else { raises }, LocalKind::Value);
+        cx.bind(
+            h as u32,
+            if raises == NO_TY { TY_ERROR } else { raises },
+            LocalKind::Value,
+        );
         for b in cx.kids(h) {
             if cx.kind(b) == NodeKind::Block {
                 cx.site(NodeKind::Handler, Slot::HandlerBlock);
@@ -217,8 +268,9 @@ impl Wf<'_> {
 
     fn classify_callee(&mut self, cx: &mut BodyCx, node: usize) -> Callee {
         match cx.kind(node) {
-            NodeKind::NameExpr if crate::member::path_segments(cx, node)
-                > crate::member::path_consumed(cx, node).max(1) as usize =>
+            NodeKind::NameExpr
+                if crate::member::path_segments(cx, node)
+                    > crate::member::path_consumed(cx, node).max(1) as usize =>
             {
                 // A method call `x.m(..)` or a qualified call `T.m(..)`:
                 // R43-R46 and R45 are I4's. The receiver is still typed, so
@@ -230,7 +282,9 @@ impl Wf<'_> {
             NodeKind::NameExpr => match cx.f.uses.target_of(node as u32) {
                 Some(ResolvedTarget::Entity(Entity::Item { file, decl })) => {
                     let def = self.defs.def_of(file, decl);
-                    if def == fors_fir::NO_DEF || !matches!(self.fir.sigs.kind(def), SigKind::Fn | SigKind::ExternFn) {
+                    if def == fors_fir::NO_DEF
+                        || !matches!(self.fir.sigs.kind(def), SigKind::Fn | SigKind::ExternFn)
+                    {
                         return Callee::Undecided;
                     }
                     // R38's "parameters to determine": the container's, then
@@ -309,16 +363,25 @@ impl Wf<'_> {
     /// fields in written order.
     pub fn struct_lit(&mut self, cx: &mut BodyCx, node: usize, expected: Option<TyId>) -> TyId {
         let kids = cx.kids(node);
-        let Some(&head) = kids.first() else { return TY_ERROR };
-        let inits: Vec<usize> = kids.iter().copied().filter(|&c| cx.kind(c) == NodeKind::FInit).collect();
+        let Some(&head) = kids.first() else {
+            return TY_ERROR;
+        };
+        let inits: Vec<usize> = kids
+            .iter()
+            .copied()
+            .filter(|&c| cx.kind(c) == NodeKind::FInit)
+            .collect();
         let def = match self.struct_head(cx, head) {
             Some(d) => d,
             None => {
                 for &i in &inits {
-                    if let Some(v) = cx.f.tree.children(i).next() {
-                        if !matches!(cx.kind(v), NodeKind::Closure | NodeKind::BareOp | NodeKind::DotLit) {
-                            self.synth(cx, v);
-                        }
+                    if let Some(v) = cx.f.tree.children(i).next()
+                        && !matches!(
+                            cx.kind(v),
+                            NodeKind::Closure | NodeKind::BareOp | NodeKind::DotLit
+                        )
+                    {
+                        self.synth(cx, v);
                     }
                 }
                 return TY_ERROR;
@@ -328,10 +391,13 @@ impl Wf<'_> {
         if self.arity(def) > 0 {
             // Determining a struct's own parameters is R38's, which is I5's.
             for &i in &inits {
-                if let Some(v) = cx.f.tree.children(i).next() {
-                    if !matches!(cx.kind(v), NodeKind::Closure | NodeKind::BareOp | NodeKind::DotLit) {
-                        self.synth(cx, v);
-                    }
+                if let Some(v) = cx.f.tree.children(i).next()
+                    && !matches!(
+                        cx.kind(v),
+                        NodeKind::Closure | NodeKind::BareOp | NodeKind::DotLit
+                    )
+                {
+                    self.synth(cx, v);
                 }
             }
             return TY_ERROR;
@@ -348,20 +414,34 @@ impl Wf<'_> {
         let mut seen = vec![false; fields.len()];
         let mut bad = false;
         for &init in &inits {
-            let Some(name) = self.field_name_of_init(cx, init) else { continue };
+            let Some(name) = self.field_name_of_init(cx, init) else {
+                continue;
+            };
             let value = cx.f.tree.children(init).next();
             match fields.iter().position(|&(n, ..)| n == name) {
                 Some(k) => {
                     if seen[k] {
                         let f = String::from_utf8_lossy(self.names.resolve(name)).into_owned();
-                        self.bemit(cx, init, 34, 34, format!("the field `{f}` is written twice"));
+                        self.bemit(
+                            cx,
+                            init,
+                            34,
+                            34,
+                            format!("the field `{f}` is written twice"),
+                        );
                         bad = true;
                     }
                     seen[k] = true;
                     if fields[k].1 == VIS_PRIVATE && !self.same_module(def, cx.owner) {
                         let f = String::from_utf8_lossy(self.names.resolve(name)).into_owned();
                         let h = self.head_name(def);
-                        self.bemit_code(cx, init, Code::N(11), 49, format!("the field `{f}` of `{h}` is not `pub`"));
+                        self.bemit_code(
+                            cx,
+                            init,
+                            Code::N(11),
+                            49,
+                            format!("the field `{f}` of `{h}` is not `pub`"),
+                        );
                         bad = true;
                     }
                     if let Some(v) = value {
@@ -381,17 +461,23 @@ impl Wf<'_> {
                 }
             }
         }
-        if !bad {
-            if let Some(k) = seen.iter().position(|&s| !s) {
-                let f = String::from_utf8_lossy(self.names.resolve(fields[k].0)).into_owned();
-                let h = self.head_name(def);
-                let missing = seen.iter().filter(|&&s| !s).count();
-                let more = if missing > 1 { format!(" (and {} more)", missing - 1) } else { String::new() };
-                self.bemit(cx, node, 34, 34, format!("the struct literal of `{h}` does not name the field `{f}`{more}; a literal names each field exactly once"));
-                bad = true;
-            }
+        if !bad && let Some(k) = seen.iter().position(|&s| !s) {
+            let f = String::from_utf8_lossy(self.names.resolve(fields[k].0)).into_owned();
+            let h = self.head_name(def);
+            let missing = seen.iter().filter(|&&s| !s).count();
+            let more = if missing > 1 {
+                format!(" (and {} more)", missing - 1)
+            } else {
+                String::new()
+            };
+            self.bemit(cx, node, 34, 34, format!("the struct literal of `{h}` does not name the field `{f}`{more}; a literal names each field exactly once"));
+            bad = true;
         }
-        let ty = if bad { TY_ERROR } else { self.fir.tys.nominal(def, NO_ARGS) };
+        let ty = if bad {
+            TY_ERROR
+        } else {
+            self.fir.tys.nominal(def, NO_ARGS)
+        };
         match expected {
             Some(w) => self.subsume(cx, node, ty, w),
             None => ty,
@@ -406,7 +492,8 @@ impl Wf<'_> {
         match cx.f.uses.target_of(head as u32)? {
             ResolvedTarget::Entity(Entity::Item { file, decl }) => {
                 let def = self.defs.def_of(file, decl);
-                (def != fors_fir::NO_DEF && self.fir.sigs.kind(def) == SigKind::Struct).then_some(def)
+                (def != fors_fir::NO_DEF && self.fir.sigs.kind(def) == SigKind::Struct)
+                    .then_some(def)
             }
             _ => None,
         }
@@ -429,17 +516,31 @@ impl Wf<'_> {
         let bare = self.fir.tys.unqual(want);
         if self.fir.tys.tag(bare) != TyTag::Nominal {
             let w = self.show(want);
-            self.bemit(cx, node, 34, 34, format!("a `.variant` literal needs an enum type here; the expected type is `{w}`"));
+            self.bemit(
+                cx,
+                node,
+                34,
+                34,
+                format!("a `.variant` literal needs an enum type here; the expected type is `{w}`"),
+            );
             return TY_ERROR;
         }
         let def = DefId(self.fir.tys.a(bare));
         self.dep(def);
         if self.fir.sigs.kind(def) != SigKind::Enum {
             let w = self.show(want);
-            self.bemit(cx, node, 34, 34, format!("a `.variant` literal needs an enum type here; the expected type is `{w}`"));
+            self.bemit(
+                cx,
+                node,
+                34,
+                34,
+                format!("a `.variant` literal needs an enum type here; the expected type is `{w}`"),
+            );
             return TY_ERROR;
         }
-        let Some(name) = self.dot_name(cx, node) else { return TY_ERROR };
+        let Some(name) = self.dot_name(cx, node) else {
+            return TY_ERROR;
+        };
         let ms = self.fir.sigs.members(def);
         for i in 0..self.fir.sigs.member_store.count(ms) {
             let m = self.fir.sigs.member_store.get(ms, i);
@@ -463,7 +564,12 @@ impl Wf<'_> {
     /// R28/R34: `none` and a unit variant take their enum from the expected
     /// type. Answers `None` when the path is not one of those, so the
     /// caller falls through to subsumption.
-    pub fn check_prelude_value(&mut self, cx: &mut BodyCx, node: usize, want: TyId) -> Option<TyId> {
+    pub fn check_prelude_value(
+        &mut self,
+        cx: &mut BodyCx,
+        node: usize,
+        want: TyId,
+    ) -> Option<TyId> {
         let target = cx.f.uses.target_of(node as u32)?;
         let bare = self.fir.tys.unqual(want);
         if self.fir.tys.tag(bare) != TyTag::Nominal {

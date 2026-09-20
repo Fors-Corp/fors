@@ -9,10 +9,10 @@
 
 use fors_fir::prelude::{gty, tr};
 use fors_fir::sig::{Conv, SigKind};
-use fors_fir::ty::{ArgsId, PrimKind, TyId, TyTag, NO_TY, TY_ERROR, TY_NEVER, TY_UNIT};
+use fors_fir::ty::{ArgsId, NO_TY, PrimKind, TY_ERROR, TY_NEVER, TY_UNIT, TyId, TyTag};
+use fors_index::Symbol;
 use fors_index::decl::DeclKind;
 use fors_index::ids::{DefId, FileId};
-use fors_index::Symbol;
 use fors_lex::TokenKind;
 use fors_resolve::paths::own_span;
 use fors_syntax::NodeKind;
@@ -92,42 +92,222 @@ pub struct CheckSiteRow {
 }
 
 pub const CHECK_SITES: &[CheckSiteRow] = &[
-    CheckSiteRow { parent: NodeKind::LetStmt, slot: Slot::AnnotatedInit, rule: 31, corpus: true },
-    CheckSiteRow { parent: NodeKind::AssignStmt, slot: Slot::AssignRhs, rule: 31, corpus: true },
-    CheckSiteRow { parent: NodeKind::ReturnStmt, slot: Slot::ReturnValue, rule: 31, corpus: true },
-    CheckSiteRow { parent: NodeKind::RaiseStmt, slot: Slot::RaiseValue, rule: 31, corpus: true },
-    CheckSiteRow { parent: NodeKind::FInit, slot: Slot::FieldInit, rule: 34, corpus: true },
-    CheckSiteRow { parent: NodeKind::CallExpr, slot: Slot::Argument, rule: 38, corpus: true },
-    CheckSiteRow { parent: NodeKind::StructLit, slot: Slot::Argument, rule: 34, corpus: false },
-    CheckSiteRow { parent: NodeKind::ArrayLit, slot: Slot::ArrayElement, rule: 22, corpus: true },
-    CheckSiteRow { parent: NodeKind::Block, slot: Slot::Tail, rule: 31, corpus: true },
-    CheckSiteRow { parent: NodeKind::IfExpr, slot: Slot::Tail, rule: 32, corpus: true },
-    CheckSiteRow { parent: NodeKind::MatchExpr, slot: Slot::Tail, rule: 32, corpus: true },
-    CheckSiteRow { parent: NodeKind::AddExpr, slot: Slot::OperatorRhs, rule: 29, corpus: true },
-    CheckSiteRow { parent: NodeKind::MulExpr, slot: Slot::OperatorRhs, rule: 29, corpus: true },
-    CheckSiteRow { parent: NodeKind::BitExpr, slot: Slot::OperatorRhs, rule: 29, corpus: false },
-    CheckSiteRow { parent: NodeKind::CmpExpr, slot: Slot::OperatorRhs, rule: 29, corpus: true },
-    CheckSiteRow { parent: NodeKind::RangeExpr, slot: Slot::OperatorRhs, rule: 30, corpus: true },
-    CheckSiteRow { parent: NodeKind::UnaryExpr, slot: Slot::OperatorRhs, rule: 29, corpus: false },
-    CheckSiteRow { parent: NodeKind::AssignStmt, slot: Slot::OperatorRhs, rule: 29, corpus: false },
-    CheckSiteRow { parent: NodeKind::Bracket, slot: Slot::IndexOperand, rule: 29, corpus: true },
-    CheckSiteRow { parent: NodeKind::IfExpr, slot: Slot::Condition, rule: 30, corpus: true },
-    CheckSiteRow { parent: NodeKind::WhileStmt, slot: Slot::Condition, rule: 30, corpus: true },
-    CheckSiteRow { parent: NodeKind::AndExpr, slot: Slot::Condition, rule: 30, corpus: true },
-    CheckSiteRow { parent: NodeKind::OrExpr, slot: Slot::Condition, rule: 30, corpus: false },
-    CheckSiteRow { parent: NodeKind::NotExpr, slot: Slot::Condition, rule: 30, corpus: false },
-    CheckSiteRow { parent: NodeKind::ParallelForStmt, slot: Slot::Condition, rule: 30, corpus: false },
-    CheckSiteRow { parent: NodeKind::ForStmt, slot: Slot::UnitBody, rule: 31, corpus: true },
-    CheckSiteRow { parent: NodeKind::WhileStmt, slot: Slot::UnitBody, rule: 31, corpus: true },
-    CheckSiteRow { parent: NodeKind::ParallelStmt, slot: Slot::UnitBody, rule: 31, corpus: false },
-    CheckSiteRow { parent: NodeKind::ParallelForStmt, slot: Slot::UnitBody, rule: 31, corpus: false },
-    CheckSiteRow { parent: NodeKind::SimdForStmt, slot: Slot::UnitBody, rule: 31, corpus: false },
-    CheckSiteRow { parent: NodeKind::WithStmt, slot: Slot::UnitBody, rule: 31, corpus: false },
-    CheckSiteRow { parent: NodeKind::AttrBlockStmt, slot: Slot::UnitBody, rule: 31, corpus: false },
-    CheckSiteRow { parent: NodeKind::DeferStmt, slot: Slot::UnitBody, rule: 31, corpus: true },
-    CheckSiteRow { parent: NodeKind::ErrdeferStmt, slot: Slot::UnitBody, rule: 31, corpus: true },
-    CheckSiteRow { parent: NodeKind::Block, slot: Slot::UnitBody, rule: 31, corpus: true },
-    CheckSiteRow { parent: NodeKind::Handler, slot: Slot::HandlerBlock, rule: 36, corpus: true },
+    CheckSiteRow {
+        parent: NodeKind::LetStmt,
+        slot: Slot::AnnotatedInit,
+        rule: 31,
+        corpus: true,
+    },
+    CheckSiteRow {
+        parent: NodeKind::AssignStmt,
+        slot: Slot::AssignRhs,
+        rule: 31,
+        corpus: true,
+    },
+    CheckSiteRow {
+        parent: NodeKind::ReturnStmt,
+        slot: Slot::ReturnValue,
+        rule: 31,
+        corpus: true,
+    },
+    CheckSiteRow {
+        parent: NodeKind::RaiseStmt,
+        slot: Slot::RaiseValue,
+        rule: 31,
+        corpus: true,
+    },
+    CheckSiteRow {
+        parent: NodeKind::FInit,
+        slot: Slot::FieldInit,
+        rule: 34,
+        corpus: true,
+    },
+    CheckSiteRow {
+        parent: NodeKind::CallExpr,
+        slot: Slot::Argument,
+        rule: 38,
+        corpus: true,
+    },
+    CheckSiteRow {
+        parent: NodeKind::StructLit,
+        slot: Slot::Argument,
+        rule: 34,
+        corpus: false,
+    },
+    CheckSiteRow {
+        parent: NodeKind::ArrayLit,
+        slot: Slot::ArrayElement,
+        rule: 22,
+        corpus: true,
+    },
+    CheckSiteRow {
+        parent: NodeKind::Block,
+        slot: Slot::Tail,
+        rule: 31,
+        corpus: true,
+    },
+    CheckSiteRow {
+        parent: NodeKind::IfExpr,
+        slot: Slot::Tail,
+        rule: 32,
+        corpus: true,
+    },
+    CheckSiteRow {
+        parent: NodeKind::MatchExpr,
+        slot: Slot::Tail,
+        rule: 32,
+        corpus: true,
+    },
+    CheckSiteRow {
+        parent: NodeKind::AddExpr,
+        slot: Slot::OperatorRhs,
+        rule: 29,
+        corpus: true,
+    },
+    CheckSiteRow {
+        parent: NodeKind::MulExpr,
+        slot: Slot::OperatorRhs,
+        rule: 29,
+        corpus: true,
+    },
+    CheckSiteRow {
+        parent: NodeKind::BitExpr,
+        slot: Slot::OperatorRhs,
+        rule: 29,
+        corpus: false,
+    },
+    CheckSiteRow {
+        parent: NodeKind::CmpExpr,
+        slot: Slot::OperatorRhs,
+        rule: 29,
+        corpus: true,
+    },
+    CheckSiteRow {
+        parent: NodeKind::RangeExpr,
+        slot: Slot::OperatorRhs,
+        rule: 30,
+        corpus: true,
+    },
+    CheckSiteRow {
+        parent: NodeKind::UnaryExpr,
+        slot: Slot::OperatorRhs,
+        rule: 29,
+        corpus: false,
+    },
+    CheckSiteRow {
+        parent: NodeKind::AssignStmt,
+        slot: Slot::OperatorRhs,
+        rule: 29,
+        corpus: false,
+    },
+    CheckSiteRow {
+        parent: NodeKind::Bracket,
+        slot: Slot::IndexOperand,
+        rule: 29,
+        corpus: true,
+    },
+    CheckSiteRow {
+        parent: NodeKind::IfExpr,
+        slot: Slot::Condition,
+        rule: 30,
+        corpus: true,
+    },
+    CheckSiteRow {
+        parent: NodeKind::WhileStmt,
+        slot: Slot::Condition,
+        rule: 30,
+        corpus: true,
+    },
+    CheckSiteRow {
+        parent: NodeKind::AndExpr,
+        slot: Slot::Condition,
+        rule: 30,
+        corpus: true,
+    },
+    CheckSiteRow {
+        parent: NodeKind::OrExpr,
+        slot: Slot::Condition,
+        rule: 30,
+        corpus: false,
+    },
+    CheckSiteRow {
+        parent: NodeKind::NotExpr,
+        slot: Slot::Condition,
+        rule: 30,
+        corpus: false,
+    },
+    CheckSiteRow {
+        parent: NodeKind::ParallelForStmt,
+        slot: Slot::Condition,
+        rule: 30,
+        corpus: false,
+    },
+    CheckSiteRow {
+        parent: NodeKind::ForStmt,
+        slot: Slot::UnitBody,
+        rule: 31,
+        corpus: true,
+    },
+    CheckSiteRow {
+        parent: NodeKind::WhileStmt,
+        slot: Slot::UnitBody,
+        rule: 31,
+        corpus: true,
+    },
+    CheckSiteRow {
+        parent: NodeKind::ParallelStmt,
+        slot: Slot::UnitBody,
+        rule: 31,
+        corpus: false,
+    },
+    CheckSiteRow {
+        parent: NodeKind::ParallelForStmt,
+        slot: Slot::UnitBody,
+        rule: 31,
+        corpus: false,
+    },
+    CheckSiteRow {
+        parent: NodeKind::SimdForStmt,
+        slot: Slot::UnitBody,
+        rule: 31,
+        corpus: false,
+    },
+    CheckSiteRow {
+        parent: NodeKind::WithStmt,
+        slot: Slot::UnitBody,
+        rule: 31,
+        corpus: false,
+    },
+    CheckSiteRow {
+        parent: NodeKind::AttrBlockStmt,
+        slot: Slot::UnitBody,
+        rule: 31,
+        corpus: false,
+    },
+    CheckSiteRow {
+        parent: NodeKind::DeferStmt,
+        slot: Slot::UnitBody,
+        rule: 31,
+        corpus: true,
+    },
+    CheckSiteRow {
+        parent: NodeKind::ErrdeferStmt,
+        slot: Slot::UnitBody,
+        rule: 31,
+        corpus: true,
+    },
+    CheckSiteRow {
+        parent: NodeKind::Block,
+        slot: Slot::UnitBody,
+        rule: 31,
+        corpus: true,
+    },
+    CheckSiteRow {
+        parent: NodeKind::Handler,
+        slot: Slot::HandlerBlock,
+        rule: 36,
+        corpus: true,
+    },
 ];
 
 /// One `defer`/`errdefer` body being typed (R33's round-6 clause).
@@ -193,7 +373,13 @@ pub struct BodyCx<'f, 'a> {
 }
 
 impl<'f, 'a> BodyCx<'f, 'a> {
-    fn new(f: &'a FileCtx<'f>, owner: DefId, file: FileId, decl: u32, lcx: lower::Cx<'f, 'a>) -> BodyCx<'f, 'a> {
+    fn new(
+        f: &'a FileCtx<'f>,
+        owner: DefId,
+        file: FileId,
+        decl: u32,
+        lcx: lower::Cx<'f, 'a>,
+    ) -> BodyCx<'f, 'a> {
         let end = f.tree.subtree_end(decl as usize) as u32;
         let n = (end - decl) as usize;
         BodyCx {
@@ -245,7 +431,11 @@ impl<'f, 'a> BodyCx<'f, 'a> {
             }
             return Some((t, self.local_kind[i]));
         }
-        self.outer.iter().rev().find(|&&(n, ..)| n == node).map(|&(_, t, k)| (t, k))
+        self.outer
+            .iter()
+            .rev()
+            .find(|&&(n, ..)| n == node)
+            .map(|&(_, t, k)| (t, k))
     }
 
     /// Marks `node` as having produced a diagnostic; answers whether it had
@@ -282,8 +472,18 @@ impl<'f, 'a> BodyCx<'f, 'a> {
 
     /// Enters a closure body (see the field comment on `closure_synth`).
     /// Returns what `leave_closure` restores.
-    pub fn enter_closure(&mut self, synth: bool, result: TyId, raises: TyId) -> (u32, Vec<DeferFrame>, TyId, TyId) {
-        let saved = (self.loop_depth, std::mem::take(&mut self.defers), self.result, self.raises);
+    pub fn enter_closure(
+        &mut self,
+        synth: bool,
+        result: TyId,
+        raises: TyId,
+    ) -> (u32, Vec<DeferFrame>, TyId, TyId) {
+        let saved = (
+            self.loop_depth,
+            std::mem::take(&mut self.defers),
+            self.result,
+            self.raises,
+        );
         self.loop_depth = 0;
         self.result = result;
         self.raises = raises;
@@ -323,7 +523,11 @@ impl<'f, 'a> BodyCx<'f, 'a> {
     pub fn site(&mut self, parent: NodeKind, slot: Slot) {
         // One row per distinct (parent, slot): the test compares SETS, and a
         // corpus of 900 targets would otherwise push millions of rows.
-        if !self.sites.iter().any(|s| s.parent == parent && s.slot == slot) {
+        if !self
+            .sites
+            .iter()
+            .any(|s| s.parent == parent && s.slot == slot)
+        {
             self.sites.push(CheckSite { parent, slot });
         }
     }
@@ -346,7 +550,11 @@ impl Wf<'_> {
             }
             let f = &files[row.file.index()];
             let decl = row.node as usize;
-            let Some(block) = f.tree.children(decl).find(|&c| f.tree.kinds[c] == NodeKind::Block) else {
+            let Some(block) = f
+                .tree
+                .children(decl)
+                .find(|&c| f.tree.kinds[c] == NodeKind::Block)
+            else {
                 continue;
             };
             self.sink.open();
@@ -364,7 +572,11 @@ impl Wf<'_> {
             self.body_nodes += cx.nodes;
             self.tape_events += cx.tape.len() as u64;
             for s in &cx.sites {
-                if !self.check_sites.iter().any(|x| x.parent == s.parent && x.slot == s.slot) {
+                if !self
+                    .check_sites
+                    .iter()
+                    .any(|x| x.parent == s.parent && x.slot == s.slot)
+                {
                     self.check_sites.push(*s);
                 }
             }
@@ -406,8 +618,20 @@ impl Wf<'_> {
             cx.result = self.fir.sigs.fn_sigs.result(sig);
             cx.raises = self.fir.sigs.fn_sigs.raises(sig);
         }
-        let Some(fs) = cx.f.tree.children(decl).find(|&c| cx.f.tree.kinds[c] == NodeKind::FnSig) else { return };
-        let Some(ps) = cx.f.tree.children(fs).find(|&c| cx.f.tree.kinds[c] == NodeKind::Params) else { return };
+        let Some(fs) =
+            cx.f.tree
+                .children(decl)
+                .find(|&c| cx.f.tree.kinds[c] == NodeKind::FnSig)
+        else {
+            return;
+        };
+        let Some(ps) =
+            cx.f.tree
+                .children(fs)
+                .find(|&c| cx.f.tree.kinds[c] == NodeKind::Params)
+        else {
+            return;
+        };
         let mut i = 0usize;
         for p in cx.f.tree.children(ps).collect::<Vec<_>>() {
             if cx.f.tree.kinds[p] != NodeKind::Param {
@@ -420,7 +644,8 @@ impl Wf<'_> {
             };
             cx.bind(p as u32, ty, LocalKind::Value);
             let place = cx.tape.intern(p as u32, &[]);
-            cx.tape.push(p as u32, place, UseKind::Declare, Cause::Explicit(p as u32));
+            cx.tape
+                .push(p as u32, place, UseKind::Declare, Cause::Explicit(p as u32));
             i += 1;
         }
     }
@@ -455,7 +680,13 @@ impl Wf<'_> {
                 } else {
                     let s = self.show(TY_UNIT);
                     let w = self.show(want);
-                    self.bemit(cx, node, 26, 31, format!("expected `{w}`, found `{s}`: this block has no tail expression"));
+                    self.bemit(
+                        cx,
+                        node,
+                        26,
+                        31,
+                        format!("expected `{w}`, found `{s}`: this block has no tail expression"),
+                    );
                     TY_ERROR
                 }
             }
@@ -501,7 +732,9 @@ impl Wf<'_> {
                 self.loop_exit(cx, node);
                 TY_NEVER
             }
-            NodeKind::ForStmt | NodeKind::ParallelForStmt | NodeKind::SimdForStmt => self.for_stmt(cx, node),
+            NodeKind::ForStmt | NodeKind::ParallelForStmt | NodeKind::SimdForStmt => {
+                self.for_stmt(cx, node)
+            }
             NodeKind::WhileStmt => {
                 let kids = cx.kids(node);
                 if let Some(&c) = kids.first() {
@@ -523,7 +756,10 @@ impl Wf<'_> {
                 for c in cx.kids(node) {
                     let is_call = match cx.kind(c) {
                         NodeKind::CallExpr => true,
-                        NodeKind::TryExpr => cx.kids(c).first().is_some_and(|&k| cx.kind(k) == NodeKind::CallExpr),
+                        NodeKind::TryExpr => cx
+                            .kids(c)
+                            .first()
+                            .is_some_and(|&k| cx.kind(k) == NodeKind::CallExpr),
                         _ => false,
                     };
                     if !is_call && cx.kind(c) != NodeKind::Error {
@@ -538,7 +774,8 @@ impl Wf<'_> {
                     let ty = self.synth(cx, c);
                     let _ = ty;
                     if let Some(p) = self.place_of(cx, c) {
-                        cx.tape.push(c as u32, p, UseKind::Move, Cause::Explicit(node as u32));
+                        cx.tape
+                            .push(c as u32, p, UseKind::Move, Cause::Explicit(node as u32));
                     }
                 }
                 TY_UNIT
@@ -548,7 +785,7 @@ impl Wf<'_> {
                 for c in cx.kids(node) {
                     if cx.kind(c) == NodeKind::Block {
                         let pk = cx.kind(node);
-                    cx.site(pk, Slot::UnitBody);
+                        cx.site(pk, Slot::UnitBody);
                         self.check(cx, c, TY_UNIT);
                     }
                 }
@@ -560,11 +797,7 @@ impl Wf<'_> {
             k if is_expr_kind(k) => {
                 cx.site(NodeKind::Block, Slot::UnitBody);
                 let got = self.check(cx, node, TY_UNIT);
-                if got == TY_NEVER {
-                    TY_NEVER
-                } else {
-                    TY_UNIT
-                }
+                if got == TY_NEVER { TY_NEVER } else { TY_UNIT }
             }
             _ => TY_UNIT,
         }
@@ -572,9 +805,19 @@ impl Wf<'_> {
 
     fn let_stmt(&mut self, cx: &mut BodyCx, node: usize) -> TyId {
         let kids = cx.kids(node);
-        let Some(&binding) = kids.first() else { return TY_UNIT };
-        let annot = kids.iter().skip(1).find(|&&c| is_type_node(cx.kind(c))).copied();
-        let init = kids.iter().skip(1).find(|&&c| is_expr_kind(cx.kind(c))).copied();
+        let Some(&binding) = kids.first() else {
+            return TY_UNIT;
+        };
+        let annot = kids
+            .iter()
+            .skip(1)
+            .find(|&&c| is_type_node(cx.kind(c)))
+            .copied();
+        let init = kids
+            .iter()
+            .skip(1)
+            .find(|&&c| is_expr_kind(cx.kind(c)))
+            .copied();
         let declared = annot.map(|a| self.lower_annotation(cx, a));
         let ty = match (declared, init) {
             (Some(d), Some(e)) => {
@@ -611,7 +854,12 @@ impl Wf<'_> {
             NodeKind::Binding => {
                 cx.bind(node as u32, ty, LocalKind::Value);
                 let p = cx.tape.intern(node as u32, &[]);
-                cx.tape.push(node as u32, p, UseKind::Declare, Cause::Explicit(node as u32));
+                cx.tape.push(
+                    node as u32,
+                    p,
+                    UseKind::Declare,
+                    Cause::Explicit(node as u32),
+                );
             }
             NodeKind::TupleBinding => {
                 let kids = cx.kids(node);
@@ -622,12 +870,31 @@ impl Wf<'_> {
                 };
                 if !parts.is_empty() && parts.len() != kids.len() && ty != TY_ERROR {
                     let w = self.show(ty);
-                    self.bemit(cx, node, 31, 31, format!("a tuple binding needs a tuple type of the same arity; found `{w}`"));
-                } else if parts.is_empty() && kids.len() != 1 && ty != TY_ERROR && ty != NO_TY && ty != TY_NEVER {
+                    self.bemit(
+                        cx,
+                        node,
+                        31,
+                        31,
+                        format!(
+                            "a tuple binding needs a tuple type of the same arity; found `{w}`"
+                        ),
+                    );
+                } else if parts.is_empty()
+                    && kids.len() != 1
+                    && ty != TY_ERROR
+                    && ty != NO_TY
+                    && ty != TY_NEVER
+                {
                     // R31: a tuple binding needs a TUPLE type. (`(a)` is `a`
                     // by R4, so a one-element binding faces any type.)
                     let w = self.show(ty);
-                    self.bemit(cx, node, 31, 31, format!("a tuple binding needs a tuple type; found `{w}`"));
+                    self.bemit(
+                        cx,
+                        node,
+                        31,
+                        31,
+                        format!("a tuple binding needs a tuple type; found `{w}`"),
+                    );
                 }
                 for (i, &k) in kids.iter().enumerate() {
                     self.bind_binding(cx, k, parts.get(i).copied().unwrap_or(TY_ERROR));
@@ -639,7 +906,9 @@ impl Wf<'_> {
 
     fn assign_stmt(&mut self, cx: &mut BodyCx, node: usize) -> TyId {
         let kids = cx.kids(node);
-        let Some(&place) = kids.first() else { return TY_UNIT };
+        let Some(&place) = kids.first() else {
+            return TY_UNIT;
+        };
         let lhs = self.synth(cx, place);
         // `a op= b` is R29's: the trait of `op` must hold for the place's
         // type and `b` is checked against it.
@@ -648,12 +917,24 @@ impl Wf<'_> {
             self.require_operator(cx, place, lhs, op, 29);
         }
         for &rhs in kids.iter().skip(1) {
-            cx.site(NodeKind::AssignStmt, if compound.is_some() { Slot::OperatorRhs } else { Slot::AssignRhs });
+            cx.site(
+                NodeKind::AssignStmt,
+                if compound.is_some() {
+                    Slot::OperatorRhs
+                } else {
+                    Slot::AssignRhs
+                },
+            );
             self.check(cx, rhs, lhs);
             self.use_value(cx, rhs, lhs, Cause::Explicit(node as u32));
         }
         if let Some(p) = self.place_of(cx, place) {
-            cx.tape.push(place as u32, p, UseKind::Assign, Cause::Explicit(node as u32));
+            cx.tape.push(
+                place as u32,
+                p,
+                UseKind::Assign,
+                Cause::Explicit(node as u32),
+            );
         }
         TY_UNIT
     }
@@ -683,7 +964,13 @@ impl Wf<'_> {
             None => {
                 if cx.result != TY_UNIT && cx.result != TY_ERROR && cx.result != NO_TY {
                     let w = self.show(cx.result);
-                    self.bemit(cx, node, 26, 31, format!("expected `{w}`, found `()`: `return;` requires a `()` result"));
+                    self.bemit(
+                        cx,
+                        node,
+                        26,
+                        31,
+                        format!("expected `{w}`, found `()`: `return;` requires a `()` result"),
+                    );
                 }
             }
         }
@@ -702,7 +989,13 @@ impl Wf<'_> {
             if cx.closures > 0 && cx.in_synth_closure() {
                 self.bemit(cx, node, 35, 35, "`raise` inside a closure in SYNTH mode: a closure raises only when checked against a `fn ... raises E` type".to_string());
             } else {
-                self.bemit(cx, node, 36, 36, "`raise` in a function that does not declare `raises`".to_string());
+                self.bemit(
+                    cx,
+                    node,
+                    36,
+                    36,
+                    "`raise` in a function that does not declare `raises`".to_string(),
+                );
             }
         }
         for &e in &kids {
@@ -717,13 +1010,23 @@ impl Wf<'_> {
     }
 
     fn loop_exit(&mut self, cx: &mut BodyCx, node: usize) {
-        let word = if cx.kind(node) == NodeKind::BreakStmt { "break" } else { "continue" };
-        if let Some(fr) = cx.defers.last() {
-            if cx.loop_depth <= fr.loops_outside {
-                let kw = if fr.errdefer { "errdefer" } else { "defer" };
-                self.bemit(cx, node, 33, 33, format!("a `{word}` inside this `{kw}` body targets a loop outside it (ch01 R23c)"));
-                return;
-            }
+        let word = if cx.kind(node) == NodeKind::BreakStmt {
+            "break"
+        } else {
+            "continue"
+        };
+        if let Some(fr) = cx.defers.last()
+            && cx.loop_depth <= fr.loops_outside
+        {
+            let kw = if fr.errdefer { "errdefer" } else { "defer" };
+            self.bemit(
+                cx,
+                node,
+                33,
+                33,
+                format!("a `{word}` inside this `{kw}` body targets a loop outside it (ch01 R23c)"),
+            );
+            return;
         }
         if cx.loop_depth == 0 {
             self.bemit(cx, node, 33, 33, format!("`{word}` outside a loop"));
@@ -733,7 +1036,9 @@ impl Wf<'_> {
     /// R33's round-6 clause: `return`, `raise` and `?` inside a deferred
     /// body are rejected, and the diagnostic names the enclosing statement.
     fn in_defer(&mut self, cx: &mut BodyCx, node: usize, what: &str) -> bool {
-        let Some(fr) = cx.defers.last() else { return false };
+        let Some(fr) = cx.defers.last() else {
+            return false;
+        };
         let kw = if fr.errdefer { "errdefer" } else { "defer" };
         let line = fr.node;
         let _ = line;
@@ -780,17 +1085,28 @@ impl Wf<'_> {
     /// or `Iterator`, and from nothing else.
     fn for_stmt(&mut self, cx: &mut BodyCx, node: usize) -> TyId {
         let kids = cx.kids(node);
-        let Some(&binding) = kids.first() else { return TY_UNIT };
+        let Some(&binding) = kids.first() else {
+            return TY_UNIT;
+        };
         let iter = kids.get(1).copied();
         let mut elem = TY_ERROR;
         if let Some(e) = iter {
             let s = self.synth(cx, e);
             // A `never` iterable: the loop is unreachable; the binding is
             // silently `TY_ERROR` (R10(a) has nothing to coerce it to).
-            elem = if s == TY_NEVER { TY_ERROR } else { self.element_of(cx, e, s) };
+            elem = if s == TY_NEVER {
+                TY_ERROR
+            } else {
+                self.element_of(cx, e, s)
+            };
             if let Some(p) = self.place_of(cx, e) {
-                let kind = if self.copyable(s) { UseKind::Copy } else { UseKind::Move };
-                cx.tape.push(e as u32, p, kind, Cause::Iterable(node as u32));
+                let kind = if self.copyable(s) {
+                    UseKind::Copy
+                } else {
+                    UseKind::Move
+                };
+                cx.tape
+                    .push(e as u32, p, kind, Cause::Iterable(node as u32));
             }
         }
         self.bind_binding(cx, binding, elem);
@@ -897,7 +1213,12 @@ pub fn is_expr_kind(k: NodeKind) -> bool {
 pub fn is_type_node(k: NodeKind) -> bool {
     matches!(
         k,
-        NodeKind::QualType | NodeKind::ScopedType | NodeKind::TypeApp | NodeKind::TupleType | NodeKind::FnType | NodeKind::DynType
+        NodeKind::QualType
+            | NodeKind::ScopedType
+            | NodeKind::TypeApp
+            | NodeKind::TupleType
+            | NodeKind::FnType
+            | NodeKind::DynType
     )
 }
 
@@ -905,29 +1226,34 @@ pub fn is_type_node(k: NodeKind) -> bool {
 fn compound_op(cx: &BodyCx, place: usize) -> Option<TokenKind> {
     let start = cx.f.tree.token_range(place).1 as usize;
     let n = cx.f.tokens.kinds.len();
-    (start..n).map(|i| cx.f.tokens.kinds[i]).find(|k| !k.is_trivia()).and_then(|k| {
-        matches!(
-            k,
-            TokenKind::PlusEq
-                | TokenKind::MinusEq
-                | TokenKind::StarEq
-                | TokenKind::SlashEq
-                | TokenKind::PercentEq
-                | TokenKind::AmpEq
-                | TokenKind::PipeEq
-                | TokenKind::CaretEq
-                | TokenKind::ShlEq
-                | TokenKind::ShrEq
-        )
-        .then_some(k)
-    })
+    (start..n)
+        .map(|i| cx.f.tokens.kinds[i])
+        .find(|k| !k.is_trivia())
+        .and_then(|k| {
+            matches!(
+                k,
+                TokenKind::PlusEq
+                    | TokenKind::MinusEq
+                    | TokenKind::StarEq
+                    | TokenKind::SlashEq
+                    | TokenKind::PercentEq
+                    | TokenKind::AmpEq
+                    | TokenKind::PipeEq
+                    | TokenKind::CaretEq
+                    | TokenKind::ShlEq
+                    | TokenKind::ShrEq
+            )
+            .then_some(k)
+        })
 }
 
 /// The first significant token strictly between two sibling nodes.
 pub fn op_between(cx: &BodyCx, a: usize, b: usize) -> Option<TokenKind> {
     let start = cx.f.tree.token_range(a).1 as usize;
     let end = (cx.f.tree.token_range(b).0 as usize).min(cx.f.tokens.kinds.len());
-    (start..end).map(|i| cx.f.tokens.kinds[i]).find(|k| !k.is_trivia())
+    (start..end)
+        .map(|i| cx.f.tokens.kinds[i])
+        .find(|k| !k.is_trivia())
 }
 
 /// The first significant token a node owns directly, before its children.
@@ -972,7 +1298,10 @@ impl Wf<'_> {
             (ty, std::mem::take(&mut l.sites).elements)
         };
         for (_, file, range, elem, container) in elements {
-            if matches!(self.fir.tys.tag(elem), TyTag::Param | TyTag::Proj | TyTag::Error) {
+            if matches!(
+                self.fir.tys.tag(elem),
+                TyTag::Param | TyTag::Proj | TyTag::Error
+            ) {
                 continue;
             }
             if self.is_linear(elem) {
@@ -995,7 +1324,10 @@ impl Wf<'_> {
             return true;
         }
         let bare = self.fir.tys.unqual(ty);
-        let want = self.fir.tys.intern_trait_ref(self.prelude.traits[tr::COPYABLE], fors_fir::ty::NO_ARGS);
+        let want = self
+            .fir
+            .tys
+            .intern_trait_ref(self.prelude.traits[tr::COPYABLE], fors_fir::ty::NO_ARGS);
         matches!(self.holds(bare, want), crate::wf::Holds::Yes)
     }
 
@@ -1004,7 +1336,10 @@ impl Wf<'_> {
     /// trait. The only normalisation I3 needs (R20 proper is I6's).
     pub fn assoc_item(&mut self, subject: TyId, trait_def: DefId, name: Symbol) -> TyId {
         if matches!(self.fir.tys.tag(subject), TyTag::Param | TyTag::Proj) {
-            let tref = self.fir.tys.intern_trait_ref(trait_def, fors_fir::ty::NO_ARGS);
+            let tref = self
+                .fir
+                .tys
+                .intern_trait_ref(trait_def, fors_fir::ty::NO_ARGS);
             let key = self.fir.tys.intern_proj_key(tref, name);
             return self.fir.tys.proj(subject, key);
         }
@@ -1039,8 +1374,7 @@ impl Wf<'_> {
                         .enumerate()
                         .skip(cx.f.tree.token_range(n).0 as usize)
                         .take((cx.f.tree.token_range(n).1 - cx.f.tree.token_range(n).0) as usize)
-                        .filter(|&(_, &k)| k == TokenKind::Ident)
-                        .last()
+                        .rfind(|&(_, &k)| k == TokenKind::Ident)
                         .map(|(i, _)| self.names.intern(cx.f.tokens.text(i, cx.f.source)));
                     path.push(Seg::Field(name.unwrap_or(Symbol(0))));
                     n = cx.f.tree.children(n).next()?;
@@ -1064,9 +1398,9 @@ impl Wf<'_> {
                     let consumed = crate::member::path_consumed(cx, n).max(1) as usize;
                     let mut own: Vec<Seg> = Vec::new();
                     for k in consumed..nsegs {
-                        match self.segment_name(cx, n, k) {
-                            Some(s) => own.push(Seg::Field(s)),
-                            None => return None,
+                        {
+                            let s = self.segment_name(cx, n, k)?;
+                            own.push(Seg::Field(s))
                         }
                     }
                     path.reverse();
@@ -1082,8 +1416,14 @@ impl Wf<'_> {
     /// Records the value use of an expression that was consumed by a `let`,
     /// an assignment, a `return` or an argument (design §7.9).
     pub fn use_value(&mut self, cx: &mut BodyCx, node: usize, ty: TyId, cause: Cause) {
-        let Some(p) = self.place_of(cx, node) else { return };
-        let kind = if self.copyable(ty) { UseKind::Copy } else { UseKind::Move };
+        let Some(p) = self.place_of(cx, node) else {
+            return;
+        };
+        let kind = if self.copyable(ty) {
+            UseKind::Copy
+        } else {
+            UseKind::Move
+        };
         cx.tape.push(node as u32, p, kind, cause);
     }
 }

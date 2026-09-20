@@ -18,8 +18,18 @@ fn check_source(src: &str) -> Vec<String> {
     let bytes = source.into_bytes();
     let name: Segments = vec![interner.intern(b"m")];
     let parsed = parse_file(&bytes);
-    assert!(parsed.diags.is_empty(), "probe must parse: {:?}\n{}", parsed.diags, String::from_utf8_lossy(&bytes));
-    let inputs = [FileInput { tree: &parsed.tree, tokens: &parsed.tokens, source: &bytes, name }];
+    assert!(
+        parsed.diags.is_empty(),
+        "probe must parse: {:?}\n{}",
+        parsed.diags,
+        String::from_utf8_lossy(&bytes)
+    );
+    let inputs = [FileInput {
+        tree: &parsed.tree,
+        tokens: &parsed.tokens,
+        source: &bytes,
+        name,
+    }];
     let resolved = fors_resolve::resolve_in_package(&mut interner, &inputs, Some(0), Some(b"m"));
     let out = fors_check::check_build(&inputs, &resolved, &mut interner);
     out.diagnostics.iter().map(|d| d.code.as_string()).collect()
@@ -33,9 +43,21 @@ struct Probe {
 
 const PROBES: &[Probe] = &[
     // ---------------------------------------------------------------- I2
-    Probe { name: "r11_type_in_const_slot", want: &["T0011"], src: "fn f(let a: Array[i32, i32]) { }" },
-    Probe { name: "r13_bool_in_usize_slot", want: &["T0013"], src: "fn f(let a: Array[i32, true]) { }" },
-    Probe { name: "r13_negative_in_usize_slot", want: &["T0013"], src: "fn f(let a: Array[i32, -1]) { }" },
+    Probe {
+        name: "r11_type_in_const_slot",
+        want: &["T0011"],
+        src: "fn f(let a: Array[i32, i32]) { }",
+    },
+    Probe {
+        name: "r13_bool_in_usize_slot",
+        want: &["T0013"],
+        src: "fn f(let a: Array[i32, true]) { }",
+    },
+    Probe {
+        name: "r13_negative_in_usize_slot",
+        want: &["T0013"],
+        src: "fn f(let a: Array[i32, -1]) { }",
+    },
     Probe {
         name: "r13_fit_is_declaration_order_independent_fn_first",
         want: &["T0013"],
@@ -46,7 +68,11 @@ const PROBES: &[Probe] = &[
         want: &["T0013"],
         src: "struct S[N: u8] { a: Array[i32, 2] }\nfn f(let x: S[300]) { }",
     },
-    Probe { name: "r13_fit_ok", want: &[], src: "fn f(let x: S[200]) { }\nstruct S[N: u8] { a: Array[i32, 2] }" },
+    Probe {
+        name: "r13_fit_ok",
+        want: &[],
+        src: "fn f(let x: S[200]) { }\nstruct S[N: u8] { a: Array[i32, 2] }",
+    },
     Probe {
         name: "r17_parameter_name_differs",
         want: &["T0017"],
@@ -78,9 +104,21 @@ const PROBES: &[Probe] = &[
         src: "struct W[T] { t: T }\nimpl Tr for W[i32] { fn m(let self) { } }\nimpl[T] Tr for W[T] { fn m(let self) { } }\ntrait Tr { fn m(let self); }",
     },
     // ---------------------------------------------------------------- I3
-    Probe { name: "r29_unary_minus_needs_neg", want: &["T0029"], src: "fn f(let n: u32) { let x = -n; }" },
-    Probe { name: "r29_negated_literal_against_unsigned", want: &["T0029"], src: "fn f() { let x: u8 = -1; }" },
-    Probe { name: "r29_index_on_scalar", want: &["T0029"], src: "fn f(let n: i32) { let x = n[0]; }" },
+    Probe {
+        name: "r29_unary_minus_needs_neg",
+        want: &["T0029"],
+        src: "fn f(let n: u32) { let x = -n; }",
+    },
+    Probe {
+        name: "r29_negated_literal_against_unsigned",
+        want: &["T0029"],
+        src: "fn f() { let x: u8 = -1; }",
+    },
+    Probe {
+        name: "r29_index_on_scalar",
+        want: &["T0029"],
+        src: "fn f(let n: i32) { let x = n[0]; }",
+    },
     Probe {
         name: "r29_index_on_struct_without_impl",
         want: &["T0029"],
@@ -91,16 +129,36 @@ const PROBES: &[Probe] = &[
         want: &["T0029"],
         src: "fn g(let x: i32) -> i32 { return x; }\nfn f() { let y = g[0]; }",
     },
-    Probe { name: "r30_range_operands_differ", want: &["T0030"], src: "fn f(let a: u8, let b: u16) { let r = a ..< b; }" },
-    Probe { name: "r31_tuple_binding_against_non_tuple", want: &["T0031"], src: "fn f() { let (a, b) = 1; }" },
-    Probe { name: "r31_one_element_binding_is_the_value", want: &[], src: "fn f() { let (a) = 1; }" },
-    Probe { name: "r35_return_in_synth_closure", want: &["T0035"], src: "fn f() { let g = |let a: i32| { return a; }; }" },
+    Probe {
+        name: "r30_range_operands_differ",
+        want: &["T0030"],
+        src: "fn f(let a: u8, let b: u16) { let r = a ..< b; }",
+    },
+    Probe {
+        name: "r31_tuple_binding_against_non_tuple",
+        want: &["T0031"],
+        src: "fn f() { let (a, b) = 1; }",
+    },
+    Probe {
+        name: "r31_one_element_binding_is_the_value",
+        want: &[],
+        src: "fn f() { let (a) = 1; }",
+    },
+    Probe {
+        name: "r35_return_in_synth_closure",
+        want: &["T0035"],
+        src: "fn f() { let g = |let a: i32| { return a; }; }",
+    },
     Probe {
         name: "r35_return_in_check_closure_uses_fn_result",
         want: &["T0026"],
         src: "fn f() { let g: fn(let i32) -> i32 = |a| { return true; }; }",
     },
-    Probe { name: "r33_break_inside_closure_is_outside_loop", want: &["T0033"], src: "fn f() { for i in 0 ..< 3 { let g = || { break; }; } }" },
+    Probe {
+        name: "r33_break_inside_closure_is_outside_loop",
+        want: &["T0033"],
+        src: "fn f() { for i in 0 ..< 3 { let g = || { break; }; } }",
+    },
     Probe {
         name: "r36_question_on_non_raising_call",
         want: &["T0036"],
@@ -116,15 +174,31 @@ const PROBES: &[Probe] = &[
         want: &["T0036"],
         src: "enum E { a }\nfn g() -> i32 raises E { return 1; }\nfn f() -> i32 { return g()?; }",
     },
-    Probe { name: "r36_raise_in_non_raising_fn", want: &["T0036"], src: "enum E { a }\nfn f() { raise E.a; }" },
-    Probe { name: "r36_question_on_a_local", want: &["T0036"], src: "fn f(let x: i32) -> i32 { return x?; }" },
+    Probe {
+        name: "r36_raise_in_non_raising_fn",
+        want: &["T0036"],
+        src: "enum E { a }\nfn f() { raise E.a; }",
+    },
+    Probe {
+        name: "r36_question_on_a_local",
+        want: &["T0036"],
+        src: "fn f(let x: i32) -> i32 { return x?; }",
+    },
     Probe {
         name: "r36_check_closure_raises_from_its_fn_type",
         want: &[],
         src: "enum E { a }\nfn g() -> i32 raises E { return 1; }\nfn f() { let h: fn(let i32) -> i32 raises E = |a| { return g()?; }; }",
     },
-    Probe { name: "r37_spawn_needs_a_call", want: &["T0037"], src: "fn f() { spawn 1; }" },
-    Probe { name: "r42_field_on_primitive", want: &["T0042"], src: "fn f(let n: i32) { let x = n.len; }" },
+    Probe {
+        name: "r37_spawn_needs_a_call",
+        want: &["T0037"],
+        src: "fn f() { spawn 1; }",
+    },
+    Probe {
+        name: "r42_field_on_primitive",
+        want: &["T0042"],
+        src: "fn f(let n: i32) { let x = n.len; }",
+    },
     // ---------------------------------------------------------- `never`
     Probe {
         name: "never_right_operand_under_literal_exception",
@@ -136,8 +210,16 @@ const PROBES: &[Probe] = &[
         want: &[],
         src: "fn die() -> never { while true { } }\nfn f() -> i32 { return die() + 1; }",
     },
-    Probe { name: "never_cast_source", want: &[], src: "fn die() -> never { while true { } }\nfn f() -> i32 { return die() as i32; }" },
-    Probe { name: "never_range_bound", want: &[], src: "fn die() -> never { while true { } }\nfn f() { for i in 0 ..< die() { } }" },
+    Probe {
+        name: "never_cast_source",
+        want: &[],
+        src: "fn die() -> never { while true { } }\nfn f() -> i32 { return die() as i32; }",
+    },
+    Probe {
+        name: "never_range_bound",
+        want: &[],
+        src: "fn die() -> never { while true { } }\nfn f() { for i in 0 ..< die() { } }",
+    },
     Probe {
         name: "never_first_array_element",
         want: &[],
@@ -149,12 +231,20 @@ const PROBES: &[Probe] = &[
 fn fresh_violations_are_enforced_for_their_own_reason() {
     let mut failures = Vec::new();
     for p in PROBES {
-        let got: Vec<String> = check_source(p.src).into_iter().filter(|c| c.starts_with('T')).collect();
+        let got: Vec<String> = check_source(p.src)
+            .into_iter()
+            .filter(|c| c.starts_with('T'))
+            .collect();
         if got != p.want {
             failures.push(format!("{}: want {:?}, got {:?}", p.name, p.want, got));
         }
     }
-    assert!(failures.is_empty(), "probe failures ({}):\n{}", failures.len(), failures.join("\n"));
+    assert!(
+        failures.is_empty(),
+        "probe failures ({}):\n{}",
+        failures.len(),
+        failures.join("\n")
+    );
 }
 
 /// The FIR pools' `u8`/`u16` length columns: a 256-parameter function, a

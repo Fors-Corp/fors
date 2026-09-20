@@ -802,7 +802,11 @@ pub fn encode_sig_into<'s>(
     scratch: &'s mut EncodeScratch,
 ) -> &'s [u8] {
     let self_key = fir.defs.key_of(def);
-    let parent_key = if self_key == NO_DECL_KEY { NO_DECL_KEY } else { fir.keys.parent_of(self_key) };
+    let parent_key = if self_key == NO_DECL_KEY {
+        NO_DECL_KEY
+    } else {
+        fir.keys.parent_of(self_key)
+    };
     scratch.tys.clear();
     scratch.body.clear();
     scratch.pos.clear();
@@ -832,7 +836,13 @@ pub fn encode_sig_into<'s>(
 
 /// [`sig_hash`] with a reusable buffer.
 pub fn sig_hash_with(fir: &Fir, names: &Interner, def: DefId, scratch: &mut EncodeScratch) -> u128 {
-    hash_bytes(encode_sig_into(fir, names, def, FINGERPRINT_POLICY, scratch))
+    hash_bytes(encode_sig_into(
+        fir,
+        names,
+        def,
+        FINGERPRINT_POLICY,
+        scratch,
+    ))
 }
 
 // ------------------------------------------------------------------ reading

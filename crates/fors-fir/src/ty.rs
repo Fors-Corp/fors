@@ -799,7 +799,11 @@ mod tests {
     #[test]
     fn the_three_reserved_rows_are_0_1_2_in_every_profile() {
         let s = TyStore::new();
-        assert_eq!(s.len(), 3, "a fresh store holds exactly TY_ERROR, TY_UNIT and TY_NEVER");
+        assert_eq!(
+            s.len(),
+            3,
+            "a fresh store holds exactly TY_ERROR, TY_UNIT and TY_NEVER"
+        );
         assert_eq!(s.tag(TY_ERROR), TyTag::Error);
         assert_eq!(s.tag(TY_UNIT), TyTag::Unit);
         assert_eq!(s.tag(TY_NEVER), TyTag::Never);

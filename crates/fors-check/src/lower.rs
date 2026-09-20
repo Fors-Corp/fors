@@ -10,12 +10,14 @@
 //! other `decl_arity` is the acyclicity base").
 
 use fors_fir::defpath::NO_DEF;
-use fors_fir::prelude::{tr, PreludeDefs, PreludeEntity};
+use fors_fir::prelude::{PreludeDefs, PreludeEntity, tr};
 use fors_fir::sig::{
-    Assoc, Conv, GParam, GParamKind, Member, Param, SigKind, NO_BOUNDS, NO_CONSTRAINTS, NO_SLOT, VIS_PRIVATE,
-    VIS_PUBLIC,
+    Assoc, Conv, GParam, GParamKind, Member, NO_BOUNDS, NO_CONSTRAINTS, NO_SLOT, Param, SigKind,
+    VIS_PRIVATE, VIS_PUBLIC,
 };
-use fors_fir::ty::{BrandRow, PrimKind, Quals, TraitRefId, TyId, NO_ARGS, NO_TY, TY_ERROR, TY_UNIT};
+use fors_fir::ty::{
+    BrandRow, NO_ARGS, NO_TY, PrimKind, Quals, TY_ERROR, TY_UNIT, TraitRefId, TyId,
+};
 use fors_fir::{ConstValue, Fir};
 use fors_index::decl::DeclKind;
 use fors_index::ids::{DefId, FileId};
@@ -26,7 +28,7 @@ use fors_resolve::target::{DeferReason, Entity, NameUseTable, ResolvedTarget};
 use fors_syntax::{NodeKind, Tree};
 
 use crate::defs::DefTable;
-use crate::diag::{t, Sink};
+use crate::diag::{Sink, t};
 
 /// Pass A's syntactic classification of a generic parameter (R15). It never
 /// needs a type: `brand` is a contextual keyword, and whether a bound is a
@@ -63,7 +65,14 @@ pub struct Shapes {
 }
 
 impl Shapes {
-    fn push(&mut self, def: DefId, gkinds: &[GKind], const_prim: &[u8], assoc: &[Symbol], generics_node: u32) {
+    fn push(
+        &mut self,
+        def: DefId,
+        gkinds: &[GKind],
+        const_prim: &[u8],
+        assoc: &[Symbol],
+        generics_node: u32,
+    ) {
         let i = def.index();
         while self.gnode.len() <= i {
             self.gk_start.push(0);
@@ -164,7 +173,10 @@ impl FileCtx<'_> {
         let mut out = Vec::new();
         for i in a as usize..b as usize {
             if self.tokens.kinds[i] == TokenKind::Ident {
-                out.push((names.intern(self.tokens.text(i, self.source)), self.tokens.range(i)));
+                out.push((
+                    names.intern(self.tokens.text(i, self.source)),
+                    self.tokens.range(i),
+                ));
             }
         }
         out
@@ -174,28 +186,44 @@ impl FileCtx<'_> {
     /// allocates per type application.
     fn own_ident_count(&self, node: usize) -> usize {
         let (a, b) = own_span(self.tree, node);
-        (a as usize..b as usize).filter(|&i| self.tokens.kinds[i] == TokenKind::Ident).count()
+        (a as usize..b as usize)
+            .filter(|&i| self.tokens.kinds[i] == TokenKind::Ident)
+            .count()
     }
 
-    fn own_ident_nth(&self, names: &mut Interner, node: usize, n: usize) -> Option<(Symbol, (u32, u32))> {
+    fn own_ident_nth(
+        &self,
+        names: &mut Interner,
+        node: usize,
+        n: usize,
+    ) -> Option<(Symbol, (u32, u32))> {
         let (a, b) = own_span(self.tree, node);
         (a as usize..b as usize)
             .filter(|&i| self.tokens.kinds[i] == TokenKind::Ident)
             .nth(n)
-            .map(|i| (names.intern(self.tokens.text(i, self.source)), self.tokens.range(i)))
+            .map(|i| {
+                (
+                    names.intern(self.tokens.text(i, self.source)),
+                    self.tokens.range(i),
+                )
+            })
     }
 
     fn own_has_ident(&self, node: usize, text: &[u8]) -> bool {
         let (a, b) = own_span(self.tree, node);
-        (a as usize..b as usize)
-            .any(|i| self.tokens.kinds[i] == TokenKind::Ident && self.tokens.text(i, self.source) == text)
+        (a as usize..b as usize).any(|i| {
+            self.tokens.kinds[i] == TokenKind::Ident && self.tokens.text(i, self.source) == text
+        })
     }
     fn own_has_kind(&self, node: usize, k: TokenKind) -> bool {
         let (a, b) = own_span(self.tree, node);
         (a as usize..b as usize).any(|i| self.tokens.kinds[i] == k)
     }
     fn child_kinds(&self, node: usize) -> Vec<(usize, NodeKind)> {
-        self.tree.children(node).map(|c| (c, self.tree.kinds[c])).collect()
+        self.tree
+            .children(node)
+            .map(|c| (c, self.tree.kinds[c]))
+            .collect()
     }
 
     /// A declaration's own header: its first significant token through the
@@ -209,7 +237,13 @@ impl FileCtx<'_> {
             .find(|&c| {
                 matches!(
                     self.tree.kinds[c],
-                    NodeKind::Block | NodeKind::Field | NodeKind::EVariant | NodeKind::FnDecl | NodeKind::TraitItem | NodeKind::AssocTypeDecl | NodeKind::AssocTypeDef
+                    NodeKind::Block
+                        | NodeKind::Field
+                        | NodeKind::EVariant
+                        | NodeKind::FnDecl
+                        | NodeKind::TraitItem
+                        | NodeKind::AssocTypeDecl
+                        | NodeKind::AssocTypeDef
                 )
             })
             .map_or(end, |c| self.tree.token_range(c).0);
@@ -224,17 +258,26 @@ impl FileCtx<'_> {
 
     /// Whether a `fn` declaration has a body (a provided trait method).
     pub fn has_block(&self, node: usize) -> bool {
-        self.tree.children(node).any(|c| self.tree.kinds[c] == NodeKind::Block)
-            || self
-                .tree
-                .children(node)
-                .any(|c| self.tree.kinds[c] == NodeKind::FnSig && self.tree.children(c).any(|x| self.tree.kinds[x] == NodeKind::Block))
+        self.tree
+            .children(node)
+            .any(|c| self.tree.kinds[c] == NodeKind::Block)
+            || self.tree.children(node).any(|c| {
+                self.tree.kinds[c] == NodeKind::FnSig
+                    && self
+                        .tree
+                        .children(c)
+                        .any(|x| self.tree.kinds[x] == NodeKind::Block)
+            })
     }
 
     /// The first `Field`/`EVariant` of a declaration, for R14's "reported on
     /// one field of the cycle".
     pub fn first_field_range(&self, node: usize) -> (u32, u32) {
-        match self.tree.children(node).find(|&c| matches!(self.tree.kinds[c], NodeKind::Field | NodeKind::EVariant)) {
+        match self
+            .tree
+            .children(node)
+            .find(|&c| matches!(self.tree.kinds[c], NodeKind::Field | NodeKind::EVariant))
+        {
             Some(c) => byte_range(self.tree, self.tokens, c),
             None => self.header_range(node),
         }
@@ -242,7 +285,12 @@ impl FileCtx<'_> {
 
     /// The `i`th `type A = RHS;` of an impl.
     pub fn assoc_def_range(&self, node: usize, i: usize) -> (u32, u32) {
-        match self.tree.children(node).filter(|&c| self.tree.kinds[c] == NodeKind::AssocTypeDef).nth(i) {
+        match self
+            .tree
+            .children(node)
+            .filter(|&c| self.tree.kinds[c] == NodeKind::AssocTypeDef)
+            .nth(i)
+        {
             Some(c) => byte_range(self.tree, self.tokens, c),
             None => self.header_range(node),
         }
@@ -253,7 +301,13 @@ impl FileCtx<'_> {
 
 /// Builds the shape table. Prelude rows keep the shapes `prelude::build` gave
 /// them, read back out of the `SigStore`.
-pub fn shapes(fir: &Fir, defs: &DefTable, prelude: &PreludeDefs, names: &mut Interner, files: &[FileCtx]) -> Shapes {
+pub fn shapes(
+    fir: &Fir,
+    defs: &DefTable,
+    prelude: &PreludeDefs,
+    names: &mut Interner,
+    files: &[FileCtx],
+) -> Shapes {
     let mut out = Shapes::default();
     for i in 0..defs.first_user.index() {
         let d = DefId(i as u32);
@@ -270,7 +324,9 @@ pub fn shapes(fir: &Fir, defs: &DefTable, prelude: &PreludeDefs, names: &mut Int
                 GParamKind::Callable { .. } => GKind::Callable,
             });
             cprims.push(match kind {
-                GParamKind::Const { ty } if fir.tys.tag(ty) == fors_fir::ty::TyTag::Prim => fir.tys.a(ty) as u8,
+                GParamKind::Const { ty } if fir.tys.tag(ty) == fors_fir::ty::TyTag::Prim => {
+                    fir.tys.a(ty) as u8
+                }
                 _ => 0xFF,
             });
         }
@@ -279,17 +335,23 @@ pub fn shapes(fir: &Fir, defs: &DefTable, prelude: &PreludeDefs, names: &mut Int
             cprims.remove(0);
         }
         let a = fir.sigs.assoc(d);
-        let assoc: Vec<Symbol> = (0..fir.sigs.assocs.count(a)).map(|k| fir.sigs.assocs.get(a, k).name).collect();
+        let assoc: Vec<Symbol> = (0..fir.sigs.assocs.count(a))
+            .map(|k| fir.sigs.assocs.get(a, k).name)
+            .collect();
         out.push(d, &gkinds, &cprims, &assoc, u32::MAX);
     }
     for (def, row) in defs.user_defs() {
         let f = &files[row.file.index()];
-        let (mut gkinds, mut assoc, mut gnode): (Vec<GKind>, Vec<Symbol>, u32) = (Vec::new(), Vec::new(), u32::MAX);
+        let (mut gkinds, mut assoc, mut gnode): (Vec<GKind>, Vec<Symbol>, u32) =
+            (Vec::new(), Vec::new(), u32::MAX);
         let mut cprims: Vec<u8> = Vec::new();
         let node = row.node as usize;
         // A `fn`'s generics hang off its `FnSig`, not off the `FnDecl`.
         let holder = if matches!(row.kind, DeclKind::Fn | DeclKind::ExternFn) {
-            f.tree.children(node).find(|&c| f.kind(c) == NodeKind::FnSig).unwrap_or(node)
+            f.tree
+                .children(node)
+                .find(|&c| f.kind(c) == NodeKind::FnSig)
+                .unwrap_or(node)
         } else {
             node
         };
@@ -300,16 +362,20 @@ pub fn shapes(fir: &Fir, defs: &DefTable, prelude: &PreludeDefs, names: &mut Int
                     if f.kind(g) == NodeKind::GParam {
                         let k = classify_gparam(f, defs, prelude, g);
                         gkinds.push(k);
-                        cprims.push(if k == GKind::Const { const_prim_of(f, prelude, g) } else { 0xFF });
+                        cprims.push(if k == GKind::Const {
+                            const_prim_of(f, prelude, g)
+                        } else {
+                            0xFF
+                        });
                     }
                 }
             }
         }
         for c in f.tree.children(node) {
-            if f.kind(c) == NodeKind::AssocTypeDecl {
-                if let Some((n, _)) = f.own_ident_nth(names, c, 0) {
-                    assoc.push(n);
-                }
+            if f.kind(c) == NodeKind::AssocTypeDecl
+                && let Some((n, _)) = f.own_ident_nth(names, c, 0)
+            {
+                assoc.push(n);
             }
         }
         out.push(def, &gkinds, &cprims, &assoc, gnode);
@@ -322,10 +388,16 @@ pub fn shapes(fir: &Fir, defs: &DefTable, prelude: &PreludeDefs, names: &mut Int
 /// `0xFF` when that bound is not a prelude primitive (R13 then speaks in
 /// pass B, at the parameter).
 fn const_prim_of(f: &FileCtx, prelude: &PreludeDefs, node: usize) -> u8 {
-    let Some(bd) = f.tree.children(node).next() else { return 0xFF };
+    let Some(bd) = f.tree.children(node).next() else {
+        return 0xFF;
+    };
     match f.target(bd) {
         Some(ResolvedTarget::Entity(Entity::PreludeType(s))) => match prelude.lookup(s) {
-            Some(PreludeEntity::Ty(ty)) => prelude.prims.iter().position(|&t| t == ty).map_or(0xFF, |i| i as u8),
+            Some(PreludeEntity::Ty(ty)) => prelude
+                .prims
+                .iter()
+                .position(|&t| t == ty)
+                .map_or(0xFF, |i| i as u8),
             _ => 0xFF,
         },
         _ => 0xFF,
@@ -408,7 +480,6 @@ pub enum Pos {
     OpaqueArg,
 }
 
-
 /// MARC: verification of I2/I3 (2026-09-20). The FIR pools keep list
 /// lengths in `u8`/`u16` columns and `fors-fir`'s `push`es assert it, so a
 /// 256-parameter function, a 256-parameter closure and a 65 536-element
@@ -435,7 +506,9 @@ pub enum SelfKind {
     Trait(DefId),
     /// Inside `impl Tr[As] for S`, or an inherent `impl S` (`trait_def` is
     /// [`NO_DEF`] then).
-    Impl { trait_def: DefId },
+    Impl {
+        trait_def: DefId,
+    },
 }
 
 /// Per-declaration lowering state.
@@ -472,7 +545,11 @@ impl<'f, 'a> Cx<'f, 'a> {
         }
     }
     fn find(&self, node: u32) -> Option<(DefId, u16, GKind)> {
-        self.scope.iter().rev().find(|&&(n, ..)| n == node).map(|&(_, d, o, k)| (d, o, k))
+        self.scope
+            .iter()
+            .rev()
+            .find(|&&(n, ..)| n == node)
+            .map(|&(_, d, o, k)| (d, o, k))
     }
 }
 
@@ -598,14 +675,22 @@ impl Lowerer<'_> {
                 }
                 if params.len() > MAX_PARAMS {
                     let r = cx.f.range(node);
-                    self.emit(cx, r, 7, 7, limit_msg("a `fn` type's parameter list", params.len(), MAX_PARAMS));
+                    self.emit(
+                        cx,
+                        r,
+                        7,
+                        7,
+                        limit_msg("a `fn` type's parameter list", params.len(), MAX_PARAMS),
+                    );
                     return TY_ERROR;
                 }
                 let id = self.fir.tys.intern_fn_ty(&params, result, raises, false);
                 self.fir.tys.fn_ty(id)
             }
             NodeKind::DynType => {
-                let Some(c) = cx.f.tree.children(node).next() else { return TY_ERROR };
+                let Some(c) = cx.f.tree.children(node).next() else {
+                    return TY_ERROR;
+                };
                 match self.trait_ref(cx, c) {
                     Some(tref) => {
                         let (tdef, _) = self.fir.tys.trait_ref(tref);
@@ -630,7 +715,9 @@ impl Lowerer<'_> {
         while i > 0 {
             i -= 1;
             match cx.f.tokens.kinds[i] {
-                TokenKind::Whitespace | TokenKind::LineComment | TokenKind::BlockComment => continue,
+                TokenKind::Whitespace | TokenKind::LineComment | TokenKind::BlockComment => {
+                    continue;
+                }
                 TokenKind::RParen if !seen_close => {
                     seen_close = true;
                     continue;
@@ -658,10 +745,16 @@ impl Lowerer<'_> {
 
     /// The head of a `TypeApp`, classified.
     fn head_of(&mut self, cx: &mut Cx, node: usize) -> Head {
-        let Some(target) = cx.f.target(node) else { return Head::Silent };
+        let Some(target) = cx.f.target(node) else {
+            return Head::Silent;
+        };
         match target {
-            ResolvedTarget::Deferred { reason: DeferReason::Diagnosed | DeferReason::StdAbsent } => Head::Silent,
-            ResolvedTarget::Deferred { reason: DeferReason::Member } => Head::Silent,
+            ResolvedTarget::Deferred {
+                reason: DeferReason::Diagnosed | DeferReason::StdAbsent,
+            } => Head::Silent,
+            ResolvedTarget::Deferred {
+                reason: DeferReason::Member,
+            } => Head::Silent,
             ResolvedTarget::Local { node: n } => {
                 if n == cx.self_node {
                     return Head::SelfTy;
@@ -693,10 +786,12 @@ impl Lowerer<'_> {
                     Some(PreludeEntity::Trait { def, .. }) => Head::Trait(def),
                     Some(PreludeEntity::Opaque) | None => Head::Opaque,
                 },
-                Entity::Variant { .. } | Entity::PreludeValue(_) => match self.last_own_ident(cx, node) {
-                    Some((s, r)) => Head::Value(r, s),
-                    None => Head::Silent,
-                },
+                Entity::Variant { .. } | Entity::PreludeValue(_) => {
+                    match self.last_own_ident(cx, node) {
+                        Some((s, r)) => Head::Value(r, s),
+                        None => Head::Silent,
+                    }
+                }
                 Entity::Module(_) | Entity::PreludeModule(..) | Entity::Poisoned => Head::Silent,
             },
         }
@@ -770,7 +865,8 @@ impl Lowerer<'_> {
                         range,
                         11,
                         11,
-                        "a trait is a type only after `dyn`, in a bound or in an `impl` header".to_string(),
+                        "a trait is a type only after `dyn`, in a bound or in an `impl` header"
+                            .to_string(),
                     );
                     return TY_ERROR;
                 }
@@ -789,9 +885,13 @@ impl Lowerer<'_> {
                         // Linear` is in, so the site is recorded, not decided.
                         if let Some(g) = self.prelude.generic_index(def) {
                             use fors_fir::prelude::gty;
-                            if matches!(g, gty::ARRAY | gty::VECTOR | gty::ATOMIC) && !xs.is_empty() {
-                                let name = self.defs.get(def).and_then(|r| r.name).unwrap_or(Symbol(0));
-                                self.sites.elements.push((cx.home, cx.f.file, range, xs[0], name));
+                            if matches!(g, gty::ARRAY | gty::VECTOR | gty::ATOMIC) && !xs.is_empty()
+                            {
+                                let name =
+                                    self.defs.get(def).and_then(|r| r.name).unwrap_or(Symbol(0));
+                                self.sites
+                                    .elements
+                                    .push((cx.home, cx.f.file, range, xs[0], name));
                             }
                         }
                         self.fir.tys.nominal_of(def, &xs)
@@ -804,7 +904,10 @@ impl Lowerer<'_> {
 
     fn param_ty(&mut self, cx: &mut Cx, owner: DefId, ord: u16, k: GKind) -> TyId {
         match k {
-            GKind::Brand => self.fir.tys.brand_ty(BrandRow::Param { owner, ordinal: ord }),
+            GKind::Brand => self.fir.tys.brand_ty(BrandRow::Param {
+                owner,
+                ordinal: ord,
+            }),
             GKind::Const => {
                 // A bare const parameter in type position is R13's "by
                 // identity" case: it stays a `Param` row so R9 compares it by
@@ -818,7 +921,13 @@ impl Lowerer<'_> {
 
     /// R11: exactly as many arguments as the head declares, each of the
     /// declared kind; R13 for the const ones.
-    fn type_args(&mut self, cx: &mut Cx, node: usize, def: DefId, range: (u32, u32)) -> Option<Vec<TyId>> {
+    fn type_args(
+        &mut self,
+        cx: &mut Cx,
+        node: usize,
+        def: DefId,
+        range: (u32, u32),
+    ) -> Option<Vec<TyId>> {
         let shapes = self.shapes;
         let kinds: &[GKind] = shapes.gkinds(def);
         let args: Vec<usize> = cx.f.tree.children(node).collect();
@@ -848,7 +957,7 @@ impl Lowerer<'_> {
             return None;
         }
         if args.len() != kinds.len() {
-            let name = self.defs.get(def).and_then(|r| r.name).or_else(|| Some(Symbol(0)));
+            let name = self.defs.get(def).and_then(|r| r.name).or(Some(Symbol(0)));
             let n = name
                 .filter(|s| s.0 != 0)
                 .map(|s| format!("`{}`", String::from_utf8_lossy(self.names.resolve(s))))
@@ -858,7 +967,11 @@ impl Lowerer<'_> {
                 range,
                 11,
                 11,
-                format!("{n} declares {} type argument(s), {} supplied", kinds.len(), args.len()),
+                format!(
+                    "{n} declares {} type argument(s), {} supplied",
+                    kinds.len(),
+                    args.len()
+                ),
             );
             for &c in &args {
                 if is_type_node(cx.f.kind(c)) {
@@ -897,7 +1010,10 @@ impl Lowerer<'_> {
             return TY_ERROR;
         }
         match self.head_of(cx, node) {
-            Head::GParam(owner, ord, GKind::Brand) => self.fir.tys.brand_ty(BrandRow::Param { owner, ordinal: ord }),
+            Head::GParam(owner, ord, GKind::Brand) => self.fir.tys.brand_ty(BrandRow::Param {
+                owner,
+                ordinal: ord,
+            }),
             _ => TY_ERROR,
         }
     }
@@ -918,10 +1034,21 @@ impl Lowerer<'_> {
                     // slot (`Array[i32, i32]`) lowered to a silent `TY_ERROR`,
                     // so the arity-correct misuse was never reported. R11's
                     // "each of the declared kind" owns it.
-                    Head::Nominal(_) | Head::Prim(_) | Head::Trait(_) | Head::SelfTy | Head::GParam(_, _, GKind::Type)
-                    | Head::GParam(_, _, GKind::Brand) | Head::GParam(_, _, GKind::Callable) => {
+                    Head::Nominal(_)
+                    | Head::Prim(_)
+                    | Head::Trait(_)
+                    | Head::SelfTy
+                    | Head::GParam(_, _, GKind::Type)
+                    | Head::GParam(_, _, GKind::Brand)
+                    | Head::GParam(_, _, GKind::Callable) => {
                         let r = cx.f.range(node);
-                        self.emit(cx, r, 11, 11, "a type where a constant argument is expected".to_string());
+                        self.emit(
+                            cx,
+                            r,
+                            11,
+                            11,
+                            "a type where a constant argument is expected".to_string(),
+                        );
                         TY_ERROR
                     }
                     // A prelude name with no declaration in this build, or a
@@ -969,10 +1096,10 @@ impl Lowerer<'_> {
                     );
                     return TY_ERROR;
                 }
-                if cx.f.kind(node) == NodeKind::UnaryExpr {
-                    if let Some(v) = self.negated_literal(cx, node) {
-                        return self.fit_const(cx, node, v, def, slot);
-                    }
+                if cx.f.kind(node) == NodeKind::UnaryExpr
+                    && let Some(v) = self.negated_literal(cx, node)
+                {
+                    return self.fit_const(cx, node, v, def, slot);
                 }
                 TY_ERROR
             }
@@ -1013,16 +1140,34 @@ impl Lowerer<'_> {
     /// R13's fit test: the closed value `v` against the declared type of the
     /// `slot`th parameter of `def`, read from pass A so the answer does not
     /// depend on which declaration was lowered first.
-    fn fit_const(&mut self, cx: &mut Cx, node: usize, v: ConstValue, def: DefId, slot: usize) -> TyId {
+    fn fit_const(
+        &mut self,
+        cx: &mut Cx,
+        node: usize,
+        v: ConstValue,
+        def: DefId,
+        slot: usize,
+    ) -> TyId {
         let declared = self.shapes.const_prim(def, slot);
         // `constval::fits` is I1's (R13's range table); I2 never called it.
         let fits = declared.is_none_or(|p| fors_fir::constval::fits(v, p));
         if !fits {
             let r = cx.f.range(node);
             let want = declared
-                .map(|p| format!("`{}`", String::from_utf8_lossy(fors_fir::prelude::PRIMS[p as usize].0)))
+                .map(|p| {
+                    format!(
+                        "`{}`",
+                        String::from_utf8_lossy(fors_fir::prelude::PRIMS[p as usize].0)
+                    )
+                })
                 .unwrap_or_else(|| "the parameter's type".to_string());
-            self.emit(cx, r, 13, 13, format!("this constant does not fit {want}, the const parameter's declared type"));
+            self.emit(
+                cx,
+                r,
+                13,
+                13,
+                format!("this constant does not fit {want}, the const parameter's declared type"),
+            );
             return TY_ERROR;
         }
         let ty = match declared {
@@ -1035,12 +1180,11 @@ impl Lowerer<'_> {
     fn mentions_const_param(&mut self, cx: &mut Cx, node: usize) -> bool {
         let end = cx.f.tree.subtree_end(node);
         for n in node..end {
-            if matches!(cx.f.kind(n), NodeKind::TypeApp | NodeKind::NameExpr) {
-                if let Some(ResolvedTarget::Local { node: b }) = cx.f.target(n) {
-                    if matches!(cx.find(b), Some((_, _, GKind::Const))) {
-                        return true;
-                    }
-                }
+            if matches!(cx.f.kind(n), NodeKind::TypeApp | NodeKind::NameExpr)
+                && let Some(ResolvedTarget::Local { node: b }) = cx.f.target(n)
+                && matches!(cx.find(b), Some((_, _, GKind::Const)))
+            {
+                return true;
             }
         }
         false
@@ -1071,7 +1215,15 @@ impl Lowerer<'_> {
     }
 
     /// R61: a projection `P.A`.
-    fn projection(&mut self, cx: &mut Cx, node: usize, nsegs: usize, consumed: usize, head: Head, pos: Pos) -> TyId {
+    fn projection(
+        &mut self,
+        cx: &mut Cx,
+        node: usize,
+        nsegs: usize,
+        consumed: usize,
+        head: Head,
+        pos: Pos,
+    ) -> TyId {
         let range = cx.f.range(node);
         let tail = nsegs - consumed.max(1);
         // An unresolved head was already diagnosed: R61 has nothing to add,
@@ -1085,11 +1237,14 @@ impl Lowerer<'_> {
                 range,
                 61,
                 61,
-                "a projection has exactly two segments; write the type it normalises to".to_string(),
+                "a projection has exactly two segments; write the type it normalises to"
+                    .to_string(),
             );
             return TY_ERROR;
         }
-        let Some((name, _)) = self.last_own_ident(cx, node) else { return TY_ERROR };
+        let Some((name, _)) = self.last_own_ident(cx, node) else {
+            return TY_ERROR;
+        };
         match head {
             Head::Silent | Head::Opaque => TY_ERROR,
             Head::Value(r, s) => {
@@ -1104,7 +1259,8 @@ impl Lowerer<'_> {
                     range,
                     61,
                     61,
-                    "a projection headed by a concrete type is not writable; write the type itself".to_string(),
+                    "a projection headed by a concrete type is not writable; write the type itself"
+                        .to_string(),
                 );
                 TY_ERROR
             }
@@ -1115,11 +1271,15 @@ impl Lowerer<'_> {
                         range,
                         61,
                         61,
-                        "a brand or const parameter has no bounds, so it heads no projection".to_string(),
+                        "a brand or const parameter has no bounds, so it heads no projection"
+                            .to_string(),
                     );
                     return TY_ERROR;
                 }
-                if pos == Pos::AssocRhs && cx.assoc_rhs_owner != NO_DEF && owner != cx.assoc_rhs_owner {
+                if pos == Pos::AssocRhs
+                    && cx.assoc_rhs_owner != NO_DEF
+                    && owner != cx.assoc_rhs_owner
+                {
                     self.emit(
                         cx,
                         range,
@@ -1155,7 +1315,11 @@ impl Lowerer<'_> {
                         if def == self.prelude.traits[tr::INDEXMUT] {
                             let i = self.fir.tys.param(def, 1);
                             let a = self.fir.tys.intern_args(&[i]);
-                            bounds.push(self.fir.tys.intern_trait_ref(self.prelude.traits[tr::INDEX], a));
+                            bounds.push(
+                                self.fir
+                                    .tys
+                                    .intern_trait_ref(self.prelude.traits[tr::INDEX], a),
+                            );
                         }
                         let head_ty = cx.self_ty;
                         self.pick_assoc(cx, range, head_ty, &bounds, name)
@@ -1167,7 +1331,8 @@ impl Lowerer<'_> {
                                 range,
                                 61,
                                 61,
-                                "an inherent impl has no trait, so `Self.` heads no projection".to_string(),
+                                "an inherent impl has no trait, so `Self.` heads no projection"
+                                    .to_string(),
                             );
                             return TY_ERROR;
                         }
@@ -1180,8 +1345,15 @@ impl Lowerer<'_> {
                             || (trait_def == self.prelude.traits[tr::INDEXMUT]
                                 && name == self.prelude.output_name);
                         if !declared {
-                            let name_s = String::from_utf8_lossy(self.names.resolve(name)).into_owned();
-                            self.emit(cx, range, 61, 61, format!("no associated type `{name_s}` on this trait"));
+                            let name_s =
+                                String::from_utf8_lossy(self.names.resolve(name)).into_owned();
+                            self.emit(
+                                cx,
+                                range,
+                                61,
+                                61,
+                                format!("no associated type `{name_s}` on this trait"),
+                            );
                         }
                         TY_ERROR
                     }
@@ -1192,7 +1364,14 @@ impl Lowerer<'_> {
     }
 
     /// R61(c): exactly one trait among `bounds` declares `name`.
-    fn pick_assoc(&mut self, cx: &mut Cx, range: (u32, u32), head_ty: TyId, bounds: &[TraitRefId], name: Symbol) -> TyId {
+    fn pick_assoc(
+        &mut self,
+        cx: &mut Cx,
+        range: (u32, u32),
+        head_ty: TyId,
+        bounds: &[TraitRefId],
+        name: Symbol,
+    ) -> TyId {
         let mut hits: Vec<TraitRefId> = Vec::new();
         for &b in bounds {
             let (def, _) = self.fir.tys.trait_ref(b);
@@ -1208,12 +1387,24 @@ impl Lowerer<'_> {
             }
             0 => {
                 let name_s = String::from_utf8_lossy(self.names.resolve(name)).into_owned();
-                self.emit(cx, range, 61, 61, format!("no bound of this parameter declares an associated type `{name_s}`"));
+                self.emit(
+                    cx,
+                    range,
+                    61,
+                    61,
+                    format!("no bound of this parameter declares an associated type `{name_s}`"),
+                );
                 TY_ERROR
             }
             n => {
                 let name_s = String::from_utf8_lossy(self.names.resolve(name)).into_owned();
-                self.emit(cx, range, 61, 61, format!("ambiguous projection: {n} bounds declare `{name_s}`"));
+                self.emit(
+                    cx,
+                    range,
+                    61,
+                    61,
+                    format!("ambiguous projection: {n} bounds declare `{name_s}`"),
+                );
                 TY_ERROR
             }
         }
@@ -1221,7 +1412,9 @@ impl Lowerer<'_> {
 
     fn own_trait_ref(&mut self, def: DefId) -> TraitRefId {
         let n = self.shapes.arity(def).min(MAX_LIST - 1);
-        let args: Vec<TyId> = (0..n).map(|o| self.fir.tys.param(def, (o + 1) as u16)).collect();
+        let args: Vec<TyId> = (0..n)
+            .map(|o| self.fir.tys.param(def, (o + 1) as u16))
+            .collect();
         let a = self.fir.tys.intern_args(&args);
         self.fir.tys.intern_trait_ref(def, a)
     }
@@ -1232,8 +1425,10 @@ impl Lowerer<'_> {
             return Vec::new();
         }
         let n = self.fir.sigs.generics_store.count(g);
-        // A trait's own list is `[Self, P1 ..]`.
-        let idx = if self.fir.sigs.kind(owner) == SigKind::Trait { ord as usize } else { ord as usize };
+        // A trait's own list is `[Self, P1 ..]` and its parameters' ordinals
+        // start at 1 (`lower_generics`), so an ordinal is the row index for
+        // every kind of owner.
+        let idx = ord as usize;
         if idx >= n {
             return Vec::new();
         }
@@ -1262,7 +1457,16 @@ impl Lowerer<'_> {
                 .and_then(|r| r.name)
                 .map(|s| format!("`{}`", String::from_utf8_lossy(self.names.resolve(s))))
                 .unwrap_or_else(|| "this trait".to_string());
-            self.emit(cx, range, 11, 11, format!("{n} declares {arity} type argument(s), {} supplied", args.len()));
+            self.emit(
+                cx,
+                range,
+                11,
+                11,
+                format!(
+                    "{n} declares {arity} type argument(s), {} supplied",
+                    args.len()
+                ),
+            );
             return None;
         }
         let xs: Vec<TyId> = args.iter().map(|&c| self.ty(cx, c, Pos::Value)).collect();
@@ -1284,7 +1488,12 @@ impl Lowerer<'_> {
 fn is_type_node(k: NodeKind) -> bool {
     matches!(
         k,
-        NodeKind::TypeApp | NodeKind::QualType | NodeKind::TupleType | NodeKind::FnType | NodeKind::DynType | NodeKind::ScopedType
+        NodeKind::TypeApp
+            | NodeKind::QualType
+            | NodeKind::TupleType
+            | NodeKind::FnType
+            | NodeKind::DynType
+            | NodeKind::ScopedType
     )
 }
 
@@ -1363,7 +1572,10 @@ pub struct Lowered {
 impl Lowered {
     /// What lowering `def`'s `impl`/`trait` head produced, if it is one.
     pub fn head(&self, def: DefId) -> Option<&HeadInfo> {
-        self.heads.binary_search_by_key(&def.0, |&(d, _)| d.0).ok().map(|i| &self.heads[i].1)
+        self.heads
+            .binary_search_by_key(&def.0, |&(d, _)| d.0)
+            .ok()
+            .map(|i| &self.heads[i].1)
     }
 }
 
@@ -1397,7 +1609,13 @@ impl Lowerer<'_> {
                     out.heads.push((def, info));
                 }
                 DeclKind::Impl => {
-                    let info = self.lower_impl(&mut cx, def, row.node as usize, &mut out.impls, &mut order);
+                    let info = self.lower_impl(
+                        &mut cx,
+                        def,
+                        row.node as usize,
+                        &mut out.impls,
+                        &mut order,
+                    );
                     out.heads.push((def, info));
                 }
                 DeclKind::Fn | DeclKind::ExternFn => self.lower_fn(&mut cx, def, row.node as usize),
@@ -1478,7 +1696,11 @@ impl Lowerer<'_> {
             // is the trait itself with its own parameters.
             let tr_self = self.own_trait_ref(def);
             let b = self.fir.sigs.bounds.intern(&[tr_self]);
-            params.push(GParam { name: self.prelude.self_name, kind: GParamKind::Type, bounds: b });
+            params.push(GParam {
+                name: self.prelude.self_name,
+                kind: GParamKind::Type,
+                bounds: b,
+            });
         }
         let base = params.len();
         let mut gparam_nodes: Vec<usize> = Vec::new();
@@ -1494,11 +1716,19 @@ impl Lowerer<'_> {
         }
         // Step 1: names, and the trait bounds of a type parameter.
         for (i, &g) in gparam_nodes.iter().enumerate() {
-            let name = cx.f.own_idents(self.names, g).first().map(|&(s, _)| s).unwrap_or(Symbol(0));
+            let name =
+                cx.f.own_idents(self.names, g)
+                    .first()
+                    .map(|&(s, _)| s)
+                    .unwrap_or(Symbol(0));
             let kind = gkinds.get(i).copied().unwrap_or(GKind::Type);
             let bound_nodes: Vec<usize> = cx.f.tree.children(g).collect();
             let gp = match kind {
-                GKind::Brand => GParam { name, kind: GParamKind::Brand, bounds: NO_BOUNDS },
+                GKind::Brand => GParam {
+                    name,
+                    kind: GParamKind::Brand,
+                    bounds: NO_BOUNDS,
+                },
                 GKind::Type => {
                     let mut bs: Vec<TraitRefId> = Vec::new();
                     for &b in &bound_nodes {
@@ -1513,16 +1743,34 @@ impl Lowerer<'_> {
                         bs.truncate(MAX_LIST);
                     }
                     let id = self.fir.sigs.bounds.intern(&bs);
-                    GParam { name, kind: GParamKind::Type, bounds: id }
+                    GParam {
+                        name,
+                        kind: GParamKind::Type,
+                        bounds: id,
+                    }
                 }
                 // Filled in step 2.
-                _ => GParam { name, kind: GParamKind::Type, bounds: NO_BOUNDS },
+                _ => GParam {
+                    name,
+                    kind: GParamKind::Type,
+                    bounds: NO_BOUNDS,
+                },
             };
             params.push(gp);
         }
         if params.len() > MAX_LIST {
-            let r = if gnode != u32::MAX { cx.f.range(gnode as usize) } else { (0, 0) };
-            self.emit(cx, r, 15, 15, limit_msg("a generic parameter list", params.len(), MAX_LIST));
+            let r = if gnode != u32::MAX {
+                cx.f.range(gnode as usize)
+            } else {
+                (0, 0)
+            };
+            self.emit(
+                cx,
+                r,
+                15,
+                15,
+                limit_msg("a generic parameter list", params.len(), MAX_LIST),
+            );
             params.truncate(MAX_LIST);
         }
         let gid = self.fir.sigs.generics_store.push(&params, NO_CONSTRAINTS);
@@ -1549,13 +1797,30 @@ impl Lowerer<'_> {
                     };
                     if !ok {
                         let r = cx.f.range(bound_nodes[0]);
-                        self.emit(cx, r, 13, 13, "a const parameter's type must be an integer type or `bool`".to_string());
+                        self.emit(
+                            cx,
+                            r,
+                            13,
+                            13,
+                            "a const parameter's type must be an integer type or `bool`"
+                                .to_string(),
+                        );
                     }
-                    self.fir.sigs.generics_store.set_param(gid, base + i, GParamKind::Const { ty }, NO_BOUNDS);
+                    self.fir.sigs.generics_store.set_param(
+                        gid,
+                        base + i,
+                        GParamKind::Const { ty },
+                        NO_BOUNDS,
+                    );
                 }
                 GKind::Callable => {
                     let fn_ty = self.ty(cx, bound_nodes[0], Pos::Value);
-                    self.fir.sigs.generics_store.set_param(gid, base + i, GParamKind::Callable { fn_ty }, NO_BOUNDS);
+                    self.fir.sigs.generics_store.set_param(
+                        gid,
+                        base + i,
+                        GParamKind::Callable { fn_ty },
+                        NO_BOUNDS,
+                    );
                 }
                 _ => {
                     // R15: bounds MUST be all traits, or exactly one non-trait
@@ -1578,7 +1843,10 @@ impl Lowerer<'_> {
                         bs.truncate(MAX_LIST);
                     }
                     let id = self.fir.sigs.bounds.intern(&bs);
-                    self.fir.sigs.generics_store.set_param(gid, base + i, GParamKind::Type, id);
+                    self.fir
+                        .sigs
+                        .generics_store
+                        .set_param(gid, base + i, GParamKind::Type, id);
                 }
             }
         }
@@ -1591,8 +1859,18 @@ impl Lowerer<'_> {
             }
         }
         if entries.len() > MAX_LIST {
-            let r = if gnode != u32::MAX { cx.f.range(gnode as usize) } else { (0, 0) };
-            self.emit(cx, r, 62, 62, limit_msg("a constraint-entry list", entries.len(), MAX_LIST));
+            let r = if gnode != u32::MAX {
+                cx.f.range(gnode as usize)
+            } else {
+                (0, 0)
+            };
+            self.emit(
+                cx,
+                r,
+                62,
+                62,
+                limit_msg("a constraint-entry list", entries.len(), MAX_LIST),
+            );
             entries.truncate(MAX_LIST);
         }
         if !entries.is_empty() {
@@ -1608,10 +1886,19 @@ impl Lowerer<'_> {
         for &b in bs.iter() {
             let (def, args) = self.fir.tys.trait_ref(b);
             if def == self.prelude.traits[tr::INDEXMUT] {
-                extra.push(self.fir.tys.intern_trait_ref(self.prelude.traits[tr::INDEX], args));
+                extra.push(
+                    self.fir
+                        .tys
+                        .intern_trait_ref(self.prelude.traits[tr::INDEX], args),
+                );
             }
-            if def == self.prelude.traits[tr::ITERATOR] || def == self.prelude.traits[tr::COPYABLE] {
-                extra.push(self.fir.tys.intern_trait_ref(self.prelude.traits[tr::DROPPABLE], NO_ARGS));
+            if def == self.prelude.traits[tr::ITERATOR] || def == self.prelude.traits[tr::COPYABLE]
+            {
+                extra.push(
+                    self.fir
+                        .tys
+                        .intern_trait_ref(self.prelude.traits[tr::DROPPABLE], NO_ARGS),
+                );
             }
         }
         for e in extra {
@@ -1662,13 +1949,25 @@ impl Lowerer<'_> {
                     None => {
                         if self.bound_resolved(cx, b) {
                             let r = cx.f.range(b);
-                            self.emit(cx, r, 62, 62, "every bound of a constraint entry must be a trait".to_string());
+                            self.emit(
+                                cx,
+                                r,
+                                62,
+                                62,
+                                "every bound of a constraint entry must be a trait".to_string(),
+                            );
                         }
                     }
                 },
                 _ => {
                     let r = cx.f.range(b);
-                    self.emit(cx, r, 62, 62, "every bound of a constraint entry must be a trait".to_string());
+                    self.emit(
+                        cx,
+                        r,
+                        62,
+                        62,
+                        "every bound of a constraint entry must be a trait".to_string(),
+                    );
                 }
             }
         }
@@ -1687,8 +1986,16 @@ impl Lowerer<'_> {
             if k != NodeKind::Field {
                 continue;
             }
-            let name = cx.f.own_idents(self.names, c).first().map(|&(s, _)| s).unwrap_or(Symbol(0));
-            let vis = if cx.f.own_has_kind(c, TokenKind::KwPub) { VIS_PUBLIC } else { VIS_PRIVATE };
+            let name =
+                cx.f.own_idents(self.names, c)
+                    .first()
+                    .map(|&(s, _)| s)
+                    .unwrap_or(Symbol(0));
+            let vis = if cx.f.own_has_kind(c, TokenKind::KwPub) {
+                VIS_PUBLIC
+            } else {
+                VIS_PRIVATE
+            };
             let ty = match cx.f.tree.children(c).next() {
                 Some(x) => self.ty(cx, x, Pos::Value),
                 None => TY_ERROR,
@@ -1709,15 +2016,27 @@ impl Lowerer<'_> {
             if k != NodeKind::EVariant {
                 continue;
             }
-            let name = cx.f.own_idents(self.names, c).first().map(|&(s, _)| s).unwrap_or(Symbol(0));
+            let name =
+                cx.f.own_idents(self.names, c)
+                    .first()
+                    .map(|&(s, _)| s)
+                    .unwrap_or(Symbol(0));
             let kids: Vec<(usize, NodeKind)> = cx.f.child_kinds(c);
             if kids.is_empty() {
                 ms.push(Member::unit_variant(name));
             } else if kids.iter().all(|&(_, k)| k == NodeKind::Field) {
                 let mut fs: Vec<Member> = Vec::new();
                 for &(fc, _) in &kids {
-                    let fname = cx.f.own_idents(self.names, fc).first().map(|&(s, _)| s).unwrap_or(Symbol(0));
-                    let vis = if cx.f.own_has_kind(fc, TokenKind::KwPub) { VIS_PUBLIC } else { VIS_PRIVATE };
+                    let fname =
+                        cx.f.own_idents(self.names, fc)
+                            .first()
+                            .map(|&(s, _)| s)
+                            .unwrap_or(Symbol(0));
+                    let vis = if cx.f.own_has_kind(fc, TokenKind::KwPub) {
+                        VIS_PUBLIC
+                    } else {
+                        VIS_PRIVATE
+                    };
                     let ty = match cx.f.tree.children(fc).next() {
                         Some(x) => self.ty(cx, x, Pos::Value),
                         None => TY_ERROR,
@@ -1727,10 +2046,19 @@ impl Lowerer<'_> {
                 let sub = self.fir.sigs.member_store.push(&fs);
                 ms.push(Member::record_variant(name, sub));
             } else {
-                let xs: Vec<TyId> = kids.iter().map(|&(x, _)| self.ty(cx, x, Pos::Value)).collect();
+                let xs: Vec<TyId> = kids
+                    .iter()
+                    .map(|&(x, _)| self.ty(cx, x, Pos::Value))
+                    .collect();
                 let xs = if xs.len() > MAX_LIST {
                     let r = cx.f.range(node);
-                    self.emit(cx, r, 6, 6, limit_msg("a variant's payload", xs.len(), MAX_LIST));
+                    self.emit(
+                        cx,
+                        r,
+                        6,
+                        6,
+                        limit_msg("a variant's payload", xs.len(), MAX_LIST),
+                    );
                     xs[..MAX_LIST].to_vec()
                 } else {
                     xs
@@ -1754,7 +2082,11 @@ impl Lowerer<'_> {
             if k != NodeKind::AssocTypeDecl {
                 continue;
             }
-            let name = cx.f.own_idents(self.names, c).first().map(|&(s, _)| s).unwrap_or(Symbol(0));
+            let name =
+                cx.f.own_idents(self.names, c)
+                    .first()
+                    .map(|&(s, _)| s)
+                    .unwrap_or(Symbol(0));
             let mut bs: Vec<TraitRefId> = Vec::new();
             for b in cx.f.tree.children(c).collect::<Vec<_>>() {
                 match cx.f.kind(b) {
@@ -1763,28 +2095,56 @@ impl Lowerer<'_> {
                         None => {
                             if self.bound_resolved(cx, b) {
                                 let r = cx.f.range(b);
-                                self.emit(cx, r, 16, 16, "every bound of an associated type must be a trait".to_string());
+                                self.emit(
+                                    cx,
+                                    r,
+                                    16,
+                                    16,
+                                    "every bound of an associated type must be a trait".to_string(),
+                                );
                             }
                         }
                     },
                     _ => {
                         let r = cx.f.range(b);
-                        self.emit(cx, r, 16, 16, "every bound of an associated type must be a trait".to_string());
+                        self.emit(
+                            cx,
+                            r,
+                            16,
+                            16,
+                            "every bound of an associated type must be a trait".to_string(),
+                        );
                     }
                 }
             }
             self.add_implied(&mut bs);
             if bs.len() > MAX_LIST {
                 let r = cx.f.range(node);
-                self.emit(cx, r, 16, 16, limit_msg("an associated type's bound list", bs.len(), MAX_LIST));
+                self.emit(
+                    cx,
+                    r,
+                    16,
+                    16,
+                    limit_msg("an associated type's bound list", bs.len(), MAX_LIST),
+                );
                 bs.truncate(MAX_LIST);
             }
             let id = self.fir.sigs.bounds.intern(&bs);
-            assoc.push(Assoc { name, bounds: id, rhs: NO_TY });
+            assoc.push(Assoc {
+                name,
+                bounds: id,
+                rhs: NO_TY,
+            });
         }
         if assoc.len() > MAX_LIST {
             let r = cx.f.range(node);
-            self.emit(cx, r, 16, 16, limit_msg("a trait's associated-type list", assoc.len(), MAX_LIST));
+            self.emit(
+                cx,
+                r,
+                16,
+                16,
+                limit_msg("a trait's associated-type list", assoc.len(), MAX_LIST),
+            );
             assoc.truncate(MAX_LIST);
         }
         let a = self.fir.sigs.assocs.push(&assoc);
@@ -1811,24 +2171,23 @@ impl Lowerer<'_> {
         self.lower_generics(cx, def, false);
         // The header types: everything that is not the generics list, a
         // member or trivia. With `for` there are two; without, one.
-        let header: Vec<usize> = cx
-            .f
-            .child_kinds(node)
-            .into_iter()
-            .filter(|&(_, k)| {
-                !matches!(
-                    k,
-                    NodeKind::Generics
-                        | NodeKind::FnDecl
-                        | NodeKind::TraitItem
-                        | NodeKind::AssocTypeDecl
-                        | NodeKind::AssocTypeDef
-                        | NodeKind::Attribute
-                        | NodeKind::Error
-                )
-            })
-            .map(|(c, _)| c)
-            .collect();
+        let header: Vec<usize> =
+            cx.f.child_kinds(node)
+                .into_iter()
+                .filter(|&(_, k)| {
+                    !matches!(
+                        k,
+                        NodeKind::Generics
+                            | NodeKind::FnDecl
+                            | NodeKind::TraitItem
+                            | NodeKind::AssocTypeDecl
+                            | NodeKind::AssocTypeDef
+                            | NodeKind::Attribute
+                            | NodeKind::Error
+                    )
+                })
+                .map(|(c, _)| c)
+                .collect();
         let (trait_node, self_node) = match header.len() {
             0 => (None, None),
             1 => (None, Some(header[0])),
@@ -1848,18 +2207,30 @@ impl Lowerer<'_> {
                 Head::Silent | Head::Opaque => {}
                 _ => {
                     let r = cx.f.range(tn);
-                    self.emit(cx, r, 18, 18, "the first type of an `impl ... for ...` must be a trait".to_string());
+                    self.emit(
+                        cx,
+                        r,
+                        18,
+                        18,
+                        "the first type of an `impl ... for ...` must be a trait".to_string(),
+                    );
                 }
             }
         }
         let self_ty = match self_node {
             Some(sn) => {
                 let ty = self.ty(cx, sn, Pos::ImplSelf);
-                if trait_node.is_some() {
-                    if let Head::Trait(_) = self.head_of(cx, sn) {
-                        let r = cx.f.range(sn);
-                        self.emit(cx, r, 18, 18, "the second type of an `impl ... for ...` must not be a trait".to_string());
-                    }
+                if trait_node.is_some()
+                    && let Head::Trait(_) = self.head_of(cx, sn)
+                {
+                    let r = cx.f.range(sn);
+                    self.emit(
+                        cx,
+                        r,
+                        18,
+                        18,
+                        "the second type of an `impl ... for ...` must not be a trait".to_string(),
+                    );
                 }
                 ty
             }
@@ -1879,18 +2250,32 @@ impl Lowerer<'_> {
             if k != NodeKind::AssocTypeDef {
                 continue;
             }
-            let name = cx.f.own_idents(self.names, c).first().map(|&(s, _)| s).unwrap_or(Symbol(0));
+            let name =
+                cx.f.own_idents(self.names, c)
+                    .first()
+                    .map(|&(s, _)| s)
+                    .unwrap_or(Symbol(0));
             let rhs = match cx.f.tree.children(c).next() {
                 Some(x) => self.ty(cx, x, Pos::AssocRhs),
                 None => TY_ERROR,
             };
             if !assoc.iter().any(|a| a.name == name) {
-                assoc.push(Assoc { name, bounds: NO_BOUNDS, rhs });
+                assoc.push(Assoc {
+                    name,
+                    bounds: NO_BOUNDS,
+                    rhs,
+                });
             }
         }
         if assoc.len() > MAX_LIST {
             let r = cx.f.range(node);
-            self.emit(cx, r, 17, 17, limit_msg("an impl's associated-type list", assoc.len(), MAX_LIST));
+            self.emit(
+                cx,
+                r,
+                17,
+                17,
+                limit_msg("an impl's associated-type list", assoc.len(), MAX_LIST),
+            );
             assoc.truncate(MAX_LIST);
         }
         let a = self.fir.sigs.assocs.push(&assoc);
@@ -1932,9 +2317,21 @@ impl Lowerer<'_> {
             if !matches!(k, NodeKind::FnDecl | NodeKind::TraitItem) {
                 continue;
             }
-            let sig = cx.f.tree.children(c).find(|&x| cx.f.kind(x) == NodeKind::FnSig).unwrap_or(c);
-            let name = cx.f.own_idents(self.names, sig).first().map(|&(s, _)| s).unwrap_or(Symbol(0));
-            let vis = if cx.f.own_has_kind(c, TokenKind::KwPub) { VIS_PUBLIC } else { VIS_PRIVATE };
+            let sig =
+                cx.f.tree
+                    .children(c)
+                    .find(|&x| cx.f.kind(x) == NodeKind::FnSig)
+                    .unwrap_or(c);
+            let name =
+                cx.f.own_idents(self.names, sig)
+                    .first()
+                    .map(|&(s, _)| s)
+                    .unwrap_or(Symbol(0));
+            let vis = if cx.f.own_has_kind(c, TokenKind::KwPub) {
+                VIS_PUBLIC
+            } else {
+                VIS_PRIVATE
+            };
             // A `TraitItem` has no `DeclTable` row of its own unless the
             // index gave it one; `def_of` answers `NO_DEF` otherwise.
             let mdef = self.member_def(cx, c);
@@ -1949,7 +2346,10 @@ impl Lowerer<'_> {
     }
 
     fn lower_fn(&mut self, cx: &mut Cx, def: DefId, node: usize) {
-        let sig_node = cx.f.tree.children(node).find(|&c| cx.f.kind(c) == NodeKind::FnSig);
+        let sig_node =
+            cx.f.tree
+                .children(node)
+                .find(|&c| cx.f.kind(c) == NodeKind::FnSig);
         let Some(sig_node) = sig_node else {
             self.lower_generics(cx, def, true);
             return;
@@ -1992,13 +2392,20 @@ impl Lowerer<'_> {
                             receiver = 0;
                             // R16: a parameter named `self` MUST have type
                             // `Self` (in an impl: the self type).
-                            if annot.is_some()
+                            if let Some(a) = annot
                                 && cx.self_ty != NO_TY
                                 && ty != TY_ERROR
                                 && self.fir.tys.unqual(ty) != self.fir.tys.unqual(cx.self_ty)
                             {
-                                let r = cx.f.range(annot.unwrap());
-                                self.emit(cx, r, 16, 16, "a parameter named `self` must have the type `Self`".to_string());
+                                let r = cx.f.range(a);
+                                self.emit(
+                                    cx,
+                                    r,
+                                    16,
+                                    16,
+                                    "a parameter named `self` must have the type `Self`"
+                                        .to_string(),
+                                );
                             }
                         }
                         params.push(Param { name, conv, ty });
@@ -2034,16 +2441,34 @@ impl Lowerer<'_> {
         }
         if params.len() > MAX_PARAMS {
             let r = cx.f.range(sig_node);
-            self.emit(cx, r, 7, 7, limit_msg("a parameter list", params.len(), MAX_PARAMS));
+            self.emit(
+                cx,
+                r,
+                7,
+                7,
+                limit_msg("a parameter list", params.len(), MAX_PARAMS),
+            );
             params.truncate(MAX_PARAMS);
         }
-        let id = self.fir.sigs.fn_sigs.push(&params, result, raises, scoped, receiver, (u32::MAX, u32::MAX), 0);
+        let id = self.fir.sigs.fn_sigs.push(
+            &params,
+            result,
+            raises,
+            scoped,
+            receiver,
+            (u32::MAX, u32::MAX),
+            0,
+        );
         self.fir.sigs.set_fn_sig(def, id);
     }
 
     fn lower_const(&mut self, cx: &mut Cx, def: DefId, node: usize) {
         let kids: Vec<(usize, NodeKind)> = cx.f.child_kinds(node);
-        let ty = kids.iter().find(|&&(_, k)| is_type_node(k)).map(|&(c, _)| self.ty(cx, c, Pos::Value)).unwrap_or(TY_ERROR);
+        let ty = kids
+            .iter()
+            .find(|&&(_, k)| is_type_node(k))
+            .map(|&(c, _)| self.ty(cx, c, Pos::Value))
+            .unwrap_or(TY_ERROR);
         let val = kids
             .iter()
             .find(|&&(_, k)| k == NodeKind::Literal)
@@ -2070,6 +2495,9 @@ mod tests {
         assert_eq!(parse_int_literal(b"0xFFu8"), Some(255));
         // Not an integer literal at all, and an overflow: neither panics.
         assert_eq!(parse_int_literal(b"usize"), None);
-        assert_eq!(parse_int_literal(b"999999999999999999999999999999999999999999"), None);
+        assert_eq!(
+            parse_int_literal(b"999999999999999999999999999999999999999999"),
+            None
+        );
     }
 }
