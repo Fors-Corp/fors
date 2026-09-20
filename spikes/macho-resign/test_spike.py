@@ -57,7 +57,7 @@ def main():
     section("2. positive path: clone-patch-rename (new inode), expect prints 42")
     positive = os.path.join(WORK, "toy_positive")
     shutil.copyfile(toy, positive)
-    os.chmod(positive, 0o755)
+    os.chmod(positive, 0o700)  # owner only: the spike runs these itself
     info = resign.clone_patch_rename(positive, offset, toy_lib.i32le(42))
     print("resign info:", info)
     rc, out, err = run(positive)
@@ -76,7 +76,7 @@ def main():
     section("4. NEGATIVE CONTROL: patch a clone's bytes WITHOUT fixing hashes")
     negative = os.path.join(WORK, "toy_negative")
     shutil.copyfile(toy, negative)
-    os.chmod(negative, 0o755)
+    os.chmod(negative, 0o700)  # owner only: the spike runs these itself
     resign.patch_and_resign(negative, offset, toy_lib.i32le(42), fix_hashes=False)
     rc, out, err = run(negative)
     desc = signal_desc(rc)
@@ -95,7 +95,7 @@ def main():
     section("5. HARD CASE A: execute, then clone-patch-rename, then execute again")
     hard_a = os.path.join(WORK, "toy_hard_a")
     shutil.copyfile(toy, hard_a)
-    os.chmod(hard_a, 0o755)
+    os.chmod(hard_a, 0o700)  # owner only: the spike runs these itself
     ino_before = os.stat(hard_a).st_ino
     rc1, out1, _ = run(hard_a)
     print(f"exec #1 (pre-patch): rc={rc1} out={out1!r} inode={ino_before}")
@@ -116,7 +116,7 @@ def main():
     section("6. HARD CASE B: execute, then patch the SAME inode in place")
     hard_b = os.path.join(WORK, "toy_hard_b")
     shutil.copyfile(toy, hard_b)
-    os.chmod(hard_b, 0o755)
+    os.chmod(hard_b, 0o700)  # owner only: the spike runs these itself
     ino_b = os.stat(hard_b).st_ino
     rcb1, outb1, _ = run(hard_b)
     print(f"exec #1 (pre-patch): rc={rcb1} out={outb1!r} inode={ino_b}")
