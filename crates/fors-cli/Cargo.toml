@@ -9,12 +9,21 @@ name = "fors"
 path = "src/main.rs"
 
 [dependencies]
+fors-diag = { path = "../fors-diag" }
 fors-lex = { path = "../fors-lex" }
 fors-syntax = { path = "../fors-syntax" }
 fors-index = { path = "../fors-index" }
 fors-resolve = { path = "../fors-resolve" }
 fors-check = { path = "../fors-check" }
 fors-query = { path = "../fors-query" }
+
+[dev-dependencies]
+fors-diag = { path = "../fors-diag" }
+fors-lsp = { path = "../fors-lsp" }
+fors-check = { path = "../fors-check" }
+fors-lex = { path = "../fors-lex" }
+fors-syntax = { path = "../fors-syntax" }
+fors-index = { path = "../fors-index" }
 
 [lints]
 workspace = true

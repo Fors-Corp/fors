@@ -156,12 +156,15 @@ fn resolve_impl(
         let Some(slot) = per_file.get_mut(d.file.index()) else {
             continue;
         };
-        slot.push(Diagnostic::new(
-            d.start,
-            d.end,
-            Code::N(index_diag_rule(d.code)),
-            d.message.clone(),
-        ));
+        slot.push(
+            Diagnostic::new(
+                d.start,
+                d.end,
+                Code::N(index_diag_rule(d.code)),
+                d.message.clone(),
+            )
+            .with_fixes(d.fixes.clone()),
+        );
     }
 
     for (i, inp) in inputs.iter().enumerate() {

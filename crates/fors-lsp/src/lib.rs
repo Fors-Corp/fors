@@ -15,6 +15,12 @@
 //!   whole file, so the editor keeps the cursor and the undo stack
 //! * `textDocument/documentSymbol`, from the per-file declaration table
 //! * `textDocument/foldingRange`, from the lossless CST
+//! * `textDocument/codeAction`: one quickfix per [`fors_diag::Fix`] carried
+//!   by a diagnostic whose range intersects the request. The server never
+//!   applies an edit itself (owner policy R14: a fix is a guess and the
+//!   compiler is the arbiter) — `isPreferred` is set only when
+//!   `fors_diag::policy::applicability` calls the fix's kind
+//!   `MachineApplicable`.
 //!
 //! [`Server::handle`] is a pure function from one message to the messages
 //! that answer it, so every behaviour here is testable without a pipe;
@@ -32,6 +38,7 @@
 
 pub mod json;
 
+use fors_diag::{Applicability, Fix};
 use fors_index::{DeclKind, Interner, Segments};
 use json::Json;
 
@@ -165,6 +172,62 @@ struct Doc {
     version: i64,
 }
 
+/// One diagnostic, phase-erased: `code` is already the stable string
+/// (`Pxxxx`/`N00xx`/`A00xx`, whichever phase raised it) and `fixes` is
+/// carried through so `code_action` can offer them without recomputing
+/// anything a second time.
+struct DiagEntry {
+    start: u32,
+    end: u32,
+    code: String,
+    message: String,
+    fixes: Vec<Fix>,
+}
+
+/// The diagnostics `doc` has today, from whatever phases the server runs
+/// (see the module docs): the parser always, and the name resolver — which
+/// folds in the module/index checks — only on a clean parse. The type
+/// checker does not run here yet, so no `T`/`O`/`F`/`D` code or fix from it
+/// can appear.
+fn diagnostic_entries(doc: &Doc) -> Vec<DiagEntry> {
+    let src = &doc.text;
+    let parse = fors_syntax::parse_file(src);
+    let mut items: Vec<DiagEntry> = parse
+        .diags
+        .iter()
+        .map(|d| DiagEntry {
+            start: d.start,
+            end: d.end,
+            code: d.code.as_str().to_string(),
+            message: d.message.to_string(),
+            fixes: d.fixes.clone(),
+        })
+        .collect();
+    // Resolution runs only on a clean parse: on a broken tree its
+    // diagnostics are noise about recovery, not about the program.
+    if parse.diags.is_empty() {
+        let mut interner = Interner::new();
+        let name: Segments = vec![interner.intern(module_stem(&doc.uri).as_bytes())];
+        let inputs = vec![fors_resolve::FileInput {
+            tree: &parse.tree,
+            tokens: &parse.tokens,
+            source: src,
+            name,
+        }];
+        let out = fors_resolve::resolve_in_package(&mut interner, &inputs, Some(0), None);
+        for d in &out.files[0].diagnostics {
+            items.push(DiagEntry {
+                start: d.start,
+                end: d.end,
+                code: d.code.as_string(),
+                message: d.message.clone(),
+                fixes: d.fixes.clone(),
+            });
+        }
+    }
+    items
+}
+
 #[derive(Default)]
 pub struct Server {
     /// Open documents, in the order they were opened. A `Vec`, not a map:
@@ -295,6 +358,10 @@ impl Server {
                 let uri = uri_of(&params);
                 out.push(response(id, self.folding(&uri)));
             }
+            "textDocument/codeAction" => match self.code_action(&params) {
+                Ok(actions) => out.push(response(id, Json::Arr(actions))),
+                Err(msg) => out.push(error(id, -32602, &msg)),
+            },
             _ => {
                 if id.is_some() {
                     out.push(error(id, -32601, &format!("unhandled method `{method}`")));
@@ -314,6 +381,13 @@ impl Server {
                     ("documentRangeFormattingProvider", Json::Bool(true)),
                     ("documentSymbolProvider", Json::Bool(true)),
                     ("foldingRangeProvider", Json::Bool(true)),
+                    (
+                        "codeActionProvider",
+                        Json::obj(vec![(
+                            "codeActionKinds",
+                            Json::Arr(vec![Json::str("quickfix")]),
+                        )]),
+                    ),
                 ]),
             ),
             (
@@ -371,35 +445,10 @@ impl Server {
         };
         let src = &doc.text;
         let ix = LineIndex::new(src);
-        let parse = fors_syntax::parse_file(src);
-        let mut items: Vec<Json> = parse
-            .diags
+        let items: Vec<Json> = diagnostic_entries(doc)
             .iter()
-            .map(|d| diag_json(&ix, src, d.start, d.end, d.code.as_str(), d.message))
+            .map(|d| diag_json(&ix, src, d.start, d.end, &d.code, &d.message))
             .collect();
-        // Resolution runs only on a clean parse: on a broken tree its
-        // diagnostics are noise about recovery, not about the program.
-        if parse.diags.is_empty() {
-            let mut interner = Interner::new();
-            let name: Segments = vec![interner.intern(module_stem(uri).as_bytes())];
-            let inputs = vec![fors_resolve::FileInput {
-                tree: &parse.tree,
-                tokens: &parse.tokens,
-                source: src,
-                name,
-            }];
-            let out = fors_resolve::resolve_in_package(&mut interner, &inputs, Some(0), None);
-            for d in &out.files[0].diagnostics {
-                items.push(diag_json(
-                    &ix,
-                    src,
-                    d.start,
-                    d.end,
-                    &d.code.as_string(),
-                    &d.message,
-                ));
-            }
-        }
         notification(
             "textDocument/publishDiagnostics",
             Json::obj(vec![
@@ -408,6 +457,46 @@ impl Server {
                 ("diagnostics", Json::Arr(items)),
             ]),
         )
+    }
+
+    /// `textDocument/codeAction`: one quickfix per [`Fix`] of every current
+    /// diagnostic of `uri` whose range intersects the requested range.
+    ///
+    /// `Err` only for a malformed request (no `textDocument.uri`, or a
+    /// `range` missing `start`/`end`) — never for a well-formed request
+    /// about a document the server does not have open, which is an empty
+    /// list, same as every other per-document query here.
+    fn code_action(&self, params: &Json) -> Result<Vec<Json>, String> {
+        let uri = params
+            .get("textDocument")
+            .and_then(|t| t.get("uri"))
+            .and_then(|u| u.as_str())
+            .ok_or_else(|| "textDocument/codeAction: missing textDocument.uri".to_string())?;
+        let range = params
+            .get("range")
+            .filter(|r| r.get("start").is_some() && r.get("end").is_some())
+            .ok_or_else(|| "textDocument/codeAction: missing or invalid range".to_string())?;
+        let Some(doc) = self.doc(uri) else {
+            return Ok(Vec::new());
+        };
+        let src = &doc.text;
+        let ix = LineIndex::new(src);
+        let (want_start, want_end) = json_range(&ix, src, range);
+        let mut actions = Vec::new();
+        for d in diagnostic_entries(doc) {
+            if d.fixes.is_empty() {
+                continue;
+            }
+            let (lo, hi) = (d.start.min(d.end), d.start.max(d.end));
+            if hi < want_start || want_end < lo {
+                continue; // no intersection with the requested range
+            }
+            let diagnostic = diag_json(&ix, src, d.start, d.end, &d.code, &d.message);
+            for fix in &d.fixes {
+                actions.push(code_action_json(uri, &ix, src, &diagnostic, fix));
+            }
+        }
+        Ok(actions)
     }
 
     fn symbols(&self, uri: &str) -> Json {
@@ -557,6 +646,38 @@ fn diag_json(ix: &LineIndex, src: &[u8], start: u32, end: u32, code: &str, messa
         ("code", Json::str(code)),
         ("source", Json::str("fors")),
         ("message", Json::str(message)),
+    ])
+}
+
+/// One `CodeAction` for `fix`, converting its byte-offset edits to the
+/// document's UTF-16 positions through `ix`. The server never applies the
+/// edit itself (owner policy R14): `isPreferred` is the only signal a
+/// client gets about how much to trust it, and it is set only when
+/// [`fors_diag::policy::applicability`] calls the fix's kind
+/// `MachineApplicable`.
+fn code_action_json(uri: &str, ix: &LineIndex, src: &[u8], diagnostic: &Json, fix: &Fix) -> Json {
+    let edits: Vec<Json> = fix
+        .edits
+        .iter()
+        .map(|e| {
+            Json::obj(vec![
+                ("range", range_json(ix, src, e.start, e.end)),
+                ("newText", Json::str(e.replacement.clone())),
+            ])
+        })
+        .collect();
+    Json::obj(vec![
+        ("title", Json::str(fix.title.clone())),
+        ("kind", Json::str("quickfix")),
+        ("diagnostics", Json::Arr(vec![diagnostic.clone()])),
+        (
+            "edit",
+            Json::obj(vec![("changes", Json::obj(vec![(uri, Json::Arr(edits))]))]),
+        ),
+        (
+            "isPreferred",
+            Json::Bool(fix.applicability() == Applicability::MachineApplicable),
+        ),
     ])
 }
 
@@ -748,13 +869,20 @@ mod tests {
                 "documentFormattingProvider",
                 "documentRangeFormattingProvider",
                 "documentSymbolProvider",
-                "foldingRangeProvider"
+                "foldingRangeProvider",
+                "codeActionProvider"
             ]
         );
         assert_eq!(caps.get("textDocumentSync"), Some(&Json::int(1))); // TextDocumentSyncKind.Full
-        for k in &names[1..] {
+        // every boolean-flag provider except the last (object-shaped) entry
+        for k in &names[1..names.len() - 1] {
             assert_eq!(caps.get(k), Some(&Json::Bool(true)), "{k}");
         }
+        assert_eq!(
+            caps.get("codeActionProvider")
+                .and_then(|p| p.get("codeActionKinds")),
+            Some(&Json::Arr(vec![Json::str("quickfix")]))
+        );
         assert_eq!(
             msgs[0]
                 .get("result")
@@ -1231,6 +1359,211 @@ mod tests {
         let line_str = std::str::from_utf8(line_bytes).unwrap();
         let utf16_total: u32 = line_str.chars().map(utf16_len).sum();
         assert!((utf16_total as usize) < line_bytes.len());
+    }
+
+    // ---- textDocument/codeAction ---------------------------------------
+
+    fn lsp_range(sl: i64, sc: i64, el: i64, ec: i64) -> Json {
+        Json::obj(vec![
+            (
+                "start",
+                Json::obj(vec![("line", Json::int(sl)), ("character", Json::int(sc))]),
+            ),
+            (
+                "end",
+                Json::obj(vec![("line", Json::int(el)), ("character", Json::int(ec))]),
+            ),
+        ])
+    }
+
+    /// A range past every line and column clamps (via [`LineIndex::offset`])
+    /// to the end of the buffer, so it intersects any diagnostic in it
+    /// without the test having to know the document's exact shape.
+    fn full_range() -> Json {
+        lsp_range(0, 0, 1 << 20, 0)
+    }
+
+    fn code_action_params(uri: &str, range: Json) -> Json {
+        Json::obj(vec![
+            ("textDocument", Json::obj(vec![("uri", Json::str(uri))])),
+            ("range", range),
+            (
+                "context",
+                Json::obj(vec![("diagnostics", Json::Arr(Vec::new()))]),
+            ),
+        ])
+    }
+
+    /// The fixture from `tests/conformance/07-grammar/recover-missing-semicolon.fors`
+    /// (read, not edited — the corpus is off limits): `let a = 1` with no
+    /// `;` before a second statement is exactly one `P0002`, with an
+    /// `insert-semicolon` fix the compiler knows is right because it
+    /// already parsed the rest of the file as if the `;` were there.
+    const MISSING_SEMI_SRC: &str = "fn f() {\n    let a = 1\n    let b = 2;\n}\n";
+
+    #[test]
+    fn missing_semicolon_yields_one_preferred_quickfix_that_clears_the_diagnostic() {
+        let mut s = Server::new();
+        open(&mut s, MISSING_SEMI_SRC);
+        let params = code_action_params("file:///w/m.fors", full_range());
+        let out = s.handle(&req("textDocument/codeAction", 10, params));
+        let actions = out[0].get("result").unwrap().as_arr().unwrap();
+        assert_eq!(actions.len(), 1, "{actions:?}");
+        let action = &actions[0];
+        assert_eq!(action.get("kind"), Some(&Json::str("quickfix")));
+        assert_eq!(action.get("isPreferred"), Some(&Json::Bool(true)));
+        let diags = action.get("diagnostics").unwrap().as_arr().unwrap();
+        assert_eq!(diags.len(), 1);
+        assert_eq!(diags[0].get("code"), Some(&Json::str("P0002")));
+
+        let edits = action
+            .get("edit")
+            .unwrap()
+            .get("changes")
+            .unwrap()
+            .get("file:///w/m.fors")
+            .unwrap()
+            .as_arr()
+            .unwrap();
+        assert_eq!(edits.len(), 1);
+
+        // apply the edit exactly as an editor would, then re-parse
+        let ix = LineIndex::new(MISSING_SEMI_SRC.as_bytes());
+        let (a, b) = json_range(
+            &ix,
+            MISSING_SEMI_SRC.as_bytes(),
+            edits[0].get("range").unwrap(),
+        );
+        let new_text = edits[0].get("newText").unwrap().as_str().unwrap();
+        let mut buf = MISSING_SEMI_SRC.as_bytes().to_vec();
+        buf.splice(a as usize..b as usize, new_text.bytes());
+        let (_tree, diags_after) = fors_syntax::parse(&buf);
+        assert!(diags_after.is_empty(), "{diags_after:?}");
+    }
+
+    /// A `maybe-incorrect` fix must arrive with `isPreferred: false`, and an
+    /// edit's columns must be UTF-16 code units counted from the start of
+    /// the line — not bytes. The `/* 😀😀 */` prefix makes the two differ:
+    /// `valu` starts at byte 25 of its line and at UTF-16 unit 21.
+    #[test]
+    fn a_guessed_fix_is_not_preferred_and_its_edit_is_in_utf16_units() {
+        const SRC: &str = "module m;\n\nfn f() {\n  let value = 1;\n  /* \u{1F600}\u{1F600} */ let y = valu;\n}\n";
+        let mut s = Server::new();
+        open(&mut s, SRC);
+        let params = code_action_params("file:///w/m.fors", full_range());
+        let out = s.handle(&req("textDocument/codeAction", 20, params));
+        let actions = out[0].get("result").unwrap().as_arr().unwrap();
+        let action = actions
+            .iter()
+            .find(|a| a.get("title") == Some(&Json::str("did you mean `value`?")))
+            .unwrap_or_else(|| panic!("no did-you-mean action in {actions:?}"));
+        assert_eq!(
+            action.get("isPreferred"),
+            Some(&Json::Bool(false)),
+            "a guess must not be marked preferred"
+        );
+        let edits = action
+            .get("edit")
+            .unwrap()
+            .get("changes")
+            .unwrap()
+            .get("file:///w/m.fors")
+            .unwrap()
+            .as_arr()
+            .unwrap();
+        assert_eq!(edits.len(), 1);
+        let r = edits[0].get("range").unwrap();
+        let start = r.get("start").unwrap();
+        assert_eq!(start.get("line"), Some(&Json::int(4)));
+        assert_eq!(
+            start.get("character"),
+            Some(&Json::int(21)),
+            "byte column 25 would mean the server counted bytes, not UTF-16 units"
+        );
+        let end = r.get("end").unwrap();
+        assert_eq!(end.get("character"), Some(&Json::int(25)));
+        assert_eq!(edits[0].get("newText"), Some(&Json::str("value")));
+
+        // and the edit really does name that identifier in the buffer
+        let ix = LineIndex::new(SRC.as_bytes());
+        let (a, b) = json_range(&ix, SRC.as_bytes(), r);
+        assert_eq!(&SRC.as_bytes()[a as usize..b as usize], b"valu");
+    }
+
+    #[test]
+    fn code_action_range_that_does_not_intersect_yields_no_actions() {
+        let mut s = Server::new();
+        open(&mut s, MISSING_SEMI_SRC);
+        // line 0 ("fn f() {") only; the diagnostic is on line 1.
+        let params = code_action_params("file:///w/m.fors", lsp_range(0, 0, 0, 8));
+        let out = s.handle(&req("textDocument/codeAction", 11, params));
+        let actions = out[0].get("result").unwrap().as_arr().unwrap();
+        assert!(actions.is_empty(), "{actions:?}");
+    }
+
+    #[test]
+    fn code_action_edit_uses_utf16_column_after_a_multibyte_character() {
+        let mut s = Server::new();
+        // Same shape as `MISSING_SEMI_SRC`, but the first statement's value
+        // is a string literal containing "café ☕": é and ☕ are each one
+        // BMP code point (one UTF-16 unit) but two and three UTF-8 bytes,
+        // so a column that was really a byte offset would land at 32
+        // instead of 20.
+        let src = "fn f() {\n    let a = \"café ☕\"\n    let b = 2;\n}\n";
+        open(&mut s, src);
+        let params = code_action_params("file:///w/m.fors", full_range());
+        let out = s.handle(&req("textDocument/codeAction", 12, params));
+        let actions = out[0].get("result").unwrap().as_arr().unwrap();
+        assert_eq!(actions.len(), 1, "{actions:?}");
+        let edits = actions[0]
+            .get("edit")
+            .unwrap()
+            .get("changes")
+            .unwrap()
+            .get("file:///w/m.fors")
+            .unwrap()
+            .as_arr()
+            .unwrap();
+        assert_eq!(edits.len(), 1);
+        let r = edits[0].get("range").unwrap();
+        let want_pos = Json::obj(vec![("line", Json::int(1)), ("character", Json::int(20))]);
+        assert_eq!(r.get("start"), Some(&want_pos));
+        assert_eq!(r.get("end"), Some(&want_pos)); // a pure insertion
+    }
+
+    #[test]
+    fn code_action_for_unknown_uri_yields_empty_never_panics() {
+        let mut s = Server::new();
+        let params = code_action_params("file:///w/does-not-exist.fors", lsp_range(0, 0, 0, 0));
+        let out = s.handle(&req("textDocument/codeAction", 13, params));
+        assert_eq!(out.len(), 1);
+        assert_eq!(out[0].get("result"), Some(&Json::Arr(Vec::new())));
+    }
+
+    #[test]
+    fn code_action_survives_malformed_params_then_keeps_serving() {
+        let mut s = Server::new();
+        open(&mut s, MISSING_SEMI_SRC);
+
+        // no `textDocument`, no `range`: malformed, must error, must not panic
+        let out = s.handle(&req("textDocument/codeAction", 14, Json::obj(vec![])));
+        assert_eq!(out.len(), 1);
+        assert!(out[0].get("error").is_some(), "{:?}", out[0]);
+        assert!(out[0].get("result").is_none());
+
+        // a `range` missing `start`/`end` is just as malformed
+        let bad_range = code_action_params(
+            "file:///w/m.fors",
+            Json::obj(vec![("start", lsp_range(0, 0, 0, 0))]),
+        );
+        let out2 = s.handle(&req("textDocument/codeAction", 15, bad_range));
+        assert!(out2[0].get("error").is_some(), "{:?}", out2[0]);
+
+        // the server must still answer a well-formed request afterwards
+        let params = code_action_params("file:///w/m.fors", full_range());
+        let out3 = s.handle(&req("textDocument/codeAction", 16, params));
+        let actions = out3[0].get("result").unwrap().as_arr().unwrap();
+        assert_eq!(actions.len(), 1, "{actions:?}");
     }
 
     /// A tiny deterministic linear-congruential generator: no external

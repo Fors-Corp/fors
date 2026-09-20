@@ -10,6 +10,7 @@ fors-syntax = { path = "../fors-syntax" }
 fors-index = { path = "../fors-index" }
 fors-resolve = { path = "../fors-resolve" }
 fors-fmt = { path = "../fors-fmt" }
+fors-diag = { path = "../fors-diag" }
 
 [lints]
 workspace = true

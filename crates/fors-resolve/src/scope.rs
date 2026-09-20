@@ -214,6 +214,46 @@ impl<'a> BodyCtx<'a> {
     /// records a single-segment position, so it is always 1 there except
     /// where 0 is exactly right (an unresolved head, or a tail deferred
     /// wholesale to the checker).
+    /// Where a new `use` item belongs in this file: just past the last
+    /// existing `use` declaration, else just past the `module` header,
+    /// else byte 0. The `bool` says which — a caller inserting at byte 0
+    /// must put the newline AFTER its item rather than before it.
+    ///
+    /// Error path only.
+    fn use_insertion_point(&self) -> (u32, bool) {
+        let mut at: Option<u32> = None;
+        for c in self.tree.children(0) {
+            if matches!(self.tree.kinds[c], NodeKind::UseDecl | NodeKind::ModuleHdr) {
+                at = Some(byte_range(self.tree, self.tokens, c).1);
+            }
+        }
+        match at {
+            Some(a) => (a, true),
+            None => (0, false),
+        }
+    }
+
+    /// The name in scope HERE that `name` is most likely a misspelling of
+    /// (see `fors_diag::suggest` for the acceptance and ranking rules).
+    ///
+    /// Error path only: it walks every open frame, every module-scope row
+    /// and the prelude, which is exactly the work Rule 14's lookup avoids
+    /// doing on the success path.
+    fn nearest_name_in_scope(&self, name: &[u8]) -> Option<Vec<u8>> {
+        // No copy, no sort, no dedup: `suggest` ranks by the candidate's own
+        // bytes, so its answer is the same for any order and any number of
+        // repeats, and a file with thousands of unresolved names (one
+        // missing import does that) pays one linear pass per name.
+        let locals = self.frames.iter().flatten().map(|&(sym, _)| sym);
+        let syms = locals
+            .chain(self.fn_params.iter().copied())
+            .chain(self.module.names().iter().copied());
+        let candidates = syms
+            .map(|sym| self.interner.resolve(sym))
+            .chain(crate::prelude::prelude_names());
+        fors_diag::suggest(name, candidates).map(<[u8]>::to_vec)
+    }
+
     fn record(&mut self, node: usize, target: ResolvedTarget, consumed: u8) {
         self.uses.push(node as u32, target, consumed);
     }
@@ -233,15 +273,53 @@ impl<'a> BodyCtx<'a> {
             // Ch08 Rule 17 (round 5, D3): a std module is a name only
             // where the header imports it, so an unresolved head that
             // spells one gets the missing `use` named in the message.
-            let msg =
-                if segs.len() > 1 && crate::prelude::is_std_module(self.interner.resolve(name0)) {
-                    let m = String::from_utf8_lossy(self.interner.resolve(name0)).into_owned();
-                    format!("unresolved name (add `use std.{m};` to import the std module `{m}`)")
+            let spelled = self.interner.resolve(name0).to_vec();
+            let std_head = segs.len() > 1 && crate::prelude::is_std_module(&spelled);
+            let msg = if std_head {
+                let m = String::from_utf8_lossy(&spelled).into_owned();
+                format!("unresolved name (add `use std.{m};` to import the std module `{m}`)")
+            } else {
+                "unresolved name".to_string()
+            };
+            // The message text is unchanged; what used to be prose the
+            // reader had to act on by hand is now also an edit a tool can
+            // apply (owner policy R14: still a suggestion, never applied
+            // by the compiler).
+            // A package may own a module of the same name (`fs.fors`); then
+            // "the std one is missing" is a guess about which `fs` was
+            // meant, and the two would resolve silently to different code.
+            let own_module = std_head && self.modules.find(&[name0]).is_some();
+            let fix = if own_module {
+                None
+            } else if std_head {
+                let m = String::from_utf8_lossy(&spelled).into_owned();
+                let (at, after_item) = self.use_insertion_point();
+                let text = if after_item {
+                    format!("\nuse std.{m};")
                 } else {
-                    "unresolved name".to_string()
+                    format!("use std.{m};\n")
                 };
-            self.diags
-                .push(Diagnostic::new(range0.0, range0.1, Code::N(14), msg));
+                Some(fors_diag::Fix::insert(
+                    fors_diag::FixKind::InsertStdImport,
+                    format!("add `use std.{m};`"),
+                    at,
+                    text,
+                ))
+            } else {
+                self.nearest_name_in_scope(&spelled).map(|c| {
+                    let s = String::from_utf8_lossy(&c).into_owned();
+                    fors_diag::Fix::replace(
+                        fors_diag::FixKind::ReplaceIdentifier,
+                        format!("did you mean `{s}`?"),
+                        range0.0,
+                        range0.1,
+                        s,
+                    )
+                })
+            };
+            let mut d = Diagnostic::new(range0.0, range0.1, Code::N(14), msg);
+            d.fixes.extend(fix);
+            self.diags.push(d);
             self.record(
                 node,
                 ResolvedTarget::Deferred {

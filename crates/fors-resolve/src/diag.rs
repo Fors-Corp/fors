@@ -8,6 +8,7 @@
 // now lives in `fors-index::diag` (the crate every checking phase already
 // depends on) and this module re-exports it, rather than keeping a second,
 // narrower definition here. `N`/`A` and their meaning are unchanged.
+use fors_diag::Fix;
 pub use fors_index::diag::Code;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -16,6 +17,8 @@ pub struct Diagnostic {
     pub end: u32,
     pub code: Code,
     pub message: String,
+    /// Suggested repairs (see `fors_diag`); empty on all but a few codes.
+    pub fixes: Vec<Fix>,
 }
 
 impl Diagnostic {
@@ -25,6 +28,19 @@ impl Diagnostic {
             end,
             code,
             message,
+            fixes: Vec::new(),
         }
+    }
+
+    #[must_use]
+    pub fn with_fix(mut self, fix: Fix) -> Self {
+        self.fixes.push(fix);
+        self
+    }
+
+    #[must_use]
+    pub fn with_fixes(mut self, fixes: Vec<Fix>) -> Self {
+        self.fixes = fixes;
+        self
     }
 }

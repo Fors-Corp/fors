@@ -20,20 +20,9 @@ use std::process::ExitCode;
 
 use fors_index::{Interner, Segments, module::is_legal_segment};
 
-fn line_col(source: &[u8], byte_offset: u32) -> (u32, u32) {
-    let offset = (byte_offset as usize).min(source.len());
-    let mut line = 1u32;
-    let mut col = 1u32;
-    for &b in &source[..offset] {
-        if b == b'\n' {
-            line += 1;
-            col = 1;
-        } else {
-            col += 1;
-        }
-    }
-    (line, col)
-}
+/// The `line:col` every writer here reports; see `fors_diag`'s crate docs
+/// for the unit of each (col counts BYTES).
+use fors_diag::LineIndex;
 
 fn run_parse(args: &[String]) -> ExitCode {
     let mut show_tree = false;
@@ -64,9 +53,10 @@ fn run_parse(args: &[String]) -> ExitCode {
             }
         };
         let parsed = fors_syntax::parse_file(&bytes);
+        let lines = (!parsed.diags.is_empty()).then(|| LineIndex::new(&bytes));
         for d in &parsed.diags {
             any_diag = true;
-            let (line, col) = line_col(&bytes, d.start);
+            let (line, col) = lines.as_ref().map_or((1, 1), |ix| ix.line_col(d.start));
             let _ = writeln!(
                 out,
                 "{path}:{line}:{col}: error[{}]: {}",
@@ -213,6 +203,84 @@ fn build_package(path: &Path, interner: &mut Interner) -> Option<(Vec<PkgFile>, 
     }
 }
 
+/// One rendered diagnostic plus the sort key `fors check` has always
+/// sorted by: the file's display path, then the byte offset the
+/// diagnostic starts at. The rendering is done eagerly, in the format
+/// this run asked for, so that only one of the two writers ever runs.
+struct Line {
+    path: String,
+    start: u32,
+    text: String,
+}
+
+/// Which writer `fors check` prints with. Text is the default and is a
+/// frozen baseline: it must not change by one byte.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Format {
+    Text,
+    Json,
+}
+
+fn push_line(
+    out: &mut Vec<Line>,
+    format: Format,
+    path: &str,
+    index: &LineIndex,
+    start: u32,
+    end: u32,
+    code: String,
+    message: String,
+    fixes: Vec<fors_diag::Fix>,
+) {
+    let r = fors_diag::Rendered {
+        path: path.to_string(),
+        start: index.pos(start),
+        end: index.pos(end),
+        code,
+        message,
+        fixes,
+    };
+    let mut text = String::new();
+    match format {
+        Format::Json => fors_diag::json::diagnostic_line(&r, index, &mut text),
+        Format::Text => fors_diag::write_text(&r, &mut text),
+    }
+    out.push(Line {
+        path: r.path,
+        start: r.start.byte,
+        text,
+    })
+}
+
+/// Reads `--format json|text` (and `--format=json`) out of `args`,
+/// returning the format and the remaining arguments. An unknown format is
+/// the caller's exit-2 error.
+fn take_format(args: &[String]) -> Result<(Format, Vec<String>), String> {
+    let mut format = Format::Text;
+    let mut rest = Vec::with_capacity(args.len());
+    let mut i = 0;
+    while i < args.len() {
+        let a = args[i].as_str();
+        let value = if a == "--format" {
+            i += 1;
+            match args.get(i) {
+                Some(v) => Some(v.as_str()),
+                None => return Err("--format needs a value (json or text)".to_string()),
+            }
+        } else {
+            a.strip_prefix("--format=")
+        };
+        match value {
+            Some("json") => format = Format::Json,
+            Some("text") => format = Format::Text,
+            Some(other) => return Err(format!("unknown --format `{other}` (json or text)")),
+            None => rest.push(args[i].clone()),
+        }
+        i += 1;
+    }
+    Ok((format, rest))
+}
+
 fn run_check(args: &[String]) -> ExitCode {
     // MARC: design §12 asks for `fors check --count` to print the
     // deterministic counters the near-linearity gate reads. It is a flag on
@@ -225,12 +293,20 @@ fn run_check(args: &[String]) -> ExitCode {
         .filter(|a| a.as_str() != "--count")
         .cloned()
         .collect();
+    let (format, args) = match take_format(&args) {
+        Ok(v) => v,
+        Err(e) => {
+            eprintln!("fors check: {e}");
+            return ExitCode::from(2);
+        }
+    };
     if args.is_empty() {
         eprintln!("fors check: no input paths");
         return ExitCode::from(2);
     }
-    let mut lines: Vec<(String, u32, u32, String)> = Vec::new();
+    let mut lines: Vec<Line> = Vec::new();
     let mut any = false;
+    let mut file_count = 0usize;
     let mut totals = fors_check::Counters::default();
 
     for arg in &args {
@@ -241,6 +317,7 @@ fn run_check(args: &[String]) -> ExitCode {
             any = true;
             continue;
         };
+        file_count += files.len();
         let parsed: Vec<fors_syntax::Parse> = files
             .iter()
             .map(|f| fors_syntax::parse_file(&f.source))
@@ -271,35 +348,56 @@ fn run_check(args: &[String]) -> ExitCode {
         // (T-codes); bodies are I3 onward's.
         let checked = fors_check::check_build(&inputs, &output, &mut interner);
 
+        // One line index per file, built the first time that file has a
+        // diagnostic to place: a clean file never pays for one.
+        let indexes: Vec<std::cell::OnceCell<LineIndex>> =
+            files.iter().map(|_| std::cell::OnceCell::new()).collect();
+        let index_of = |i: usize| indexes[i].get_or_init(|| LineIndex::new(&files[i].source));
+
         for (i, f) in files.iter().enumerate() {
             for d in &parsed[i].diags {
                 any = true;
-                let (l, c) = line_col(&f.source, d.start);
-                lines.push((
-                    f.display.clone(),
+                push_line(
+                    &mut lines,
+                    format,
+                    &f.display,
+                    index_of(i),
                     d.start,
-                    d.start,
-                    format!("{l}:{c}: error[{}]: {}", d.code.as_str(), d.message),
-                ));
+                    d.end,
+                    d.code.as_str().to_string(),
+                    d.message.to_string(),
+                    d.fixes.clone(),
+                );
             }
             for (_, _, code, msg) in &f.extra {
                 any = true;
-                lines.push((
-                    f.display.clone(),
+                // Not positioned inside the file (a file-name or duplicate-
+                // module fact), so it is reported at its very start.
+                push_line(
+                    &mut lines,
+                    format,
+                    &f.display,
+                    index_of(i),
                     0,
                     0,
-                    format!("1:1: error[{code}]: {msg}"),
-                ));
+                    (*code).to_string(),
+                    msg.clone(),
+                    Vec::new(),
+                );
             }
             for d in &output.files[i].diagnostics {
                 any = true;
-                let (l, c) = line_col(&f.source, d.start);
-                lines.push((
-                    f.display.clone(),
+                push_line(
+                    &mut lines,
+                    format,
+                    &f.display,
+                    index_of(i),
                     d.start,
-                    d.start,
-                    format!("{l}:{c}: error[{}]: {}", d.code.as_string(), d.message),
-                ));
+                    d.end,
+                    d.code.as_string(),
+                    d.message.clone(),
+                    d.fixes.clone(),
+                );
             }
         }
         for d in &checked.diagnostics {
@@ -307,13 +405,17 @@ fn run_check(args: &[String]) -> ExitCode {
                 continue;
             };
             any = true;
-            let (l, c) = line_col(&f.source, d.start);
-            lines.push((
-                f.display.clone(),
+            push_line(
+                &mut lines,
+                format,
+                &f.display,
+                index_of(d.file.index()),
                 d.start,
-                d.start,
-                format!("{l}:{c}: error[{}]: {}", d.code.as_string(), d.message),
-            ));
+                d.end,
+                d.code.as_string(),
+                d.message.clone(),
+                d.fixes.clone(),
+            );
         }
         let c = checked.counters;
         totals.nodes_visited += c.nodes_visited;
@@ -329,26 +431,52 @@ fn run_check(args: &[String]) -> ExitCode {
         totals.bodies_skipped += c.bodies_skipped;
     }
 
-    lines.sort_by(|a, b| (a.0.as_str(), a.1).cmp(&(b.0.as_str(), b.1)));
+    lines.sort_by(|a, b| (a.path.as_str(), a.start).cmp(&(b.path.as_str(), b.start)));
     let stdout = std::io::stdout();
     let mut out = stdout.lock();
-    for (path, _, _, rest) in &lines {
-        let _ = writeln!(out, "{path}:{rest}");
+    for l in &lines {
+        let _ = writeln!(out, "{}", l.text);
     }
 
-    if count {
-        let t = &totals;
-        let _ = writeln!(out, "bodies checked       {}", t.bodies_checked);
-        let _ = writeln!(out, "bodies skipped       {}", t.bodies_skipped);
-        let _ = writeln!(out, "nodes visited        {}", t.nodes_visited);
-        let _ = writeln!(out, "synth calls          {}", t.synths);
-        let _ = writeln!(out, "check calls          {}", t.checks);
-        let _ = writeln!(out, "subst_norm calls     {}", t.subst_norm_calls);
-        let _ = writeln!(out, "holds probes         {}", t.holds_probes);
-        let _ = writeln!(out, "holds memo misses    {}", t.holds_misses);
-        let _ = writeln!(out, "impl-index probes    {}", t.impl_scans);
-        let _ = writeln!(out, "use-tape events      {}", t.tape_events);
-        let _ = writeln!(out, "types interned       {}", t.types_interned);
+    let t = &totals;
+    let counters: [(&str, u64); 11] = [
+        ("bodies_checked", t.bodies_checked),
+        ("bodies_skipped", t.bodies_skipped),
+        ("nodes_visited", t.nodes_visited),
+        ("synth_calls", t.synths),
+        ("check_calls", t.checks),
+        ("subst_norm_calls", t.subst_norm_calls),
+        ("holds_probes", t.holds_probes),
+        ("holds_memo_misses", t.holds_misses),
+        ("impl_index_probes", t.impl_scans),
+        ("use_tape_events", t.tape_events),
+        ("types_interned", t.types_interned),
+    ];
+    match format {
+        Format::Json => {
+            let mut s = String::new();
+            fors_diag::json::summary_line(
+                lines.len(),
+                file_count,
+                count.then_some(&counters[..]),
+                &mut s,
+            );
+            let _ = writeln!(out, "{s}");
+        }
+        Format::Text if count => {
+            let _ = writeln!(out, "bodies checked       {}", t.bodies_checked);
+            let _ = writeln!(out, "bodies skipped       {}", t.bodies_skipped);
+            let _ = writeln!(out, "nodes visited        {}", t.nodes_visited);
+            let _ = writeln!(out, "synth calls          {}", t.synths);
+            let _ = writeln!(out, "check calls          {}", t.checks);
+            let _ = writeln!(out, "subst_norm calls     {}", t.subst_norm_calls);
+            let _ = writeln!(out, "holds probes         {}", t.holds_probes);
+            let _ = writeln!(out, "holds memo misses    {}", t.holds_misses);
+            let _ = writeln!(out, "impl-index probes    {}", t.impl_scans);
+            let _ = writeln!(out, "use-tape events      {}", t.tape_events);
+            let _ = writeln!(out, "types interned       {}", t.types_interned);
+        }
+        Format::Text => {}
     }
 
     if any {
@@ -356,6 +484,53 @@ fn run_check(args: &[String]) -> ExitCode {
     } else {
         ExitCode::from(0)
     }
+}
+
+/// `fors explain <CODE>` / `fors explain --list`: the normative rule behind
+/// a stable diagnostic code, offline, from the chapters this binary
+/// embeds. Exit 2 (and one line on stderr) for a code that does not exist —
+/// an agent that mistypes a code must not read silence as "no such rule".
+fn run_explain(args: &[String]) -> ExitCode {
+    let (format, args) = match take_format(args) {
+        Ok(v) => v,
+        Err(e) => {
+            eprintln!("fors explain: {e}");
+            return ExitCode::from(2);
+        }
+    };
+    let list = args.iter().any(|a| a == "--list");
+    let codes: Vec<&String> = args.iter().filter(|a| !a.starts_with("--")).collect();
+    let stdout = std::io::stdout();
+    let mut out = stdout.lock();
+
+    if list {
+        for (code, summary) in fors_diag::list() {
+            let _ = match format {
+                Format::Json => writeln!(
+                    out,
+                    "{}",
+                    fors_diag::explain::render_list_json(&code, &summary)
+                ),
+                Format::Text => writeln!(out, "{code}  {summary}"),
+            };
+        }
+        return ExitCode::SUCCESS;
+    }
+
+    let [code] = codes.as_slice() else {
+        eprintln!("usage: fors explain [--format json|text] <CODE>\n       fors explain --list");
+        return ExitCode::from(2);
+    };
+    let upper = code.to_ascii_uppercase();
+    let Some(e) = fors_diag::explain(&upper) else {
+        eprintln!("fors explain: unknown diagnostic code `{code}` (try `fors explain --list`)");
+        return ExitCode::from(2);
+    };
+    let _ = match format {
+        Format::Json => writeln!(out, "{}", fors_diag::explain::render_json(&e)),
+        Format::Text => write!(out, "{}", fors_diag::explain::render_text(&e)),
+    };
+    ExitCode::SUCCESS
 }
 
 fn real_header_segments(source: &[u8], interner: &mut Interner) -> Option<Segments> {
@@ -383,6 +558,7 @@ fn main() -> ExitCode {
     match args.first().map(String::as_str) {
         Some("parse") => run_parse(&args[1..]),
         Some("check") => run_check(&args[1..]),
+        Some("explain") => run_explain(&args[1..]),
         // Two streams (CONTRIBUTING.md): the compiler's own version, and the
         // language version it implements.
         Some("--version" | "-V") => {
@@ -395,7 +571,11 @@ fn main() -> ExitCode {
         }
         _ => {
             eprintln!(
-                "usage: fors parse [--tree] <file>...\n       fors check <path>...\n       fors --version"
+                "usage: fors parse [--tree] <file>...\n\
+                 \x20      fors check [--format json|text] [--count] <path>...\n\
+                 \x20      fors explain [--format json|text] <CODE>\n\
+                 \x20      fors explain [--format json|text] --list\n\
+                 \x20      fors --version"
             );
             ExitCode::from(2)
         }

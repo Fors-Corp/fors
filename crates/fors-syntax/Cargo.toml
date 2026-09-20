@@ -5,6 +5,7 @@ edition = "2024"
 publish = false
 
 [dependencies]
+fors-diag = { path = "../fors-diag" }
 fors-lex = { path = "../fors-lex" }
 
 [lints]
