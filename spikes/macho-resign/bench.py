@@ -60,7 +60,7 @@ def bench_resign(binary_path, work, n_pages):
     times = []
     target = os.path.join(work, f"resign_target_{n_pages}p")
     shutil.copyfile(binary_path, target)
-    os.chmod(target, 0o755)
+    os.chmod(target, 0o700)  # owner only: the spike runs these itself
     for _ in range(N_REPS):
         t0 = time.perf_counter()
         resign.clone_patch_rename(target, patch_off, patch_data)
@@ -73,7 +73,7 @@ def bench_codesign(binary_path, work):
     times = []
     target = os.path.join(work, "codesign_target")
     shutil.copyfile(binary_path, target)
-    os.chmod(target, 0o755)
+    os.chmod(target, 0o700)  # owner only: the spike runs these itself
     for _ in range(N_REPS):
         t0 = time.perf_counter()
         subprocess.run(["codesign", "-f", "-s", "-", target],
