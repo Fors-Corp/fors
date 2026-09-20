@@ -1,0 +1,12 @@
+//! name: scoped_rvalue_extent_is_the_statement_accepted
+//! rule: 01.R19c
+//! expect: check-ok
+//! detail: ch01 R19c(c) -- a scoped value consumed within the expression that produced it has THAT EXPRESSION as its extent
+
+needs { };
+
+fn f[A: brand](inout v: Vec[i32, A], let n: i32) -> usize {
+    let k: usize = v.iter().count();
+    v[0] = n;
+    return k;
+}

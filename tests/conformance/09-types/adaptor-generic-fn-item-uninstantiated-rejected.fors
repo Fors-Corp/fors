@@ -1,0 +1,12 @@
+//! name: adaptor-generic-fn-item-uninstantiated-rejected
+//! rule: 09.R28
+//! expect: check-error
+//! detail: T0039 -- the parameter type `fn (sink I.Item) -> U` is not complete (`U` is unbound), so the argument is SYNTHESISED, and a generic `fn` item in SYNTH mode with no explicit arguments is rejected: write `same[I.Item]`
+
+needs { };
+
+fn same[T](sink x: T) -> T { return x; }
+
+fn f[I: Iterator](sink it: I) -> usize {
+    return it.map(same).count();
+}

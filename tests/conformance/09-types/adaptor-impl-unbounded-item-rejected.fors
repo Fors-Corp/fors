@@ -1,0 +1,18 @@
+//! name: adaptor-impl-unbounded-item-rejected
+//! rule: 09.R17
+//! expect: check-error
+//! detail: T0021 -- `type Item = U;` must satisfy the trait's `Item: Droppable` (R21) at the impl, with `U` rigid (R17); an unbounded `U` is not `Droppable` (ch01 R22c), so the impl is rejected: write `impl[I: Iterator, U: Droppable]`
+
+needs { };
+
+struct MyMap[I: Iterator, U] { src: I, f: fn (sink I.Item) -> U }
+
+impl[I: Iterator, U] Iterator for MyMap[I, U] {
+    type Item = U;
+    fn next(inout self) -> Option[U] {
+        match self.src.next() {
+            some(let x) => { return some((self.f)(move x)); }
+            none => { return none; }
+        }
+    }
+}

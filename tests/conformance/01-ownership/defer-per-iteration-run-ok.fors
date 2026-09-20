@@ -1,0 +1,15 @@
+//! name: defer_per_iteration_run_ok
+//! rule: 01.R23e
+//! expect: run-ok
+//! detail: a\nend\na\nend  -- R23e: a loop body's block is exited at the end of every iteration, so its `defer` runs once per iteration, after the body
+
+module app;
+needs { io.stdout };
+use std.io;
+
+fn main(inout out: io.Stdout) {
+    for i in 0 ..< 2 {
+        defer out.write_line("end");
+        out.write_line("a");
+    }
+}

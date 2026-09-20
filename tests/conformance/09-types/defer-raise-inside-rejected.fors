@@ -1,0 +1,12 @@
+//! name: defer-raise-inside-rejected
+//! rule: 09.R33
+//! expect: check-error
+//! detail: T0033 -- ch01 R23c: no `raise` inside a deferred body
+
+needs { };
+
+enum Err { boom }
+
+fn f() raises Err {
+    defer { raise Err.boom; }
+}

@@ -1,0 +1,22 @@
+//! name: defer_break_outer_loop_rejected
+//! rule: 01.R23c
+//! expect: check-error
+//! detail: ch01 R23c (ch09 T0033) -- a `break` whose target loop lies outside the body is rejected
+
+needs { };
+
+struct Res { fd: i32 }
+impl Linear for Res { }
+impl Res {
+    fn open(let n: i32) -> Res { return Res { fd: n }; }
+    fn close(sink self) { }
+    fn poke(inout self) { }
+    fn step(let self) raises Err { }
+}
+enum Err { boom }
+
+fn f(let n: usize) {
+    for i in 0 ..< n {
+        defer { break; }
+    }
+}

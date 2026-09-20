@@ -176,6 +176,15 @@ pub enum NodeKind {
     /// `gconstraint`). Introduces no name; both identifiers are tokens
     /// the node owns directly; children: the bound types.
     GConstraint,
+
+    // ---- appended, owner decision 2026-09-20 round 6 (O2): additive
+    // only, never reorder or remove anything above. ----
+    /// `"defer" ( block | expr ";" )` (ch07 `defer_stmt`). One child: the
+    /// `Block`, or the expression the `expr ";"` form abbreviates.
+    DeferStmt,
+    /// `"errdefer" ( block | expr ";" )` (ch07 `errdefer_stmt`). Same
+    /// shape as `DeferStmt`; it runs on error exits only (ch01 R23b).
+    ErrdeferStmt,
 }
 
 impl NodeKind {

@@ -1,0 +1,24 @@
+//! name: linear_field_partial_move_rejected
+//! rule: 01.R22d
+//! expect: check-error
+//! detail: ch01 R4a(c) -- a partial move out of an aggregate is forbidden, so a linear field cannot be taken out by a field expression
+
+needs { };
+
+struct Res { fd: i32 }
+impl Linear for Res { }
+impl Res {
+    fn open(let n: i32) -> Res { return Res { fd: n }; }
+    fn close(sink self) { }
+    fn poke(inout self) { }
+    fn step(let self) raises Err { }
+}
+enum Err { boom }
+
+struct Box { r: Res, n: i32 }
+
+fn f() {
+    var b: Box = Box { r: Res.open(1), n: 2 };
+    var r: Res = move b.r;
+    r.close();
+}

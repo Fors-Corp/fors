@@ -1,0 +1,15 @@
+//! name: main-raises-nested-payload-run-error
+//! rule: 02.R17
+//! expect: run-error
+//! detail: error: main.Error.wrapped(..)  -- a payload component of a type with no rendering renders as `..`
+
+module main;
+needs { };
+
+fn zero(let x: i32) -> i32 { return 0; }
+
+enum Error { wrapped(fn (let i32) -> i32) }
+
+fn main() raises Error {
+    raise Error.wrapped(zero);
+}

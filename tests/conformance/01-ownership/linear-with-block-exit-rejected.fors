@@ -1,0 +1,22 @@
+//! name: linear_with_block_exit_rejected
+//! rule: 01.R22g
+//! expect: check-error
+//! detail: ch01 R22g, R22h -- a `with allocator` block is a scope: `r` declared inside it must be consumed before its `}`
+
+needs { };
+
+struct Res { fd: i32 }
+impl Linear for Res { }
+impl Res {
+    fn open(let n: i32) -> Res { return Res { fd: n }; }
+    fn close(sink self) { }
+    fn poke(inout self) { }
+    fn step(let self) raises Err { }
+}
+enum Err { boom }
+
+fn f() {
+    with allocator a: PageAllocator {
+        var r: Res = Res.open(1);
+    }
+}

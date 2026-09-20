@@ -1,0 +1,23 @@
+//! name: linear_in_loop_consumed_once_rejected
+//! rule: 01.R22d
+//! expect: check-error
+//! detail: ch01 R4a(b) -- a move inside a loop of a place declared outside it, with no re-initialisation
+
+needs { };
+
+struct Res { fd: i32 }
+impl Linear for Res { }
+impl Res {
+    fn open(let n: i32) -> Res { return Res { fd: n }; }
+    fn close(sink self) { }
+    fn poke(inout self) { }
+    fn step(let self) raises Err { }
+}
+enum Err { boom }
+
+fn f(let n: usize) {
+    var r: Res = Res.open(1);
+    for i in 0 ..< n {
+        r.close();
+    }
+}

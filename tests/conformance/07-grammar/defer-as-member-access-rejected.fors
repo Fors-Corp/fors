@@ -1,0 +1,10 @@
+//! name: defer-as-member-access-rejected
+//! rule: 07.Reserved
+//! expect: parse-error
+//! detail: a reserved word is never the member of a field access: `x.defer` is a parse error
+
+needs { };
+
+fn a(let x: i32) -> i32 {
+    return x.defer;
+}

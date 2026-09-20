@@ -1,0 +1,21 @@
+//! name: user_linear_type_diagnostic_names_consumer_rejected
+//! rule: 01.R22i
+//! expect: check-error
+//! detail: ch01 R22i -- the diagnostic carries the value `r`, its type `Res`, the exit (the `}` of the body) and the consumer `Res.close`
+
+needs { };
+
+struct Res { fd: i32 }
+impl Linear for Res { }
+impl Res {
+    fn open(let n: i32) -> Res { return Res { fd: n }; }
+    fn close(sink self) { }
+    fn poke(inout self) { }
+    fn step(let self) raises Err { }
+}
+enum Err { boom }
+
+fn f() {
+    var r: Res = Res.open(1);
+    r.poke();
+}

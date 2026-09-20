@@ -9,7 +9,7 @@ use std.mem;
 fn f() raises AllocError {
     with allocator scratch: mem.Fixed[4096] {
         var v: Vec[i32, scratch] = Vec.new();
+        defer v.deinit(&scratch);          // linear: consumed on every exit, incl. the `?`
         v.push(&scratch, 1)?;
-        v.deinit(&scratch);
     }
 }

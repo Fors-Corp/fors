@@ -1,22 +1,120 @@
-// std.mem.seq — the slice iterator, the closed adaptor set and the closed
-// consumer set. Surface: docs/spec/10-std.md Rules 28, 33-37. Bodies are
-// STUBS. A leaf: imports nothing, so vec may import it.
+// std.mem.seq — the `Iterator` trait, the slice iterator, the closed
+// adaptor set and the closed consumer set. Surface: docs/spec/10-std.md
+// Rules 28, 32-37. Bodies are STUBS where storage is involved.
+// A leaf: imports nothing, so vec may import it.
 //
-// The Iterator trait itself is language-known (ch09 R21) and is NOT
-// redeclared here, and there is no way to add a method to it (ch09 R43
-// looks up inherent impls and trait impls only; there is no blanket impl,
-// ch09 R18, and no free-function method syntax). Every adaptor and
-// consumer is therefore a FREE FUNCTION, reached as `mem.map(...)`.
+// Round 6 (owner decision 2026-09-20, O3). The adaptors and consumers are
+// PROVIDED METHODS of `Iterator` (R34-R35), not free functions. The trait's
+// REQUIRED part is language-known (ch09 R21) and this module declares that
+// same trait: the prelude name `Iterator` and `mem.seq.Iterator` denote one
+// item (ch08 R13's same-entity case). A provided method is a lookup
+// candidate exactly like a required one (ch09 R16, R43), so `it.map(f)`
+// resolves with NO blanket impl (ch09 R18 is untouched) — each adaptor is a
+// concrete struct carrying its own struct-headed `impl Iterator`.
 //
-// An adaptor takes its source `inout` and returns a `scoped(it)` value:
-// the result keeps the source borrowed for its whole life (ch01 R19a),
-// which is how a scoped source (`v.iter()`, `mem.iter(s)`) may be adapted
-// at all — a scoped value can be stored in no field, so an adaptor that
-// took `sink it` and kept it in a struct would be rejected by ch01 R19a.
-// A consumer takes `sink it`: it uses the iterator up and returns a plain
-// value. A callable passed to an adaptor is never `raises` (R8): the
-// fallible forms are the try_ consumers.
+// An adaptor takes its source by value (`sink self`) and OWNS it; what
+// makes that writable for a scoped source such as `v.iter()` is ch01 R19c:
+// a call's result inherits its scoped argument's extent exactly when the
+// declared result type mentions the parameter the argument went into.
+// `by_ref` is the one borrowing adaptor and the one raw pointer left here.
+//
+// Two declaration shapes are forced and MUST NOT be "simplified" (R34):
+// a callable parameter is a `fn` TYPE, never a callable type parameter
+// (ch09 R38 never binds through a bound, so `U` would be uninferable), and
+// an adaptor carries every parameter it needs in its own head (`Mapped[I,
+// U]`, since ch09 R18 would leave `U` unconstrained otherwise). A callable
+// FIELD is called as `(self.f)(move x)`, never `self.f(x)` (ch09 T0043).
 needs { };
+
+// ------------------------------------------------------------- the trait
+
+pub trait Iterator {
+    type Item: Droppable;
+    fn next(inout self) -> Option[Self.Item];
+
+    // ---- adaptors (R34): lazy, allocation-free, closed set ----
+
+    // U: Droppable is forced by ch09 R17/R21: Mapped's `type Item = U;`
+    // must satisfy `Item: Droppable` with U rigid, and the bound here makes
+    // a closure returning a linear value fail at `map` (T0012).
+    fn map[U: Droppable](sink self, let f: fn (sink Self.Item) -> U) -> Mapped[Self, U] {
+        return Mapped { src: self, f: f };
+    }
+
+    fn filter(sink self, let p: fn (let Self.Item) -> bool) -> Filtered[Self] {
+        return Filtered { src: self, p: p };
+    }
+
+    fn take(sink self, let n: usize) -> Taken[Self] {
+        return Taken { src: self, left: n };
+    }
+
+    fn skip(sink self, let n: usize) -> Skipped[Self] {
+        return Skipped { src: self, to_skip: n };
+    }
+
+    fn enumerate(sink self) -> Enumerated[Self] {
+        return Enumerated { src: self, at: 0 };
+    }
+
+    fn zip[J: Iterator](sink self, sink other: J) -> Zipped[Self, J] {
+        return Zipped { a: self, b: other };
+    }
+
+    // The one borrowing adaptor: how an `inout` iterator, or one held in a
+    // field, is chained, since every other adaptor takes `sink self` and
+    // ch01 R4a(c)-(d) forbid moving out of a field or an `inout` parameter.
+    @unsafe(invariant: "src points at the receiver for the extent of the scoped result")
+    fn by_ref(inout self) -> scoped(self) ByRef[Self] {
+        return self.by_ref();                                // STUB
+    }
+
+    // ---- consumers (R35): each uses the iterator up ----
+
+    fn count(sink self) -> usize {
+        var n: usize = 0;
+        for x in self { n = n + 1; }
+        return n;
+    }
+
+    // Strictly left to right; never reassociated, whatever the algebra (R37).
+    fn fold[B](sink self, sink init: B, let f: fn (sink B, sink Self.Item) -> B) -> B {
+        var acc: B = move init;
+        for x in self { acc = f(move acc, move x); }
+        return acc;
+    }
+
+    fn for_each(sink self, let f: fn (sink Self.Item)) {
+        for x in self { f(move x); }
+    }
+
+    fn all(sink self, let p: fn (let Self.Item) -> bool) -> bool {
+        for x in self { if not p(x) { return false; } }
+        return true;
+    }
+
+    fn any(sink self, let p: fn (let Self.Item) -> bool) -> bool {
+        for x in self { if p(x) { return true; } }
+        return false;
+    }
+
+    fn find(sink self, let p: fn (let Self.Item) -> bool) -> Option[Self.Item] {
+        for x in self { if p(x) { return some(x); } }
+        return none;
+    }
+
+    // The try_ siblings (R8): same name modulo the prefix, same order.
+    fn try_fold[B, E](sink self, sink init: B,
+                      let f: fn (sink B, sink Self.Item) -> B raises E) -> B raises E {
+        var acc: B = move init;
+        for x in self { acc = f(move acc, move x)?; }
+        return acc;
+    }
+
+    fn try_for_each[E](sink self, let f: fn (sink Self.Item) raises E) raises E {
+        for x in self { f(move x)?; }
+    }
+}
 
 // -------------------------------------------------------- the slice view
 
@@ -25,7 +123,7 @@ pub struct SliceIter[T] { at: usize, n: usize, base: rawptr[T] }
 
 impl[T: Copyable] Iterator for SliceIter[T] {
     type Item = T;
-    fn next(inout self: Self) -> Option[Self.Item] {
+    fn next(inout self) -> Option[Self.Item] {
         if self.at < self.n {
             self.at = self.at + 1;
             return self.load(self.at - 1);                   // STUB
@@ -34,9 +132,9 @@ impl[T: Copyable] Iterator for SliceIter[T] {
     }
 }
 
-// The one iterator over borrowed storage, and the only unsafe step in
-// every container's `iter` (R28, R33a): its scoped result keeps `s`, and
-// so whatever `s` is scoped to, borrowed `let` for the iterator's life.
+// The one iterator over borrowed storage, and the only free unsafe step in
+// every container's `iter` (R28, R33a): its scoped result keeps `s`, and so
+// whatever `s` is scoped to, borrowed `let` for the iterator's life.
 @unsafe(invariant: "base and n span s; the scoped result keeps s borrowed")
 pub fn iter[T: Copyable](let s: Slice[T]) -> scoped(s) SliceIter[T] {
     return iter(s);                                          // STUB
@@ -44,72 +142,22 @@ pub fn iter[T: Copyable](let s: Slice[T]) -> scoped(s) SliceIter[T] {
 
 // ------------------------------------------------------------- adaptors
 
-// Each holds a raw pointer to its source, never the source: the source
-// stays where it is, borrowed inout for the extent of the scoped result.
-pub struct Mapped[I: Iterator, U] { src: rawptr[I], f: fn (let I.Item) -> U }
-pub struct Filtered[I: Iterator] { src: rawptr[I], p: fn (let I.Item) -> bool }
-pub struct Taken[I: Iterator] { src: rawptr[I], left: usize }
-pub struct Skipped[I: Iterator] { src: rawptr[I], to_skip: usize }
-pub struct Enumerated[I: Iterator] { src: rawptr[I], at: usize }
-// The second source is OWNED (sink): ch01 R19 lets a result be scoped to
-// one parameter only, so a zip of two borrowed iterators is not writable.
-pub struct Zipped[I: Iterator, J: Iterator] { a: rawptr[I], b: J }
+// Each OWNS its source (R34); only `ByRef` holds a raw pointer.
+pub struct Mapped[I: Iterator, U: Droppable] { src: I, f: fn (sink I.Item) -> U }
+pub struct Filtered[I: Iterator] { src: I, p: fn (let I.Item) -> bool }
+pub struct Taken[I: Iterator] { src: I, left: usize }
+pub struct Skipped[I: Iterator] { src: I, to_skip: usize }
+pub struct Enumerated[I: Iterator] { src: I, at: usize }
+// `zip` owns BOTH sources; a result with two scoped sources keeps both
+// (ch01 R19c(d)) and is an ordinary local that ch01 R19 forbids returning.
+pub struct Zipped[I: Iterator, J: Iterator] { a: I, b: J }
+pub struct ByRef[I: Iterator] { src: rawptr[I] }
 
-@unsafe(invariant: "src points at the argument for the extent of the scoped result")
-pub fn map[I: Iterator, U](inout it: I, let f: fn (let I.Item) -> U) -> scoped(it) Mapped[I, U] {
-    return map(&it, f);                                      // STUB
-}
-
-@unsafe(invariant: "src points at the argument for the extent of the scoped result")
-pub fn filter[I: Iterator](inout it: I, let p: fn (let I.Item) -> bool) -> scoped(it) Filtered[I] {
-    return filter(&it, p);                                   // STUB
-}
-
-@unsafe(invariant: "src points at the argument for the extent of the scoped result")
-pub fn take[I: Iterator](inout it: I, let n: usize) -> scoped(it) Taken[I] {
-    return take(&it, n);                                     // STUB
-}
-
-@unsafe(invariant: "src points at the argument for the extent of the scoped result")
-pub fn skip[I: Iterator](inout it: I, let n: usize) -> scoped(it) Skipped[I] {
-    return skip(&it, n);                                     // STUB
-}
-
-@unsafe(invariant: "src points at the argument for the extent of the scoped result")
-pub fn enumerate[I: Iterator](inout it: I) -> scoped(it) Enumerated[I] {
-    return enumerate(&it);                                   // STUB
-}
-
-@unsafe(invariant: "a points at the argument for the extent of the scoped result; b is owned")
-pub fn zip[I: Iterator, J: Iterator](inout it: I, sink other: J) -> scoped(it) Zipped[I, J] {
-    return zip(&it, move other);                             // STUB
-}
-
-// The private step through the raw pointer, one per adaptor: STUBS.
-impl[I: Iterator, U] Mapped[I, U] {
-    fn pull(inout self: Self) -> Option[I.Item] { return self.pull(); }       // STUB: (*src).next()
-}
-impl[I: Iterator] Filtered[I] {
-    fn pull(inout self: Self) -> Option[I.Item] { return self.pull(); }       // STUB
-}
-impl[I: Iterator] Taken[I] {
-    fn pull(inout self: Self) -> Option[I.Item] { return self.pull(); }       // STUB
-}
-impl[I: Iterator] Skipped[I] {
-    fn pull(inout self: Self) -> Option[I.Item] { return self.pull(); }       // STUB
-}
-impl[I: Iterator] Enumerated[I] {
-    fn pull(inout self: Self) -> Option[I.Item] { return self.pull(); }       // STUB
-}
-impl[I: Iterator, J: Iterator] Zipped[I, J] {
-    fn pull(inout self: Self) -> Option[I.Item] { return self.pull(); }       // STUB
-}
-
-impl[I: Iterator, U] Iterator for Mapped[I, U] {
+impl[I: Iterator, U: Droppable] Iterator for Mapped[I, U] {
     type Item = U;
-    fn next(inout self: Self) -> Option[Self.Item] {
-        match self.pull() {
-            some(let x) => { return some(self.f(x)); }
+    fn next(inout self) -> Option[U] {
+        match self.src.next() {
+            some(let x) => { return some((self.f)(move x)); }
             none => { return none; }
         }
     }
@@ -117,10 +165,10 @@ impl[I: Iterator, U] Iterator for Mapped[I, U] {
 
 impl[I: Iterator] Iterator for Filtered[I] {
     type Item = I.Item;
-    fn next(inout self: Self) -> Option[Self.Item] {
+    fn next(inout self) -> Option[I.Item] {
         while true {
-            match self.pull() {
-                some(let x) => { if self.p(x) { return some(x); } }
+            match self.src.next() {
+                some(let x) => { if (self.p)(x) { return some(x); } }
                 none => { return none; }
             }
         }
@@ -130,31 +178,31 @@ impl[I: Iterator] Iterator for Filtered[I] {
 
 impl[I: Iterator] Iterator for Taken[I] {
     type Item = I.Item;
-    fn next(inout self: Self) -> Option[Self.Item] {
+    fn next(inout self) -> Option[I.Item] {
         if self.left == 0 { return none; }
         self.left = self.left - 1;
-        return self.pull();
+        return self.src.next();
     }
 }
 
 impl[I: Iterator] Iterator for Skipped[I] {
     type Item = I.Item;
-    fn next(inout self: Self) -> Option[Self.Item] {
+    fn next(inout self) -> Option[I.Item] {
         while self.to_skip > 0 {
             self.to_skip = self.to_skip - 1;
-            match self.pull() {
+            match self.src.next() {
                 some(let skipped) => { }
                 none => { return none; }
             }
         }
-        return self.pull();
+        return self.src.next();
     }
 }
 
 impl[I: Iterator] Iterator for Enumerated[I] {
     type Item = (usize, I.Item);
-    fn next(inout self: Self) -> Option[Self.Item] {
-        match self.pull() {
+    fn next(inout self) -> Option[Self.Item] {
+        match self.src.next() {
             some(let x) => { let i: usize = self.at; self.at = self.at + 1; return some((i, x)); }
             none => { return none; }
         }
@@ -163,8 +211,8 @@ impl[I: Iterator] Iterator for Enumerated[I] {
 
 impl[I: Iterator, J: Iterator] Iterator for Zipped[I, J] {
     type Item = (I.Item, J.Item);
-    fn next(inout self: Self) -> Option[Self.Item] {
-        match self.pull() {
+    fn next(inout self) -> Option[Self.Item] {
+        match self.a.next() {
             some(let x) => {
                 match self.b.next() {
                     some(let y) => { return some((x, y)); }
@@ -176,54 +224,13 @@ impl[I: Iterator, J: Iterator] Iterator for Zipped[I, J] {
     }
 }
 
-// ------------------------------------------------------------ consumers
-
-pub fn count[I: Iterator](sink it: I) -> usize {
-    var n: usize = 0;
-    for x in it { n = n + 1; }
-    return n;
+impl[I: Iterator] Iterator for ByRef[I] {
+    type Item = I.Item;
+    fn next(inout self) -> Option[I.Item] {
+        return self.pull();                                  // STUB: (*src).next()
+    }
 }
 
-// Strictly left to right; never reassociated, whatever the algebra (R37).
-pub fn fold[I: Iterator, B](sink it: I, sink init: B,
-                            let f: fn (sink B, let I.Item) -> B) -> B {
-    var acc: B = move init;
-    for x in it { acc = f(move acc, x); }
-    return acc;
-}
-
-pub fn for_each[I: Iterator](sink it: I, let f: fn (let I.Item)) {
-    for x in it { f(x); }
-}
-
-pub fn all[I: Iterator](sink it: I, let p: fn (let I.Item) -> bool) -> bool {
-    for x in it { if not p(x) { return false; } }
-    return true;
-}
-
-pub fn any[I: Iterator](sink it: I, let p: fn (let I.Item) -> bool) -> bool {
-    for x in it { if p(x) { return true; } }
-    return false;
-}
-
-pub fn find[I: Iterator](sink it: I, let p: fn (let I.Item) -> bool) -> Option[I.Item] {
-    for x in it { if p(x) { return some(x); } }
-    return none;
-}
-
-// ------------------------------------------------- the try_ siblings (R8)
-
-pub fn try_fold[I: Iterator, B, E](sink it: I, sink init: B,
-                                   let f: fn (sink B, let I.Item) -> B raises E)
-    -> B raises E
-{
-    var acc: B = move init;
-    for x in it { acc = f(move acc, x)?; }
-    return acc;
-}
-
-pub fn try_for_each[I: Iterator, E](sink it: I, let f: fn (let I.Item) raises E)
-    raises E
-{
-    for x in it { f(x)?; }
+impl[I: Iterator] ByRef[I] {
+    fn pull(inout self) -> Option[I.Item] { return self.pull(); }   // STUB
 }

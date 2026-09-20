@@ -1,0 +1,11 @@
+//! name: scoped_through_generic_sink_result_scoped_rejected
+//! rule: 01.R19c
+//! expect: check-error
+//! detail: ch01 R19c(a) -- the declared result `Taken[Self]` mentions `Self`, so the result is scoped to `v` and MUST NOT outlive it
+
+needs { };
+use std.mem;
+
+fn f[A: brand](let v: Vec[i32, A]) -> mem.Taken[mem.SliceIter[i32]] {
+    return v.iter().take(2);
+}

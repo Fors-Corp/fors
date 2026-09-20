@@ -1,0 +1,8 @@
+//! name: rigid-discard-without-droppable-rejected
+//! rule: 09.R57
+//! expect: check-error
+//! detail: T0057 -- `discard`ing a value of rigid type is a drop
+
+needs { };
+
+fn f[T](sink x: T) { discard x; }

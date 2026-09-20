@@ -1,0 +1,11 @@
+//! name: string_dropped_rejected
+//! rule: 10.S11
+//! expect: check-error
+//! detail: ch01 R22h -- `String[A]` is linear ALWAYS, not while cap > 0; the consumer is `String.deinit`
+
+needs { };
+
+fn f[A: brand, L: Allocator[A]](inout a: L) raises AllocError {
+    var s: String[A] = String.new();
+    s.push_str(&a, "hi")?;
+}

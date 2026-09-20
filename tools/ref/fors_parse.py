@@ -1,5 +1,5 @@
 import sys,re,os
-RES=set("module use pub fn struct enum trait impl const extern let var inout sink if else match for in while break continue return raise raises with parallel simd spawn comptime move consume discard as and or not true false iso imm secret dyn asm import recover type spmd kernel".split())
+RES=set("module use pub fn struct enum trait impl const extern let var inout sink if else match for in while break continue return raise raises with parallel simd spawn comptime move consume discard defer errdefer as and or not true false iso imm secret dyn asm import recover type spmd kernel".split())
 SUF=set("i8 i16 i32 i64 u8 u16 u32 u64 isize usize f32 f64".split())
 ISUF=SUF-{"f32","f64"}
 PUN=sorted("( ) [ ] { } , ; : . @ ? -> => = == != < > <= >= + - * / % & | ^ << >> ..< ..= += -= *= /= %= &= |= ^= <<= >>=".split(),key=len,reverse=True)
@@ -313,6 +313,9 @@ class P:
         elif s.opt("simd"): s.eat("for");s.binding();s.eat("in");s.expr(True);s.block()
         elif s.opt("spawn"): s.expr();s.eat(";")
         elif s.opt("consume") or s.opt("discard"): s.place();s.eat(";")
+        elif s.opt("defer") or s.opt("errdefer"):
+            if s.isp("{"): s.block()
+            else: s.expr();s.eat(";")
         elif s.isp("@"): s.attr();s.block()
         elif s.isp("{"): s.block()
         else:

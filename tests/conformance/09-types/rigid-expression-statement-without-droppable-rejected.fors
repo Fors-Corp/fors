@@ -1,0 +1,10 @@
+//! name: rigid-expression-statement-without-droppable-rejected
+//! rule: 09.R57
+//! expect: check-error
+//! detail: T0057 -- evaluating a value of rigid type as an expression statement is a drop
+
+needs { };
+
+fn make[T](let t: T) -> T { return t; }
+
+fn f[T](sink x: T) { make(x); }

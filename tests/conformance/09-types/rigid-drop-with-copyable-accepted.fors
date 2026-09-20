@@ -1,0 +1,8 @@
+//! name: rigid-drop-with-copyable-accepted
+//! rule: 09.R57
+//! expect: check-ok
+//! detail: T0057 -- `Copyable` implies `Droppable`
+
+needs { };
+
+fn f[T: Copyable](sink x: T) { }

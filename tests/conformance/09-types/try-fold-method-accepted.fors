@@ -1,0 +1,17 @@
+//! name: try-fold-method-accepted
+//! rule: 09.R43
+//! expect: check-ok
+//! detail: R35 -- `try_fold` is a provided method carrying `E` as a method parameter (R60)
+
+needs { };
+
+enum Err { boom }
+
+fn add(sink acc: i32, sink x: i32) -> i32 raises Err {
+    if x < 0 { raise Err.boom; }
+    return acc + x;
+}
+
+fn f[A: brand](let v: Vec[i32, A]) -> i32 raises Err {
+    return v.iter().try_fold(0, add)?;
+}

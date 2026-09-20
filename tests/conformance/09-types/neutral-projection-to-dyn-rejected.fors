@@ -1,0 +1,13 @@
+//! name: neutral-projection-to-dyn-rejected
+//! rule: 09.R10
+//! expect: check-error
+//! detail: T0010 -- a value of NEUTRAL-PROJECTION type MUST NOT be coerced to `dyn Tr`
+
+needs { };
+
+trait Tr { fn go(let self); }
+trait Has { type A: Tr; fn get(let self) -> Self.A; }
+
+fn f[H: Has](let h: H) -> dyn Tr {
+    return h.get() as dyn Tr;
+}

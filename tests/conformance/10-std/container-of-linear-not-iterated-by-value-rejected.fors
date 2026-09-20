@@ -1,0 +1,10 @@
+//! name: container_of_linear_not_iterated_by_value_rejected
+//! rule: 10.S33
+//! expect: check-error
+//! detail: T0021 -- no linear `Item` can exist (R32, ch09 R21), so a container of LINEAR elements is emptied by `pop`/`remove`, never iterated by value
+
+needs { };
+
+fn f[A: brand](let v: Vec[Own[i64, A], A]) -> usize {
+    return v.iter().count();
+}

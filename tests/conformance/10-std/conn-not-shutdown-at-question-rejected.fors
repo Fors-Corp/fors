@@ -1,0 +1,13 @@
+//! name: conn_not_shutdown_at_question_rejected
+//! rule: 10.S11
+//! expect: check-error
+//! detail: ch01 R22h -- `net.Conn` is linear and live across the `?`; `errdefer c.shutdown();` is the migration
+
+needs { };
+use std.net;
+
+fn talk(inout n: net.Net, let a: net.Addr) raises net.Error {
+    var c: net.Conn = n.connect(a)?;
+    c.write_all("ping")?;
+    c.shutdown();
+}

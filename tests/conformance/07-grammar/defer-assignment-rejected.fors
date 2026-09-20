@@ -1,0 +1,11 @@
+//! name: defer-assignment-rejected
+//! rule: 07.D9
+//! expect: parse-error
+//! detail: an assignment is a `stmt`, not an `expr`, so `defer x = 1;` is a parse error at `=` ("expected `;`")
+
+needs { };
+
+fn a() {
+    var x: i32 = 0;
+    defer x = 1;
+}

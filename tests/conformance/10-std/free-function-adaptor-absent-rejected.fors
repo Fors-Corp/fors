@@ -1,0 +1,14 @@
+//! name: free_function_adaptor_absent_rejected
+//! rule: 10.S34
+//! expect: check-error
+//! detail: T0043 -- round 6 DELETED the free functions `mem.map`, `mem.filter`, `mem.take`, `mem.skip`, `mem.enumerate` and `mem.zip`; the method chain replaces them
+
+needs { };
+use std.mem;
+
+fn double(sink x: i32) -> i32 { return x * 2; }
+
+fn f[A: brand](let v: Vec[i32, A]) -> usize {
+    var it: mem.SliceIter[i32] = v.iter();
+    return mem.map(&it, double).count();
+}

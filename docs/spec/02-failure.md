@@ -10,7 +10,10 @@ this chapter conflicts with `docs/design/*.md`, this chapter wins (§4.2).
 
 Owns exclusively: the error-as-value model (`raises`, postfix `?`,
 `else |e| { }`, `ErrorFrom`); the failure ABI classifier (register/tag/sret);
-trap semantics and the whole-process-abort mechanism; cross-fiber backtrace
+trap semantics and the whole-process-abort mechanism (including that a trap
+runs no deferred body); which exits of a block are ERROR exits, the
+definition `errdefer` keys on (Rule 16); what the runtime does with an error
+that leaves `main` (Rule 17); cross-fiber backtrace
 continuity; contract syntax (`pre`/`post`/`invariant`) as declarations and
 when a check may be removed; sole authority for removing bounds/overflow
 checks; checks-off build status; the C/C++ raise/unwind boundary.
@@ -28,6 +31,8 @@ chapters).
   list). Other chapters name trap *conditions*; only this chapter defines
   what a trap *does* and the closed set of trap-kind identifiers.
 - **Raise**: returning an error from a function declared `raises E`.
+- **Error exit**: a way of leaving a block that carries an error out of it
+  (Rule 16). Every other way of leaving a block is a **normal exit**.
 - **Classifier**: the pure `(payload_size) -> ClassResult` function both
   backends and the interpreter must compute identically, where
   `payload_size = max(size_of(T), size_of(E))` for `-> T raises E`.
@@ -65,7 +70,10 @@ chapters).
 5. `else |e| { }` MUST bind `e: E` only directly after a call expression of
    static type `raises E`; it MUST NOT apply to a multi-statement block.
    The `else` block MUST either diverge (`return`, `raise`, trap) or yield
-   a value of the call's success type.
+   a value of the call's success type. Inside a `defer`/`errdefer` body a
+   handler is the only way to call a `raises` function, and there it MUST
+   NOT `raise` or `return` (ch01 Rule 23c): it yields the success value or
+   traps.
 6. A trap MUST lower to one breakpoint-class instruction (aarch64: `brk
    #imm`) plus a static read-only pc-to-info side-table entry (site id,
    kind, span); it MUST NOT allocate or call.
@@ -79,7 +87,19 @@ chapters).
    to handle travels as a VALUE, through `raises E`, `?` and `else |e|`
    (Rules 1-5). A trap is for a violated invariant — a contract, an index,
    an overflow (Rule 15's closed kind list) — which is a bug, not a
-   condition, and therefore ends the process.
+   condition, and therefore ends the process. **A trap runs NO deferred
+   body.** Every `defer` and `errdefer` body pending at the trap site (ch01
+   Rules 23-23f) is skipped, because a trap is one breakpoint-class
+   instruction that MUST NOT call or allocate (Rule 6) and the process ends
+   there. A trap is therefore not an exit of any block and is neither a
+   normal nor an error exit (Rule 16). Consequently no invariant of std or
+   of a program MAY depend on cleanup happening on the abnormal path: after
+   a trap an open file, socket, listener or child process is abandoned to
+   the operating system, no `close`/`shutdown`/`wait`/`free` runs, and
+   buffered bytes MAY be lost (ch10 Rule 40(b)). There is no
+   flush-on-abort, no temporary-file removal and no lock-file release, and
+   none will be added; a program that needs durability across a risky step
+   writes and flushes before it.
 8. A backtrace crossing a fiber boundary MUST recognize the fiber-switch
    sentinel frame (parent fiber id, parent frame pointer, spawn-site pc) and
    continue through it, else report a truncated trace rather than reading
@@ -111,6 +131,55 @@ chapters).
     appear there. `nesting-limit` (any recursion- or nesting-depth guard)
     is NOT a trap kind: a nesting-limit violation MUST NOT lower via Rule 6
     or carry a trap-kind identifier.
+16. **Error exit** (the definition `errdefer` keys on; ch01 Rules 23-23f
+    are its only consumer in v0.1). An exit of a block `B` is an *error
+    exit* iff control leaves `B` because a `raise` statement, or a `?`
+    whose call failed, written in `B` or in a block nested in `B`,
+    propagates the error out of the enclosing function (Rules 1-3). The
+    error passes through every block between the raise site and the
+    function body, and every one of those blocks is left by an error exit.
+    Every other way of leaving a block is a *normal exit*: reaching its
+    `}`, a tail value, `return`, `break`, `continue`. An `else |e| { }`
+    handler (Rule 5) decides for the blocks it leaves by what it does — a
+    handler that `raise`s makes an error exit, one that `return`s or yields
+    a value makes a normal exit — so a `?` that a handler intercepts is not
+    an error exit of anything. A trap is neither (Rule 7). The property is
+    syntactic and per exit point: the set of error exits of a block is
+    read off its statements, with no dataflow analysis, which is why ch01
+    Rule 23b can apply `errdefer` bodies in one forward pass.
+17. **An error raised out of `main`.** If `main` is declared `raises E`
+    (ch04 Rule 8) and an error `e: E` propagates out of it, then, after
+    `main`'s own `defer` and `errdefer` bodies have run (ch01 Rule 23e):
+    (a) the runtime flushes `Stdout` exactly as on a normal return (ch10
+    Rule 40(a)), ignoring any failure of that flush; (b) it writes exactly
+    ONE line to the standard error file descriptor, unbuffered: the bytes
+    `error: `, then `render(e)`, then `\n`; (c) the process exits with
+    status 1, whether or not (a) or (b) succeeded, and this rule writes
+    nothing to `Stdout`. `render` is defined on the STATIC type `E`,
+    recursively, and is the whole of v0.1's error reporting: an enum value
+    renders as its type's fully-qualified path (module path and item name,
+    `std.net.Error`, `app.Error`), `.`, the variant name, and, for a
+    variant with a payload, `(` the rendered components separated by `, `
+    `)`, or `{ ` `name: ` rendered `, ` ... ` }` for a struct-form variant;
+    a struct value as its path followed by `{ name: rendered, ... }` over
+    its fields in declaration order; a tuple as `(` components `)`; an
+    integer in base 10 with a leading `-` if negative, no grouping and no
+    padding; `bool` as `true`/`false`; `()` as `()`; a `Str` as its text
+    between double quotes with `\`, `"`, newline, carriage return and tab
+    escaped as `\\`, `\"`, `\n`, `\r`, `\t`, so that the line stays ONE
+    line; every other type — `Own`, `Slice`, a `fn` type, a `dyn` type, a
+    root-capability or allocator type, a rigid type parameter — as `..`.
+    No locale, no width, no colour, no backtrace. Examples of the whole
+    line: `error: std.io.Error.closed`, `error: app.Error.timeout(3,
+    "host")`.
+    **If the write in (b) fails** — an error return, a short write, a
+    closed descriptor — the runtime MUST NOT retry, MUST NOT write the line
+    anywhere else, MUST NOT trap, and MUST still exit with status 1. The
+    runtime entry shim installs `SIG_IGN` for `SIGPIPE` before `main` runs,
+    so a write to a closed pipe fails as an ordinary `io.Error.closed`
+    inside `main` (ch10 Rule 39's latching then works as described) and
+    cannot end the process by a signal here. The exit-status table — 0, 1
+    and 2 — is ch10 Rule 40(d), which cites this rule for status 1.
 
 ## Examples
 
@@ -164,6 +233,26 @@ fn take(let s: Str, let n: usize) -> Str raises app.Error {
 }
 ```
 
+```fors
+module app.main;
+needs { io.stdout };
+use std.io;
+
+enum Error { boom, code(i32, Str) }
+
+fn step(let n: i32) raises Error {
+    if n == 0 { raise Error.boom; }
+}
+
+// An error out of `main`: the deferred line first (ch01 Rule 23e), then
+// the runtime's one line `error: app.main.Error.boom` on stderr and
+// status 1 (Rule 17). `errdefer` would run here and not on a normal exit.
+fn main(inout out: io.Stdout) raises Error {
+    defer out.write_line("done");
+    step(0)?;
+}
+```
+
 ## Rejected alternatives
 
 - Tag in `x1`/`x8`+flag (surface draft): collides with 16-byte aggregate
@@ -176,6 +265,16 @@ fn take(let s: Str, let n: usize) -> Str raises app.Error {
   arena teardown (reviews.md #10); deleted.
 - Compiler-generated `@catches_cxx`: needs a landing pad the compiler must
   never emit; moved to a prebuilt external object.
+- **Rendering `main`'s error through a `Writer` trait the error type must
+  implement** (Rule 17): a trait obligation on every error type, for a line
+  that is almost always an enum name. Rejected.
+- **Printing nothing but the exit status**: throws away the only diagnostic
+  a script gets from a failing program.
+- **Deriving the exit status from the variant's ordinal**: unstable across
+  a variant addition (ch09 Rule 6), so a script would break on a
+  source-compatible std change.
+- **Running deferred bodies on a trap** (a "cleanup handler"): needs a call
+  on the trap path, which Rule 6 forbids; the honest answer is Rule 7's.
 
 ## Decisions made while drafting
 
@@ -197,6 +296,14 @@ fn take(let s: Str, let n: usize) -> Str raises app.Error {
   path.
 - Sentinel frame fields fixed to (parent fiber id, parent fp, spawn-site
   pc) per reviews.md's proposed fix; no design doc specified fields.
+- Round 6 (2026-09-20): the error-exit definition is this chapter's (Rule
+  16) and not ch01's, because it is a property of `raise`/`?`, which this
+  chapter owns; ch01 Rules 23-23f cite it. `render` (Rule 17) is defined
+  structurally on the static type rather than by a trait, so no error type
+  carries an obligation and no allocation happens on the failure path.
+  Status 2 is reserved by ch10 Rule 40(d) for a failed final `Stdout`
+  flush, kept distinct from 1 so a script can tell "the program failed"
+  from "the output did not arrive".
 - Owner decision 2026-09-19, round 2: the corpus audit found trap-kind
   identifiers scattered across chapters with no closed list; Rule 15 names
   the eight canonical strings verbatim and states that a nesting-limit
@@ -211,6 +318,20 @@ fn take(let s: Str, let n: usize) -> Str raises app.Error {
   consequence the owner asked to be stated: expected errors travel as
   values via `raises`/`?`/`else`, so "no recovery" costs a server author
   nothing they were meant to have — it removes only recovery from bugs.
+
+## Closed by owner decision 2026-09-20, round 6
+
+- **O4 — an error raised out of `main`.** Rule 17: one line on stderr,
+  `error: ` + `render(e)`, exit status 1, a failed stderr write ignored,
+  `SIGPIPE` ignored by the entry shim. This closes ch10 Open question 5
+  ("`main`'s result and `raises`", which said the answer "is currently
+  nowhere"). ch04 Rule 8 gains one sentence pointing here; ch10 Rule 40(d)
+  carries the exit-status table.
+- **O2 — traps run no deferred body.** Rule 7 states it and states the
+  consequence the owner asked for: no std invariant and no program
+  invariant may depend on cleanup on the abnormal path. Rule 16 gives
+  `errdefer` the error-exit definition it keys on; the semantics of both
+  words are ch01 Rules 23-23f.
 
 ## Open questions for the owner
 
@@ -267,3 +388,36 @@ fn take(let s: Str, let n: usize) -> Str raises app.Error {
   of the eight Rule 15 strings; any other string is a spec violation.
 - `nesting-limit-not-a-trap`: a nesting/recursion-limit violation does not
   lower via Rule 6 and carries no trap-kind identifier.
+
+Round 6 (Rules 16-17), all in `tests/conformance/02-failure/`. The harness
+gains ONE expectation kind, `run-error`: the program is built and run, it
+MUST exit with status 1, and its standard error MUST equal the directive's
+`detail` followed by a newline (the directive carries the line without the
+trailing newline). `run-ok` keeps its meaning (status 0, stdout compared);
+a program that exits 2 is expected with `run-error` plus an explicit
+`status: 2` field, which `tests/conformance/README.md` documents.
+
+- `main-raises-unit-variant-run-error` (R17) — stderr is exactly
+  `error: main.Error.boom`.
+- `main-raises-payload-run-error` (R17) — `error: main.Error.code(7, "x\n")`,
+  the newline in the payload escaped so the output is one line.
+- `main-raises-std-error-run-error` (R17) — an `AllocError` out of `main`
+  through `mem.Counting`: `error: std.mem.alloc.AllocError.out_of_memory`.
+- `main-raises-nested-payload-run-error` (R17) — a payload component of a
+  type with no rendering renders as `..`.
+- `main-raises-flushes-stdout-run-error` (R17(a)) — buffered `Stdout`
+  content still arrives, and the status is 1.
+- `main-raises-after-defer-run-error` (R17, ch01 R23e) — the deferred
+  line, written to `Stderr`, precedes the runtime's `error: ` line.
+- `main-returns-latched-stdout-exit-2` (ch10 R40(d)) — a latched `Stdout`
+  error on a normal return exits 2, not 1.
+- `main-raises-not-declared-rejected` (R1) — a `?` in a `main` with no
+  `raises` is a `check-error`, unchanged.
+- `error-exit-through-nested-blocks` (R16) — a `?` inside a `for` inside a
+  `with` leaves three blocks by error exits, each running its `errdefer`
+  bodies (ch01 R23b).
+- `handler-makes-normal-exit` (R16, R5) — a `?` intercepted by an
+  `else |e|` that yields a value is NOT an error exit: the enclosing
+  `errdefer` does not run (`run-ok`).
+- `trap-runs-no-defer` (R7) — a `defer` that writes to `Stderr` before a
+  trapping index: the marker MUST NOT appear (`trap` kind).

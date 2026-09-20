@@ -1,0 +1,13 @@
+//! name: adaptor-chain-method-accepted
+//! rule: 09.R43
+//! expect: check-ok
+//! detail: R43 tier (2) finds `Iterator`'s PROVIDED methods for a concrete receiver; three adaptor stages with `fn` items, then a consumer
+
+needs { };
+
+fn double(sink x: i32) -> i32 { return x * 2; }
+fn small(let x: i32) -> bool { return x < 10; }
+
+fn f[A: brand](let v: Vec[i32, A]) -> usize {
+    return v.iter().map(double).filter(small).take(3).count();
+}

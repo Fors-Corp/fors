@@ -1,0 +1,8 @@
+//! name: rigid-drop-with-droppable-accepted
+//! rule: 09.R57
+//! expect: check-ok
+//! detail: T0057 -- the bound is how a generic body SAYS it drops
+
+needs { };
+
+fn f[T: Droppable](sink x: T) { }

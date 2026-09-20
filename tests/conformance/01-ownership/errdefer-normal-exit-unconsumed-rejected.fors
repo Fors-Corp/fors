@@ -1,0 +1,22 @@
+//! name: errdefer_normal_exit_unconsumed_rejected
+//! rule: 01.R23b
+//! expect: check-error
+//! detail: ch01 R22h, R23b -- an `errdefer` does not run on the normal exit, so the normal exit leaves `r` unconsumed
+
+needs { };
+
+struct Res { fd: i32 }
+impl Linear for Res { }
+impl Res {
+    fn open(let n: i32) -> Res { return Res { fd: n }; }
+    fn close(sink self) { }
+    fn poke(inout self) { }
+    fn step(let self) raises Err { }
+}
+enum Err { boom }
+
+fn f() raises Err {
+    var r: Res = Res.open(1);
+    errdefer r.close();
+    r.step()?;
+}

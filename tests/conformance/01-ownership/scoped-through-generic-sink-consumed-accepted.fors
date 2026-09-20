@@ -1,0 +1,10 @@
+//! name: scoped_through_generic_sink_consumed_accepted
+//! rule: 01.R19c
+//! expect: check-ok
+//! detail: ch01 R19c(a) -- the declared result `usize` mentions no parameter, so nothing stays scoped and the borrow ends at the statement
+
+needs { };
+
+fn f[A: brand](let v: Vec[i32, A]) -> usize {
+    return v.iter().count();
+}

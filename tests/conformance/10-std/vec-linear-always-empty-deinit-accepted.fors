@@ -1,0 +1,11 @@
+//! name: vec_linear_always_empty_deinit_accepted
+//! rule: 10.S11c
+//! expect: check-ok
+//! detail: S0011 -- `Vec` is linear ALWAYS, not `while cap > 0`, and `deinit` on an empty Vec is total and free
+
+needs { };
+
+fn f[A: brand, L: Allocator[A]](inout a: L) {
+    var v: Vec[i32, A] = Vec.new();
+    v.deinit(&a);
+}

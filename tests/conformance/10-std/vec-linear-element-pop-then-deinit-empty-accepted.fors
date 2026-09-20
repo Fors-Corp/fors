@@ -1,0 +1,17 @@
+//! name: vec_linear_element_pop_then_deinit_empty_accepted
+//! rule: 10.S11c
+//! expect: check-ok
+//! detail: S0011c(iii) -- the caller pops and consumes every element, then releases with `deinit_empty`
+
+needs { };
+
+fn f[A: brand, L: Allocator[A]](inout a: L, sink v: Vec[Own[i64, A], A]) {
+    var w: Vec[Own[i64, A], A] = move v;
+    while w.len() > 0 {
+        match w.pop() {
+            some(let o) => { a.deinit(move o); }
+            none => { }
+        }
+    }
+    w.deinit_empty(&a);
+}

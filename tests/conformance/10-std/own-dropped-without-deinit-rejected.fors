@@ -1,0 +1,10 @@
+//! name: own_dropped_without_deinit_rejected
+//! rule: 10.S11
+//! expect: check-error
+//! detail: ch01 R22h -- `Own[T, A]` is linear by language rule; the consumer is `Allocator.deinit`, written `a.deinit(move o)`
+
+needs { };
+
+fn f[A: brand, L: Allocator[A]](inout a: L) raises AllocError {
+    var o: Own[i64, A] = a.create(1)?;
+}

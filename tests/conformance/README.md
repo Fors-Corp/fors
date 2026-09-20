@@ -26,14 +26,68 @@ corpus file name is the test's name, not the module's file name.
   resolution with zero diagnostics; used by ch08's name-resolution corpus.
 - `parse-error`: a lexical/syntax diagnostic, for the reason in `detail`.
 - `check-error`: parses; checker or build rejects, reason in `detail`.
-- `run-ok`: exits 0, stdout equals `detail` (`(no output)` = empty).
+- `run-ok`: exits 0, stdout equals `detail` (`(no output)` = empty). A
+  `\n` in the directive stands for a line break (round-6 verification:
+  `3\n2\n1` is the three lines `3`, `2`, `1`, each ending in a newline).
+- `run-error`: added in round 6 (2026-09-20, O4; ch02 Rule 17). The
+  program is built and run, it MUST exit with status 1, and its standard
+  error MUST equal the directive's `detail` followed by a newline (the
+  directive carries the line without its trailing newline). A program that
+  exits 2 — `main` RETURNED but the final `Stdout` flush failed or an error
+  was latched (ch10 Rule 40(d)) — is expected with `run-error` plus an
+  explicit `status: 2` field, which then replaces the stderr comparison.
+  A `status: 2` test is run with the standard OUTPUT descriptor closed
+  before `main` starts (the harness's only way to make the final flush
+  fail deterministically; ch02 Rule 17 makes the entry shim ignore
+  `SIGPIPE`), and its stderr is not compared.
 - `trap`: aborts with the trap kind in `detail`.
 
 Run tests assume `io.Writer.write_line`, which no chapter defines. A
 `Slice[T]` is obtained only by range-indexing a bound array (ch03 Rule 24);
 `main` takes root capabilities by type (ch04 Rules 8, 21).
 
-## Counts: 683 tests, 771 files
+## Counts: 921 tests, 1010 files
+
+(Round-6 verification (2026-09-20): +26 tests. 01-ownership +19 — the
+five `run-ok` `defer`/`errdefer` behaviour tests ch01 listed but the
+implementation stage never wrote, plus `defer-nested-scope-order-run-ok`;
+the R19c tests that were listed but missing (`scoped-through-generic-
+{inout-param,raises}-rejected`, `scoped-copy-into-field-via-let-param-
+rejected`, `closure-returned-with-local-capture-rejected`); the closure-
+capture tests of the new ch01 R19d; `zip-two-scoped-sources-local-
+accepted` (ch01 R19c(d): a result keeps EVERY scoped source, so the
+rejected zip test is now the RETURNED form, here and in 10-std);
+`errdefer-{without-error-exit,after-fallible-call}-rejected` (ch01 R23b:
+an `errdefer` no error exit follows is an error);
+`linear-enum-payload-one-arm-unconsumed-rejected`;
+`adaptor-chain-for-mutates-source-rejected`. 08-names +1
+(`linear-impl-outside-defining-module-rejected`, N0021). 09-types +4
+(`adaptor-map-closure-returns-linear-rejected` T0012 — `map` and
+`Mapped` now carry `U: Droppable`, forced by ch09 R17/R21;
+`adaptor-impl-unbounded-item-rejected`; `adaptor-annotated-binding-
+mismatch-rejected`; `adaptor-generic-fn-item-uninstantiated-rejected`,
+which also corrected `adaptor-chain-rigid-receiver-accepted` to write
+`same[I.Item]`). 10-std +1 (`zip-two-scoped-sources-local-accepted`);
+`try-for-each-error-propagates-run-ok` now obtains its iterator with
+`mem.iter(xs)`, since a `Slice` has no inherent `iter`.)
+
+(Round 6 (2026-09-20): applied the linearity, `defer`/`errdefer`,
+iterator-method-chaining and `main`-error decisions. +165 tests:
+01-ownership +52 (Rules 19c, 22-22i, 23-23f), 02-failure +11 (Rules 16-17
+and the new `run-error` kind), 07-grammar +13 (the two productions, the two
+reserved words, Disambiguation 9 and the recovery case), 09-types +54
+(Rules 10c, 11, 21, 23, 24, 31, 33, 43, 50, 57, including the whole O3
+method-chaining derivation) and 10-std +35 (Rules 11, 11c, 32-35, 40).
+Eight files were MIGRATED: the three free-function adaptor/consumer tests
+became method chains (`mem.map` … `mem.try_for_each` are deleted), four
+ch10 tests that held a linear value across a `?` gained `defer`/`errdefer`,
+and `linear-element-container-deinit-trap` became
+`vec-deinit-empty-nonempty-trap`, round 6 having made the rest of ch10 Rule
+11c static. `fors-resolve`'s harness gained
+`ch01_ownership_corpus_resolver_view`: a ch01 `check-ok`/`check-error` test
+must be resolver-CLEAN, as ch09's and ch10's already must, because ch01's
+codes are the checker's. The table below now also counts 10-std, which
+round 5's table omitted.)
 
 (Round-5 verification (2026-09-20): +7 tests. 04-authority
 `main-forged-std-module-rejected` (a user module `io` cannot forge
@@ -76,16 +130,17 @@ comment. Until a type checker exists, `fors check` must be CLEAN on every
 T-coded or ch01-coded 09-types test and report exactly the named N-code
 on the others (crates/fors-resolve/tests/conformance.rs).)
 
-| Dir | parse-ok | check-ok | parse-error | check-error | run-ok | trap |
-|---|---|---|---|---|---|---|
-| 01-ownership (58) | 24 | 0 | 2 | 31 | 0 | 1 |
-| 02-failure (25) | 8 | 0 | 2 | 9 | 1 | 5 |
-| 03-numerics (46) | 7 | 0 | 0 | 13 | 19 | 7 |
-| 04-authority (34) | 9 | 1 | 0 | 21 | 3 | 0 |
-| 07-grammar (159) | 65 | 0 | 90 | 4 | 0 | 0 |
-| 08-names (175) | 0 | 61 | 0 | 114 | 0 | 0 |
-| 09-types (186) | 0 | 69 | 0 | 117 | 0 | 0 |
-| total | 113 | 131 | 94 | 309 | 23 | 13 |
+| Dir | parse-ok | check-ok | parse-error | check-error | run-ok | run-error | trap |
+|---|---|---|---|---|---|---|---|
+| 01-ownership (128) | 24 | 25 | 2 | 70 | 6 | 0 | 1 |
+| 02-failure (36) | 8 | 1 | 2 | 10 | 2 | 7 | 6 |
+| 03-numerics (46) | 7 | 0 | 0 | 13 | 19 | 0 | 7 |
+| 04-authority (34) | 9 | 1 | 0 | 21 | 3 | 0 | 0 |
+| 07-grammar (172) | 71 | 0 | 97 | 4 | 0 | 0 | 0 |
+| 08-names (176) | 0 | 61 | 0 | 115 | 0 | 0 | 0 |
+| 09-types (246) | 0 | 95 | 0 | 151 | 0 | 0 | 0 |
+| 10-std (83) | 0 | 26 | 0 | 44 | 7 | 1 | 5 |
+| total (921) | 119 | 209 | 101 | 428 | 37 | 8 | 19 |
 
 ## Change rule
 

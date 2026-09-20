@@ -238,13 +238,18 @@ brands (ch01); receiver-type dispatch (checker); grammar productions
     f32 f64 bool Str Slice Array vector mask atomic rawptr Own Ref Arena
     Option Shared ErrorFrom never Range RangeIncl Copyable Eq Ord Add Sub
     Mul Div Rem Neg BitAnd BitOr BitXor Shl Shr Iterator Index IndexMut
-    Allocator AllocError PageAllocator Buffer Vec Map String Utf8Error`
+    Allocator AllocError PageAllocator Buffer Vec Map String Utf8Error
+    Linear Droppable`
     (the second line is round 4's addition: the names ch09 Rules 4, 5, 21
     and 23 make language-known; the third is the eight names std
     contributes, ch10 Rule 2, which closes Open question 1 — types and
     traits only, each defined in `std.mem` or a submodule of it, and each
     denoting the SAME item as its module path, `mem.Vec`, so the two
-    spellings never collide under Rule 13).
+    spellings never collide under Rule 13; the fourth is round 6's two
+    marker traits, ch01 Rules 22 and 22c, which are language-known like
+    `Copyable` and `Shared` and belong to no module — a user item named
+    `Linear` or `Droppable` is the ordinary N0013 collision, exactly as
+    for `Iterator`).
     Values: `some none reduce`. No other name
     is available without `use`: in particular a std module — `io`, `fs`,
     `net` and the rest — is a name only in a module whose header imports

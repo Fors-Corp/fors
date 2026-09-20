@@ -380,3 +380,23 @@ fn recover_assoc_type_item() {
         );
     }
 }
+
+#[test]
+fn round6_defer_errdefer_statements() {
+    // ch07 `defer_stmt`/`errdefer_stmt` (Disambiguation 9): the keyword
+    // selects the statement and the next token alone selects the body.
+    assert_eq!(body_shape("defer f();"), "DeferStmt(CallExpr(NameExpr))");
+    assert_eq!(body_shape("errdefer f();"), "ErrdeferStmt(CallExpr(NameExpr))");
+    assert_eq!(body_shape("defer { f(); }"), "DeferStmt(Block(ExprStmt(CallExpr(NameExpr))))");
+    // `defer P { x: 1 };` is the expr form holding a struct literal, not a block.
+    assert!(body_shape("defer P { x: 1 };").starts_with("DeferStmt(StructLit"));
+    // an assignment is a stmt, not an expr: parse error at `=`, one diagnostic
+    rejects("defer x = 1;");
+    assert_eq!(body_codes("defer x = 1;").len(), 1);
+    rejects("errdefer x = 1;");
+    // both words are reserved
+    rejects("let defer = 1;");
+    rejects("let errdefer = 1;");
+    // missing `;` recovers on the statement sync set: one diagnostic, both statements kept
+    assert_eq!(body_codes("defer f() defer g();").len(), 1);
+}

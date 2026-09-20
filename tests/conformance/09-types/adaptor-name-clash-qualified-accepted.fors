@@ -1,0 +1,10 @@
+//! name: adaptor-name-clash-qualified-accepted
+//! rule: 09.R43
+//! expect: check-ok
+//! detail: R43 -- the qualified form names the trait explicitly: `Iterator.take(move it, 3)`
+
+needs { };
+
+fn f[I: Iterator](sink it: I) -> usize {
+    return Iterator.take(move it, 3).count();
+}

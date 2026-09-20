@@ -1,0 +1,11 @@
+//! name: entries_not_closed_rejected
+//! rule: 10.S11
+//! expect: check-error
+//! detail: ch01 R22h -- `fs.Entries` is one of round 6's nine `impl Linear` std types; the consumer is `fs.Entries.close`
+
+needs { };
+use std.fs;
+
+fn walk(inout d: fs.Dir) raises fs.Error {
+    var e: fs.Entries = d.entries()?;
+}

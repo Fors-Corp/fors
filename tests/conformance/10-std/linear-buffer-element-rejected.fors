@@ -1,0 +1,10 @@
+//! name: linear_buffer_element_rejected
+//! rule: 10.S11c
+//! expect: check-error
+//! detail: T0011 -- ch01 R22b, R11c(i): `Buffer[X, N]` with a linear `X` is ILL-FORMED, because its `data` field is an `Array[X, N]`
+
+needs { };
+
+fn f[A: brand](let n: usize) {
+    var b: Buffer[Vec[i32, A], 4];
+}

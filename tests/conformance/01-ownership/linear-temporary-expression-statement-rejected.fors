@@ -1,0 +1,20 @@
+//! name: linear_temporary_expression_statement_rejected
+//! rule: 01.R22h
+//! expect: check-error
+//! detail: ch01 R22h -- the result of `Res.open(1)` at 16:5 is linear and is never bound or consumed
+
+needs { };
+
+struct Res { fd: i32 }
+impl Linear for Res { }
+impl Res {
+    fn open(let n: i32) -> Res { return Res { fd: n }; }
+    fn close(sink self) { }
+    fn poke(inout self) { }
+    fn step(let self) raises Err { }
+}
+enum Err { boom }
+
+fn f() {
+    Res.open(1);
+}

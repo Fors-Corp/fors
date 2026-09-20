@@ -1,0 +1,14 @@
+//! name: main_raises_exit_status_one_run_error
+//! rule: 10.S40
+//! expect: run-error
+//! detail: error: main.Error.boom  -- R40(d) row 1, ch02 R17: an error left `main`, so the status is 1
+
+
+module main;
+needs { };
+
+enum Error { boom }
+
+fn main() raises Error {
+    raise Error.boom;
+}

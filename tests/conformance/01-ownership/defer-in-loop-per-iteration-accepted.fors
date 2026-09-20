@@ -1,0 +1,25 @@
+//! name: defer_in_loop_per_iteration_accepted
+//! rule: 01.R23e
+//! expect: check-ok
+//! detail: ch01 R23e -- the loop body is exited at the end of every iteration, so a `defer` written inside it runs once per iteration
+
+needs { };
+
+struct Res { fd: i32 }
+impl Linear for Res { }
+impl Res {
+    fn open(let n: i32) -> Res { return Res { fd: n }; }
+    fn close(sink self) { }
+    fn poke(inout self) { }
+    fn step(let self) raises Err { }
+}
+enum Err { boom }
+
+fn f(let n: usize) {
+    for i in 0 ..< n {
+        var r: Res = Res.open(1);
+        defer r.close();
+        if i == 0 { continue; }
+        r.poke();
+    }
+}

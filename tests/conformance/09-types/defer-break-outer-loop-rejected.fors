@@ -1,0 +1,12 @@
+//! name: defer-break-outer-loop-rejected
+//! rule: 09.R33
+//! expect: check-error
+//! detail: T0033 -- ch01 R23c: a `break` whose target loop lies outside the body is rejected
+
+needs { };
+
+fn f(let n: usize) {
+    for i in 0 ..< n {
+        defer { continue; }
+    }
+}

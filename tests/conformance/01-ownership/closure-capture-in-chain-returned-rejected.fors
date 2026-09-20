@@ -1,0 +1,12 @@
+//! name: closure_capture_in_chain_returned_rejected
+//! rule: 01.R19d
+//! expect: check-error
+//! detail: ch01 R19d, R19c(a'), R19 -- the result keeps `v` and the local `k` (the adaptor stores the closure); `scoped(v)` names one parameter, and `k` is not a projection of it, so the value cannot be returned: the closure over the dead local would leave inside the adaptor
+
+needs { };
+use std.mem;
+
+fn f[A: brand](let v: Vec[i32, A]) -> scoped(v) mem.Mapped[mem.SliceIter[i32], i32] {
+    let k: i32 = 3;
+    return v.iter().map(|sink x| x + k);
+}

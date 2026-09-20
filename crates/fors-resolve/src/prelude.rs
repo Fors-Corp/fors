@@ -49,12 +49,19 @@ pub const PRELUDE_TYPES5: [&[u8]; 8] = [
     b"Utf8Error",
 ];
 
+/// Round 6 (owner decision 2026-09-20, O1): the two marker traits ch01
+/// Rules 22 and 22c make language-known (ch08 Rule 17's fourth line).
+/// They belong to no module, like `Copyable` and `Shared`: a user item
+/// named `Linear` or `Droppable` is the ordinary N0013 collision.
+pub const PRELUDE_TYPES6: [&[u8]; 2] = [b"Linear", b"Droppable"];
+
 pub fn is_prelude_type(name: &[u8]) -> bool {
     PRELUDE_TYPES.contains(&name)
         || PRELUDE_TYPES2.contains(&name)
         || PRELUDE_TYPES3.contains(&name)
         || PRELUDE_TYPES4.contains(&name)
         || PRELUDE_TYPES5.contains(&name)
+        || PRELUDE_TYPES6.contains(&name)
 }
 
 pub fn is_prelude_value(name: &[u8]) -> bool {

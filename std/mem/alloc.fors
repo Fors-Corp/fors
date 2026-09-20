@@ -40,6 +40,11 @@ impl Layout {
 // `free` takes no Layout and a wrong-size free is unrepresentable (R16).
 pub struct Block[A: brand] { size: usize, align: usize, ptr: rawptr[u8] }
 
+// Round 6 (R11, ch01 R22): the declared base of linearity for a Block; a
+// Vec, Map or String holding one would be linear by inference anyway
+// (ch01 R22a(b)), and each declares its own impl as well.
+impl[A: brand] Linear for Block[A] { }
+
 impl[A: brand] Block[A] {
     pub fn len(let self: Self) -> usize { return self.size; }
     pub fn align(let self: Self) -> usize { return self.align; }
@@ -78,7 +83,10 @@ pub trait Allocator[A: brand] {
     // Provided (ch07 trait_item permits a body): written once here in
     // terms of alloc/free and the placement primitives above, so an
     // allocator author implements the six methods and gets both.
-    fn create[T](inout self: Self, sink v: T) -> Own[T, A] raises AllocError {
+    // `T: Droppable` (round 6, R22a): the `?` below drops `v` on the error
+    // exit and a rigid type may be linear (ch01 R22c). An Own of a linear
+    // payload is built with alloc + own_raw instead.
+    fn create[T: Droppable](inout self: Self, sink v: T) -> Own[T, A] raises AllocError {
         var b: Block[A] = self.alloc(Layout.of[T]())?;
         return own_raw(move b, move v);
     }

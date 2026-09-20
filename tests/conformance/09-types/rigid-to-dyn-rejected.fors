@@ -1,0 +1,12 @@
+//! name: rigid-to-dyn-rejected
+//! rule: 09.R10
+//! expect: check-error
+//! detail: T0010 -- a value of RIGID type MUST NOT be coerced to `dyn Tr`; a generic body that wants an object takes `dyn Tr` as a parameter
+
+needs { };
+
+trait Tr { fn go(let self); }
+
+fn f[T: Tr](sink x: T) -> dyn Tr {
+    return x as dyn Tr;
+}

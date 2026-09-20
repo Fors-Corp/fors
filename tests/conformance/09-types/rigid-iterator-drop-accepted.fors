@@ -1,0 +1,8 @@
+//! name: rigid-iterator-drop-accepted
+//! rule: 09.R57
+//! expect: check-ok
+//! detail: T0057 -- ch09 R21: `Iterator` implies `Droppable`
+
+needs { };
+
+fn f[I: Iterator](sink it: I) { }

@@ -1,0 +1,14 @@
+//! name: scoped_into_concrete_sink_rejected
+//! rule: 01.R19c
+//! expect: check-error
+//! detail: ch01 R19c(a'), R19 -- `Str` is `Copyable`, so the call is judged by (a'): `Holder` contains `Str` and the result keeps `v`, which `f` then returns without `scoped(v)`; for a non-`Copyable` scoped value the concrete `sink` is closed outright by R19c(b)
+
+needs { };
+
+struct Holder { s: Str }
+
+fn keep(sink s: Str) -> Holder { return Holder { s: s }; }
+
+fn f[A: brand](let v: String[A]) -> Holder {
+    return keep(v.as_str());
+}

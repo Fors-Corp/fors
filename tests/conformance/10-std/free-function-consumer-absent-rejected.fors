@@ -1,0 +1,11 @@
+//! name: free_function_consumer_absent_rejected
+//! rule: 10.S35
+//! expect: check-error
+//! detail: T0043 -- round 6 DELETED `mem.count`, `mem.fold`, `mem.for_each`, `mem.all`, `mem.any`, `mem.find`, `mem.try_fold` and `mem.try_for_each`
+
+needs { };
+use std.mem;
+
+fn f[A: brand](let v: Vec[i32, A]) -> usize {
+    return mem.count(v.iter());
+}

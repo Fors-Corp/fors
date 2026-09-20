@@ -18,6 +18,9 @@ impl Exec {
 // Linear (R11): wait is the only release.
 pub struct Child { id: u64 }
 
+// Round 6 (R11, ch01 R22): linear — consumed by `wait` on every path.
+impl Linear for Child { }
+
 impl Child {
     pub fn pid(let self: Self) -> u64 { return self.id; }
     pub fn wait(sink self: Self) -> i32 raises Error { raise Error.other; }    // STUB

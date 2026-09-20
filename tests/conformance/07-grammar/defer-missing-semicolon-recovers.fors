@@ -1,0 +1,13 @@
+//! name: defer-missing-semicolon-recovers
+//! rule: 07.Recovery
+//! expect: parse-error
+//! detail: exactly one diagnostic ("missing `;`"): `defer` is in the statement synchronisation set, so the `;` is inserted virtually and both statements are in the CST
+
+needs { };
+
+fn f() { }
+fn g() { }
+
+fn a() {
+    defer f() defer g();
+}

@@ -1,0 +1,15 @@
+//! name: main-raises-after-defer-run-error
+//! rule: 02.R17
+//! expect: run-error
+//! detail: error: main.Error.boom  -- ch01 R23e: `main`'s deferred bodies run first; the deferred line goes to `Stderr` and precedes this one
+
+module main;
+needs { io.stderr };
+use std.io;
+
+enum Error { boom }
+
+fn main(inout err: io.Stderr) raises Error {
+    defer err.write_line("deferred");
+    raise Error.boom;
+}

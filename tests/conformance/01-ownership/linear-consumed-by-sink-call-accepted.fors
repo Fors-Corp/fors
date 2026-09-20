@@ -1,0 +1,21 @@
+//! name: linear_consumed_by_sink_call_accepted
+//! rule: 01.R22d
+//! expect: check-ok
+//! detail: ch01 R22d(i) -- the implicit receiver move into a `sink self` method consumes
+
+needs { };
+
+struct Res { fd: i32 }
+impl Linear for Res { }
+impl Res {
+    fn open(let n: i32) -> Res { return Res { fd: n }; }
+    fn close(sink self) { }
+    fn poke(inout self) { }
+    fn step(let self) raises Err { }
+}
+enum Err { boom }
+
+fn f() {
+    var r: Res = Res.open(1);
+    r.close();
+}

@@ -1,12 +1,13 @@
 //! name: linear_moved_to_caller_accepted
 //! rule: 10.S11
 //! expect: check-ok
-//! detail: S0011 -- moving a linear value to a caller that consumes it satisfies the obligation
+//! detail: S0011 -- moving a linear value to a caller that consumes it satisfies the obligation; `errdefer` covers the `?`'s error exit only (ch01 R23b)
 
 needs { };
 
 fn make[A: brand, L: Allocator[A]](inout a: L, let n: i32) -> Vec[i32, A] raises AllocError {
     var v: Vec[i32, A] = Vec.new();
+    errdefer v.deinit(&a);                 // error exits only: the normal exit hands it on
     v.push(&a, n)?;
-    return v;
+    return move v;
 }

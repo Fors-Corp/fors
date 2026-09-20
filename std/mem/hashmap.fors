@@ -45,6 +45,9 @@ impl[T: Hash] Hash for Slice[T] {
 // Opaque, linear while cap > 0 (R11).
 pub struct Map[K, V, A: brand] { n: usize, capacity: usize, seed: u64, store: Option[alloc.Block[A]] }
 
+// Round 6 (R11, ch01 R22): linear ALWAYS, exactly as Vec is.
+impl[K, V, A: brand] Linear for Map[K, V, A] { }
+
 impl[K: Eq + Hash, V, A: brand] Map[K, V, A] {
     pub fn new() -> Map[K, V, A] {
         return Map { n: 0, capacity: 0, seed: 0x9e3779b97f4a7c15, store: none };
@@ -73,7 +76,17 @@ impl[K: Eq + Hash, V, A: brand] Map[K, V, A] {
         raise alloc.AllocError.out_of_memory;                // STUB
     }
 
-    // Traps (kind contract) on a linear value type while len > 0 (R11c).
+    // The release for a LINEAR value type (R11c(iii)): the caller has
+    // removed and consumed every value first.
+    pub fn deinit_empty[L: alloc.Allocator[A]](sink self: Self, inout a: L)
+        pre self.len() == 0
+    { }                                                                      // STUB
+}
+
+// Round 6 (R11c(ii)): these DROP values, so they need `V: Droppable`. `K`
+// is already Copyable through `Eq + Hash` (R29), so a linear key cannot
+// arise.
+impl[K: Eq + Hash, V: Droppable, A: brand] Map[K, V, A] {
     pub fn clear(inout self: Self) { self.n = 0; }
 
     pub fn deinit[L: alloc.Allocator[A]](sink self: Self, inout a: L) { }     // STUB

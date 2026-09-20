@@ -1,0 +1,10 @@
+//! name: map_deinit_linear_value_rejected
+//! rule: 10.S11c
+//! expect: check-error
+//! detail: T0043 -- R11c(ii): `Map.clear`/`Map.deinit` need `V: Droppable`; `K` is already Copyable through `Eq + Hash` (R29), so a linear key cannot arise
+
+needs { };
+
+fn f[A: brand, L: Allocator[A]](inout a: L, sink m: Map[i32, Own[i64, A], A]) {
+    m.deinit(&a);
+}

@@ -1,0 +1,11 @@
+//! name: consumer_count_method_accepted
+//! rule: 10.S35
+//! expect: check-ok
+//! detail: S0035 -- `count` is a provided method taking `sink self`; its `usize` result mentions no parameter of the receiver's head, so nothing stays scoped
+
+needs { };
+
+fn f[A: brand, L: Allocator[A]](inout a: L, inout v: Vec[i32, A]) raises AllocError {
+    let n: usize = v.iter().count();
+    v.push(&a, 1)?;
+}

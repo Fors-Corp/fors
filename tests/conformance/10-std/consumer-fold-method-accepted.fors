@@ -1,0 +1,12 @@
+//! name: consumer_fold_method_accepted
+//! rule: 10.S35
+//! expect: check-ok
+//! detail: S0035, S0037 -- `fold` is strictly left to right and never reassociated, whatever the algebra
+
+needs { };
+
+fn add(sink acc: i32, sink x: i32) -> i32 { return acc + x; }
+
+fn f[A: brand](let v: Vec[i32, A]) -> i32 {
+    return v.iter().fold(0, add);
+}

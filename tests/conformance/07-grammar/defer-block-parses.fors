@@ -1,0 +1,13 @@
+//! name: defer-block-parses
+//! rule: 07.Grammar
+//! expect: parse-ok
+//! detail: n/a  -- `defer_stmt` with the `block` body; no `;` follows the `}`
+
+needs { };
+
+fn f() { }
+fn g() { }
+
+fn a() {
+    defer { f(); g(); }
+}

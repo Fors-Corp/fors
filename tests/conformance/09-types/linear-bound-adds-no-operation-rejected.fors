@@ -1,0 +1,8 @@
+//! name: linear-bound-adds-no-operation-rejected
+//! rule: 09.R24
+//! expect: check-error
+//! detail: T0057 -- `Linear` MAY be used as a bound, where it restricts instantiation and adds NO operation: a value of rigid type is still not droppable
+
+needs { };
+
+fn f[T: Linear](sink x: T) { }

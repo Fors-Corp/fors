@@ -233,7 +233,9 @@ impl[T, N: usize] IndexMut[usize] for Buffer[T, N] {
 // Consuming: moves elements out; owns the data, so it is not scoped.
 pub struct BufferIter[T, N: usize] { at: usize, len: usize, data: Array[T, N] }
 
-impl[T, N: usize] Iterator for BufferIter[T, N] {
+// T: Droppable (round-6 verification): `Self: Droppable` and `Item:
+// Droppable` (ch09 R21) both need it with T rigid; every Buffer's T is.
+impl[T: Droppable, N: usize] Iterator for BufferIter[T, N] {
     type Item = T;
     fn next(inout self: Self) -> Option[Self.Item] {
         if self.at < self.len {

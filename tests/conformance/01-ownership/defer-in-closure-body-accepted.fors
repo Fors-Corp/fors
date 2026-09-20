@@ -1,0 +1,25 @@
+//! name: defer_in_closure_body_accepted
+//! rule: 01.R23
+//! expect: check-ok
+//! detail: ch01 R23 -- a closure body is a block like any other, so a `defer` written in it is a statement of that block
+
+needs { };
+
+struct Res { fd: i32 }
+impl Linear for Res { }
+impl Res {
+    fn open(let n: i32) -> Res { return Res { fd: n }; }
+    fn close(sink self) { }
+    fn poke(inout self) { }
+    fn step(let self) raises Err { }
+}
+enum Err { boom }
+
+fn f() {
+    let c: fn () = || {
+        var r: Res = Res.open(1);
+        defer r.close();
+        r.poke();
+    };
+    c();
+}

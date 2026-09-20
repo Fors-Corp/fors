@@ -1,0 +1,15 @@
+//! name: scoped_iter_chain_keeps_borrow_rejected
+//! rule: 10.S33
+//! expect: check-error
+//! detail: ch01 R7, R19c(a) -- every adaptor's declared result mentions `Self`, so the whole chain stays scoped to `v` and `v` stays borrowed `let` while it lives
+
+needs { };
+use std.mem;
+
+fn double(sink x: i32) -> i32 { return x * 2; }
+
+fn f[A: brand, L: Allocator[A]](inout a: L, inout v: Vec[i32, A]) raises AllocError {
+    var m: mem.Mapped[mem.SliceIter[i32], i32] = v.iter().map(double);
+    v.push(&a, 1)?;
+    let n: usize = m.count();
+}

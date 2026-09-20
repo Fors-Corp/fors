@@ -1,0 +1,8 @@
+//! name: errdefer-as-identifier-rejected
+//! rule: 07.Reserved
+//! expect: parse-error
+//! detail: `errdefer` is reserved: `fn errdefer() { }` is a parse error
+
+needs { };
+
+fn errdefer() { }

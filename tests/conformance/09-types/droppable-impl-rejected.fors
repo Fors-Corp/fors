@@ -1,0 +1,9 @@
+//! name: droppable-impl-rejected
+//! rule: 09.R24
+//! expect: check-error
+//! detail: T0024 -- `Droppable` is purely STRUCTURAL: `impl Droppable for T` MUST be rejected for every `T`; there are no impls at all
+
+needs { };
+
+struct S { n: i32 }
+impl Droppable for S { }

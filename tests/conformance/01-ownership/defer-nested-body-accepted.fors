@@ -1,0 +1,15 @@
+//! name: defer_nested_body_accepted
+//! rule: 01.R23c
+//! expect: check-ok
+//! detail: ch01 R23c -- bodies MAY NEST: a `defer` written inside a body is a statement of that body's block and runs when that block exits
+
+needs { };
+
+fn note(let tag: Str) { }
+
+fn f() {
+    defer {
+        defer note("inner");
+        note("outer");
+    }
+}

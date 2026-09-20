@@ -1,0 +1,10 @@
+//! name: copyable-implies-droppable-accepted
+//! rule: 09.R23
+//! expect: check-ok
+//! detail: T0023 -- `X: Copyable` implies `X: Droppable`, so a `Copyable` bound licenses the drop of R57
+
+needs { };
+
+fn f[T: Copyable](let x: T) {
+    let y: T = x;
+}

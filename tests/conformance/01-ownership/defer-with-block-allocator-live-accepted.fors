@@ -1,0 +1,13 @@
+//! name: defer_with_block_allocator_live_accepted
+//! rule: 01.R23d
+//! expect: check-ok
+//! detail: ch01 R23d(f) -- an arena or allocator value dies only after its block's deferred bodies have run
+
+needs { };
+
+fn f[T](let n: i32) raises AllocError {
+    with allocator a: PageAllocator {
+        var b: Own[i64, a] = a.create(1)?;
+        defer a.deinit(move b);
+    }
+}

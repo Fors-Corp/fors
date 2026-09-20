@@ -1,0 +1,22 @@
+//! name: defer_consumes_linear_on_all_exits_accepted
+//! rule: 01.R23d
+//! expect: check-ok
+//! detail: ch01 R22d(iii), R23d(b) -- a deferred body that moves `r` consumes it on every exit the body runs on, including the `?`'s error exit
+
+needs { };
+
+struct Res { fd: i32 }
+impl Linear for Res { }
+impl Res {
+    fn open(let n: i32) -> Res { return Res { fd: n }; }
+    fn close(sink self) { }
+    fn poke(inout self) { }
+    fn step(let self) raises Err { }
+}
+enum Err { boom }
+
+fn f() raises Err {
+    var r: Res = Res.open(1);
+    defer r.close();
+    r.step()?;
+}

@@ -182,6 +182,7 @@ fn is_stmt_keyword(k: TokenKind) -> bool {
         k,
         KwLet | KwVar | KwIf | KwMatch | KwFor | KwWhile | KwBreak | KwContinue | KwReturn | KwRaise | KwWith
             | KwParallel | KwSimd | KwSpawn | KwConsume | KwDiscard | KwComptime
+            | KwDefer | KwErrdefer
     )
 }
 
@@ -1328,6 +1329,25 @@ impl<'a> Parser<'a> {
                 self.bump();
                 self.place();
                 self.expect_semi();
+                self.b.finish_node();
+            }
+            KwDefer | KwErrdefer => {
+                // ch07 `defer_stmt` / `errdefer_stmt`, Disambiguation 9:
+                // the keyword selects the statement (LA 1) and the token
+                // after it selects the body (LA 1) — `{` is a `block`, and
+                // anything else begins an `expr` that ends at its `;`.
+                self.b.start_node(if self.at(KwDefer) {
+                    NodeKind::DeferStmt
+                } else {
+                    NodeKind::ErrdeferStmt
+                });
+                self.bump();
+                if self.at(LBrace) {
+                    self.block();
+                } else {
+                    self.expr(false);
+                    self.expect_semi();
+                }
                 self.b.finish_node();
             }
             At => {

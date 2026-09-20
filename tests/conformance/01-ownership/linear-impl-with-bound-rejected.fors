@@ -1,0 +1,9 @@
+//! name: linear_impl_with_bound_rejected
+//! rule: 01.R22
+//! expect: check-error
+//! detail: ch09 T0024 (ch01 R22) -- an `impl Linear` MUST NOT carry a bound on any of its parameters: whether a constructor is linear is a fact of the constructor
+
+needs { };
+
+struct Pair[T] { a: T }
+impl[T: Copyable] Linear for Pair[T] { }

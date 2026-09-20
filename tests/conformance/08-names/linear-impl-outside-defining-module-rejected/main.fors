@@ -1,0 +1,10 @@
+//! name: linear-impl-outside-defining-module-rejected
+//! rule: 08.R21
+//! expect: check-error
+//! detail: N0021 -- `impl Linear for lib.Res` in `main`: `Linear` is a prelude trait (package std) and `Res` is defined in `lib`; `main` is neither (ch01 R22: the `impl` MUST appear in the defining module, as for `Shared`)
+
+module main;
+needs { };
+use lib;
+
+impl Linear for lib.Res { }

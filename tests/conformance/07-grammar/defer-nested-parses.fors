@@ -1,0 +1,23 @@
+//! name: defer-nested-parses
+//! rule: 07.Grammar
+//! expect: parse-ok
+//! detail: n/a  -- bodies nest, and a `defer` parses inside a loop body, an arm block, a `with` block and a closure body
+
+needs { };
+
+fn h() { }
+
+fn a(let n: usize, let k: i32) {
+    defer { defer h(); }
+    for i in 0 ..< n {
+        defer h();
+    }
+    match k {
+        0 => { defer h(); }
+        _ => { }
+    }
+    with arena nodes: Arena[i32] {
+        defer h();
+    }
+    let c: fn () = || { defer h(); };
+}

@@ -1,0 +1,12 @@
+//! name: callable-field-paren-call-accepted
+//! rule: 09.R43
+//! expect: check-ok
+//! detail: R7 -- the parenthesised form `(h.f)(move x)` is the call of a value of `fn` type
+
+needs { };
+
+struct Holder { f: fn (sink i32) -> i32 }
+
+fn go(let h: Holder, sink x: i32) -> i32 {
+    return (h.f)(move x);
+}

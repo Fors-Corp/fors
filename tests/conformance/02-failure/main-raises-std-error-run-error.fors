@@ -1,0 +1,20 @@
+//! name: main-raises-std-error-run-error
+//! rule: 02.R17
+//! expect: run-error
+//! detail: error: std.mem.alloc.AllocError.out_of_memory  -- a std error out of `main` renders by its fully-qualified path
+
+module main;
+needs { };
+use std.mem;
+
+fn fill[A: brand, L: Allocator[A]](inout a: L) raises AllocError {
+    var v: Vec[i32, A] = Vec.new();
+    defer v.deinit(&a);
+    v.push(&a, 1)?;
+}
+
+fn main() raises AllocError {
+    with allocator counting: mem.Counting[mem.Fixed[8]] {
+        fill(&counting)?;
+    }
+}

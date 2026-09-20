@@ -1,0 +1,10 @@
+//! name: dyn-param-in-generic-body-accepted
+//! rule: 09.R10
+//! expect: check-ok
+//! detail: T0010's other side -- taking `dyn Tr` as a parameter is how a generic body gets an object
+
+needs { };
+
+trait Tr { fn go(let self); }
+
+fn f[T](let t: T, let o: dyn Tr) { o.go(); }

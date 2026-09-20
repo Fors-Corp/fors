@@ -1,0 +1,10 @@
+//! name: rigid-array-element-in-generic-body-accepted
+//! rule: 09.R11
+//! expect: check-ok
+//! detail: T0011's other side -- with a RIGID element type the same written type is well-formed; its values obey R57's drop clause instead
+
+needs { };
+
+fn f[T: Droppable](let n: usize) {
+    var a: Array[T, 4];
+}

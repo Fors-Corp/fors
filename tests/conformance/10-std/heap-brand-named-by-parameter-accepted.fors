@@ -9,6 +9,6 @@ use std.mem;
 
 fn main(inout heap: mem.Heap) raises AllocError {
     var v: Vec[i32, heap] = Vec.new();
+    defer v.deinit(&heap);                 // linear: consumed on every exit (ch01 R22h)
     v.push(&heap, 1)?;
-    v.deinit(&heap);
 }

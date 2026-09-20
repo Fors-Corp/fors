@@ -152,8 +152,18 @@ signature as the only inter-declaration interface. Not owned: see the table
     T`, succeeds only through this closed list, applied once, at the outermost
     type only, never searched or chained: (a) `never` to any `T`; (b) a closure
     type or `fn` item to an equal `fn` type; (c) a type `S` to `dyn Tr` when
-    `S` implements `Tr` (Rule 12). (b) and (c) MUST be rejected for a
-    brand-mentioning or scoped value (ch01 Rules 15(b), 19a). Any conversion
+    `S` implements `Tr` (Rule 12). (c) MUST be rejected for a
+    brand-mentioning or scoped value (ch01 Rules 15(b), 19a); (b) MUST be
+    rejected for a brand-mentioning value and for a closure capturing one
+    (ch01 Rule 15(b)), while a closure's other captures SURVIVE the
+    coercion as the `fn`-typed value's sources (ch01 Rule 19d; round-6
+    verification — without this, `it.map(|sink x| x + k)` would be
+    unwritable), and (c) MUST
+    also be rejected when `S` is LINEAR (ch01 Rule 22f: the cleanup
+    obligation would become invisible) or when `S` is a rigid type
+    parameter or a neutral projection (round 6; a generic body that wants
+    an object takes `dyn Tr` as a parameter — this is the clause that
+    closes the last escape in ch01 Rule 19c(a)'s soundness argument). Any conversion
     between qualified and unqualified forms (`iso`, `imm`, `secret`) is ch01's
     and ch05's; this chapter adds none. There is no numeric, array-to-slice
     (ch03 Rule 24) or `T`-to-`Option[T]` coercion. Anything else: type
@@ -185,7 +195,14 @@ fn f(let c: bool) -> i64 {
     named `io` written as the head of `io.Stdout` in a module that does not
     import `std.io` (round 5, D3: `io` is then an ordinary binding, not a
     module) — MUST be rejected with this code, naming the binding. A type path with deferred segments (ch08
-    Rule 16) is a projection and is Rule 61's.
+    Rule 16) is a projection and is Rule 61's. **Linear element types**
+    (round 6, ch01 Rule 22b): a CONCRETE `Array[X, N]`, `vector[X, N]` or
+    `atomic[X]` whose element type `X` is linear MUST be rejected with this
+    code where the type is written or instantiated, naming `X` and its
+    linear head. An element can leave such a value only by a partial move,
+    which ch01 Rule 4a(c) forbids, so the obligation could never be
+    discharged. With a RIGID element type the same written type is
+    well-formed and its values obey Rule 57's drop clause instead.
 12. **T0012** — Bounds MUST hold at every use: for each argument `X` given to a
     parameter `P: Tr1 + ... + Trk`, `X` MUST implement every `Tri`. "`X`
     implements `Tr[As]`" is decided structurally: if `X` is a rigid parameter,
@@ -365,10 +382,25 @@ fn grow[T, N: usize](let a: Array[T, N]) -> Array[T, N + 1] { return a; } // rej
     (receivers abbreviated in the table are written in full here):
 
     ```fors
-    trait Iterator { type Item; fn next(inout self: Self) -> Option[Self.Item]; }
+    trait Iterator { type Item: Droppable; fn next(inout self: Self) -> Option[Self.Item]; }
     trait Index[I] { type Output; fn at(let self: Self, let i: I) -> scoped(self) Self.Output; }
     trait IndexMut[I] { fn at_mut(inout self: Self, let i: I) -> scoped(self) Self.Output; }
     ```
+
+    `Iterator` is language-known in its REQUIRED part only: the associated
+    type, its bound and `next`. Std declares the same trait and adds
+    PROVIDED methods to it (the adaptors and consumers of ch10 Rules
+    32-35); a provided method is a lookup candidate exactly like a required
+    one (Rules 16, 43), so nothing here changes for it. `Iterator` is the
+    SECOND trait with a language-known prerequisite, after `IndexMut`
+    (round 6, O1): `impl Iterator for S` MUST be rejected unless `S` is
+    `Droppable`, and a bound `P: Iterator` implies `P: Droppable`. With
+    `type Item: Droppable` this means v0.1 has no linear iterator and no
+    linear item, which is what lets `for x in it` (Rule 31) own and drop
+    the iterator and drop each item, in a generic body as well as a
+    concrete one. An iterator over a linear source takes that source
+    `inout` and is `scoped` to it; a container of linear elements is
+    emptied by `pop`/`remove`, never iterated by value (ch10 Rule 33).
 
     A type MAY implement `Index[I]` for several `I`. `IndexMut[I]` declares no
     associated type of its own: it is the one trait with a language-known
@@ -402,11 +434,23 @@ fn grow[T, N: usize](let a: Array[T, N]) -> Array[T, N + 1] { return a; } // rej
     `Copyable` components. Never `Copyable`: `Own`, `Arena`, allocator and
     root-capability types (ch01 Rule 15a, ch04 Rule 7), any `iso` type, a
     closure type, `dyn Tr`. This is the `Copyable` that ch01 Rule 4 and ch03
-    Rule 24a name.
-24. **T0024** — A marker trait (`Shared`, `Copyable`) has no methods and
+    Rule 24a name. `impl Copyable for T` MUST also be rejected when `T` is
+    LINEAR (ch01 Rule 22e), and `X: Copyable` implies `X: Droppable`.
+24. **T0024** — A marker trait (`Shared`, `Copyable`, and from round 6
+    `Linear` and `Droppable`) has no methods and
     contributes no operation to a generic body; as a bound it only restricts
     instantiation (ch01 Rule 21b). `Shared`'s field check is ch01 Rules 21-21d.
-    A marker trait MUST NOT be used as `dyn`.
+    A marker trait MUST NOT be used as `dyn`. The two round-6 markers differ
+    from the other two in how they are established. `Linear` is DECLARED:
+    `impl Linear for T {}` in `T`'s defining module, with no bound on any
+    parameter of the impl, so linearity is a fact of the constructor and
+    never of an instantiation (ch01 Rule 22); linearity then propagates
+    structurally, with no impl to write (ch01 Rule 22a). `Droppable` is
+    purely STRUCTURAL: `impl Droppable for T` MUST be rejected for every
+    `T` — there are no impls at all — and `X: Droppable` holds exactly when
+    `X` is not linear (ch01 Rule 22c). As a BOUND, `Droppable` is how a
+    generic body says that it drops a value of that parameter's type
+    (Rule 57); `Copyable` and `Iterator` each imply it.
 25. **T0025** — `dyn Tr` is well-formed iff `Tr` is dyn-capable: it declares
     no associated type (so `dyn Iterator` does not exist in v0.1; there is no
     `dyn Tr[Item = T]` form), it has no generic methods, every method is a receiver method with convention `let` or
@@ -549,7 +593,11 @@ impl[I: Iterator] Keyed for Three[I.Item] {              // rejected T0018: proj
     23; so `for x in it` with `sink it: I` consumes the parameter, and a
     `let` parameter cannot be iterated directly, ch01 Rule 3). The body is
     checked against `()`, as are the bodies of `while`, `parallel`, `with` and
-    attribute blocks. A function body is checked against the declared result
+    attribute blocks. A `defer` or `errdefer` statement (ch07) has type
+    `()`; its `block` body is checked against `()`, and its `expr ";"` form
+    is checked as the expression statement it abbreviates. Everything else
+    about a deferred body — where it may appear, when it runs, what it may
+    contain, what it may capture and consume — is ch01 Rules 23-23f. A function body is checked against the declared result
     type (`()` if absent); `return e;` checks `e` against it and `return;`
     requires `()`. A block with no tail expression has type `()`, or `never`
     when its last statement has type `never`.
@@ -567,6 +615,10 @@ impl[I: Iterator] Keyed for Three[I.Item] {              // rejected T0018: proj
     38's matching: an argument that synthesises `never` binds nothing (it
     coerces to whatever the parameter becomes), and a parameter left
     undetermined is T0039. `break`/`continue` outside a loop MUST be rejected.
+    Inside a `defer`/`errdefer` body (ch01 Rule 23c) a `return`, a `raise`,
+    a `?`, and a `break`/`continue` whose target loop is outside the body
+    MUST be rejected with this code, naming the enclosing `defer` or
+    `errdefer` statement.
 34. **T0034** — Aggregates. A struct literal MUST name each field of the struct
     exactly once and nothing else, each visible (ch08 Rule 11), and is typed as
     a call whose parameters are the fields in written order (Rule 38); explicit
@@ -703,7 +755,15 @@ fn demo2(sink xs: Counter2) {          // given: impl Iterator for Counter2 { ty
     located in the module defining that head, in the current module, or in a
     module the current module has a direct edge to (ch08 Rule 7).  This uses
     the module graph, not a scope (ch08 Rule 22), so a module the caller does
-    not import cannot alter the outcome. No candidate: T0043.
+    not import cannot alter the outcome. No candidate: T0043. Whether a
+    trait method is REQUIRED or PROVIDED (Rule 16) makes no difference
+    here: a provided method is a candidate exactly like a required one, and
+    is the mechanism by which std puts `map`, `filter`, `take` and the
+    consumers on `Iterator` without a blanket impl (ch10 Rules 32-35). A
+    std type that implements `Iterator` therefore MUST NOT declare an
+    INHERENT method whose name is that of one of `Iterator`'s provided
+    methods, since tier (1) would silently re-route the call (Rule 44's
+    inherent-before-trait precedence; ch10 Rule 34).
 44. **T0044** — More than one candidate in the tier that answered MUST be an
     error listing them; the call is rewritten in a qualified form (Rule 45).
     Candidates are never ranked by specificity, import order or argument types.
@@ -800,7 +860,13 @@ fn build(sink b: Builder, sink c: Builder, let d: Builder) -> i64 {
     payload MUST name a variant of `S` (a `dot_lit` always means `S`'s variant)
     or, for a `{ }` payload, the struct `S` itself; a `( )` payload needs one
     sub-pattern per component, a `{ }` payload names visible fields at most
-    once each, and omitted fields match anything.
+    once each, and omitted fields match anything. **Linear components**
+    (round 6, ch01 Rule 22d(ii)): when the component a sub-pattern faces is
+    of LINEAR type, `_`, an omitted `{ }` field and a literal pattern each
+    DROP that component and MUST be rejected; the arm binds it with `let
+    n`, or the whole value is moved instead of destructured. This is the
+    one place a pattern's legality depends on ownership, and the code and
+    diagnostic are ch01's.
 51. **T0051** — A `let n` binding has the type of the component it faces, with
     the enum's or struct's arguments substituted. Whether it moves, copies or
     projects that component is ch01's; the type is the same in each case. The
@@ -865,9 +931,20 @@ fn sign(let n: i32) -> i32 { match n { 0 => 0, -1 => -1 } }   // rejected T0053:
 57. **T0057** — A generic declaration is checked once, at its definition, with
     each type parameter rigid. The only operations on a value of rigid type `T`
     are: binding it, passing it by a convention, moving it, storing it in an
-    aggregate, dropping it, `size_of` / `align_of`, and the methods and
+    aggregate, dropping it IF `T` IS `Droppable`, `size_of` / `align_of`,
+    and the methods and
     operators of `T`'s declared bounds (an operator needs its Rule 21 trait
-    among the bounds; copying needs `Copyable`). A neutral projection `P.A`
+    among the bounds; copying needs `Copyable`). **The drop clause**
+    (round 6, ch01 Rule 22c): letting a value of rigid type go out of
+    scope, `discard`ing it, matching it with `_`, or evaluating it as an
+    expression statement MUST be rejected with this code unless `T`'s
+    declared bounds include `Droppable`, `Copyable` or `Iterator` (each of
+    the last two implies the first; for a neutral projection `P.A` the
+    bounds are the trait's declaration for `A` plus the constraint entries
+    in scope). Binding, passing, moving, storing and returning stay
+    available for every rigid type. A generic body must therefore SAY in
+    its signature that it drops, which keeps Rule 59 intact: the error is
+    at the definition, against the bounds, never at an instantiation. A neutral projection `P.A`
     is a rigid type under this rule; its "declared bounds" are exactly the
     bounds the trait declares for `A` (Rule 16) plus the constraint entries
     on `P.A` in scope (Rule 62), and nothing is learnt from any impl. Fields, literals, `as`,
@@ -1146,6 +1223,136 @@ fn bad4(let x: Counter2.Item) { }           // rejected T0061: concrete head, wr
   iterator (`closure-before-its-iterator-rejected`), and the five receiver-
   move shapes (`implicit-receiver-move-*-rejected`).
 
+
+## Closed by owner decision 2026-09-20, round 6
+
+**O3 — iterator method chaining works under this chapter AS WRITTEN.** The
+mechanism is PROVIDED methods on `Iterator` (Rule 16) returning CONCRETE
+adaptor structs, each carrying an ordinary struct-headed `impl Iterator`.
+No blanket impl is involved (Rule 18 is untouched), and Rules 16, 18, 19,
+20, 38-41, 43-46, 57 and 61 needed no change. The derivation, for
+`v.iter().map(double).take(3).count()`:
+
+- Rule 43 tier (2) finds `Iterator.map` for a concrete receiver
+  (`Iterator` is a prelude trait and the `impl` for `SliceIter`'s head is
+  in the module defining that head), for a rigid receiver (`I: Iterator`:
+  "the candidate traits are exactly its bounds") and for an adaptor
+  receiver (`Mapped`'s own `impl Iterator`, found by Rule 12). A provided
+  method is a candidate like a required one, and there is no Rule 44
+  ambiguity.
+- Rule 38(b) binds `Self` from the receiver BEFORE any argument is visited
+  in (d), so the parameter type `fn (sink Self.Item) -> U` is always
+  normalised through the impl (Rule 20(b)) for a concrete `Self`, or
+  neutral (Rule 20(a)) for a rigid one, when the callable argument is
+  checked. A closure argument is then handled by Rule 41, which binds `U`
+  from the closure's body; a `fn` item binds `U` by the one-way match of
+  Rule 38(d).
+- The provided body is checked once with `Self` rigid (Rule 16): the
+  struct literal `Mapped { src: self, f: f }` is typed as a call (Rule 34)
+  whose parameters are determined from the CHECK position (Rule 38(c)),
+  `Mapped[Self, U]` is well-formed because `Self`'s one bound inside the
+  trait is `Iterator` (Rule 8), and the field types agree by Rule 9's
+  equality on neutral projections.
+- `dyn` capability is already lost for `Iterator` (Rule 25: it declares an
+  associated type), so nothing is given up by the generic provided methods.
+
+Two consequences are normative and recorded above: Rule 43's sentence that
+a provided method is a lookup candidate and that no std iterator type may
+declare an inherent method of the same name; and Rule 21's statement that
+`Iterator` now has a language-known prerequisite (`Self: Droppable`,
+`type Item: Droppable`).
+
+**Two declaration choices that this chapter forces**, recorded so the std
+stage does not "simplify" them back:
+- A CALLABLE PARAMETER MUST BE A `fn` TYPE, never a callable type
+  parameter. With `fn map[U, F: fn (sink Self.Item) -> U](sink self, let
+  f: F)`, a `fn`-item argument binds `F` only; `U` occurs in no parameter
+  type, and Rule 38 never binds anything through a BOUND, so
+  `it.map(double)` is T0039. With a `fn` type the item's type is matched
+  componentwise (Rule 7) and binds `U`, and a closure argument is handled
+  by Rule 41. The second benefit is that the adaptor types stay WRITABLE
+  (`Taken[Mapped[SliceIter[i32], i32]]`), since no closure type appears in
+  a signature and a closure type "cannot be written" (Rule 7).
+- AN ADAPTOR CARRIES EVERY PARAMETER IT NEEDS IN ITS OWN HEAD
+  (`Mapped[I, U]`, not `Mapped[I]`), because `impl[I: Iterator, U]
+  Iterator for Mapped[I]` would leave `U` unconstrained (Rule 18: "an
+  occurrence only in a bound, in `type A = ...;` or in a method does not
+  count").
+
+A callable FIELD is called as `(self.f)(move x)`. `self.f(x)` is
+method-call form (Rule 43) and is T0043: there are no method values (Rule
+42), and a value of `fn` type is called with `( )` (Rule 7).
+
+**Round-6 verification, two corrections.** (1) `Mapped[I, U]`'s impl MUST
+bound `U: Droppable`: the trait declares `type Item: Droppable` (Rule 21)
+and Rule 17 checks `type Item = U;` against that bound at the impl with
+`U` rigid, so `impl[I: Iterator, U] Iterator for Mapped[I, U]` is T0021 as
+written; `map[U: Droppable]` carries the same bound so that a closure
+returning a LINEAR value fails at `map` with T0012 ("`Vec[..]` is not
+`Droppable`") instead of at the next stage with "no method `take`". An
+iterator of linear items does not exist in v0.1, by Rule 21. (2) A closure
+argument that captures is a scoped value (ch01 Rule 19d), and the caller
+accounts for the callable the adaptor stores through ch01 Rule 19c(a′):
+`Mapped[Self, U]` CONTAINS the `fn` type `f` went in through, so
+`v.iter().map(|sink x| x + k)` keeps `v` and `k`; typing is unchanged.
+A generic `fn` item passed where a `fn` type is expected but not yet
+complete is SYNTHESISED and is T0039 by Rule 28 (`it.map(same)` needs
+`it.map(same[I.Item])`); a non-generic item binds `U` by the one-way match.
+(3) The verification re-derived the three-adaptor chain
+`v.iter().map(double).filter(small).take(3).count()` rule by rule:
+Rule 43 tier (2) at each stage (`Iterator` is a prelude trait; the impl
+for `SliceIter`, `Mapped`, `Filtered` is in its head's defining module, so
+NO import is needed); Rule 38(b) binds `Self` from the receiver, (d)
+normalises `fn (sink Self.Item) -> U` to `fn (sink i32) -> U` and the
+one-way match against `double`'s type binds `U := i32`; Rule 12 then
+checks `U: Droppable`; each stage's result is `Mapped[SliceIter[i32],
+i32]`, `Filtered[Mapped[..]]`, `Taken[Filtered[..]]`, and `count` is
+`usize`. In a CHECK position (`var t: Taken[Mapped[SliceIter[i32], i32]]
+= ...`) Rule 38(b) still binds `Self` from the receiver first and (c)
+merely agrees; a disagreeing annotation is T0026 at the call. Through a
+bound (`fn f[I: Iterator](sink it: I)`) tier (2) is exactly the bound and
+`Self.Item` stays neutral, so the closure is CHECKed against `fn (sink
+I.Item) -> U` and its body synthesises `U`. With a second trait in the
+bounds that also declares `take`, tier (2) has two candidates and the
+call is T0044; the qualified form `Iterator.take(move it, 3)` resolves it.
+
+**O1 — linearity's obligations on the checker** are ch01 Rules 22-22i;
+this chapter carries the five clauses those rules delegate to it: Rule
+10(c) (no `dyn` of a linear, rigid or neutral-projection value), Rule 11
+(no concrete `Array`/`vector`/`atomic` of a linear element), Rule 21
+(`Iterator`'s prerequisites), Rules 23-24 (`Copyable` excludes linear;
+`Linear` and `Droppable` as markers, `Droppable` with no impls), Rule 50
+(`_`, an omitted field or a literal over a linear component) and Rule 57
+(the drop clause for rigid types). **O2 — `defer`/`errdefer`** cost this
+chapter two sentences: Rule 31 (the statement and its body have type
+`()`) and Rule 33 (no `return`, `raise`, `?` or outward `break`/`continue`
+inside a body).
+
+```fors
+needs { };
+
+// The shape of every adaptor: a provided method returning a concrete
+// struct that carries its own struct-headed impl. No blanket impl.
+pub trait Iterator {
+    type Item: Droppable;
+    fn next(inout self) -> Option[Self.Item];
+    fn take(sink self, let n: usize) -> Taken[Self] {
+        return Taken { src: self, left: n };        // Rules 34, 38(c)
+    }
+}
+
+pub struct Taken[I: Iterator] { src: I, left: usize }
+
+impl[I: Iterator] Iterator for Taken[I] {
+    type Item = I.Item;                             // Rule 61(d)
+    fn next(inout self) -> Option[I.Item] {
+        if self.left == 0 { return none; }
+        self.left = self.left - 1;
+        return self.src.next();
+    }
+}
+```
+
 ## Open owner questions
 
 Closed in round 4 and removed from this list: the integer-literal default
@@ -1154,7 +1361,11 @@ Closed in round 4 and removed from this list: the integer-literal default
 `MATCH_STEP_FACTOR` (drafting defaults, see Drafting decisions).
 
 1. **Remaining v0.1 restrictions**, each addable later without breaking
-   accepted code: no blanket impls or supertraits (Rules 16, 18); no generic
+   accepted code: no blanket impls or supertraits (Rules 16, 18 — round 6
+   confirmed that iterator method chaining needs NEITHER, so nothing in
+   std or the corpus is now waiting on them; `Iterator` joins `IndexMut`
+   as the second trait with a language-known prerequisite, which is still
+   not a supertrait feature); no generic
    associated types, defaults, associated consts or equality bounds (Rule 16);
    no arithmetic on const parameters (Rule 13, although ch07 parses `N + 1`);
    no effect polymorphism, so std writes `map`/`try_map` pairs (Rule 60).
@@ -1356,3 +1567,68 @@ and 52 have no corpus test: 2 is an incremental-build property (tested in
 the query engine: `assoc_type_def_is_signature_level_and_method_bodies_
 are_not` in crates/fors-index), 49 re-uses ch08's tests, 52 is a fact
 about the grammar. Rule 56 has none: it forbids syntax ch07 does not have.
+
+Added in round 6 (2026-09-20), all in `tests/conformance/09-types/` unless
+another chapter is named; each `-rejected` expects a `check-error` with the
+code shown, and `fors check` (the resolver) stays CLEAN on every one of
+them, as for every other T- and ch01-coded test.
+
+R10(c) `rigid-to-dyn-rejected` T0010, `neutral-projection-to-dyn-rejected`
+T0010, `linear-to-dyn-rejected` T0010, `dyn-param-in-generic-body-accepted`.
+R11 `linear-array-element-rejected` T0011,
+`linear-vector-element-rejected` T0011,
+`linear-atomic-element-rejected` T0011,
+`rigid-array-element-in-generic-body-accepted`.
+R21 `iterator-impl-linear-self-rejected` T0021,
+`iterator-impl-linear-item-rejected` T0021,
+`iterator-bound-implies-droppable-accepted`,
+`iterator-item-dropped-in-generic-body-accepted`.
+R23 `linear-copyable-impl-rejected` T0023,
+`copyable-implies-droppable-accepted`.
+R24 `droppable-impl-rejected` T0024,
+`linear-impl-with-bound-rejected` T0024 (ch01 R22),
+`linear-bound-adds-no-operation-rejected` T0057.
+R31 `defer-body-checks-against-unit-accepted`,
+`defer-body-with-value-rejected` T0026.
+R33 `defer-return-inside-rejected` T0033,
+`defer-raise-inside-rejected` T0033,
+`defer-question-inside-rejected` T0033,
+`defer-break-outer-loop-rejected` T0033,
+`defer-inner-loop-break-accepted`.
+R12 `adaptor-map-closure-returns-linear-rejected` T0012 (`U: Droppable`).
+R17/R21 `adaptor-impl-unbounded-item-rejected` T0021 (`type Item = U;`
+with `U` unbounded).
+R26 `adaptor-annotated-binding-mismatch-rejected` T0026 (CHECK position
+disagreeing with the receiver-bound `Self`).
+R28 `adaptor-generic-fn-item-uninstantiated-rejected` T0039.
+R43 (O3) `adaptor-chain-method-accepted` (three adaptors, `fn` items),
+`adaptor-chain-closure-accepted` (`U` from a closure body, un-annotated
+binding), `adaptor-chain-rigid-receiver-accepted` (`I: Iterator`, result
+`Mapped[I, I.Item]`), `adaptor-chain-on-adaptor-receiver-accepted`,
+`adaptor-provided-method-shadowed-by-inherent-rejected` (ch10 R34),
+`adaptor-name-clash-two-traits-rejected` T0044,
+`adaptor-name-clash-qualified-accepted` (`Iterator.take(move it, 3)`),
+`adaptor-on-inout-receiver-rejected` (ch01 R4a(d); the `detail` names
+`Iterator.map`'s `sink self`, Rule 46),
+`adaptor-on-field-receiver-rejected` (ch01 R4a(c)),
+`adaptor-by-ref-on-inout-accepted`, `adaptor-by-ref-on-field-accepted`,
+`adaptor-stored-then-chained-accepted`,
+`adaptor-annotated-binding-accepted`
+(`mem.Taken[mem.Mapped[mem.SliceIter[i32], i32]]`),
+`adaptor-chain-across-question-accepted`,
+`adaptor-chain-as-for-iterable-accepted`,
+`adaptor-by-ref-for-then-reuse-accepted`,
+`callable-field-method-form-rejected` T0043 (`self.f(x)`),
+`callable-field-paren-call-accepted` (`(self.f)(x)`),
+`callable-bound-cannot-bind-result-rejected` T0039 (the `F: fn(...) -> U`
+shape the std surface must not use), `try-fold-method-accepted`,
+`consumer-count-drops-items-accepted` (a non-`Copyable`, non-linear
+`Item`).
+R50 `linear-match-underscore-rejected`, `linear-match-omitted-field-rejected`,
+`linear-match-literal-component-rejected`, `linear-option-matched-accepted`.
+R57 `rigid-drop-without-droppable-rejected` T0057,
+`rigid-drop-with-droppable-accepted`, `rigid-drop-with-copyable-accepted`,
+`rigid-iterator-drop-accepted`,
+`rigid-discard-without-droppable-rejected` T0057,
+`rigid-expression-statement-without-droppable-rejected` T0057,
+`neutral-projection-drop-without-bound-rejected` T0057.

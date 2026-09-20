@@ -1,0 +1,13 @@
+//! name: errdefer-expr-parses
+//! rule: 07.Grammar
+//! expect: parse-ok
+//! detail: n/a  -- `errdefer_stmt` with the `expr ";"` body
+
+needs { };
+
+struct V { n: i32 }
+impl V { fn deinit(sink self, inout a: i32) { } }
+
+fn a(sink v: V, inout alloc: i32) {
+    errdefer v.deinit(&alloc);
+}

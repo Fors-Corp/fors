@@ -1,0 +1,17 @@
+//! name: adaptor-map-closure-returns-linear-rejected
+//! rule: 09.R12
+//! expect: check-error
+//! detail: T0012 -- `map[U: Droppable]`: the closure's body synthesises `U := Res`, a linear type, which is not `Droppable`; no iterator of linear items exists (R21), and the error is at `map`, not at the next stage
+
+needs { };
+
+struct Res { fd: i32 }
+impl Linear for Res { }
+impl Res {
+    fn open(let n: i32) -> Res { return Res { fd: n }; }
+    fn close(sink self) { }
+}
+
+fn f[A: brand](let v: Vec[i32, A]) -> usize {
+    return v.iter().map(|sink x| Res.open(x)).count();
+}

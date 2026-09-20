@@ -1,0 +1,25 @@
+//! name: linear_match_omitted_field_rejected
+//! rule: 01.R22d
+//! expect: check-error
+//! detail: ch01 R22d(ii), ch09 R50 -- an omitted `{ }` field matches anything, so it drops the linear component
+
+needs { };
+
+struct Res { fd: i32 }
+impl Linear for Res { }
+impl Res {
+    fn open(let n: i32) -> Res { return Res { fd: n }; }
+    fn close(sink self) { }
+    fn poke(inout self) { }
+    fn step(let self) raises Err { }
+}
+enum Err { boom }
+
+struct Box { r: Res, n: i32 }
+
+fn f() {
+    var b: Box = Box { r: Res.open(1), n: 2 };
+    match b {
+        Box { n: let k } => { }
+    }
+}

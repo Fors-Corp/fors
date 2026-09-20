@@ -1,0 +1,8 @@
+//! name: linear_array_field_in_buffer_rejected
+//! rule: 10.S11c
+//! expect: check-error
+//! detail: T0011 -- the same by way of the field: an `Array` of a linear element is where the ill-formedness is detected
+
+needs { };
+
+struct Holder[A: brand] { data: Array[Vec[i32, A], 4], n: usize }

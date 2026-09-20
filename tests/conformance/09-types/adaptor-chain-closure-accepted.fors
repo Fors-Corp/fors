@@ -1,0 +1,11 @@
+//! name: adaptor-chain-closure-accepted
+//! rule: 09.R43
+//! expect: check-ok
+//! detail: R41 binds `U` from the closure's body, so an un-annotated binding takes the chain's type
+
+needs { };
+
+fn f[A: brand](let v: Vec[i32, A]) -> usize {
+    let n: usize = v.iter().map(|sink x| x * 2).count();
+    return n;
+}

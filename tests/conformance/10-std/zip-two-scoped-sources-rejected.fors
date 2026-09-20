@@ -1,0 +1,11 @@
+//! name: zip_two_scoped_sources_rejected
+//! rule: 10.S34
+//! expect: check-error
+//! detail: ch01 R19c(d), R19 -- `zip` owns BOTH sources; the result keeps `v` and `w`, and `scoped(v)` names only `v`, so the zipped value cannot be RETURNED (as a local it is legal)
+
+needs { };
+use std.mem;
+
+fn f[A: brand](let v: Vec[i32, A], let w: Vec[i32, A]) -> scoped(v) mem.Zipped[mem.SliceIter[i32], mem.SliceIter[i32]] {
+    return v.iter().zip(w.iter());
+}

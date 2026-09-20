@@ -1,0 +1,22 @@
+//! name: linear_local_dropped_at_question_rejected
+//! rule: 01.R22h
+//! expect: check-error
+//! detail: ch01 R22h -- the `?`'s error exit is a scope exit: `r` is live and unconsumed there; the detail names the `?`
+
+needs { };
+
+struct Res { fd: i32 }
+impl Linear for Res { }
+impl Res {
+    fn open(let n: i32) -> Res { return Res { fd: n }; }
+    fn close(sink self) { }
+    fn poke(inout self) { }
+    fn step(let self) raises Err { }
+}
+enum Err { boom }
+
+fn f(let n: i32) raises Err {
+    var r: Res = Res.open(1);
+    r.step()?;
+    r.close();
+}

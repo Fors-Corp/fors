@@ -1,0 +1,25 @@
+//! name: linear_aggregate_destructured_accepted
+//! rule: 01.R22d
+//! expect: check-ok
+//! detail: ch01 R22d(ii) -- the arm binds every linear component with `let n`, and each is consumed
+
+needs { };
+
+struct Res { fd: i32 }
+impl Linear for Res { }
+impl Res {
+    fn open(let n: i32) -> Res { return Res { fd: n }; }
+    fn close(sink self) { }
+    fn poke(inout self) { }
+    fn step(let self) raises Err { }
+}
+enum Err { boom }
+
+struct Box { r: Res }
+
+fn f() {
+    var b: Box = Box { r: Res.open(1) };
+    match b {
+        Box { r: let inner } => { inner.close(); }
+    }
+}

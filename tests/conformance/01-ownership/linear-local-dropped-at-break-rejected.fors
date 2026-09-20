@@ -1,0 +1,24 @@
+//! name: linear_local_dropped_at_break_rejected
+//! rule: 01.R22h
+//! expect: check-error
+//! detail: ch01 R22h -- `break` leaves the loop body's scope with `r` live and unconsumed
+
+needs { };
+
+struct Res { fd: i32 }
+impl Linear for Res { }
+impl Res {
+    fn open(let n: i32) -> Res { return Res { fd: n }; }
+    fn close(sink self) { }
+    fn poke(inout self) { }
+    fn step(let self) raises Err { }
+}
+enum Err { boom }
+
+fn f(let n: usize) {
+    for i in 0 ..< n {
+        var r: Res = Res.open(1);
+        if i == 0 { break; }
+        r.close();
+    }
+}

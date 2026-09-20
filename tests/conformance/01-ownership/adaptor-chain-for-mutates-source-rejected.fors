@@ -1,0 +1,14 @@
+//! name: adaptor_chain_for_mutates_source_rejected
+//! rule: 01.R19c
+//! expect: check-error
+//! detail: ch01 R19c(c), R19a, R7 -- the chain keeps `v` borrowed `let` for the whole `for` statement, so `&v` inside the body is an overlapping `inout` access
+
+needs { };
+
+fn double(sink x: i32) -> i32 { return x * 2; }
+
+fn f[A: brand, L: Allocator[A]](inout a: L, inout v: Vec[i32, A]) raises AllocError {
+    for x in v.iter().map(double) {
+        v.push(&a, x)?;
+    }
+}

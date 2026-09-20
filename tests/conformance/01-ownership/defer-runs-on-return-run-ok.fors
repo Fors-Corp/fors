@@ -1,0 +1,18 @@
+//! name: defer_runs_on_return_run_ok
+//! rule: 01.R23a
+//! expect: run-ok
+//! detail: body\ncleanup  -- R23a: `return` is an exit of the function body, so the pending body runs after the result is evaluated
+
+module app;
+needs { io.stdout };
+use std.io;
+
+fn work(inout out: io.Stdout) -> i32 {
+    defer out.write_line("cleanup");
+    out.write_line("body");
+    return 1;
+}
+
+fn main(inout out: io.Stdout) {
+    let n: i32 = work(&out);
+}

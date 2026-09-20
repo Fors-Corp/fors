@@ -1,0 +1,26 @@
+//! name: linear_consumed_by_return_accepted
+//! rule: 01.R22d
+//! expect: check-ok
+//! detail: ch01 R22d(i) -- `return move r;` hands the obligation to the caller
+
+needs { };
+
+struct Res { fd: i32 }
+impl Linear for Res { }
+impl Res {
+    fn open(let n: i32) -> Res { return Res { fd: n }; }
+    fn close(sink self) { }
+    fn poke(inout self) { }
+    fn step(let self) raises Err { }
+}
+enum Err { boom }
+
+fn make() -> Res {
+    var r: Res = Res.open(1);
+    return move r;
+}
+
+fn f() {
+    var r: Res = make();
+    r.close();
+}

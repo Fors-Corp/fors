@@ -1,0 +1,18 @@
+//! name: iterator-impl-linear-self-rejected
+//! rule: 09.R21
+//! expect: check-error
+//! detail: T0021 -- `impl Iterator for S` MUST be rejected unless `S` is `Droppable`; v0.1 has no linear iterator
+
+needs { };
+
+struct Res { fd: i32 }
+impl Linear for Res { }
+impl Res {
+    fn open(let n: i32) -> Res { return Res { fd: n }; }
+    fn close(sink self) { }
+}
+
+impl Iterator for Res {
+    type Item = i32;
+    fn next(inout self) -> Option[i32] { return none; }
+}

@@ -1,0 +1,17 @@
+//! name: main-raises-unit-variant-run-error
+//! rule: 02.R17
+//! expect: run-error
+//! detail: error: main.Error.boom
+
+module main;
+needs { };
+
+enum Error { boom }
+
+fn step(let n: i32) raises Error {
+    if n == 0 { raise Error.boom; }
+}
+
+fn main() raises Error {
+    step(0)?;
+}

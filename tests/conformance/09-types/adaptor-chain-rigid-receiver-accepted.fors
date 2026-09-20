@@ -1,0 +1,12 @@
+//! name: adaptor-chain-rigid-receiver-accepted
+//! rule: 09.R43
+//! expect: check-ok
+//! detail: R43 -- for a rigid receiver the candidate traits are exactly its bounds, so `I: Iterator` finds `map`; the generic item is instantiated (`same[I.Item]`, R28), and the result is `Mapped[I, I.Item]` with `I.Item: Droppable` from the trait's bound
+
+needs { };
+
+fn same[T](sink x: T) -> T { return x; }
+
+fn f[I: Iterator](sink it: I) -> usize {
+    return it.map(same[I.Item]).count();
+}

@@ -1,0 +1,19 @@
+//! name: adaptor-provided-method-shadowed-by-inherent-rejected
+//! rule: 09.R43
+//! expect: check-error
+//! detail: T0043 -- ch10 R34: tier (1) beats tier (2) (R44's inherent-before-trait precedence), so an inherent method with a provided method's name silently re-routes the call (`s.take(3)` is the inherent `usize`, and `.count()` on `usize` is T0043); a STD type implementing `Iterator` MUST NOT declare one, and a user type that does gets this
+
+needs { };
+
+struct Src { n: usize }
+
+impl Iterator for Src {
+    type Item = i32;
+    fn next(inout self) -> Option[i32] { return none; }
+}
+
+impl Src {
+    pub fn take(sink self, let n: usize) -> usize { return n; }
+}
+
+fn f(sink s: Src) -> usize { return s.take(3).count(); }

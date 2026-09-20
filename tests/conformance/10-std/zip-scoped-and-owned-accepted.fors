@@ -1,0 +1,10 @@
+//! name: zip_scoped_and_owned_accepted
+//! rule: 10.S34
+//! expect: check-ok
+//! detail: ch01 R19c(a) -- one scoped source and one owned source: the result is scoped to the single scoped source
+
+needs { };
+
+fn f[A: brand, I: Iterator](let v: Vec[i32, A], sink other: I) -> usize {
+    return v.iter().zip(move other).count();
+}

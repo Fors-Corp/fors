@@ -1,0 +1,15 @@
+//! name: scoped_rvalue_extent_is_the_for_accepted
+//! rule: 01.R19c
+//! expect: check-ok
+//! detail: ch01 R19c(c) -- a scoped value used as the iterable of a `for` has THAT `for` STATEMENT as its extent
+
+needs { };
+
+fn f[A: brand](inout v: Vec[i32, A]) -> i32 {
+    var acc: i32 = 0;
+    for x in v.iter() {
+        acc = acc + x;
+    }
+    v[0] = acc;
+    return acc;
+}

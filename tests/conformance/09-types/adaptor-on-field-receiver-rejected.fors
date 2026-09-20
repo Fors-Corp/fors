@@ -1,0 +1,12 @@
+//! name: adaptor-on-field-receiver-rejected
+//! rule: 09.R43
+//! expect: check-error
+//! detail: ch01 R4a(c) -- a partial move out of an aggregate: the `sink self` adaptor would move the field
+
+needs { };
+
+struct Holder[I: Iterator] { src: I }
+
+fn f[I: Iterator](sink h: Holder[I]) -> usize {
+    return h.src.take(2).count();
+}

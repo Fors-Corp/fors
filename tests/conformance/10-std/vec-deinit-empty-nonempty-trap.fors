@@ -1,0 +1,24 @@
+//! name: vec_deinit_empty_nonempty_trap
+//! rule: 10.S11c
+//! expect: trap
+//! detail: contract  -- `deinit_empty` carries `pre self.len() == 0`; it is the ONE trap left from R11c after round 6 made the rest static
+
+module app;
+needs { };
+use std.mem;
+
+// The element type is linear, so `deinit` (a `T: Droppable` method) does not
+// exist for this Vec and `deinit_empty` is the release (R11c(iii)). `v` is
+// `inout` here, so the obligation stays with `main`.
+fn fill[A: brand, L: Allocator[A]](inout v: Vec[Own[i64, A], A], inout a: L)
+    raises AllocError
+{
+    var b: Own[i64, A] = a.create(1)?;
+    v.push(&a, move b)?;
+}
+
+fn main(inout heap: mem.Heap) {
+    var v: Vec[Own[i64, heap], heap] = Vec.new();
+    fill(&v, &heap) else |e| { };
+    v.deinit_empty(&heap);          // len() == 1: the contract trap
+}

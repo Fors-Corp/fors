@@ -1,0 +1,10 @@
+//! name: zip_two_scoped_sources_local_accepted
+//! rule: 10.S34
+//! expect: check-ok
+//! detail: ch01 R19c(d) -- a result with two scoped sources keeps both; consumed by `count` in the same statement, nothing is returned and nothing outlives either source
+
+needs { };
+
+fn f[A: brand](let v: Vec[i32, A], let w: Vec[i32, A]) -> usize {
+    return v.iter().zip(w.iter()).count();
+}

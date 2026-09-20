@@ -1,0 +1,10 @@
+//! name: chain_adaptor_absent_rejected
+//! rule: 10.S34
+//! expect: check-error
+//! detail: T0043 -- there is no `chain`: its `Item` needs `J.Item = I.Item`, and ch07's `gconstraint` states a bound, not an equality
+
+needs { };
+
+fn f[I: Iterator, J: Iterator](sink a: I, sink b: J) -> usize {
+    return a.chain(move b).count();
+}

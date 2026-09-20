@@ -1,0 +1,14 @@
+//! name: scoped_through_generic_raises_rejected
+//! rule: 01.R19c
+//! expect: check-error
+//! detail: ch01 R19c(a) -- the callee's `raises` type `Fail[T]` mentions `T`, so the scoped `v.iter()` could leave inside the error: the call is rejected
+
+needs { };
+use std.mem;
+
+enum Fail[T] { carrying(T) }
+fn maybe[T](sink x: T) raises Fail[T] { raise Fail.carrying(move x); }
+
+fn f[A: brand](let v: Vec[i32, A]) raises Fail[mem.SliceIter[i32]] {
+    maybe(v.iter())?;
+}

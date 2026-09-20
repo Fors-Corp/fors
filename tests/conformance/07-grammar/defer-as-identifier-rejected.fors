@@ -1,0 +1,10 @@
+//! name: defer-as-identifier-rejected
+//! rule: 07.Reserved
+//! expect: parse-error
+//! detail: `defer` is reserved (round 6, O2) and never fills a binding slot, exactly as for `type`
+
+needs { };
+
+fn a() {
+    let defer = 1;
+}

@@ -38,7 +38,9 @@ fn parse_directives(src: &str) -> Case {
             // prefix letter is per chapter, not always `R`.
             if let Some((ch, r)) = v.split_once('.') {
                 if let Some(k) = r.strip_prefix('R').or_else(|| r.strip_prefix('S')) {
-                    let k = k.split(['a', 'b']).next().unwrap_or(k); // "2a" -> "2"
+                    // "2a" -> "2", "11c" -> "11", "22h" -> "22": a rule
+                    // number is digits plus an optional letter suffix.
+                    let k: &str = &k[..k.find(|c: char| !c.is_ascii_digit()).unwrap_or(k.len())];
                     if let (Ok(c), Ok(n)) = (ch.parse::<u8>(), k.parse::<u16>()) {
                         rule_chapter = c;
                         rule_num = n;
@@ -436,4 +438,69 @@ fn determinism_resolving_twice() {
         let sb: Vec<String> = b.iter().map(|d| format!("{}:{}:{}:{}", d.start, d.end, d.code.as_string(), d.message)).collect();
         assert_eq!(sa, sb, "non-deterministic diagnostics for {target:?}");
     }
+}
+
+/// Ch01 (ownership) corpus, resolver view — added in round 6 (owner
+/// decision 2026-09-20), which put ~50 new tests in this directory for
+/// linearity (Rules 22-22i) and `defer`/`errdefer` (Rules 23-23f). No type
+/// checker exists, so this crate's whole obligation on a ch01 test is to be
+/// SILENT: every name a `check-ok` or `check-error` test uses must resolve,
+/// because ch01's codes are the checker's, not ch08's. `parse-ok`,
+/// `parse-error` and `trap` tests are the parser's and the runtime's and are
+/// skipped here.
+#[test]
+fn ch01_ownership_corpus_resolver_view() {
+    let dir = repo_root().join("tests/conformance/01-ownership");
+    let targets = corpus_targets(&dir);
+    assert!(targets.len() >= 90, "01-ownership corpus not found or truncated: {}", targets.len());
+    let mut failures = Vec::new();
+    let mut checked = 0usize;
+    for target in &targets {
+        let src = directive_source(target);
+        let case = parse_directives(&src);
+        if case.rule_chapter != 1 {
+            continue;
+        }
+        if !matches!(case.expect.as_str(), "check-ok" | "check-error") {
+            continue;
+        }
+        // Rounds 1-3 wrote four ch01 tests whose shape IS a name error as
+        // well as an ownership one (an undeclared brand argument; an `impl`
+        // of a foreign type, outside the defining module). They are ch08's
+        // to move or retire, not round 6's, and are listed rather than
+        // asserted so this test stays a real gate for everything else.
+        const NAME_SHAPED: &[&str] = &[
+            "arena_brand_nonescape_rejected",
+            "brand_field_requires_param",
+            "shared_blanket_impl_rejected",
+            "shared_impl_outside_defining_module_rejected",
+        ];
+        if NAME_SHAPED.contains(&case.name.as_str()) {
+            continue;
+        }
+        let detail = src.lines().find_map(|l| l.strip_prefix("//! detail:")).unwrap_or("").trim().to_string();
+        // A test whose `detail` names an ch08/ch04 code is that phase's.
+        let expected: Option<Code> = match detail.as_bytes().first() {
+            Some(b'N') => detail.get(1..5).and_then(|d| d.parse().ok()).map(Code::N),
+            Some(b'A') => detail.get(1..5).and_then(|d| d.parse().ok()).map(Code::A),
+            _ => None,
+        };
+        checked += 1;
+        let diags = resolve_target(target);
+        let got: Vec<String> = diags.iter().map(|d| d.code.as_string()).collect();
+        match expected {
+            Some(code) => {
+                if diags.len() != 1 || diags[0].code != code {
+                    failures.push(format!("{}: expected exactly one {}, got {got:?}", case.name, code.as_string()));
+                }
+            }
+            None => {
+                if !diags.is_empty() {
+                    failures.push(format!("{}: expected the resolver to be clean (the test is ch01's), got {got:?}", case.name));
+                }
+            }
+        }
+    }
+    assert!(checked >= 60, "expected ch01's check-* tests to be found, saw {checked}");
+    assert!(failures.is_empty(), "ch01 corpus (resolver view) failures:\n{}", failures.join("\n"));
 }

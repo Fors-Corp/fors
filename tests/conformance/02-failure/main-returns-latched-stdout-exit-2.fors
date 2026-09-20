@@ -1,0 +1,12 @@
+//! name: main-returns-latched-stdout-exit-2
+//! rule: 02.R17
+//! expect: run-error
+//! detail: status: 2  -- ch10 R40(d): `main` RETURNED but the final flush failed or an error was latched on `Stdout`, which is status 2, not 1
+
+module main;
+needs { io.stdout };
+use std.io;
+
+fn main(inout out: io.Stdout) {
+    out.write_line("to a closed pipe");
+}

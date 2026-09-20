@@ -1,0 +1,24 @@
+//! name: defer_inner_loop_break_accepted
+//! rule: 01.R23c
+//! expect: check-ok
+//! detail: ch01 R23c -- a loop written INSIDE the body may use `break`/`continue` freely
+
+needs { };
+
+struct Res { fd: i32 }
+impl Linear for Res { }
+impl Res {
+    fn open(let n: i32) -> Res { return Res { fd: n }; }
+    fn close(sink self) { }
+    fn poke(inout self) { }
+    fn step(let self) raises Err { }
+}
+enum Err { boom }
+
+fn f(let n: usize) {
+    defer {
+        for i in 0 ..< n {
+            if i == 1 { break; }
+        }
+    }
+}

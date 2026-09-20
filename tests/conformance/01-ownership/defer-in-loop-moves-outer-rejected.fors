@@ -1,0 +1,24 @@
+//! name: defer_in_loop_moves_outer_rejected
+//! rule: 01.R23d
+//! expect: check-error
+//! detail: ch01 R23d(d), R4a(b) -- a body in a loop's block that moves a place declared OUTSIDE the loop, with no re-initialisation
+
+needs { };
+
+struct Res { fd: i32 }
+impl Linear for Res { }
+impl Res {
+    fn open(let n: i32) -> Res { return Res { fd: n }; }
+    fn close(sink self) { }
+    fn poke(inout self) { }
+    fn step(let self) raises Err { }
+}
+enum Err { boom }
+
+fn f(let n: usize) {
+    var r: Res = Res.open(1);
+    for i in 0 ..< n {
+        defer r.close();
+        r.poke();
+    }
+}

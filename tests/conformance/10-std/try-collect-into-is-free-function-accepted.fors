@@ -1,0 +1,13 @@
+//! name: try_collect_into_is_free_function_accepted
+//! rule: 10.S35
+//! expect: check-ok
+//! detail: S0035 -- collecting stays a FREE FUNCTION naming its destination and its allocator: `seq` is a leaf and cannot name `Vec`
+
+needs { };
+use std.mem;
+
+fn f[A: brand, L: Allocator[A]](inout a: L, let src: Vec[i32, A], inout dst: Vec[i32, A])
+    raises AllocError
+{
+    mem.try_collect_into(src.iter(), &dst, &a)?;
+}

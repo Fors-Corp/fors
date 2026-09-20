@@ -1,0 +1,14 @@
+//! name: adaptor-stored-then-chained-accepted
+//! rule: 09.R43
+//! expect: check-ok
+//! detail: R43 -- a stage may be stored in a binding and chained later; the receiver move is the ordinary one
+
+needs { };
+use std.mem;
+
+fn double(sink x: i32) -> i32 { return x * 2; }
+
+fn f[A: brand](let v: Vec[i32, A]) -> usize {
+    let m: mem.Mapped[mem.SliceIter[i32], i32] = v.iter().map(double);
+    return m.take(3).count();
+}

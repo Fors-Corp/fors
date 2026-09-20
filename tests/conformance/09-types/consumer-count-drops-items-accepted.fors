@@ -1,0 +1,12 @@
+//! name: consumer-count-drops-items-accepted
+//! rule: 09.R43
+//! expect: check-ok
+//! detail: R35 -- a consumer's `for x in self` drops each item, which `Item: Droppable` (R21) licenses even for a non-`Copyable`, non-linear item
+
+needs { };
+
+struct Item { n: i32 }
+
+fn f[I: Iterator](sink it: I) -> usize {
+    return it.count();
+}

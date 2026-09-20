@@ -1,0 +1,20 @@
+//! name: errdefer_skipped_on_return_run_ok
+//! rule: 01.R23b
+//! expect: run-ok
+//! detail: normal  -- R23b: an `errdefer` body runs on ERROR exits only; a `return` is a normal exit and skips it
+
+module app;
+needs { io.stdout };
+use std.io;
+
+enum Err { boom }
+
+fn work(inout out: io.Stdout) raises Err {
+    errdefer out.write_line("undone");
+    out.write_line("normal");
+    return;
+}
+
+fn main(inout out: io.Stdout) {
+    work(&out) else |e| { return; };
+}

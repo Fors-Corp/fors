@@ -1,0 +1,10 @@
+//! name: adaptor-chain-on-adaptor-receiver-accepted
+//! rule: 09.R43
+//! expect: check-ok
+//! detail: R43 -- an adaptor's own struct-headed `impl Iterator` is found by R12, so a chain may continue on an adaptor receiver
+
+needs { };
+
+fn f[I: Iterator](sink it: I) -> usize {
+    return it.take(4).skip(1).enumerate().count();
+}

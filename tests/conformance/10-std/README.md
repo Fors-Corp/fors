@@ -5,13 +5,22 @@ code (`S00nn`), or an `N00nn`/`T00nn`/`ch01 Rk`/trap kind where another
 chapter's rule decides. Directives and expectation kinds are
 `tests/conformance/README.md`'s.
 
-The authoritative list of names is `docs/spec/10-std.md`'s "Conformance tests" section (159 names). Every file here parses clean under `fors parse`.
+The authoritative list of names is `docs/spec/10-std.md`'s "Conformance
+tests" section (159 names from rounds 1-5, plus 55 added in round 6). Every
+file here parses clean under `fors parse` and is silent under `fors check`
+unless its `detail` names an N/A code (`crates/fors-resolve/tests/conformance.rs`).
 
-## Present (47)
+Round 6 (2026-09-20) added 35 files and migrated five: the adaptors and
+consumers became PROVIDED METHODS of `Iterator` (Rules 32-35), so
+`mem.map` … `mem.try_for_each` are gone and a chain is one expression;
+`Vec`, `Map` and `String` are linear ALWAYS and their element-dropping
+operations moved to `T: Droppable` impl blocks (Rule 11c), leaving
+`deinit_empty` and its `pre` as the only trap this rule keeps —
+`linear-element-container-deinit-trap` is now
+`vec-deinit-empty-nonempty-trap`.
 
-- `own-sent-to-unstructured-task-rejected`
-- `linear-element-container-deinit-trap`
-- `free-brand-laundering-rejected`
+## Present (83)
+
 - `adaptor-chain-accepted`
 - `adaptor-with-raising-closure-rejected`
 - `alloc-failure-is-error-value-accepted`
@@ -20,8 +29,20 @@ The authoritative list of names is `docs/spec/10-std.md`'s "Conformance tests" s
 - `buffer-in-module-without-allocator-accepted`
 - `buffer-index-past-len-trap`
 - `buffer-one-type-argument-rejected`
+- `chain-adaptor-absent-rejected`
+- `child-not-waited-at-question-rejected`
+- `conn-not-shutdown-at-question-rejected`
+- `consumer-count-method-accepted`
+- `consumer-fold-method-accepted`
+- `container-of-linear-not-iterated-by-value-rejected`
+- `defer-not-run-on-trap`
 - `discard-linear-rejected`
+- `entries-not-closed-rejected`
+- `file-not-closed-rejected`
 - `fixed-allocator-in-needs-empty-module-accepted`
+- `free-brand-laundering-rejected`
+- `free-function-adaptor-absent-rejected`
+- `free-function-consumer-absent-rejected`
 - `free-wrong-brand-rejected`
 - `fs-name-dotdot-invalid-run-ok`
 - `fs-read-needs-capability-rejected`
@@ -33,8 +54,17 @@ The authoritative list of names is `docs/spec/10-std.md`'s "Conformance tests" s
 - `index-loop-mutates-accepted`
 - `item-named-as-std-prelude-addition-rejected`
 - `iter-mut-not-provided-rejected`
+- `iterator-next-not-raises-rejected`
+- `linear-array-field-in-buffer-rejected`
+- `linear-buffer-element-rejected`
+- `linear-discard-rejected`
+- `linear-in-user-struct-inherits-rejected`
 - `linear-moved-to-caller-accepted`
 - `main-heap-parameter-accepted`
+- `main-raises-exit-status-one-run-error`
+- `map-deinit-linear-value-rejected`
+- `own-dropped-without-deinit-rejected`
+- `own-sent-to-unstructured-task-rejected`
 - `prelude-alloc-error-without-import-accepted`
 - `prelude-buffer-without-import-accepted`
 - `prelude-page-allocator-without-import-accepted`
@@ -43,28 +73,45 @@ The authoritative list of names is `docs/spec/10-std.md`'s "Conformance tests" s
 - `rand-pcg-needs-no-capability-accepted`
 - `rand-rng-needs-capability-rejected`
 - `result-type-absent-rejected`
+- `scoped-iter-chain-keeps-borrow-rejected`
+- `sigpipe-ignored-write-latches-run-ok`
 - `std-fn-without-capability-value-rejected`
+- `std-iterator-inherent-name-clash-rejected`
 - `stdout-check-surfaces-error-accepted`
 - `str-index-is-bytes-run-ok`
 - `str-slice-non-boundary-raises-run-ok`
+- `string-dropped-rejected`
 - `time-now-is-monotonic-run-ok`
 - `time-since-reversed-trap`
+- `try-collect-into-is-free-function-accepted`
 - `try-for-each-error-propagates-run-ok`
+- `try-for-each-method-accepted`
 - `two-tasks-one-allocator-rejected`
+- `vec-clear-linear-element-rejected`
+- `vec-consumed-by-defer-accepted`
+- `vec-consumed-by-errdefer-then-returned-accepted`
+- `vec-deinit-empty-nonempty-trap`
+- `vec-deinit-linear-element-rejected`
+- `vec-dropped-at-question-rejected`
 - `vec-dropped-without-deinit-rejected`
+- `vec-errdefer-normal-exit-unconsumed-rejected`
+- `vec-linear-always-empty-deinit-accepted`
+- `vec-linear-element-pop-then-deinit-empty-accepted`
 - `vec-not-shared-rejected`
 - `vec-push-wrong-brand-allocator-rejected`
 - `write-line-without-question-accepted-run-ok`
 - `writer-flush-requires-question-rejected`
+- `zip-scoped-and-owned-accepted`
+- `zip-two-scoped-sources-rejected`
+- `zip-two-scoped-sources-local-accepted`
 
-## Pending (112)
+## Pending (111)
 
 Named and owned by ch10, not yet written. They need either the type
-checker (most of the `check-error` ones), a runnable std (`run-ok`,
-`trap`), or an owner decision this chapter's Open questions record —
-in particular the linearity rule (Open question 2) and `Buffer`'s
-shape (Open question 1). Writing one before its rule is settled would
-make the corpus, not the spec, the ground truth.
+checker (most of the `check-error` ones) or a runnable std (`run-ok`,
+`run-error`, `trap`). Round 6 closed the two open questions that blocked a
+group of them (linearity, and `main`'s raised error), and the names that
+round covered have moved to Present.
 
 - `adaptor-does-not-allocate-accepted`
 - `alloc-failure-not-trap-run-ok`
@@ -134,7 +181,6 @@ make the corpus, not the spec, the ground truth.
 - `net-timeout-error-from-accepted`
 - `option-not-used-for-failure-rejected`
 - `option-unwrap-absent-rejected`
-- `own-dropped-without-deinit-rejected`
 - `own-get-scoped-escape-rejected`
 - `parallel-fold-absent-rejected`
 - `path-type-absent-rejected`

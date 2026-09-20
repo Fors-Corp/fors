@@ -44,6 +44,9 @@ impl Addr {
 // state; a read that would block raises Error.would_block.
 pub struct Conn { fd: i32 }
 
+// Round 6 (R11, ch01 R22): linear — consumed by `shutdown` on every path.
+impl Linear for Conn { }
+
 impl Conn {
     pub fn read_into(inout self: Self, inout into: Slice[u8]) -> usize raises Error {
         raise Error.would_block;                             // STUB
@@ -76,6 +79,9 @@ impl io.Writer for Conn {
 
 // Linear (R11).
 pub struct Listener { fd: i32 }
+
+// Round 6 (R11, ch01 R22): linear — consumed by `close` on every path.
+impl Linear for Listener { }
 
 impl Listener {
     pub fn accept(inout self: Self) -> Conn raises Error {

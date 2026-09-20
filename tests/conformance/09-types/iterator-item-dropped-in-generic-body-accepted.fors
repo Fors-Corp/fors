@@ -1,0 +1,12 @@
+//! name: iterator-item-dropped-in-generic-body-accepted
+//! rule: 09.R21
+//! expect: check-ok
+//! detail: T0021 -- `Item: Droppable` is what lets `for x in it` drop each item with `Self` rigid
+
+needs { };
+
+fn f[I: Iterator](sink it: I) -> usize {
+    var n: usize = 0;
+    for x in it { n = n + 1; }
+    return n;
+}

@@ -1,0 +1,14 @@
+//! name: adaptor-chain-as-for-iterable-accepted
+//! rule: 09.R43
+//! expect: check-ok
+//! detail: R31 -- a chain is an ordinary iterable, and the `for` owns and drops it (`Self: Droppable` by R21)
+
+needs { };
+
+fn double(sink x: i32) -> i32 { return x * 2; }
+
+fn f[A: brand](let v: Vec[i32, A]) -> i32 {
+    var acc: i32 = 0;
+    for x in v.iter().map(double).take(3) { acc = acc + x; }
+    return acc;
+}

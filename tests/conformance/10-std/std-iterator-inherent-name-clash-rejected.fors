@@ -1,0 +1,17 @@
+//! name: std_iterator_inherent_name_clash_rejected
+//! rule: 10.S32
+//! expect: check-error
+//! detail: S0032, ch09 R43 -- no type that implements `Iterator` MAY declare an INHERENT method whose name is that of a provided method: tier (1) would silently re-route the call
+
+needs { };
+
+struct Src { n: usize }
+
+impl Iterator for Src {
+    type Item = i32;
+    fn next(inout self) -> Option[i32] { return none; }
+}
+
+impl Src {
+    pub fn take(sink self, let n: usize) -> usize { return n; }
+}

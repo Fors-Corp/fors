@@ -1,0 +1,8 @@
+//! name: defer-as-field-name-rejected
+//! rule: 07.Reserved
+//! expect: parse-error
+//! detail: a reserved word is no field name: `struct S { defer: i32 }` is a parse error
+
+needs { };
+
+struct S { defer: i32 }

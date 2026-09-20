@@ -76,7 +76,8 @@ munch, and needs at most 2 characters of lookahead past the current one.
 
 `module use pub fn struct enum trait impl const extern let var inout sink
 if else match for in while break continue return raise raises with
-parallel simd spawn comptime move consume discard as and or not true false
+parallel simd spawn comptime move consume discard defer errdefer as and or
+not true false
 iso imm secret dyn asm type` and `_`. (`type` is reserved since owner decision
 2026-09-19, round 4: it introduces an associated type inside a `trait` or
 `impl` body and has no other production; no field, binding, path segment or
@@ -218,7 +219,8 @@ stmt            = let_stmt | if_expr | match_expr | comptime_block
                 | for_stmt | while_stmt | break_stmt | continue_stmt
                 | return_stmt | raise_stmt | with_stmt | parallel_stmt
                 | parallel_for_stmt | simd_for_stmt | spawn_stmt
-                | consume_stmt | discard_stmt | attr_block_stmt | block
+                | consume_stmt | discard_stmt | defer_stmt | errdefer_stmt
+                | attr_block_stmt | block
                 | assign_stmt | expr_stmt ;
 let_stmt        = ( "let" | "var" ) binding [ ":" type ] [ "=" expr ] ";" ;
 binding         = ident | "_" | "(" binding { "," binding } [ "," ] ")" ;
@@ -240,6 +242,8 @@ simd_for_stmt   = "simd" "for" binding "in" expr_ns block ;
 spawn_stmt      = "spawn" expr ";" ;
 consume_stmt    = "consume" place ";" ;
 discard_stmt    = "discard" place ";" ;
+defer_stmt      = "defer" ( block | expr ";" ) ;
+errdefer_stmt   = "errdefer" ( block | expr ";" ) ;
 attr_block_stmt = attribute block ;
 
 (* ---- expressions ---- *)
@@ -393,6 +397,17 @@ Every choice below is made on the current token plus at most one more
    otherwise a syntax error is reported at the operator (a check on the
    built node, not a re-parse). There are no labels. A final statement-form
    `if`/`match`/`comptime` is also the block's tail value.
+   `defer` and `errdefer` are statement keywords like the rest, so the
+   current token alone selects `defer_stmt`/`errdefer_stmt` (LA 1). After
+   the keyword the current token alone decides the body (LA 1): `{` is a
+   `block` — no `expr` begins with `{`, the argument of Disambiguation 2 —
+   and anything else begins an `expr` that ends at its `;`. A reserved word
+   is never the head of a `path`, so the struct-literal question of
+   Disambiguation 1 cannot arise after either keyword, and `defer P { x: 1
+   };` is the `expr` form holding a `struct_lit`. The `expr ";"` form means
+   exactly `{ expr; }`. An assignment is a `stmt`, not an `expr`, so
+   `defer x = 1;` is a parse error at `=` (Error recovery). Both decisions
+   are one token; the chapter's bound stays 2.
 10. **Contextual keywords.** Exactly the table above; outside its slot the
     word is an identifier (`inout arena: ...`, `arena.alloc(...)`,
     `inout out: Slice[u8]`, `out[i] = ...` are all attested).
@@ -528,7 +543,7 @@ per recovery.
   immediately before the sync token belongs to the resumed declaration.
 - **Statement sync set**: `;` and `}` at the current nesting depth, and at
   statement start `let var if match for while break continue return raise
-  with parallel simd spawn consume discard comptime`. If `;` is expected
+  with parallel simd spawn consume discard defer errdefer comptime`. If `;` is expected
   and the current token is in this set or is `}`, the parser reports
   "missing `;`" at the end of the previous token, inserts it virtually and
   continues without skipping anything.
@@ -684,6 +699,25 @@ of "Open questions for the owner" above.
   already owns whitespace, trivia and the token stream a formatter
   rewrites; the formatter's own implementation is tooling, not spec.
 
+## Closed by owner decision 2026-09-20, round 6
+
+- **O2, `defer` and `errdefer` are reserved words with a production.**
+  `stmt` gains `defer_stmt` and `errdefer_stmt`, each `keyword ( block |
+  expr ";" )`; both words join the reserved list and the statement
+  synchronisation set; Disambiguation 9 gains the two one-token
+  decisions. No identifier in the spec, `std/` or `tests/conformance`
+  was spelled either way, so nothing that parses today stops parsing.
+  Rejected here: a CONTEXTUAL `defer` — `defer {` would be a
+  `struct_lit` by Disambiguation 1 and telling the two apart needs the
+  token after the `{` (`ident ":"` versus anything else), three tokens,
+  which would break the chapter's bound of 2; and a single word with an
+  error-only modifier (`defer(error) { }`), which spends call syntax on a
+  statement keyword. `fors fmt` writes `defer expr;` on one line and puts
+  a `defer { }` body on its own lines like any other block.
+  What the two words MEAN — when a body runs, in which order, what it may
+  contain, what it may consume — is ch01 Rules 23-23f, and the
+  error-exit definition they key on is ch02 Rule 16.
+
 ## Open questions for the owner
 
 1. ~~PLAN §4.3(3): confirm mandatory `;`, and the bitwise tier as drafted
@@ -820,3 +854,26 @@ of "Open questions for the owner" above.
 - `pattern_let_typed_rejected` — `match p { let x: i32 => x }` is a parse
   error at `:`; so is `.Some(let n: i32)` inside a payload
   (`pattern_let_typed_in_payload_rejected`). (Rule 17)
+- `defer-block-parses` (round 6, O2) — `defer { f(); g(); }` parses as one
+  `defer_stmt` whose body is a `block`, with no `;` after the `}`.
+- `defer-expr-parses` — `defer v.deinit(&a);` parses as one `defer_stmt`
+  whose body is the `expr ";"` form.
+- `errdefer-block-parses` — `errdefer { v.deinit(&a); }` parses.
+- `errdefer-expr-parses` — `errdefer v.deinit(&a);` parses.
+- `defer-assignment-rejected` — `defer x = 1;` is a parse error at `=`,
+  one diagnostic; `errdefer x = 1;` likewise
+  (`errdefer-assignment-rejected`).
+- `defer-as-identifier-rejected` (`let defer = 1;`),
+  `defer-as-field-name-rejected` (`struct S { defer: i32 }`) and
+  `defer-as-member-access-rejected` (`x.defer`) are parse errors, exactly
+  as for `type`; `errdefer-as-identifier-rejected` (`fn errdefer() { }`)
+  the same for `errdefer`. (The implementation stage split this name into
+  the three slots a reserved word can be tried in, matching the
+  `reserved-*-as-*` files rounds 2-5 wrote for the other words.)
+- `defer-missing-semicolon-recovers` — `defer f() defer g();` yields
+  exactly one diagnostic ("missing `;`") and both statements in the CST.
+- `defer-nested-parses` — a `defer { defer h(); }` and a `defer` inside a
+  `for` body, an arm `block`, a `with` block and a closure body all parse.
+- `defer-struct-literal-body-parses` — `defer P { x: 1 };` parses as the
+  `expr` form holding a `struct_lit` (a reserved word is not a `path`
+  head, so Disambiguation 1 never applies).

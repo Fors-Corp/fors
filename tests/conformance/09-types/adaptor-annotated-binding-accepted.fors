@@ -1,0 +1,14 @@
+//! name: adaptor-annotated-binding-accepted
+//! rule: 09.R43
+//! expect: check-ok
+//! detail: R31 -- the adaptor types stay WRITABLE, because no closure type appears in a signature (R7): `mem.Taken[mem.Mapped[mem.SliceIter[i32], i32]]`
+
+needs { };
+use std.mem;
+
+fn double(sink x: i32) -> i32 { return x * 2; }
+
+fn f[A: brand](let v: Vec[i32, A]) -> usize {
+    var t: mem.Taken[mem.Mapped[mem.SliceIter[i32], i32]] = v.iter().map(double).take(3);
+    return t.count();
+}

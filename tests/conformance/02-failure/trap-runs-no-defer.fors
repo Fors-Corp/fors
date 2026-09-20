@@ -1,0 +1,15 @@
+//! name: trap-runs-no-defer
+//! rule: 02.R7
+//! expect: trap
+//! detail: bounds  -- R7: a trap runs NO deferred body, so the marker written by the `defer` MUST NOT appear; `Stderr` is unbuffered, so its absence is observable
+
+module app;
+needs { io.stderr };
+use std.io;
+
+fn main(inout err: io.Stderr) {
+    var data: Array[i32, 2] = [1, 2];
+    let i: usize = 5;
+    defer err.write_line("cleanup");
+    let x: i32 = data[i];
+}

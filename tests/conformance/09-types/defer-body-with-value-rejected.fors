@@ -1,0 +1,10 @@
+//! name: defer-body-with-value-rejected
+//! rule: 09.R31
+//! expect: check-error
+//! detail: T0026 -- the body is checked against `()`, so a tail value of another type is rejected
+
+needs { };
+
+fn f() {
+    defer { 1 }
+}

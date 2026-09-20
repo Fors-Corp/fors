@@ -1,0 +1,12 @@
+//! name: adaptor-name-clash-two-traits-rejected
+//! rule: 09.R44
+//! expect: check-error
+//! detail: T0044 -- two candidate traits in tier (2) declare `take`, so the unqualified call is ambiguous; the qualified form names the trait
+
+needs { };
+
+trait Limited { fn take(sink self, let n: usize) -> usize; }
+
+fn f[I: Iterator + Limited](sink it: I) -> usize {
+    return it.take(3);
+}

@@ -1,0 +1,14 @@
+//! name: callable-bound-cannot-bind-result-rejected
+//! rule: 09.R43
+//! expect: check-error
+//! detail: T0039 -- R38 never binds a parameter through a BOUND, so `F: fn (...) -> U` leaves `U` uninferable; this is the shape the std surface MUST NOT use
+
+needs { };
+
+fn apply[U, F: fn (sink i32) -> U](sink x: i32, let f: F) -> U {
+    return f(move x);
+}
+
+fn double(sink x: i32) -> i32 { return x * 2; }
+
+fn go() -> i32 { return apply(2, double); }

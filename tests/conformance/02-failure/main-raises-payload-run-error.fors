@@ -1,0 +1,17 @@
+//! name: main-raises-payload-run-error
+//! rule: 02.R17
+//! expect: run-error
+//! detail: error: main.Error.code(7, "x\nY")  -- the payload newline is escaped so the line stays ONE line
+
+module main;
+needs { };
+
+enum Error { boom, code(i32, Str) }
+
+fn step() raises Error {
+    raise Error.code(7, "x\nY");
+}
+
+fn main() raises Error {
+    step()?;
+}

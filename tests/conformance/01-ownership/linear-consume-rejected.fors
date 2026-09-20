@@ -1,0 +1,21 @@
+//! name: linear_consume_rejected
+//! rule: 01.R22d
+//! expect: check-error
+//! detail: ch01 R22d -- `consume p;` is NOT a consumption of a linear obligation
+
+needs { };
+
+struct Res { fd: i32 }
+impl Linear for Res { }
+impl Res {
+    fn open(let n: i32) -> Res { return Res { fd: n }; }
+    fn close(sink self) { }
+    fn poke(inout self) { }
+    fn step(let self) raises Err { }
+}
+enum Err { boom }
+
+fn f() {
+    var r: Res = Res.open(1);
+    consume r;
+}

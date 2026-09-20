@@ -1,0 +1,22 @@
+//! name: linear_consumed_by_implicit_receiver_move_accepted
+//! rule: 01.R22d
+//! expect: check-ok
+//! detail: ch01 R22d(i), ch09 R46 -- `r.close()` IS `(move r).close()`; `r` is dead afterwards
+
+needs { };
+
+struct Res { fd: i32 }
+impl Linear for Res { }
+impl Res {
+    fn open(let n: i32) -> Res { return Res { fd: n }; }
+    fn close(sink self) { }
+    fn poke(inout self) { }
+    fn step(let self) raises Err { }
+}
+enum Err { boom }
+
+fn f(let n: i32) {
+    var r: Res = Res.open(n);
+    if n == 0 { r.poke(); }
+    r.close();
+}

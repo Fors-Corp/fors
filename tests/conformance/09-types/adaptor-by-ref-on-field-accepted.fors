@@ -1,0 +1,12 @@
+//! name: adaptor-by-ref-on-field-accepted
+//! rule: 09.R43
+//! expect: check-ok
+//! detail: R34 -- `by_ref` on a field: nothing is moved out of the aggregate
+
+needs { };
+
+struct Holder[I: Iterator] { src: I }
+
+fn f[I: Iterator](inout h: Holder[I]) -> usize {
+    return h.src.by_ref().take(2).count();
+}

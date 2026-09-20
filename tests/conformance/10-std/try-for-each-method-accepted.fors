@@ -1,0 +1,14 @@
+//! name: try_for_each_method_accepted
+//! rule: 10.S35
+//! expect: check-ok
+//! detail: S0035, S0008 -- the two `try_` siblings carry `E` as a method parameter (ch09 R60) and keep R8's naming rule
+
+needs { };
+
+enum Err { boom }
+
+fn step(sink x: i32) raises Err { if x < 0 { raise Err.boom; } }
+
+fn f[A: brand](let v: Vec[i32, A]) raises Err {
+    v.iter().try_for_each(step)?;
+}

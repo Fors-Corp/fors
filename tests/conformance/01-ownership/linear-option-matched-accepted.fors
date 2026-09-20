@@ -1,0 +1,24 @@
+//! name: linear_option_matched_accepted
+//! rule: 01.R22d
+//! expect: check-ok
+//! detail: ch01 R22d(ii) -- an `Option[Res]` is linear by payload; the `some` arm binds and consumes it
+
+needs { };
+
+struct Res { fd: i32 }
+impl Linear for Res { }
+impl Res {
+    fn open(let n: i32) -> Res { return Res { fd: n }; }
+    fn close(sink self) { }
+    fn poke(inout self) { }
+    fn step(let self) raises Err { }
+}
+enum Err { boom }
+
+fn f(let n: i32) {
+    var o: Option[Res] = some(Res.open(n));
+    match o {
+        some(let r) => { r.close(); }
+        none => { }
+    }
+}

@@ -1,0 +1,20 @@
+//! name: iterator-impl-linear-item-rejected
+//! rule: 09.R21
+//! expect: check-error
+//! detail: T0021 -- the trait bounds `type Item: Droppable`, so a linear `Item` is rejected
+
+needs { };
+
+struct Res { fd: i32 }
+impl Linear for Res { }
+impl Res {
+    fn open(let n: i32) -> Res { return Res { fd: n }; }
+    fn close(sink self) { }
+}
+
+struct Src { n: usize }
+
+impl Iterator for Src {
+    type Item = Res;
+    fn next(inout self) -> Option[Res] { return none; }
+}

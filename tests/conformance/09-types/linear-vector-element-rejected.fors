@@ -1,0 +1,15 @@
+//! name: linear-vector-element-rejected
+//! rule: 09.R11
+//! expect: check-error
+//! detail: T0011 -- ch01 R22b: `vector[X, N]` with a linear element type is ill-formed
+
+needs { };
+
+struct Res { fd: i32 }
+impl Linear for Res { }
+impl Res {
+    fn open(let n: i32) -> Res { return Res { fd: n }; }
+    fn close(sink self) { }
+}
+
+struct Holder { v: vector[Res, 4] }

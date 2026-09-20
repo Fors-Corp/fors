@@ -1,0 +1,16 @@
+//! name: child_not_waited_at_question_rejected
+//! rule: 10.S11
+//! expect: check-error
+//! detail: ch01 R22h -- `proc.Child` is linear and live across the `?`; the consumer is `proc.Child.wait`
+
+needs { };
+use std.proc;
+
+fn run(let e: proc.Exec, let prog: Str, let args: Slice[Str], let other: Str)
+    raises proc.Error
+{
+    var c: proc.Child = e.run(prog, args)?;
+    var d: proc.Child = e.run(other, args)?;
+    let a: i32 = c.wait()?;
+    let b: i32 = d.wait()?;
+}

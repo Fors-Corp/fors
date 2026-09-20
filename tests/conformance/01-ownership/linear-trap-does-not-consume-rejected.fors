@@ -1,0 +1,21 @@
+//! name: linear_trap_does_not_consume_rejected
+//! rule: 01.R22d
+//! expect: check-error
+//! detail: ch01 R22d, ch02 R7 -- a trap is an abort and runs nothing, so a trapping path never discharges an obligation: `r` is still owed on the non-trapping path
+
+needs { };
+
+struct Res { fd: i32 }
+impl Linear for Res { }
+impl Res {
+    fn open(let n: i32) -> Res { return Res { fd: n }; }
+    fn close(sink self) { }
+    fn poke(inout self) { }
+    fn step(let self) raises Err { }
+}
+enum Err { boom }
+
+fn f(let xs: Slice[i32], let i: usize) -> i32 {
+    var r: Res = Res.open(1);
+    return xs[i];
+}

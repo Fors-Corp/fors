@@ -1,7 +1,7 @@
 //! name: vec_dropped_without_deinit_rejected
 //! rule: 10.S11
 //! expect: check-error
-//! detail: S0011 -- a Vec with capacity is linear: it MUST be consumed by deinit on every path
+//! detail: ch01 R22h -- a Vec is linear ALWAYS: it MUST be consumed by `Vec.deinit(&<allocator>)` on every path, including the `?`'s error exit
 
 needs { };
 

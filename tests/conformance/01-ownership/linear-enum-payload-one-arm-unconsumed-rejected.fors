@@ -1,0 +1,23 @@
+//! name: linear_enum_payload_one_arm_unconsumed_rejected
+//! rule: 01.R22h
+//! expect: check-error
+//! detail: ch01 R22d(ii), R22h -- the `some` arm binds the linear payload `r` and lets it die at the arm block's `}`; the `none` arm has nothing to consume and is fine
+
+needs { };
+
+struct Res { fd: i32 }
+impl Linear for Res { }
+impl Res {
+    fn open(let n: i32) -> Res { return Res { fd: n }; }
+    fn close(sink self) { }
+    fn poke(inout self) { }
+    fn step(let self) raises Err { }
+}
+enum Err { boom }
+
+fn f(sink o: Option[Res]) {
+    match o {
+        some(let r) => { r.poke(); }
+        none => { }
+    }
+}

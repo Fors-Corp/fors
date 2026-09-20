@@ -1,0 +1,11 @@
+//! name: closure_returned_with_local_capture_rejected
+//! rule: 01.R19d
+//! expect: check-error
+//! detail: ch01 R19d, R19 -- a closure over the local `k` is a scoped value whose source is `k`; Rule 19 lets a scoped value be returned only from a designated PARAMETER, so the closure cannot leave `f`
+
+needs { };
+
+fn f() -> fn (let i32) -> i32 {
+    let k: i32 = 3;
+    return |let x| x + k;
+}

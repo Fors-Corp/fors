@@ -1,0 +1,10 @@
+//! name: neutral-projection-drop-without-bound-rejected
+//! rule: 09.R57
+//! expect: check-error
+//! detail: T0057 -- for a neutral projection `P.A` the bounds are the trait's declaration for `A` plus the constraint entries in scope
+
+needs { };
+
+trait Has { type A; fn get(sink self) -> Self.A; }
+
+fn f[H: Has](sink h: H) { h.get(); }

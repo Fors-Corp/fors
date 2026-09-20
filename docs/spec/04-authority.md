@@ -143,7 +143,12 @@ ABI belong to other chapters and are only referenced here.
    `main` MUST be the sole
    root of capability values, and no function other than `main` MAY obtain
    a root capability except by being handed one, as an ordinary parameter,
-   by a caller that already holds it.
+   by a caller that already holds it. `main` MAY declare `raises E` for any
+   error type `E` (ch02 Rule 1); what the runtime does with an error that
+   leaves `main` — `main`'s own deferred bodies first, then the `Stdout`
+   flush, one `error: ...` line on stderr and exit status 1 — is ch02 Rule
+   17, and the exit-status table is ch10 Rule 40(d). This chapter owns
+   `main`'s SHAPE and nothing about its failure.
 9. A module holding `ffi` MUST be marked `unguaranteed`; every transitive
    importer MUST inherit that mark in the audit ledger, `fors audit` and
    the published unsafe/FFI inventory. Sealing (Rule 2) stops the

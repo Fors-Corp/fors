@@ -145,6 +145,15 @@ pub enum TokenKind {
     /// `kernel` (ch07 reserved-unused): the device-kernel region of
     /// ch01/ch03 (M9). Reserved from v0.1; no production mentions it.
     KwKernel,
+
+    // ---- appended, owner decision 2026-09-20 round 6 (O2): additive only,
+    // never reorder anything above. ----
+    /// `defer` (ch07 `defer_stmt`): its body runs on every exit of the
+    /// directly containing block (ch01 Rules 23-23a).
+    KwDefer,
+    /// `errdefer` (ch07 `errdefer_stmt`): its body runs on the ERROR exits
+    /// of the directly containing block only (ch01 Rule 23b, ch02 Rule 16).
+    KwErrdefer,
 }
 
 impl TokenKind {
@@ -213,6 +222,8 @@ pub fn keyword_kind(word: &[u8]) -> Option<TokenKind> {
         b"type" => KwType,
         b"spmd" => KwSpmd,
         b"kernel" => KwKernel,
+        b"defer" => KwDefer,
+        b"errdefer" => KwErrdefer,
         _ => return None,
     })
 }

@@ -1,0 +1,14 @@
+//! name: defer-question-inside-rejected
+//! rule: 09.R33
+//! expect: check-error
+//! detail: T0033 -- ch01 R23c: no `?` inside a deferred body; a handler is the only way to call a `raises` function there
+
+needs { };
+
+enum Err { boom }
+
+fn step() raises Err { raise Err.boom; }
+
+fn f() raises Err {
+    defer { step()?; }
+}

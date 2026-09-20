@@ -1,0 +1,18 @@
+//! name: defer_result_evaluated_first_run_ok
+//! rule: 01.R23a
+//! expect: run-ok
+//! detail: 1  -- R23a: `return e;` evaluates and moves `e` into the result BEFORE any body runs; the body's later write to `n` cannot change what was returned
+
+module app;
+needs { io.stdout };
+use std.io;
+
+fn work() -> i32 {
+    var n: i32 = 1;
+    defer { n = 2; }
+    return n;
+}
+
+fn main(inout out: io.Stdout) {
+    if work() == 1 { out.write_line("1"); } else { out.write_line("2"); }
+}

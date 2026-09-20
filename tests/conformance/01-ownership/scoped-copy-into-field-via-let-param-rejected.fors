@@ -1,0 +1,13 @@
+//! name: scoped_copy_into_field_via_let_param_rejected
+//! rule: 01.R19c
+//! expect: check-error
+//! detail: ch01 R19c(a'), R19 -- `Str` is `Copyable` and `Holder` CONTAINS `Str`, so `keep`'s result keeps `v`; returning it from `f` without `scoped(v)` is rejected, and the copy stored inside `keep` is accounted for at the call, not by inspecting the callee
+
+needs { };
+
+struct Holder { s: Str }
+fn keep(let s: Str) -> Holder { return Holder { s: s }; }
+
+fn f[A: brand](let v: String[A]) -> Holder {
+    return keep(v.as_str());
+}

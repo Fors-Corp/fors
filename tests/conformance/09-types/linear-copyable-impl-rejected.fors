@@ -1,0 +1,15 @@
+//! name: linear-copyable-impl-rejected
+//! rule: 09.R23
+//! expect: check-error
+//! detail: T0023 -- ch01 R22e: `impl Copyable for T` MUST be rejected when `T` is linear
+
+needs { };
+
+struct Res { fd: i32 }
+impl Linear for Res { }
+impl Res {
+    fn open(let n: i32) -> Res { return Res { fd: n }; }
+    fn close(sink self) { }
+}
+
+impl Copyable for Res { }

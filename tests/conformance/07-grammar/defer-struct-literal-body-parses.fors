@@ -1,0 +1,12 @@
+//! name: defer-struct-literal-body-parses
+//! rule: 07.D9
+//! expect: parse-ok
+//! detail: n/a  -- a reserved word is not a `path` head, so Disambiguation 1 never applies: `defer P { x: 1 };` is the `expr` form holding a `struct_lit`
+
+needs { };
+
+struct P { x: i32 }
+
+fn a() {
+    defer P { x: 1 };
+}

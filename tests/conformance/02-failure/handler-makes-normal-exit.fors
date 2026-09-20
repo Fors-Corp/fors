@@ -1,0 +1,18 @@
+//! name: handler-makes-normal-exit
+//! rule: 02.R16
+//! expect: run-ok
+//! detail: kept  -- R16, R5: a `?` intercepted by an `else |e|` that yields a value is NOT an error exit, so the enclosing `errdefer` does not run
+
+module app;
+needs { io.stdout };
+use std.io;
+
+enum Error { boom }
+
+fn step() -> i32 raises Error { raise Error.boom; }
+
+fn main(inout out: io.Stdout) {
+    errdefer out.write_line("ran");
+    let n: i32 = step() else |e| { 0 };
+    out.write_line("kept");
+}

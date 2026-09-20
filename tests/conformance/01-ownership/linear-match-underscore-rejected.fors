@@ -1,0 +1,25 @@
+//! name: linear_match_underscore_rejected
+//! rule: 01.R22d
+//! expect: check-error
+//! detail: ch01 R22d(ii), ch09 R50 -- `_` facing a linear component is a drop
+
+needs { };
+
+struct Res { fd: i32 }
+impl Linear for Res { }
+impl Res {
+    fn open(let n: i32) -> Res { return Res { fd: n }; }
+    fn close(sink self) { }
+    fn poke(inout self) { }
+    fn step(let self) raises Err { }
+}
+enum Err { boom }
+
+struct Box { r: Res }
+
+fn f() {
+    var b: Box = Box { r: Res.open(1) };
+    match b {
+        Box { r: _ } => { }
+    }
+}

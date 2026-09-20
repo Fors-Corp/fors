@@ -17,6 +17,11 @@ pub enum Utf8Error { invalid_sequence, not_a_boundary, incomplete }
 // from_utf8 is the only entry from bytes.
 pub struct String[A: brand] { n: usize, capacity: usize, store: Option[alloc.Block[A]] }
 
+// Round 6 (R11, ch01 R22): linear ALWAYS. Its elements are bytes, which
+// are Copyable and therefore Droppable, so `clear` and `deinit` need no
+// bound and there is no `deinit_empty` for String.
+impl[A: brand] Linear for String[A] { }
+
 impl[A: brand] String[A] {
     pub fn new() -> String[A] {
         return String { n: 0, capacity: 0, store: none };

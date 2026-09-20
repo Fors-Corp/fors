@@ -1,0 +1,13 @@
+//! name: defer-expr-parses
+//! rule: 07.Grammar
+//! expect: parse-ok
+//! detail: n/a  -- `defer_stmt` with the `expr ";"` body, which means exactly `{ expr; }`
+
+needs { };
+
+struct V { n: i32 }
+impl V { fn deinit(sink self, inout a: i32) { } }
+
+fn a(sink v: V, inout alloc: i32) {
+    defer v.deinit(&alloc);
+}

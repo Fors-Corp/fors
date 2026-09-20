@@ -1,0 +1,13 @@
+//! name: defer-body-checks-against-unit-accepted
+//! rule: 09.R31
+//! expect: check-ok
+//! detail: T0031 -- a `defer`/`errdefer` statement has type `()` and its block body is checked against `()`
+
+needs { };
+
+fn note() { }
+
+fn f() {
+    defer { note(); }
+    errdefer note();
+}

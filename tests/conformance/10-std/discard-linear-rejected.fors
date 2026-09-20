@@ -1,7 +1,7 @@
 //! name: discard_linear_rejected
 //! rule: 10.S11
 //! expect: check-error
-//! detail: S0011 -- `discard` MUST NOT satisfy a linear obligation; only the named sink method does
+//! detail: ch01 R22d -- `discard` MUST NOT satisfy a linear obligation; only a move to a consumer does
 
 needs { };
 

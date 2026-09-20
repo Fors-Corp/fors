@@ -1,0 +1,20 @@
+//! name: linear-option-matched-accepted
+//! rule: 09.R50
+//! expect: check-ok
+//! detail: ch01 R22d(ii) -- the arm binds every linear component with `let n` and consumes it
+
+needs { };
+
+struct Res { fd: i32 }
+impl Linear for Res { }
+impl Res {
+    fn open(let n: i32) -> Res { return Res { fd: n }; }
+    fn close(sink self) { }
+}
+
+fn f(sink o: Option[Res]) {
+    match o {
+        some(let r) => { r.close(); }
+        none => { }
+    }
+}

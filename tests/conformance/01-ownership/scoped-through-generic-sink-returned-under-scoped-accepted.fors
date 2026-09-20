@@ -1,0 +1,11 @@
+//! name: scoped_through_generic_sink_returned_under_scoped_accepted
+//! rule: 01.R19c
+//! expect: check-ok
+//! detail: ch01 R19c(a), R19 -- the result keeps `v`, its only source, and `v` is the `let` parameter `scoped(v)` names, so the chain may be returned
+
+needs { };
+use std.mem;
+
+fn f[A: brand](let v: Vec[i32, A]) -> scoped(v) mem.Taken[mem.SliceIter[i32]] {
+    return v.iter().take(2);
+}

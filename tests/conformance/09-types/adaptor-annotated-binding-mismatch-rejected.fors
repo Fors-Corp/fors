@@ -1,0 +1,14 @@
+//! name: adaptor-annotated-binding-mismatch-rejected
+//! rule: 09.R38
+//! expect: check-error
+//! detail: T0026 -- R38(b) binds `Self := Mapped[SliceIter[i32], i32]` from the receiver before (c) looks at the CHECK position, so the result `Taken[Mapped[..]]` disagrees with the annotation `Taken[SliceIter[i32]]`: a binding is never revised
+
+needs { };
+use std.mem;
+
+fn double(sink x: i32) -> i32 { return x * 2; }
+
+fn f[A: brand](let v: Vec[i32, A]) -> usize {
+    var t: mem.Taken[mem.SliceIter[i32]] = v.iter().map(double).take(3);
+    return t.count();
+}

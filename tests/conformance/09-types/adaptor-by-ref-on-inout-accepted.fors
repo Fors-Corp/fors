@@ -1,0 +1,10 @@
+//! name: adaptor-by-ref-on-inout-accepted
+//! rule: 09.R43
+//! expect: check-ok
+//! detail: R34 -- `by_ref` is the one borrowing adaptor: it takes `inout self` and its scoped result chains
+
+needs { };
+
+fn f[I: Iterator](inout it: I) -> usize {
+    return it.by_ref().take(2).count();
+}

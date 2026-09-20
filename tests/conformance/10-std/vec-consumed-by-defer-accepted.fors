@@ -1,0 +1,12 @@
+//! name: vec_consumed_by_defer_accepted
+//! rule: 10.S11
+//! expect: check-ok
+//! detail: S0011, ch01 R23d(b) -- `defer v.deinit(&a);` is a deferred consumption: it discharges the obligation on EVERY exit, the `?`'s included
+
+needs { };
+
+fn f[A: brand, L: Allocator[A]](inout a: L, let n: i32) raises AllocError {
+    var v: Vec[i32, A] = Vec.new();
+    defer v.deinit(&a);
+    v.push(&a, n)?;
+}

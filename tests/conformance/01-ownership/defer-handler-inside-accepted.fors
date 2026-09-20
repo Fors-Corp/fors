@@ -1,0 +1,25 @@
+//! name: defer_handler_inside_accepted
+//! rule: 01.R23c
+//! expect: check-ok
+//! detail: ch01 R23c, ch02 R5 -- inside a body a `raises` call carries an `else |e| { }` handler that neither raises nor returns: it yields the success value or traps
+
+needs { };
+
+struct Res { fd: i32 }
+impl Linear for Res { }
+impl Res {
+    fn open(let n: i32) -> Res { return Res { fd: n }; }
+    fn close(sink self) { }
+    fn poke(inout self) { }
+    fn step(let self) raises Err { }
+}
+enum Err { boom }
+
+fn f() {
+    var r: Res = Res.open(1);
+    defer {
+        r.step() else |e| { };
+        r.close();
+    }
+    r.poke();
+}

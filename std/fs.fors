@@ -67,6 +67,9 @@ impl Dir {
 // Linear (R11): close is the only release.
 pub struct File { fd: i32 }
 
+// Round 6 (R11, ch01 R22): linear — consumed by `close` on every path.
+impl Linear for File { }
+
 impl File {
     pub fn read_into(inout self: Self, inout into: Slice[u8]) -> usize raises Error {
         raise Error.would_block;                             // STUB
@@ -98,6 +101,9 @@ impl io.Writer for File {
 // NOT an Iterator: its item would have to borrow a name buffer (R10d), so
 // it takes one. Linear.
 pub struct Entries { fd: i32, at: u64 }
+
+// Round 6 (R11, ch01 R22): linear — consumed by `close` on every path.
+impl Linear for Entries { }
 
 impl Entries {
     pub fn next_into(inout self: Self, inout name: Slice[u8]) -> Option[Meta] raises Error {

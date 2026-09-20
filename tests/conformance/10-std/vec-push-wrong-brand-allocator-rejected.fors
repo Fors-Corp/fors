@@ -8,9 +8,9 @@ needs { };
 fn f(let n: i32) raises AllocError {
     with allocator one: PageAllocator {
         var v: Vec[i32, one] = Vec.new();
+        defer v.deinit(&one);              // one root cause: the brand, not a leak
         with allocator two: PageAllocator {
             v.push(&two, n)?;
         }
-        v.deinit(&one);
     }
 }

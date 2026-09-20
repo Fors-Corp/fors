@@ -1,0 +1,8 @@
+//! name: rigid-drop-without-droppable-rejected
+//! rule: 09.R57
+//! expect: check-error
+//! detail: T0057 -- letting a value of rigid type go out of scope needs `Droppable`, `Copyable` or `Iterator` among the declared bounds
+
+needs { };
+
+fn f[T](sink x: T) { }

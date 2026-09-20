@@ -1,0 +1,12 @@
+//! name: callable-field-method-form-rejected
+//! rule: 09.R43
+//! expect: check-error
+//! detail: T0043 -- a callable FIELD in method-call form: there are no method values (R42), and a value of `fn` type is called with `( )`
+
+needs { };
+
+struct Holder { f: fn (sink i32) -> i32 }
+
+fn go(let h: Holder, sink x: i32) -> i32 {
+    return h.f(move x);
+}

@@ -1,0 +1,12 @@
+//! name: vec_dropped_at_question_rejected
+//! rule: 10.S11
+//! expect: check-error
+//! detail: ch01 R22h -- the `?`'s error exit is a scope exit: `v` is live and unconsumed there; consume it with `Vec.deinit(&<allocator>)`
+
+needs { };
+
+fn f[A: brand, L: Allocator[A]](inout a: L, let n: i32) raises AllocError {
+    var v: Vec[i32, A] = Vec.new();
+    v.push(&a, n)?;
+    v.deinit(&a);
+}

@@ -202,6 +202,7 @@ fn build_prelude(interner: &mut Interner) -> Prelude {
         .chain(&prelude::PRELUDE_TYPES3)
         .chain(&prelude::PRELUDE_TYPES4)
         .chain(&prelude::PRELUDE_TYPES5)
+        .chain(&prelude::PRELUDE_TYPES6)
     {
         let s = interner.intern(n);
         out.insert(s, Entity::PreludeType(s));
@@ -639,8 +640,19 @@ pub fn build_universe_in_package(
             let Some(name) = f.decls.name[i] else { continue };
             let range = (f.decls.range_start[i], f.decls.range_end[i]);
             let shown = String::from_utf8_lossy(interner.resolve(name)).into_owned();
-            if prelude.get(scope, name).is_some() {
+            if prelude.get(scope, name).is_some() && !scope.in_std {
                 diags.push((m, Diagnostic::new(range.0, range.1, Code::N(13), format!("item `{shown}` has a prelude name"))));
+                continue;
+            }
+            // Round 6 (ch10 Rule 32, ch08 Rule 13's same-entity case):
+            // inside package `std` a prelude-named declaration is the
+            // DEFINITION of that prelude name — `mem.seq.Iterator` and the
+            // prelude `Iterator` denote one item, as `mem.Vec` and `Vec`
+            // already do — so it is entered in the module's own table
+            // rather than reported as a collision. Outside `std` the check
+            // above is unchanged.
+            if prelude.get(scope, name).is_some() && scope.index.contains_key(&name) {
+                diags.push((m, Diagnostic::new(range.0, range.1, Code::N(13), format!("`{shown}` is already declared by an earlier item of this module"))));
                 continue;
             }
             if scope.index.contains_key(&name) {

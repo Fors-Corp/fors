@@ -1,0 +1,16 @@
+//! name: defer_not_run_on_trap
+//! rule: 10.S40
+//! expect: trap
+//! detail: bounds  -- R40(b), ch02 R7: no deferred body runs on the trap path; the marker goes to `Stderr`, since `Stdout` may lose buffered bytes
+
+
+module app;
+needs { io.stderr };
+use std.io;
+
+fn main(inout err: io.Stderr) {
+    var data: Array[i32, 2] = [1, 2];
+    let i: usize = 9;
+    defer err.write_line("cleanup");
+    let x: i32 = data[i];
+}

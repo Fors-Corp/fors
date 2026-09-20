@@ -1,0 +1,13 @@
+//! name: sigpipe_ignored_write_latches_run_ok
+//! rule: 10.S40
+//! expect: run-ok
+//! detail: (no output)  -- R40(d), ch02 R17: the entry shim installs `SIG_IGN` for `SIGPIPE`, so a write to a closed pipe latches an `io.Error.closed` instead of killing the process
+
+
+module app;
+needs { io.stdout };
+use std.io;
+
+fn main(inout out: io.Stdout) {
+    out.write_line("to a closed pipe") else |e| { };
+}

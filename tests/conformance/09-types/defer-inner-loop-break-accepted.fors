@@ -1,0 +1,12 @@
+//! name: defer-inner-loop-break-accepted
+//! rule: 09.R33
+//! expect: check-ok
+//! detail: T0033's other side -- a loop written INSIDE the body may `break` freely
+
+needs { };
+
+fn f(let n: usize) {
+    defer {
+        for i in 0 ..< n { if i == 1 { break; } }
+    }
+}

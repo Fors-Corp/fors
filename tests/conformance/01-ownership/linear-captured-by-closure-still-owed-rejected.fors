@@ -1,0 +1,22 @@
+//! name: linear_captured_by_closure_still_owed_rejected
+//! rule: 01.R22g
+//! expect: check-error
+//! detail: ch01 R22g -- a closure captures by ACCESS and never moves, so the enclosing scope still owes `r` after the closure's last use
+
+needs { };
+
+struct Res { fd: i32 }
+impl Linear for Res { }
+impl Res {
+    fn open(let n: i32) -> Res { return Res { fd: n }; }
+    fn close(sink self) { }
+    fn poke(inout self) { }
+    fn step(let self) raises Err { }
+}
+enum Err { boom }
+
+fn f() {
+    var r: Res = Res.open(1);
+    let c: fn () = || { r.poke(); };
+    c();
+}

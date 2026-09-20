@@ -1,0 +1,11 @@
+//! name: file_not_closed_rejected
+//! rule: 10.S11
+//! expect: check-error
+//! detail: ch01 R22h -- `fs.File` is linear; the consumer is `fs.File.close`
+
+needs { };
+use std.fs;
+
+fn read_it(inout d: fs.Dir) raises fs.Error {
+    var f: fs.File = d.open("x")?;
+}

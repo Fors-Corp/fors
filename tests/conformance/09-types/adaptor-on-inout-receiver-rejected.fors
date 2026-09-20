@@ -1,0 +1,10 @@
+//! name: adaptor-on-inout-receiver-rejected
+//! rule: 09.R43
+//! expect: check-error
+//! detail: ch01 R4a(d) -- every adaptor takes `sink self` (ch09 R46's implicit receiver move) and an `inout` parameter MUST NOT be moved from
+
+needs { };
+
+fn f[I: Iterator](inout it: I) -> usize {
+    return it.take(2).count();
+}

@@ -1,0 +1,10 @@
+//! name: vec_deinit_linear_element_rejected
+//! rule: 10.S11c
+//! expect: check-error
+//! detail: T0043 -- R11c(ii): `Vec.deinit` DROPS elements, so it needs `T: Droppable`; for a linear element type the release is `deinit_empty`
+
+needs { };
+
+fn f[A: brand, L: Allocator[A]](inout a: L, sink v: Vec[Own[i64, A], A]) {
+    v.deinit(&a);
+}

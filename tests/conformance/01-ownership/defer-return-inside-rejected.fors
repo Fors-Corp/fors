@@ -1,0 +1,21 @@
+//! name: defer_return_inside_rejected
+//! rule: 01.R23c
+//! expect: check-error
+//! detail: ch01 R23c (ch09 T0033) -- a deferred body MUST NOT contain `return`: it would silently turn an error exit into a success
+
+needs { };
+
+struct Res { fd: i32 }
+impl Linear for Res { }
+impl Res {
+    fn open(let n: i32) -> Res { return Res { fd: n }; }
+    fn close(sink self) { }
+    fn poke(inout self) { }
+    fn step(let self) raises Err { }
+}
+enum Err { boom }
+
+fn f() -> i32 {
+    defer { return 1; }
+    return 0;
+}

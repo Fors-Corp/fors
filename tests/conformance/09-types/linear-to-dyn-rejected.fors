@@ -1,0 +1,20 @@
+//! name: linear-to-dyn-rejected
+//! rule: 09.R10
+//! expect: check-error
+//! detail: T0010 -- ch01 R22f: a LINEAR value MUST NOT be coerced to `dyn Tr`; the cleanup obligation would become invisible
+
+needs { };
+
+struct Res { fd: i32 }
+impl Linear for Res { }
+impl Res {
+    fn open(let n: i32) -> Res { return Res { fd: n }; }
+    fn close(sink self) { }
+}
+
+trait Tr { fn go(let self); }
+impl Tr for Res { fn go(let self) { } }
+
+fn f(sink r: Res) -> dyn Tr {
+    return r as dyn Tr;
+}

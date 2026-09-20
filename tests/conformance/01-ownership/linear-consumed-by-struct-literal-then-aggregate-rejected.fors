@@ -1,0 +1,23 @@
+//! name: linear_consumed_by_struct_literal_then_aggregate_rejected
+//! rule: 01.R22d
+//! expect: check-error
+//! detail: ch01 R22a(b), R22h -- the struct literal consumes `r`, and `Box` is linear by inference: the aggregate inherits the obligation and is dropped here
+
+needs { };
+
+struct Res { fd: i32 }
+impl Linear for Res { }
+impl Res {
+    fn open(let n: i32) -> Res { return Res { fd: n }; }
+    fn close(sink self) { }
+    fn poke(inout self) { }
+    fn step(let self) raises Err { }
+}
+enum Err { boom }
+
+struct Box { r: Res }
+
+fn f() {
+    var r: Res = Res.open(1);
+    var b: Box = Box { r: r };
+}

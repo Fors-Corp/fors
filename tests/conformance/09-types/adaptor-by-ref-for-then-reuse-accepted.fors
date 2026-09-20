@@ -1,0 +1,12 @@
+//! name: adaptor-by-ref-for-then-reuse-accepted
+//! rule: 09.R43
+//! expect: check-ok
+//! detail: R34 -- `by_ref` leaves the source usable after the borrow's extent ends
+
+needs { };
+
+fn f[I: Iterator](inout it: I) -> usize {
+    var first: usize = 0;
+    for x in it.by_ref().take(2) { first = first + 1; }
+    return first + it.by_ref().count();
+}

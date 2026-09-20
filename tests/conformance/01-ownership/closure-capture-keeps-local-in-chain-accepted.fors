@@ -1,0 +1,13 @@
+//! name: closure_capture_keeps_local_in_chain_accepted
+//! rule: 01.R19d
+//! expect: check-ok
+//! detail: ch01 R19d, R19c(a'), R19c(d) -- `Mapped[Self, U]` contains the `fn` type the closure went in through, so `m` keeps `v` AND `k`; both accesses last to the end of `m`'s scope, and the value is an ordinary local
+
+needs { };
+use std.mem;
+
+fn f[A: brand](let v: Vec[i32, A]) -> usize {
+    let k: i32 = 3;
+    let m: mem.Mapped[mem.SliceIter[i32], i32] = v.iter().map(|sink x| x + k);
+    return m.count();
+}

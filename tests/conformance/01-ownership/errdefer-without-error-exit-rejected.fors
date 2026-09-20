@@ -1,0 +1,22 @@
+//! name: errdefer_without_error_exit_rejected
+//! rule: 01.R23b
+//! expect: check-error
+//! detail: ch01 R23b -- `f` does not `raises`, so its body has no error exit and the `errdefer` at 17:5 can never run
+
+needs { };
+
+struct Res { fd: i32 }
+impl Linear for Res { }
+impl Res {
+    fn open(let n: i32) -> Res { return Res { fd: n }; }
+    fn close(sink self) { }
+    fn poke(inout self) { }
+    fn step(let self) raises Err { }
+}
+enum Err { boom }
+
+fn f() {
+    var r: Res = Res.open(1);
+    errdefer r.close();
+    r.close();
+}

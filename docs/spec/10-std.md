@@ -56,11 +56,17 @@ parsed one, and `std/` holds the same signatures with placeholder bodies.
 - **Total operation**: one declared without `raises` that reaches no trap
   condition of ch02 Rule 15. A total operation cannot fail.
 - **Fallible operation**: one declared `raises E`.
-- **Linear type**: a std type whose values MUST be consumed by a named
-  `sink self` method (`deinit`, `free`, `close`, `wait`) on every path.
-  Rule 11 states the discipline; `Block[A]`, `Own[T, A]`, `Vec`, `Map`,
-  `String`, `fs.File`, `net.Conn`, `net.Listener` and `proc.Child` are the
-  v0.1 linear types.
+- **Linear type**: a type `T` for which `lin(T)` is true (ch01 Rules 22,
+  22a). Std DECLARES `impl Linear for ...` for exactly nine types:
+  `Block[A]`, `Vec[T, A]`, `Map[K, V, A]`, `String[A]`, `fs.File`,
+  `fs.Entries`, `net.Conn`, `net.Listener` and `proc.Child`; `Own[T, A]` is
+  linear by language rule with no written impl (ch01 Rule 22). Every other
+  std type is non-linear, and any user type that HOLDS one of these is
+  linear by inference, with nothing to declare (ch01 Rule 22a(b)). Values
+  of a linear type MUST be consumed on every path by a named `sink self`
+  method — `deinit`, `deinit_empty`, `free`, `close`, `shutdown`, `wait` —
+  or moved to a caller that consumes them; Rule 11 states std's half of the
+  discipline and ch01 Rules 22-22i are the language rule.
 - **Latching writer**: a writer whose per-write operations are total and
   whose first failure is recorded in the value, to be surfaced by `check`
   or `flush` (Rule 39).
@@ -85,7 +91,7 @@ parsed one, and `std/` holds the same signatures with placeholder bodies.
    std.mem.vec.Vec;`, ch08 Rules 4(b) and 5; never `pub use std.mem.vec;`,
    which would re-export the submodule NAME), so that every user-facing
    name is either a prelude name (Rule 2) or a member of one of the ten
-   (`mem.Allocator`, `mem.map`, `io.Stdout`). The parent imports its
+   (`mem.Allocator`, `mem.iter`, `io.Stdout`). The parent imports its
    submodules and NO submodule imports its parent (ch08 Rule 7's
    acyclicity): `std.mem.alloc` and `std.mem.seq` are leaves, and the
    containers import only those two. A submodule is a defining home only,
@@ -232,31 +238,60 @@ parsed one, and `std/` holds the same signatures with placeholder bodies.
     language owns `@device`/`kernel` (ch07 reserved). (o) Sorting that
     allocates, and any stable sort — Rule 31 ships an in-place unstable
     one. (p) A hash map with a randomised seed by default — Rule 25.
+    (q) A container, array or inline buffer OF a linear element that can be
+    iterated by value, and `Array`/`vector`/`Buffer` of a linear element at
+    all — round 6 makes the last ill-formed (ch01 Rule 22b, ch09 Rule 11)
+    and `Iterator`'s `Item: Droppable` forbids the first (ch09 Rule 21);
+    empty such a container with `pop`/`remove` and release it with
+    `deinit_empty` (Rule 11c). (r) `iter_mut`, a `chain` adaptor, a
+    `collect` that invents its container, a `raises` callable in an
+    adaptor, and any adaptor or consumer beyond Rules 34-35 — the two sets
+    are closed. (s) Blanket impls, in std as in the language (ch09 Rule
+    18): round 6 confirmed that iterator method chaining does not need
+    them, so nothing in std is waiting on them.
 
 ### Memory
 
-11. **S0011** — Linearity and leaks. A value of a linear type
-    (Definitions) MUST be consumed on every path by its named `sink self`
-    method or moved to a caller that consumes it; letting one go out of
-    scope MUST be a compile error naming the type and the method that
-    consumes it. This is what makes "no destructors + explicit allocators"
+11. **S0011** — Linearity and leaks. The LANGUAGE rule is ch01 Rules
+    22-22i (round 6, owner decision O1): the compiler MUST reject any path
+    on which a value carrying an outstanding cleanup obligation leaves its
+    scope unconsumed, with a diagnostic naming the value, its type, the
+    scope and exit it escapes, and the method that would consume it (ch01
+    Rule 22i). This chapter's half is only the list: which std types
+    declare `impl Linear` (Definitions) and which operations consume them
+    (`deinit`, `deinit_empty`, `free`, `close`, `shutdown`, `wait`, each a
+    `sink self` receiver method, so the consuming call is written
+    `v.deinit(&a)` and moves `v` implicitly — Rule 4, ch09 Rule 46). This
+    is what makes "no destructors + explicit allocators"
     safe: the allocator is not reachable at scope exit, so the only place
-    the storage can be returned is an explicit call. `discard x;` MUST NOT
-    satisfy the obligation for a linear type.
-    11c. **Linear elements.** A container (`Buffer`, `Vec`, `Map`) MAY
-    hold a linear element, key or value type, but its `clear` and
-    `deinit` cannot consume those elements by name, so **`clear` and
-    `deinit` on a container whose element (key or value) type is linear
-    MUST trap (kind `contract`) unless the container is empty**; the
-    caller `pop`s or `remove`s every element first and consumes each. A
-    statically-typed rejection is not available in v0.1 (ch09 Rule 59: no
-    error may depend on an instantiation), so the check is a contract on
-    the element type's witness, and Rule 55 lists it. Every std iterator
-    is non-linear (Rule 33), so ch09 Rule 31's "the loop owns and drops
-    the iterator" never drops a linear value.
-    *Handoff*: ch01 owns moves and drops; this rule needs one sentence
-    there (Rule 4a's neighbourhood) to be enforceable. Recorded as Open
-    question 2.
+    the storage can be returned is an explicit call. `discard x;` and
+    `consume x;` MUST NOT satisfy the obligation for a linear type (ch01
+    Rule 22d). The cleanup is WRITTEN ONCE, with `defer` or `errdefer`
+    (ch01 Rules 23-23f): `defer v.deinit(&a);` immediately after
+    `Vec.new()` discharges the obligation on every `?` path as well as on
+    the normal one, and `errdefer v.deinit(&a);` discharges it on the error
+    paths only, leaving `return move v;` free to hand the value on. Without
+    those two words the discipline would demand the cleanup at every `?`,
+    which is why round 6 added them together with linearity.
+    11c. **Linear elements.** A container MUST NOT be able to drop an
+    element it cannot name. Round 6 makes all three consequences STATIC and
+    retires this rule's earlier runtime contract: (i) `Buffer[X, N]`,
+    `Array[X, N]` and `vector[X, N]` with a linear `X` are ILL-FORMED
+    (ch09 Rule 11, ch01 Rule 22b) — an element could leave one only by a
+    partial move, which ch01 Rule 4a(c) forbids; (ii) the operations that
+    DROP elements — `Vec.clear`, `Vec.deinit`, `Map.clear`, `Map.deinit`,
+    `Buffer.clear` — are declared in `T: Droppable` (for `Map`, `V:
+    Droppable`) impl blocks (Rules 23-26) and so are simply unavailable for
+    a linear element type; (iii) for a linear element type the release is
+    `deinit_empty`, declared in the unbounded block and carrying `pre
+    self.len() == 0`, after the caller has `pop`ped or `remove`d every
+    element and consumed each. That `pre` is the ONE trap this rule keeps
+    (kind `contract`; Rule 55). Every std iterator is non-linear and every
+    `Item` is `Droppable` — a language fact now (ch09 Rule 21), not a std
+    promise — so ch09 Rule 31's "the loop owns and drops the iterator"
+    never drops a linear value.
+    *Handoff*: DONE. ch01 Rules 22-22i are the sentences this rule asked
+    for in round 5; Open question 2's third item is closed.
 12. **S0012** — The allocator interface. Verbatim, in `std.mem.alloc`
     (re-exported as `mem.Allocator` and the prelude's `Allocator`):
 
@@ -271,7 +306,12 @@ parsed one, and `std/` holds the same signatures with placeholder bodies.
         // provided (ch07 trait_item permits a body): written once in the
         // trait, in terms of alloc/free and the two @unsafe placement
         // primitives own_raw/disown_raw of Rule 28.
-        fn create[T](inout self: Self, sink v: T) -> Own[T, A] raises AllocError {
+        // Round 6: `T: Droppable`, because the `?` below drops `v` on the
+        // error exit and a rigid type may be linear (ch01 R22c, ch09 R57).
+        // An `Own` of a LINEAR payload is still constructible, through
+        // `alloc` plus the @unsafe `own_raw` of Rule 28, where the caller
+        // can hold the payload across the fallible step itself.
+        fn create[T: Droppable](inout self: Self, sink v: T) -> Own[T, A] raises AllocError {
             var b: Block[A] = self.alloc(Layout.of[T]())?;
             return own_raw(move b, move v);
         }
@@ -458,10 +498,12 @@ parsed one, and `std/` holds the same signatures with placeholder bodies.
         pub fn cap(let self: Self) -> usize;                     // = N
         pub fn push(inout self: Self, sink v: T) -> Option[T];    // some(v) iff full: v comes back
         pub fn pop(inout self: Self) -> Option[T];
-        pub fn clear(inout self: Self);
         pub fn items(let self: Self) -> scoped(self) Slice[T];    // self.data[0 ..< self.len]
         pub fn items_mut(inout self: Self) -> scoped(self) Slice[T];
         pub fn into_iter(sink self: Self) -> BufferIter[T, N];
+    }
+    impl[T: Droppable, N: usize] Buffer[T, N] {
+        pub fn clear(inout self: Self);                          // drops elements: Rule 11c
     }
     impl[T: Copyable, N: usize] Buffer[T, N] {
         pub fn filled(let v: T) -> Buffer[T, N];                 // len = N
@@ -487,10 +529,21 @@ parsed one, and `std/` holds the same signatures with placeholder bodies.
     `Buffer` has no one-parameter form: a heap-free buffer whose capacity
     is a runtime value is not implementable without an allocator, and
     under D5 there is no ambient one. See the corpus defects.
+    **Round 6.** `Buffer[X, N]` with a linear `X` is ILL-FORMED, because
+    its `data` field is an `Array[X, N]` (ch09 Rule 11, ch01 Rule 22b),
+    and so is `Buffer[Option[X], N]`, since `lin(Option[X])` is `lin(X)`;
+    a variable number of linear values lives in a `Vec` (Rule 24). `clear`
+    drops its elements, so it moved to a `T: Droppable` block; `push` and
+    `pop` need no bound, because each hands the value back. `BufferIter`'s
+    `impl Iterator` is `impl[T: Droppable, N: usize]` (round-6
+    verification): `Self: Droppable` and `Item: Droppable` (Rule 32) both
+    need it with `T` rigid, and no `Buffer` of a non-`Droppable` `T` exists
+    anyway.
 24. **S0024** — `Vec[T, A: brand]`, the growable array:
 
     ```fors-sig
-    pub struct Vec[T, A: brand] { }         // opaque, linear while cap > 0
+    pub struct Vec[T, A: brand] { }         // opaque
+    impl[T, A: brand] Linear for Vec[T, A] { }      // linear ALWAYS: Rule 11, ch01 Rule 22
     impl[T, A: brand] Vec[T, A] {
         pub fn new() -> Vec[T, A];                                          // allocates nothing
         pub fn len(let self: Self) -> usize;
@@ -499,12 +552,15 @@ parsed one, and `std/` holds the same signatures with placeholder bodies.
         pub fn pop(inout self: Self) -> Option[T];
         pub fn reserve[L: Allocator[A]](inout self: Self, inout a: L, let extra: usize) raises AllocError;
         pub fn shrink_to_fit[L: Allocator[A]](inout self: Self, inout a: L);
-        pub fn clear(inout self: Self);
         pub fn swap_remove(inout self: Self, let i: usize) -> T;
         @unsafe(invariant: "the view spans len initialised elements and is dead at the next push/reserve/deinit")
         pub fn items(let self: Self) -> scoped(self) Slice[T];
         @unsafe(invariant: "as items, and exclusive for the extent of the borrow")
         pub fn items_mut(inout self: Self) -> scoped(self) Slice[T];
+        pub fn deinit_empty[L: Allocator[A]](sink self: Self, inout a: L) pre self.len() == 0;
+    }
+    impl[T: Droppable, A: brand] Vec[T, A] {        // Rule 11c: these DROP elements
+        pub fn clear(inout self: Self);
         pub fn deinit[L: Allocator[A]](sink self: Self, inout a: L);
     }
     impl[T: Copyable, A: brand] Vec[T, A] {
@@ -523,12 +579,19 @@ parsed one, and `std/` holds the same signatures with placeholder bodies.
     38(c)); in a SYNTH position write `Vec.new[i32, heap]()`. Growth is
     amortised by doubling from a first capacity of 4 elements; the growth
     schedule is deterministic and part of this rule, because `cap` is
-    observable. `Vec` is linear once it has capacity (Rule 11): `deinit`
-    is the only release.
+    observable. **`Vec` is linear ALWAYS**, not "once it has capacity"
+    (round 6): linearity is a fact of the constructor, never of a value's
+    state or of an instantiation (ch01 Rule 22), and `deinit` on an empty
+    `Vec` is total and free, so nothing is lost by the simpler rule. The
+    release is `deinit` when `T: Droppable` and `deinit_empty` — after
+    `pop`ping and consuming every element — when it is not (Rule 11c); one
+    of the two MUST be called on every path (ch01 Rule 22h), and `defer` or
+    `errdefer` is how that is written once (ch01 Rule 23d(b)).
 25. **S0025** — `Map[K, V, A: brand]`, the hash map:
 
     ```fors-sig
-    pub struct Map[K, V, A: brand] { }      // opaque, linear while cap > 0
+    pub struct Map[K, V, A: brand] { }      // opaque
+    impl[K, V, A: brand] Linear for Map[K, V, A] { }    // linear ALWAYS: Rule 11
     impl[K: Eq + Hash, V, A: brand] Map[K, V, A] {
         pub fn new() -> Map[K, V, A];
         pub fn seeded(let seed: u64) -> Map[K, V, A];
@@ -538,6 +601,9 @@ parsed one, and `std/` holds the same signatures with placeholder bodies.
             -> Option[V] raises AllocError;
         pub fn remove(inout self: Self, let k: K) -> Option[V];
         pub fn reserve[L: Allocator[A]](inout self: Self, inout a: L, let extra: usize) raises AllocError;
+        pub fn deinit_empty[L: Allocator[A]](sink self: Self, inout a: L) pre self.len() == 0;
+    }
+    impl[K: Eq + Hash, V: Droppable, A: brand] Map[K, V, A] {   // Rule 11c: these DROP values
         pub fn clear(inout self: Self);
         pub fn deinit[L: Allocator[A]](sink self: Self, inout a: L);
     }
@@ -570,11 +636,16 @@ parsed one, and `std/` holds the same signatures with placeholder bodies.
     sequence of operations on the same build yields the same order.
     Two `get`-shaped methods exist because `Option[V]` can return a value
     only when `V` is `Copyable`; for a non-`Copyable` `V` use `has` +
-    `m[k]`.
+    `m[k]`. **Round 6.** `Map` is linear always (as `Vec` is, Rule 24), and
+    `clear`/`deinit` need `V: Droppable` because they drop the values; `K`
+    is already `Copyable` through `Eq + Hash` (Rule 29), so a linear key
+    cannot arise. For a linear `V` the release is `deinit_empty` after
+    `remove`ing and consuming every value (Rule 11c).
 26. **S0026** — `String[A: brand]` and `Str`.
 
     ```fors-sig
-    pub struct String[A: brand] { }         // opaque, linear while cap > 0; UTF-8 by invariant
+    pub struct String[A: brand] { }         // opaque; UTF-8 by invariant
+    impl[A: brand] Linear for String[A] { }        // linear ALWAYS: Rule 11
     impl[A: brand] String[A] {
         pub fn new() -> String[A];
         pub fn len(let self: Self) -> usize;                                 // bytes
@@ -620,7 +691,9 @@ parsed one, and `std/` holds the same signatures with placeholder bodies.
     static storage and is not scoped; a `Str` derived from a `String`,
     `Buffer` or `Slice` is scoped to it (ch01 Rules 19-19a). Comparison is
     byte-wise: std has no case folding, no normalisation and no collation
-    (Rule 56).
+    (Rule 56). **Round 6.** `String[A]` is linear always; its elements are
+    bytes, which are `Copyable` and therefore `Droppable`, so `clear` and
+    `deinit` need no bound and there is no `deinit_empty` for `String`.
 27. **S0027** — `Option[T]` is ch09 Rule 5's built-in enum with `some(T)`
     and `none`, whose constructors the prelude binds as values (ch08 Rule
     17); this chapter adds only
@@ -635,7 +708,7 @@ parsed one, and `std/` holds the same signatures with placeholder bodies.
     hands out a `Slice[T]`, a `Str` or an iterator over storage that is
     NOT an `Array` field — `Block.bytes_raw`, `Vec.items`, `Vec.items_mut`,
     `String.as_str`, `String`'s and `Str`'s `bytes_raw`, `Str.scalars`,
-    `split_at`, `mem.iter` (Rule 33) and the adaptors of Rule 34 — is
+    `split_at`, `mem.iter` (Rule 33) and `Iterator.by_ref` (Rule 34) — is
     therefore an `@unsafe(invariant: "...")` declaration (ch04 Rules
     9-10) and appears in the published unsafe inventory; ch01 Rule 19b
     already fixes this shape for `split_at`. The two placement primitives
@@ -677,13 +750,23 @@ parsed one, and `std/` holds the same signatures with placeholder bodies.
 
 ### Iteration
 
-32. **S0032** — The `Iterator` trait is the language-known one of ch09 Rule
-    21 — `trait Iterator { type Item; fn next(inout self: Self) ->
-    Option[Self.Item]; }` — and this chapter does NOT redeclare it. Two
-    std obligations follow: `next` is TOTAL for every std iterator (it
-    cannot be `raises`, so a failing source must not be modelled as an
-    iterator), and `next` MUST NOT trap except through ch02 Rule 15
-    conditions in the user code it calls.
+32. **S0032** — The `Iterator` trait. Its REQUIRED part is language-known
+    (ch09 Rule 21): `type Item: Droppable;` and `fn next(inout self) ->
+    Option[Self.Item];`. Std DECLARES that same trait, in `std.mem.seq`,
+    and adds to it the PROVIDED methods of Rules 34-35; the prelude name
+    `Iterator` and `mem.seq.Iterator` denote ONE item (Definitions,
+    "Defining module"; ch08 Rule 13's same-entity case), so there is one
+    trait, not two. Three std obligations follow. `next` is TOTAL for
+    every std iterator: it cannot be `raises`, so a failing source MUST NOT
+    be modelled as an iterator. `next` MUST NOT trap except through ch02
+    Rule 15 conditions in the user code it calls. And no std type that
+    implements `Iterator` MAY declare an INHERENT method whose name is that
+    of a provided method of `Iterator` (Rule 34): ch09 Rule 44's
+    inherent-before-trait precedence would silently re-route the call.
+    Round 6 also makes "no std iterator is linear, and no `Item` is linear"
+    a LANGUAGE fact rather than a std promise: `impl Iterator for S`
+    requires `S: Droppable` and the trait bounds `Item: Droppable` (ch09
+    Rule 21).
 33. **S0033** — How a container yields an iterator, under the convention
     system, is exactly two forms in v0.1, plus indexing:
     (a) over `let` data: ONE iterator type, `SliceIter[T]` (`std.mem.seq`,
@@ -698,8 +781,7 @@ parsed one, and `std/` holds the same signatures with placeholder bodies.
     exclusivity error, not an invalidation bug. `SliceIter` holds a base
     and a count, NOT a `Slice` field, because a scoped value MUST NOT be
     stored in a field (ch01 Rule 19a); that is why `mem.iter` is
-    `@unsafe` and in the inventory (ch04 Rule 9), and why nothing else
-    needs to be.
+    `@unsafe` and in the inventory (ch04 Rule 9).
     (b) consuming, for allocator-free containers only:
     `fn into_iter(sink self: Self) -> BufferIter[T, N]` with `Item = T`,
     which moves elements out; `Buffer[T, N]` has it, `Vec`, `Map` and
@@ -710,67 +792,142 @@ parsed one, and `std/` holds the same signatures with placeholder bodies.
     `parallel for` and `simd for` accept (ch01 Rule 9's varying-index
     rule).
     No std iterator is linear or `Copyable`; every one is a plain value
-    whose only obligation is the scoped extent of (a).
-34. **S0034** — The adaptor set is closed for v0.1. **Each is a FREE
-    FUNCTION of `std.mem.seq`, re-exported as `mem.map`, `mem.filter`, …**
-    — not a method: `Iterator` is language-known (ch09 Rule 21) and std
-    cannot add a method to it (ch09 Rule 43 finds inherent and trait
-    methods only, there is no blanket impl, Rule 18, and no free-function
-    method syntax), so `it.map(f)` is not writable. Each takes its source
-    `inout`, is lazy, and returns a `scoped(it)` struct that itself
-    implements `Iterator`:
+    whose only obligation is the scoped extent of (a). A scoped iterator is
+    chained by the adaptor methods of Rule 34, whose results inherit that
+    extent (ch01 Rule 19c(a)); a container of LINEAR elements is emptied by
+    `pop`/`remove`, never iterated by value, because no linear `Item` can
+    exist (Rule 32).
+34. **S0034** — The adaptor set is closed for v0.1. **Each is a PROVIDED
+    METHOD of `Iterator`** (ch09 Rules 16, 43), taking its source by value
+    and returning a CONCRETE adaptor struct that carries its own ordinary,
+    struct-headed `impl Iterator`. This is NOT a blanket impl (ch09 Rule 18
+    is untouched) and needs no new language feature: round 6 disproved this
+    rule's earlier conclusion that `it.map(f)` "is not writable" — the
+    obstacle was never method lookup but OWNERSHIP, and it is removed by
+    ch01 Rule 19c, which makes a call's result inherit its scoped argument's
+    extent when the callee's declared result type mentions the parameter
+    that argument went into. `v.iter().map(f)` therefore yields a value
+    scoped to `v`, exactly as the old one-binding-per-stage chain did.
 
-    | Function | Result | `Item` |
+    | Provided method of `Iterator` | Result | `Item` of the result |
     |---|---|---|
-    | `map[I: Iterator, U](inout it: I, let f: fn (let I.Item) -> U)` | `scoped(it) Mapped[I, U]` | `U` |
-    | `filter[I: Iterator](inout it: I, let p: fn (let I.Item) -> bool)` | `scoped(it) Filtered[I]` | `I.Item` |
-    | `take[I: Iterator](inout it: I, let n: usize)` | `scoped(it) Taken[I]` | `I.Item` |
-    | `skip[I: Iterator](inout it: I, let n: usize)` | `scoped(it) Skipped[I]` | `I.Item` |
-    | `enumerate[I: Iterator](inout it: I)` | `scoped(it) Enumerated[I]` | `(usize, I.Item)` |
-    | `zip[I: Iterator, J: Iterator](inout it: I, sink other: J)` | `scoped(it) Zipped[I, J]` | `(I.Item, J.Item)` |
+    | `fn map[U: Droppable](sink self, let f: fn (sink Self.Item) -> U)` | `Mapped[Self, U]` | `U` |
+    | `fn filter(sink self, let p: fn (let Self.Item) -> bool)` | `Filtered[Self]` | `Self.Item` |
+    | `fn take(sink self, let n: usize)` | `Taken[Self]` | `Self.Item` |
+    | `fn skip(sink self, let n: usize)` | `Skipped[Self]` | `Self.Item` |
+    | `fn enumerate(sink self)` | `Enumerated[Self]` | `(usize, Self.Item)` |
+    | `fn zip[J: Iterator](sink self, sink other: J)` | `Zipped[Self, J]` | `(Self.Item, J.Item)` |
+    | `fn by_ref(inout self)` | `scoped(self) ByRef[Self]` | `Self.Item` |
 
-    **Why `inout` and `scoped`, not `sink`**: a scoped source (`v.iter()`,
-    `mem.iter(s)`, `s.scalars()`) MUST NOT be stored in a field (ch01
-    Rule 19a) and a `sink` parameter cannot be a scoped result's
-    designated source (ch01 Rule 19), so an adaptor that took its source
-    by value and kept it in a struct could never be applied to a borrowed
-    iterator — which is every container iterator. Instead the adaptor
-    struct holds a raw base to the source (an `@unsafe(invariant: "...")`
-    declaration in the inventory, exactly Rule 28's shape) and the
-    `scoped(it)` result keeps the source borrowed `inout` for the
-    adaptor's whole life; the source itself stays borrowed to ITS source,
-    so the extent carries through a chain stage by stage. A chain is
-    therefore written one binding per stage: `var it = v.iter(); var m =
-    mem.map(&it, f); var t = mem.take(&m, 3); let n = mem.count(move t);`.
-    `zip`'s SECOND source is owned (`sink`), because a result may be
-    scoped to one parameter only (ch01 Rule 19): zipping two borrowed
-    iterators is written as an index loop. There is no `chain`: its
-    `Item` needs `J.Item = I.Item`, and ch07's `gconstraint` can state a
-    bound, not an equality. A callable passed to an adaptor MUST NOT be
-    `raises` (Rule 8; ch09 Rule 60 makes the type mismatch the
-    diagnostic); an adaptor MUST NOT allocate, so the set has no
-    `collect`, no `sorted` and no `group_by`. A program names an adaptor
-    type only to declare a binding's type (`mem.Mapped[mem.SliceIter[i32],
-    i32]`), which ch09 Rule 31 requires for a `var`.
-35. **S0035** — The consumer set is closed for v0.1, free functions of
-    `std.mem.seq` re-exported by `mem`, each taking its source `sink` (it
-    is used up; a scoped source MAY be passed, since a `sink` parameter
-    is an ordinary place within the caller's extent):
-    `fn count[I: Iterator](sink it: I) -> usize`,
-    `fn fold[I: Iterator, B](sink it: I, sink init: B, let f: fn (sink B, let I.Item) -> B) -> B`,
-    `fn for_each[I: Iterator](sink it: I, let f: fn (let I.Item))`,
-    `fn all[I: Iterator](sink it: I, let p: fn (let I.Item) -> bool) -> bool`,
-    `fn any[I: Iterator](sink it: I, let p: fn (let I.Item) -> bool) -> bool`,
-    `fn find[I: Iterator](sink it: I, let p: fn (let I.Item) -> bool) -> Option[I.Item]`,
-    and the two `try_` siblings
-    `fn try_fold[I: Iterator, B, E](sink it: I, sink init: B, let f: fn (sink B, let I.Item) -> B raises E) -> B raises E` and
-    `fn try_for_each[I: Iterator, E](sink it: I, let f: fn (let I.Item) raises E) raises E`.
-    Collecting is `fn try_collect_into[I: Iterator, A: brand, L: Allocator[A]]
+    The adaptor structs, all in `std.mem.seq` and re-exported as
+    `mem.Mapped`, `mem.Filtered`, …:
+
+    ```fors-sig
+    pub struct Mapped[I: Iterator, U: Droppable] { src: I, f: fn (sink I.Item) -> U }
+    pub struct Filtered[I: Iterator]  { src: I, p: fn (let I.Item) -> bool }
+    pub struct Taken[I: Iterator]     { src: I, left: usize }
+    pub struct Skipped[I: Iterator]   { src: I, to_skip: usize }
+    pub struct Enumerated[I: Iterator] { src: I, at: usize }
+    pub struct Zipped[I: Iterator, J: Iterator] { a: I, b: J }
+    pub struct ByRef[I: Iterator]     { src: rawptr[I] }
+    ```
+
+    Five constraints on these declarations, each with the rule that forces
+    it. **(1) A callable parameter is a `fn` TYPE, never a callable type
+    parameter `F`**: ch09 Rule 38 never binds a parameter through a BOUND,
+    so `fn map[U, F: fn (sink Self.Item) -> U](sink self, let f: F)` would
+    make `it.map(double)` a T0039 "cannot infer `U`"; with a `fn` type the
+    fn item's type is matched componentwise and binds `U`, and a closure
+    argument is handled by ch09 Rule 41. It also keeps the adaptor types
+    WRITABLE (`mem.Taken[mem.Mapped[mem.SliceIter[i32], i32]]`), since a
+    closure type cannot be written (ch09 Rule 7) — which a `var`
+    annotation needs (ch09 Rule 31). **(2) An adaptor carries every
+    parameter it needs in its own head** (`Mapped[I, U]`), because
+    `impl[I: Iterator, U] Iterator for Mapped[I]` would leave `U`
+    unconstrained (ch09 Rule 18). **(3) The names are `Mapped`,
+    `Filtered`, …, never `Map` or `Filter`**: `Map` is the hash map and a
+    prelude name (Rule 2), and a submodule `mem.iter` is impossible because
+    `mem` has one namespace already holding the function `mem.iter` (ch08
+    Rule 13). **(4) `map` takes its item `sink`, predicates take it
+    `let`**: `fn (let Self.Item) -> U` would forbid `|sink x| x` for a
+    non-`Copyable` item (ch01 Rule 3). **(5) A callable FIELD is called as
+    `(self.f)(move x)`**, never `self.f(x)`, which is method-call form and
+    is ch09 T0043.
+    Every adaptor is lazy and allocates nothing, so the set has no
+    `collect`, no `sorted` and no `group_by`; a callable passed to one MUST
+    NOT be `raises` (Rule 8; ch09 Rule 60 makes the type mismatch the
+    diagnostic). There is no `chain`: its `Item` needs `J.Item = I.Item`,
+    and ch07's `gconstraint` states a bound, not an equality.
+    `by_ref` is the ONE borrowing adaptor and the only struct in `seq` with
+    a raw pointer, so it is an `@unsafe(invariant: "...")` declaration in
+    the inventory (Rule 28, ch04 Rules 9-10); it is how an `inout`
+    iterator or an iterator held in a field is chained, since every other
+    adaptor takes `sink self` and ch01 Rule 4a(c)-(d) forbid moving out of
+    a field or an `inout` parameter. `zip` owns BOTH sources; the old rule
+    "the second source is owned" is gone from the signature: a result with
+    two scoped sources keeps both (ch01 Rule 19c(d)) and is an ordinary
+    local that Rule 19 forbids returning. `map[U: Droppable]` and the
+    `U: Droppable` on `Mapped`'s head and impl are forced by ch09 Rules
+    17 and 21 (`type Item = U;` must satisfy `Item: Droppable` with `U`
+    rigid): a closure returning a linear value is rejected at `map`
+    (T0012), and no iterator of linear items exists. **Round 6 deletes** the free functions `mem.map`,
+    `mem.filter`, `mem.take`, `mem.skip`, `mem.enumerate` and `mem.zip`;
+    `mem.iter` stays. The unsafe inventory loses six adaptor entries and
+    keeps two, `mem.iter` and `Iterator.by_ref`.
+
+    ```fors
+    module std.mem.seq;
+    needs { };
+
+    // The shape of every adaptor, in full: a provided method of the trait
+    // returns a concrete struct that carries its own impl.
+    pub struct Mapped[I: Iterator, U: Droppable] { src: I, f: fn (sink I.Item) -> U }
+
+    impl[I: Iterator, U: Droppable] Iterator for Mapped[I, U] {   // U: Droppable — ch09 Rules 17, 21
+        type Item = U;
+        fn next(inout self) -> Option[U] {
+            match self.src.next() {
+                some(let x) => { return some((self.f)(move x)); }
+                none => { return none; }
+            }
+        }
+    }
+    ```
+35. **S0035** — The consumer set is closed for v0.1 and is also PROVIDED
+    METHODS of `Iterator`, each taking its source `sink self` (it is used
+    up) and returning a plain value:
+
+    | Provided method of `Iterator` |
+    |---|
+    | `fn count(sink self) -> usize` |
+    | `fn fold[B](sink self, sink init: B, let f: fn (sink B, sink Self.Item) -> B) -> B` |
+    | `fn for_each(sink self, let f: fn (sink Self.Item))` |
+    | `fn all(sink self, let p: fn (let Self.Item) -> bool) -> bool` |
+    | `fn any(sink self, let p: fn (let Self.Item) -> bool) -> bool` |
+    | `fn find(sink self, let p: fn (let Self.Item) -> bool) -> Option[Self.Item]` |
+    | `fn try_fold[B, E](sink self, sink init: B, let f: fn (sink B, sink Self.Item) -> B raises E) -> B raises E` |
+    | `fn try_for_each[E](sink self, let f: fn (sink Self.Item) raises E) raises E` |
+
+    Each body is `for x in self { ... }`, which is legal because `Self:
+    Iterator` implies `Self: Droppable` and `Self.Item: Droppable` (ch09
+    Rule 21), so the loop may own and drop the iterator and drop each item
+    even with `Self` rigid (ch09 Rules 16, 31, 57). The two `try_` siblings
+    carry `E` as a method parameter (ch09 Rule 60) and satisfy Rule 8's
+    "same name modulo the prefix, same parameter order". A consumer's
+    result mentions no type parameter of the receiver's head, so nothing it
+    returns is scoped (ch01 Rule 19c(a)): `v.iter().count()` ends `v`'s
+    borrow at the statement (ch01 Rule 19c(c)).
+    Collecting stays a FREE FUNCTION,
+    `fn try_collect_into[I: Iterator, A: brand, L: Allocator[A]]
     (sink it: I, inout dst: Vec[I.Item, A], inout a: L) raises AllocError`,
-    declared in `std.mem.vec` (it names `Vec`; `seq` stays a leaf) and
-    re-exported as `mem.try_collect_into` — it names its destination and
-    its allocator, because a `collect` that invents a container would
-    allocate ambiently (Rule 3).
+    declared in `std.mem.vec` and re-exported as `mem.try_collect_into`:
+    `seq` is a leaf and cannot name `Vec` (Rule 1), and as an inherent
+    `Vec` method it would need the equality `I.Item = T`, which v0.1 has no
+    way to state (ch09 Rule 16). It names its destination and its
+    allocator, because a `collect` that invented a container would allocate
+    ambiently (Rule 3). **Round 6 deletes** the free functions `mem.count`,
+    `mem.fold`, `mem.for_each`, `mem.all`, `mem.any`, `mem.find`,
+    `mem.try_fold` and `mem.try_for_each`.
 36. **S0036** — `for` over std. `for p in e` accepts `Range`/`RangeIncl`,
     `Array[T, N]`, `Slice[T]` and any `Iterator` (ch09 Rule 31), which is
     the whole surface: `for x in v.items()` (a `Slice`, elements by value),
@@ -785,7 +942,8 @@ parsed one, and `std/` holds the same signatures with placeholder bodies.
     parallel reduction in the language, its tree shape is fixed, and no
     std consumer is an alias for it. `fold` and `try_fold` are strictly
     left-to-right and MUST NOT be reassociated, whatever the operation's
-    algebra.
+    algebra. Being provided METHODS (Rules 34-35) changes none of this: a
+    provided body is ordinary code, checked once (ch09 Rule 16).
 
 ### I/O and authority
 
@@ -855,8 +1013,27 @@ parsed one, and `std/` holds the same signatures with placeholder bodies.
     (b) on a TRAP, buffered `Stdout` bytes MAY be lost, because a trap is
     one breakpoint-class instruction that MUST NOT call or allocate (ch02
     Rules 6-7) and therefore cannot flush — a program whose output must
-    survive a trap writes to `Stderr` or flushes explicitly; (c) no std
-    operation flushes `Stdout` as a side effect of anything else.
+    survive a trap writes to `Stderr` or flushes explicitly; **and no
+    `defer`/`errdefer` body runs on that path either** (ch02 Rule 7, ch01
+    Rule 23f), so an open `File`, `Conn`, `Listener` or `Child` is
+    abandoned to the operating system, nothing is closed, flushed or freed,
+    and NO std invariant depends on cleanup after an abnormal
+    termination — there is no temporary-file removal, no lock-file release
+    and no flush-on-exit promise on the trap path, and none will be added;
+    (c) no std operation flushes `Stdout` as a side effect of anything
+    else; (d) **the exit-status table is closed**: `0` — `main` returned
+    and the final `Stdout` flush succeeded with no latched error; `1` — an
+    error left `main` (ch02 Rule 17, which also fixes the one stderr line
+    and its format); `2` — `main` returned but the final flush failed or an
+    error was latched on `Stdout`, which (a) called "non-zero" and this
+    clause pins, keeping it distinct from `1` so that a script can tell
+    "the program failed" from "the output did not arrive". A TRAP is in
+    neither row: the process dies by the breakpoint instruction (ch02 Rule
+    6) and reports through the operating system's signal status, never
+    through `1` or `2`. Before `main` runs, the entry shim installs
+    `SIG_IGN` for `SIGPIPE`, so a write to a closed pipe surfaces as
+    `io.Error.closed` through Rule 39's latching instead of killing the
+    process (ch02 Rule 17).
 41. **S0041** — `fs`. `fs.Dir` is the rooted capability and there is NO
     ambient current directory:
 
@@ -1113,7 +1290,8 @@ parsed one, and `std/` holds the same signatures with placeholder bodies.
     error type — all of them field-wise conforming because they contain no
     interior mutability. **No std container is `Shared`**: `Buffer`, `Vec`,
     `Map`, `String`, `Own[T, A]`, `Block[A]`, every allocator, every
-    root-capability type and every linear type do NOT implement it. Sharing
+    root-capability type and every type that is linear (ch01 Rules 22, 22a)
+    do NOT implement it. Sharing
     one across a task boundary therefore goes through ch01 Rule 13 —
     `imm`, `iso` by `move`, or a structured-`spawn` capture — and never
     through a std wrapper. Std ships no `@unsafe` `Shared` impl (ch01 Rule
@@ -1211,7 +1389,8 @@ use std.io, std.mem;
 // The heap arrives as a main parameter and names its own brand, Rule 17.
 fn main(inout out: io.Stdout, inout heap: mem.Heap) raises AllocError {
     var v: Vec[i32, heap] = Vec.new();      // allocates nothing yet, Rule 24
-    v.push(&heap, 1)?;                      // the allocator is an argument
+    defer v.deinit(&heap);                  // linear: consumed on EVERY exit
+    v.push(&heap, 1)?;                      // including this `?`'s error exit
     v.push(&heap, 2)?;
     for x in v.iter() {                     // copies, Rule 33(a)
         out.write_int(x as i64);
@@ -1222,8 +1401,7 @@ fn main(inout out: io.Stdout, inout heap: mem.Heap) raises AllocError {
     }
     let total: i32 = reduce(+, v.items());  // ch03's tree, the only parallel one
     out.write_int(total as i64);
-    v.deinit(&heap);                        // sink self: implicit move, Rule 4
-}
+}                                           // the defer runs here: Rule 11
 ```
 
 ```fors
@@ -1231,16 +1409,30 @@ module app.chain;
 needs { };
 use std.mem;
 
-fn double(let x: i32) -> i32 { return x * 2; }
+fn double(sink x: i32) -> i32 { return x * 2; }
 fn small(let x: i32) -> bool { return x < 10; }
 
-// Adaptors are free functions, one binding per stage, Rule 34: each stage
-// is scoped to the one before, so every stage keeps `v` borrowed `let`.
+// Adaptors are provided methods of `Iterator`, so a chain is ONE
+// expression (Rule 34). `v.iter()` is scoped to `v`, and every adaptor's
+// declared result type mentions `Self`, so the whole chain stays scoped to
+// `v` (ch01 Rule 19c(a)); `count`'s `usize` mentions nothing, so the
+// borrow ends at the statement (ch01 Rule 19c(c)).
 fn count_small[A: brand](let v: Vec[i32, A]) -> usize {
-    var it: mem.SliceIter[i32] = v.iter();
-    var m: mem.Mapped[mem.SliceIter[i32], i32] = mem.map(&it, double);
-    var k: mem.Filtered[mem.Mapped[mem.SliceIter[i32], i32]] = mem.filter(&m, small);
-    return mem.count(move k);
+    return v.iter().map(double).filter(small).take(3).count();
+}
+
+// A stage may still be stored: the adaptor types are writable because no
+// closure type appears in a signature (Rule 34(1); ch09 Rule 31).
+fn staged[A: brand](let v: Vec[i32, A]) -> usize {
+    let m: mem.Mapped[mem.SliceIter[i32], i32] = v.iter().map(double);
+    return m.take(3).count();
+}
+
+// An `inout` iterator is chained through `by_ref`, because every other
+// adaptor takes `sink self` and ch01 Rule 4a(d) forbids moving out of an
+// `inout` parameter.
+fn first_two[I: Iterator](inout it: I) -> usize {
+    return it.by_ref().take(2).count();
 }
 ```
 
@@ -1252,14 +1444,14 @@ use std.mem;
 fn sum_of(let xs: Slice[i32]) -> i32 raises AllocError {
     with allocator scratch: mem.Fixed[4096] {     // inline storage, Rule 20
         var v: Vec[i32, scratch] = Vec.new();
+        defer v.deinit(&scratch);                  // linear: required, Rule 11
         for x in xs {
-            v.push(&scratch, x)?;
+            v.push(&scratch, x)?;                  // the defer covers this exit
         }
         var acc: i32 = 0;
         for y in v.iter() {
             acc = acc + y;
         }
-        v.deinit(&scratch);                        // linear: required, Rule 11
         return acc;
     }
 }
@@ -1408,13 +1600,34 @@ fn shuffle_seed(inout r: rand.Rng) -> rand.Pcg {
 15. **`std.mem` holds the sealed `syscall` capability** (Rule 53). This is
     the mechanism that makes "allocation is not authority" true for user
     code without making it false for the implementation.
-16. **Adaptors and consumers are free functions** (`mem.map`, `mem.count`;
-    Rules 34-35), not methods: `Iterator` is language-known and nothing in
-    the frozen language lets std put a method on it (round-6
-    verification). Adaptors take their source `inout` and return
-    `scoped(it)`, because ch01 Rule 19a forbids a scoped iterator in a
-    field and ch01 Rule 19 forbids `sink` as a scoped source; `chain` is
-    dropped (no type-equality constraint), `zip`'s second source is owned.
+16. **Adaptors and consumers are PROVIDED METHODS of `Iterator`** (Rules
+    34-35), and the ownership rule that makes them writable is ch01 Rule
+    19c. Round 6 (owner decision O3, 2026-09-20) DISPROVED the earlier
+    conclusion of this decision — "`Iterator` is language-known and nothing
+    in the frozen language lets std put a method on it" — on its stated
+    ground: ch09 Rule 43 tier (2) already finds a PROVIDED method of a
+    prelude trait for a concrete, a rigid and an adaptor receiver, ch09
+    Rule 38(b) already binds `Self` before any argument is visited, and
+    each adaptor's `impl Iterator` is struct-headed, so no blanket impl is
+    involved. The real obstacle was OWNERSHIP, which the old rule worked
+    around rather than named: a `sink self` adaptor stores a SCOPED
+    `v.iter()` in a field, and nothing said what the caller may conclude
+    about the result. ch01 Rule 19c says it — the result inherits the
+    argument's extent iff the declared result type mentions the parameter
+    the argument went into — so `v.iter().map(f)` is scoped to `v` and the
+    field store inside the generic body is not the caller's concern. The
+    free functions `mem.map`, `mem.filter`, `mem.take`, `mem.skip`,
+    `mem.enumerate`, `mem.zip`, `mem.count`, `mem.fold`, `mem.for_each`,
+    `mem.all`, `mem.any`, `mem.find`, `mem.try_fold` and
+    `mem.try_for_each` are DELETED; `mem.iter` and
+    `mem.try_collect_into` stay free functions. `by_ref` is added as the
+    seventh adaptor and the one remaining raw pointer in `seq`; `chain` is
+    still dropped (no type-equality constraint); `zip` now owns both
+    sources, and a result with two scoped sources keeps both (ch01 Rule
+    19c(d)) — legal as a local, unreturnable by ch01 Rule 19 — instead of
+    the signature deciding. The round-6 verification added `U: Droppable`
+    to `map`/`Mapped` (ch09 Rules 17, 21) and `T: Droppable` to
+    `BufferIter`'s impl (Rule 23).
 17. **A non-`Copyable` payload is never returned by value from a view**
     (round-6 verification): `Own.get`/`set` need `T: Copyable`, `Own.replace`
     exchanges, `Allocator.deinit` returns the payload (Rules 12, 22), and
@@ -1433,8 +1646,50 @@ fn shuffle_seed(inout r: rand.Rng) -> rand.Pcg {
 19. **Every std trap is either `bounds` from an index or `contract` from a
     `pre` the signature shows** (Rule 55): `Instant.since`, `Pcg.bounded`,
     `Str.slice` and `push_scalar` carry a `pre`, so their kind is
-    `contract`, not `overflow`/`div-zero`/`bounds`; a container of a
-    linear element type traps on non-empty `clear`/`deinit` (Rule 11c).
+    `contract`, not `overflow`/`div-zero`/`bounds`; after round 6 the only
+    trap left from Rule 11c is `deinit_empty`'s `len() == 0`, the rest
+    having become static (ch01 Rule 22b and the `T: Droppable` impl
+    blocks).
+
+20. **Linearity is a language rule, not a std promise** (round 6, O1;
+    Rule 11). Std declares `impl Linear` for nine types and lists the
+    consuming methods; everything else — what an obligation is, what
+    discharges it, what happens in a container, a closure, a `spawn` or a
+    `with` block, and the diagnostic — is ch01 Rules 22-22i. The knock-on
+    surface change is that `clear` and `deinit` DROP elements and therefore
+    live in `T: Droppable` impl blocks (Rules 23-26), with `deinit_empty`
+    plus a `pre` for the linear-element case. `Vec`, `Map` and `String` are
+    linear ALWAYS, not "while cap > 0": linearity is a fact of the
+    constructor, and `deinit` on an empty container is total and free.
+21. **Cleanup is written with `defer`/`errdefer`** (round 6, O2; ch01
+    Rules 23-23f). Every std body that lets a linear value live across a
+    `?` uses `errdefer`; every example in this chapter that creates a
+    container now attaches its release once, at the creation site. Nothing
+    of std's shape depends on the abnormal path, because a trap runs no
+    deferred body (Rule 40(b), ch02 Rule 7).
+22a. **`Allocator.create` gains `T: Droppable`** (round 6, implementation
+    stage; ch01 Rule 22c, ch09 Rule 57). Its provided body holds the `sink
+    v: T` payload across `self.alloc(...)?`, so the error exit drops a
+    value of rigid type; without the bound the trait's own body would be
+    rejected, and no `errdefer` can help, since a rigid `T` has no
+    consumer to name. `deinit` keeps no bound: it RETURNS the payload, so a
+    linear `Own` is still releasable. An `Own` of a linear payload is
+    constructed through `alloc` plus `own_raw` (Rule 28), where the caller
+    holds the payload across the fallible step and can consume it on the
+    failure path itself.
+22b. **The resolver treats a prelude-named declaration inside package
+    `std` as the DEFINITION of that name** (round 6, implementation stage;
+    Rule 32, ch08 Rule 13's same-entity case). `std.mem.seq` must be able
+    to declare `pub trait Iterator`, since the provided methods of Rules
+    34-35 live in its body, and outside `std` the same declaration stays
+    the ordinary N0013 collision. This is the name-resolution counterpart
+    of round 5's package-aware orphan rule, which already let an `impl` of
+    a prelude type live in `std`.
+22. **`main`'s raised error is ch02 Rule 17** (round 6, O4), and this
+    chapter owns only the observable ordering and the exit-status table
+    (Rule 40(d)): flush `Stdout`, one `error: ` line on unbuffered stderr,
+    status 1; status 2 for a failed final flush or a latched `Stdout`
+    error; a trap in neither row. Open question 5 is closed.
 
 ## Corpus and spec defects this chapter creates
 
@@ -1480,6 +1735,20 @@ only if it changes the file's PARSE.
   and Open question 1 closed.
 - `docs/spec/README.md`: chapter 10 in the chapter list and the fact table,
   the root-capability count, and the round-5 D5 line marked implemented.
+- Round 6 (2026-09-20): `docs/spec/01-ownership.md` gains Rules 19c and
+  22-22i (linearity, which Rule 11 here now only lists) and 23-23f
+  (`defer`/`errdefer`); `docs/spec/07-grammar.md` gains the two
+  productions and reserves both words; `docs/spec/02-failure.md` gains
+  Rule 16 (error exit) and Rule 17 (`main`'s raised error), which Rule
+  40(d) here cites; `docs/spec/04-authority.md` Rule 8 gains one sentence
+  pointing at ch02 Rule 17; `docs/spec/09-types.md` amends Rules 10(c),
+  11, 21, 23, 24, 31, 33, 43, 50 and 57. The corpus stage migrates the
+  files listed under "What round 6 forbids" in ch01 and the `*-accepted`
+  tests named below; the std stage rewrites `std/mem/seq.fors` to Rules
+  32-35, `std/mem/vec.fors` and `std/mem/hashmap.fors` to Rules 23-26,
+  `std/mem/alloc.fors` with `impl Linear for Block[A] {}`, and
+  `std/fs`, `std/net`, `std/proc` with their `impl Linear` declarations
+  and an `errdefer` on every body that holds a linear value across a `?`.
 
 ## Open questions for the owner
 
@@ -1494,10 +1763,11 @@ only if it changes the file's PARSE.
    17). (b) ch03 Rule 24: "no other constructor for `Slice[T]`" excepting
    ch10 Rule 28's `@unsafe` std primitives, as ch01 Rule 19b already
    words it. Recommendation: make both, as editorial clarifications.
-   A third, larger one: ch01 needs the linearity rule of Rule 11 (a
-   linear value MUST be consumed), without which every `Own`, `Vec` and
-   `File` can be leaked silently. Recommendation: adopt linearity; the
-   alternative (silent leak) makes "explicit allocators" decorative.
+   ~~A third, larger one: ch01 needs the linearity rule of Rule 11.~~
+   CLOSED by owner decision 2026-09-20, round 6 (O1): ch01 Rules 22-22i
+   are that rule, with `Linear` and `Droppable` as prelude markers and no
+   new keyword; Rule 11 here is now the list of std's nine `impl Linear`
+   types and their consuming methods.
 3. **Should `with_stmt` take arguments in v0.2** (`with allocator f:
    mem.Fixed(&storage) { }`)? It would give a fixed-buffer allocator over
    caller-owned memory and a counting allocator that really wraps a
@@ -1510,12 +1780,14 @@ only if it changes the file's PARSE.
    owner. Recommendation: keep this for v0.1 rather than adding `*`, an
    `Index[()]` hack or a reference type; revisit if `Own` of a
    non-`Copyable` payload becomes common in the corpus.
-5. **`main`'s result and `raises`.** ch04's example writes
-   `fn main(...) raises io.Error`, and this chapter's examples raise
-   `AllocError`. What does the runtime do with a raised error — exit code,
-   message, and on which stream? Recommendation: exit status 1, one line
-   on `Stderr` naming the error type and variant, nothing on `Stdout`.
-   This belongs in ch04 Rule 8 or here; it is currently nowhere.
+5. ~~**`main`'s result and `raises`.** What does the runtime do with a
+   raised error — exit code, message, and on which stream?~~ CLOSED by
+   owner decision 2026-09-20, round 6 (O4), exactly as recommended: ch02
+   Rule 17 owns the semantics and the line format (`error: ` +
+   `render(e)`, one line, unbuffered stderr, status 1, a failed stderr
+   write ignored, `SIGPIPE` ignored by the entry shim), ch04 Rule 8 carries
+   one pointing sentence, and Rule 40(d) here carries the exit-status
+   table.
 6. **Which capability does `mem.Heap` need in `needs`?** This chapter says
    none (D5). Confirm that `fors audit` should still REPORT heap arrival,
    so a reviewer can see which programs allocate, even though it is not
@@ -1643,4 +1915,56 @@ R55 `std-introduces-no-new-trap-kind-rejected`;
 R56 `formatting-has-no-locale-run-ok`, `text-compare-is-bytewise-run-ok`;
 R57 `audit-finds-unlisted-unsafe-slice-rejected`.
 
-Count: **57 rules (S0001-S0057, with sub-rules S0006a-d and S0011c), 159 test names, of which 47 have files (`tests/conformance/10-std/README.md` splits present from pending).**
+Round 6 additions (2026-09-20), all in `tests/conformance/10-std/`:
+
+R11 `vec-dropped-without-deinit-rejected` (ch01 R22h; the `detail` names
+`Vec.deinit`), `vec-dropped-at-question-rejected`,
+`vec-consumed-by-defer-accepted`, `vec-consumed-by-errdefer-then-returned-accepted`,
+`vec-errdefer-normal-exit-unconsumed-rejected`,
+`own-dropped-without-deinit-rejected`, `string-dropped-rejected`,
+`file-not-closed-rejected`, `entries-not-closed-rejected`,
+`conn-not-shutdown-at-question-rejected`, `child-not-waited-at-question-rejected`,
+`linear-discard-rejected` (ch01 R22d), `linear-in-user-struct-inherits-rejected`.
+R11c `linear-buffer-element-rejected` (ch09 R11),
+`linear-array-field-in-buffer-rejected`,
+`vec-clear-linear-element-rejected` (no `clear` in the unbounded block),
+`vec-deinit-linear-element-rejected`,
+`map-deinit-linear-value-rejected`,
+`vec-deinit-empty-nonempty-trap` (`contract`),
+`vec-linear-element-pop-then-deinit-empty-accepted`,
+`vec-linear-always-empty-deinit-accepted`.
+R32 `iterator-impl-linear-self-rejected`, `iterator-impl-linear-item-rejected`,
+`std-iterator-inherent-name-clash-rejected` (an inherent `take` on a std
+iterator type), `iterator-next-not-raises-rejected`.
+R33 `container-of-linear-not-iterated-by-value-rejected`,
+`scoped-iter-chain-keeps-borrow-rejected` (mutating `v` while a chain
+derived from `v.iter()` is live).
+R34 `adaptor-chain-method-accepted` (three stages, fn items),
+`adaptor-chain-closure-accepted`, `adaptor-chain-rigid-receiver-accepted`,
+`adaptor-annotated-binding-accepted`
+(`mem.Taken[mem.Mapped[mem.SliceIter[i32], i32]]`),
+`adaptor-stored-then-chained-accepted`,
+`adaptor-on-inout-receiver-rejected` (ch01 R4a(d)),
+`adaptor-by-ref-on-inout-accepted`,
+`adaptor-on-field-receiver-rejected` (ch01 R4a(c)),
+`adaptor-by-ref-on-field-accepted`,
+`adaptor-chain-across-question-accepted`,
+`adaptor-chain-as-for-iterable-accepted`,
+`adaptor-by-ref-for-then-reuse-accepted`,
+`zip-two-scoped-sources-rejected` (ch01 R19c(d), R19: returned under `scoped(v)`),
+`zip-two-scoped-sources-local-accepted` (ch01 R19c(d)),
+`zip-scoped-and-owned-accepted`,
+`free-function-adaptor-absent-rejected` (`mem.map` is gone),
+`adaptor-with-raising-closure-rejected`,
+`chain-adaptor-absent-rejected`.
+R35 `consumer-count-method-accepted`, `consumer-fold-method-accepted`,
+`try-fold-method-accepted`, `try-for-each-method-accepted`,
+`free-function-consumer-absent-rejected` (`mem.count` is gone),
+`consumer-count-drops-items-accepted` (a non-`Copyable`, non-linear
+`Item`), `try-collect-into-is-free-function-accepted`.
+R40 `main-raises-exit-status-one-run-error` (ch02 R17),
+`main-returns-latched-stdout-exit-2`,
+`defer-not-run-on-trap` (`trap`; the marker goes to `Stderr`),
+`sigpipe-ignored-write-latches-run-ok`.
+
+Count: **57 rules (S0001-S0057, with sub-rules S0006a-d and S0011c), 159 test names from rounds 1-5 plus 55 from round 6, of which 82 have files (`tests/conformance/10-std/README.md` splits present from pending).**

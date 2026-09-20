@@ -1,0 +1,13 @@
+//! name: scoped_through_generic_inout_param_rejected
+//! rule: 01.R19c
+//! expect: check-error
+//! detail: ch01 R19c(a) -- the callee's `inout` parameter `out: Option[T]` mentions `T`, the parameter the scoped `v.iter()` goes into, so the scoped value could be stored through it: the call is rejected
+
+needs { };
+use std.mem;
+
+fn stash[T](sink x: T, inout out: Option[T]) { out = some(move x); }
+
+fn f[A: brand](let v: Vec[i32, A], inout slot: Option[mem.SliceIter[i32]]) {
+    stash(v.iter(), &slot);
+}

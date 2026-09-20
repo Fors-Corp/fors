@@ -1,0 +1,24 @@
+//! name: defer_inout_use_after_defer_accepted
+//! rule: 01.R23d
+//! expect: check-ok
+//! detail: ch01 R23d(c) -- a body's accesses are accesses AT THE EXIT POINT, not during the block, so this is no R7 exclusivity conflict
+
+needs { };
+
+struct Res { fd: i32 }
+impl Linear for Res { }
+impl Res {
+    fn open(let n: i32) -> Res { return Res { fd: n }; }
+    fn close(sink self) { }
+    fn poke(inout self) { }
+    fn step(let self) raises Err { }
+}
+enum Err { boom }
+
+fn f() raises Err {
+    var r: Res = Res.open(1);
+    defer r.close();
+    r.poke();
+    r.step()?;
+    r.poke();
+}

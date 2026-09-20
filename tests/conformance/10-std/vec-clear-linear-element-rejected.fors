@@ -1,0 +1,10 @@
+//! name: vec_clear_linear_element_rejected
+//! rule: 10.S11c
+//! expect: check-error
+//! detail: T0043 -- R11c(ii): `Vec.clear` is declared in the `T: Droppable` impl block, so it does not exist for a linear element type
+
+needs { };
+
+fn f[A: brand](inout v: Vec[Own[i64, A], A]) {
+    v.clear();
+}

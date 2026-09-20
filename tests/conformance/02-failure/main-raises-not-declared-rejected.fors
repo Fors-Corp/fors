@@ -1,0 +1,15 @@
+//! name: main-raises-not-declared-rejected
+//! rule: 02.R1
+//! expect: check-error
+//! detail: ch02 R1 -- a `?` in a `main` with no `raises` is rejected, unchanged by round 6
+
+module main;
+needs { };
+
+enum Error { boom }
+
+fn step() raises Error { raise Error.boom; }
+
+fn main() {
+    step()?;
+}

@@ -1,0 +1,16 @@
+//! name: adaptor-chain-across-question-accepted
+//! rule: 09.R43
+//! expect: check-ok
+//! detail: R43 -- a chain's stages are ordinary values; a `?` in the same body does not disturb them
+
+needs { };
+
+enum Err { boom }
+
+fn check(let n: usize) raises Err { if n == 0 { raise Err.boom; } }
+
+fn f[A: brand](let v: Vec[i32, A]) -> usize raises Err {
+    let n: usize = v.iter().take(3).count();
+    check(n)?;
+    return n;
+}

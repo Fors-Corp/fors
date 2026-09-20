@@ -1,0 +1,19 @@
+//! name: linear-match-omitted-field-rejected
+//! rule: 09.R50
+//! expect: check-error
+//! detail: ch01 R22d(ii) -- an omitted `{ }` field matches anything, so it drops the linear component
+
+needs { };
+
+struct Res { fd: i32 }
+impl Linear for Res { }
+impl Res {
+    fn open(let n: i32) -> Res { return Res { fd: n }; }
+    fn close(sink self) { }
+}
+
+struct Box { r: Res, n: i32 }
+
+fn f(sink b: Box) {
+    match b { Box { n: let k } => { } }
+}

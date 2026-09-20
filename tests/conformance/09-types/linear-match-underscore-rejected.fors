@@ -1,0 +1,19 @@
+//! name: linear-match-underscore-rejected
+//! rule: 09.R50
+//! expect: check-error
+//! detail: ch01 R22d(ii) -- `_` facing a LINEAR component drops it; the code and diagnostic are ch01's
+
+needs { };
+
+struct Res { fd: i32 }
+impl Linear for Res { }
+impl Res {
+    fn open(let n: i32) -> Res { return Res { fd: n }; }
+    fn close(sink self) { }
+}
+
+struct Box { r: Res }
+
+fn f(sink b: Box) {
+    match b { Box { r: _ } => { } }
+}

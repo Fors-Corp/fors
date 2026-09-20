@@ -1,20 +1,20 @@
 //! name: try_for_each_error_propagates
 //! rule: 10.S35
 //! expect: run-ok
-//! detail: caught  -- try_for_each takes a raising callable and is itself raises (R8, R35)
+//! detail: caught  -- try_for_each is a provided method of Iterator taking a raising callable and is itself raises (R8, R35); a Slice has no inherent `iter`, the iterator comes from `mem.iter` (R33a)
 
 module app;
 needs { io.stdout };
 use std.io, std.mem;
 
-fn step(let x: i32) raises AllocError {
+fn step(sink x: i32) raises AllocError {
     if x > 1 { raise AllocError.out_of_memory; }
 }
 
 fn main(inout out: io.Stdout) {
     var data: Array[i32, 3] = [1, 2, 3];
     let xs: Slice[i32] = data[0 ..< 3];
-    mem.try_for_each(xs.iter(), step) else |e| {
+    mem.iter(xs).try_for_each(step) else |e| {
         out.write_line("caught");
         return;
     };

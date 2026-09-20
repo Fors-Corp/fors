@@ -1,0 +1,8 @@
+//! name: iterator-bound-implies-droppable-accepted
+//! rule: 09.R21
+//! expect: check-ok
+//! detail: T0021 -- a bound `P: Iterator` implies `P: Droppable`, so a generic body may drop the iterator
+
+needs { };
+
+fn f[I: Iterator](sink it: I) { }

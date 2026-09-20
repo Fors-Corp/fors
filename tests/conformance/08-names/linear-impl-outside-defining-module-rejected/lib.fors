@@ -1,0 +1,4 @@
+module lib;
+needs { };
+
+pub struct Res { fd: i32 }

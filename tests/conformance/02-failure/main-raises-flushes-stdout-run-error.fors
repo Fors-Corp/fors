@@ -1,0 +1,15 @@
+//! name: main-raises-flushes-stdout-run-error
+//! rule: 02.R17
+//! expect: run-error
+//! detail: error: main.Error.boom  -- R17(a): the buffered `Stdout` content still arrives, and the status is 1
+
+module main;
+needs { io.stdout };
+use std.io;
+
+enum Error { boom }
+
+fn main(inout out: io.Stdout) raises Error {
+    out.write_line("buffered");
+    raise Error.boom;
+}
