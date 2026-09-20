@@ -214,14 +214,26 @@ fn build_package(path: &Path, interner: &mut Interner) -> Option<(Vec<PkgFile>, 
 }
 
 fn run_check(args: &[String]) -> ExitCode {
+    // MARC: design §12 asks for `fors check --count` to print the
+    // deterministic counters the near-linearity gate reads. It is a flag on
+    // this command rather than a subcommand of its own because the numbers
+    // are a property of a check, not a separate operation, and the gate
+    // wants them for the same run whose diagnostics it is reading.
+    let count = args.iter().any(|a| a == "--count");
+    let args: Vec<String> = args
+        .iter()
+        .filter(|a| a.as_str() != "--count")
+        .cloned()
+        .collect();
     if args.is_empty() {
         eprintln!("fors check: no input paths");
         return ExitCode::from(2);
     }
     let mut lines: Vec<(String, u32, u32, String)> = Vec::new();
     let mut any = false;
+    let mut totals = fors_check::Counters::default();
 
-    for arg in args {
+    for arg in &args {
         let path = Path::new(arg);
         let mut interner = Interner::new();
         let Some((files, root)) = build_package(path, &mut interner) else {
@@ -253,14 +265,11 @@ fn run_check(args: &[String]) -> ExitCode {
             .map(|n| n.as_encoded_bytes().to_vec());
         let output =
             fors_resolve::resolve_in_package(&mut interner, &inputs, root, package.as_deref());
-        // Design §4.4/§13, increment I0: `fors check` calls `check_build`
-        // after resolution; it emits nothing yet (no phase runs before
-        // I2), so `checked.diagnostics` is always empty here today. Kept
-        // as a real call (not commented out) so the wiring itself is
-        // exercised by every `fors check` invocation and every
-        // conformance test that shells out to it, not just by
-        // `fors-check`'s own unit test.
-        let checked = fors_check::check_build(&output, &interner);
+        // Design §4.4/§13: `fors check` runs the checker after resolution
+        // and merges its diagnostics into the same sorted line list. As of
+        // I2 that is signature lowering and whole-head well-formedness
+        // (T-codes); bodies are I3 onward's.
+        let checked = fors_check::check_build(&inputs, &output, &mut interner);
 
         for (i, f) in files.iter().enumerate() {
             for d in &parsed[i].diags {
@@ -293,10 +302,31 @@ fn run_check(args: &[String]) -> ExitCode {
                 ));
             }
         }
-        // I0: `checked.diagnostics` is always empty (see above), so this
-        // never adds a line yet; the merge point exists now so I2 onward
-        // is additive here too.
-        debug_assert!(checked.diagnostics.is_empty());
+        for d in &checked.diagnostics {
+            let Some(f) = files.get(d.file.index()) else {
+                continue;
+            };
+            any = true;
+            let (l, c) = line_col(&f.source, d.start);
+            lines.push((
+                f.display.clone(),
+                d.start,
+                d.start,
+                format!("{l}:{c}: error[{}]: {}", d.code.as_string(), d.message),
+            ));
+        }
+        let c = checked.counters;
+        totals.nodes_visited += c.nodes_visited;
+        totals.synths += c.synths;
+        totals.checks += c.checks;
+        totals.subst_norm_calls += c.subst_norm_calls;
+        totals.holds_probes += c.holds_probes;
+        totals.holds_misses += c.holds_misses;
+        totals.impl_scans += c.impl_scans;
+        totals.tape_events += c.tape_events;
+        totals.types_interned += c.types_interned;
+        totals.bodies_checked += c.bodies_checked;
+        totals.bodies_skipped += c.bodies_skipped;
     }
 
     lines.sort_by(|a, b| (a.0.as_str(), a.1).cmp(&(b.0.as_str(), b.1)));
@@ -304,6 +334,21 @@ fn run_check(args: &[String]) -> ExitCode {
     let mut out = stdout.lock();
     for (path, _, _, rest) in &lines {
         let _ = writeln!(out, "{path}:{rest}");
+    }
+
+    if count {
+        let t = &totals;
+        let _ = writeln!(out, "bodies checked       {}", t.bodies_checked);
+        let _ = writeln!(out, "bodies skipped       {}", t.bodies_skipped);
+        let _ = writeln!(out, "nodes visited        {}", t.nodes_visited);
+        let _ = writeln!(out, "synth calls          {}", t.synths);
+        let _ = writeln!(out, "check calls          {}", t.checks);
+        let _ = writeln!(out, "subst_norm calls     {}", t.subst_norm_calls);
+        let _ = writeln!(out, "holds probes         {}", t.holds_probes);
+        let _ = writeln!(out, "holds memo misses    {}", t.holds_misses);
+        let _ = writeln!(out, "impl-index probes    {}", t.impl_scans);
+        let _ = writeln!(out, "use-tape events      {}", t.tape_events);
+        let _ = writeln!(out, "types interned       {}", t.types_interned);
     }
 
     if any {

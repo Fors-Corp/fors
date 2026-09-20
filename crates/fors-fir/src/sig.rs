@@ -235,6 +235,28 @@ impl GenericsStore {
         self.len[id.index()] as usize
     }
 
+    /// Replaces one parameter's kind and bounds. R15's classification of a
+    /// CONST or CALLABLE parameter needs its bound's TYPE, which may mention a
+    /// projection on an EARLIER parameter of the same list
+    /// (`F: fn(sink I.Item) -> U`), so the row is pushed with the parameters'
+    /// names and trait bounds first and those two columns are filled a moment
+    /// later, once the list itself can be read.
+    pub fn set_param(
+        &mut self,
+        id: GenericsId,
+        ordinal: usize,
+        kind: GParamKind,
+        bounds: TraitRefListId,
+    ) {
+        let base = self.start[id.index()] as usize;
+        assert!(
+            ordinal < self.len[id.index()] as usize,
+            "generic parameter out of range"
+        );
+        self.gp_kind[base + ordinal] = kind;
+        self.gp_bounds[base + ordinal] = bounds;
+    }
+
     pub fn param(&self, id: GenericsId, ordinal: usize) -> GParam {
         let i = self.start[id.index()] as usize + ordinal;
         debug_assert!(ordinal < self.count(id));
@@ -243,6 +265,14 @@ impl GenericsStore {
             kind: self.gp_kind[i],
             bounds: self.gp_bounds[i],
         }
+    }
+
+    /// Replaces a row's constraint list. R62's entries are lowered AFTER the
+    /// parameter rows they may refer to (`fn f[I: Iterator, I.Item: Eq]`
+    /// reads `I`'s bounds to decide which trait declares `Item`), so the row
+    /// is pushed first and its constraints filled in a moment later.
+    pub fn set_constraints(&mut self, id: GenericsId, c: ConstraintListId) {
+        self.constraints[id.index()] = c;
     }
 
     pub fn constraints(&self, id: GenericsId) -> ConstraintListId {

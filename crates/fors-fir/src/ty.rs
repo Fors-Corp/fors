@@ -351,11 +351,26 @@ impl TyStore {
             brand_cons: ConsTable::new(),
             const_cons: ConsTable::new(),
         };
+        // MARC (I3): these three `intern` calls used to sit INSIDE
+        // `debug_assert_eq!`, so a RELEASE build never created rows 0, 1
+        // and 2 at all: the first type any release build interned became
+        // `TY_ERROR`, the second `TY_UNIT` and the third `TY_NEVER`. It was
+        // invisible while only signatures were lowered (nothing compared a
+        // type against those constants) and showed up the moment a body
+        // did: `let n = 1;` reported T0033 "a binding must not be given the
+        // type `never`" in the release binary and nothing in the test
+        // build. The calls are unconditional now, and the assertion is a
+        // hard one — it runs once per store, and a store whose three
+        // reserved rows are not 0/1/2 is not a store anything else in this
+        // crate is true about.
         let empty = s.intern_args(&[]);
-        debug_assert_eq!(empty, NO_ARGS);
-        debug_assert_eq!(s.intern(TyTag::Error, 0, 0, Quals::NONE), TY_ERROR);
-        debug_assert_eq!(s.intern(TyTag::Unit, 0, 0, Quals::NONE), TY_UNIT);
-        debug_assert_eq!(s.intern(TyTag::Never, 0, 0, Quals::NONE), TY_NEVER);
+        let err = s.intern(TyTag::Error, 0, 0, Quals::NONE);
+        let unit = s.intern(TyTag::Unit, 0, 0, Quals::NONE);
+        let never = s.intern(TyTag::Never, 0, 0, Quals::NONE);
+        assert_eq!(empty, NO_ARGS, "the empty argument list must be NO_ARGS");
+        assert_eq!(err, TY_ERROR, "row 0 must be TY_ERROR");
+        assert_eq!(unit, TY_UNIT, "row 1 must be TY_UNIT");
+        assert_eq!(never, TY_NEVER, "row 2 must be TY_NEVER");
         s
     }
 
@@ -777,6 +792,24 @@ impl TyStore {
 
 #[cfg(test)]
 mod tests {
+    /// The three reserved rows exist in EVERY build profile. This is the
+    /// regression test for the release-only bug the comment in
+    /// `TyStore::new` describes: it reads `len()` and the ids, neither of
+    /// which a `debug_assert` can fabricate.
+    #[test]
+    fn the_three_reserved_rows_are_0_1_2_in_every_profile() {
+        let s = TyStore::new();
+        assert_eq!(
+            s.len(),
+            3,
+            "a fresh store holds exactly TY_ERROR, TY_UNIT and TY_NEVER"
+        );
+        assert_eq!(s.tag(TY_ERROR), TyTag::Error);
+        assert_eq!(s.tag(TY_UNIT), TyTag::Unit);
+        assert_eq!(s.tag(TY_NEVER), TyTag::Never);
+        assert!(s.args(NO_ARGS).is_empty());
+    }
+
     use super::*;
 
     #[test]

@@ -61,12 +61,30 @@ const fn r(
     }
 }
 
+/// A rule whose checker code exists. Increment I2 flips the signature and
+/// whole-head rules; the body rules stay [`RuleStatus::Unimplemented`] until
+/// the increment that types a body reaches them.
+const fn imp(
+    rule: u16,
+    code: Option<u16>,
+    short_name: &'static str,
+    emit_sites: &'static [&'static str],
+) -> RuleEntry {
+    RuleEntry {
+        rule,
+        code,
+        short_name,
+        status: RuleStatus::Implemented,
+        emit_sites,
+    }
+}
+
 /// Every ch09 rule, R1 through R62, in rule-number order — design §8's
 /// table verbatim. `EMIT_SITES` (below) is the flat union of every row's
 /// `emit_sites`, for a quick "does this function name appear anywhere in
 /// the table" check without walking the rows.
 pub const CH09_RULES: [RuleEntry; 62] = [
-    r(
+    imp(
         1,
         Some(1),
         "let-needs-annotation-or-initializer",
@@ -82,45 +100,45 @@ pub const CH09_RULES: [RuleEntry; 62] = [
         "sig-hash-is-signature-level-not-body",
         &["encode::sig_hash"],
     ),
-    r(
+    imp(
         3,
         Some(3),
         "no-scalar-beyond-the-primitives",
         &["prelude::build", "lower::prim"],
     ),
-    r(
+    imp(
         4,
         Some(4),
         "one-tuple-of-t-is-t",
         &["lower::tuple_type", "expr::never_forms"],
     ),
-    r(5, Some(5), "prelude-types-are-fixed", &["prelude::build"]),
-    r(6, Some(6), "nominal-identity-by-defid", &["ty::intern"]),
-    r(
+    imp(5, Some(5), "prelude-types-are-fixed", &["prelude::build"]),
+    imp(6, Some(6), "nominal-identity-by-defid", &["ty::intern"]),
+    imp(
         7,
         Some(7),
         "fn-item-value-and-fn-type-equality",
         &["ty::fn_ty", "expr::name_expr"],
     ),
-    r(
+    imp(
         8,
         Some(8),
         "self-replaced-by-self-type-in-impls",
         &["lower::self_ty"],
     ),
-    r(
+    imp(
         9,
         Some(9),
         "type-equality-is-tyid-equality-after-subst-norm",
         &[],
     ),
-    r(
+    imp(
         10,
         Some(10),
         "subsumption-brand-and-scoped-rejection",
         &["expr::subsume"],
     ),
-    r(
+    imp(
         11,
         Some(11),
         "type-application-arity-and-kind",
@@ -137,43 +155,43 @@ pub const CH09_RULES: [RuleEntry; 62] = [
             "normalise",
         ],
     ),
-    r(
+    imp(
         13,
         Some(13),
         "const-argument-is-a-closed-literal",
         &["lower::const_arg"],
     ),
-    r(
+    imp(
         14,
         Some(14),
         "infinite-size-rejected",
         &["wf::infinite_size"],
     ),
-    r(
+    imp(
         15,
         Some(15),
         "generic-parameter-kind-classified-once",
         &["lower::classify_gparam"],
     ),
-    r(
+    imp(
         16,
         Some(16),
         "trait-declaration-well-formedness",
         &["lower::trait_decl"],
     ),
-    r(
+    imp(
         17,
         Some(17),
         "impl-completeness-against-its-trait",
         &["wf::impl_completeness"],
     ),
-    r(
+    imp(
         18,
         Some(18),
         "impl-head-well-formedness",
         &["wf::impl_params"],
     ),
-    r(
+    imp(
         19,
         Some(19),
         "no-overlapping-impls-per-bucket",
@@ -185,7 +203,7 @@ pub const CH09_RULES: [RuleEntry; 62] = [
         "projection-normalisation",
         &["normalise::normalise_proj", "subst::subst_norm"],
     ),
-    r(
+    imp(
         21,
         Some(21),
         "operator-and-indexmut-prerequisite-traits",
@@ -196,7 +214,7 @@ pub const CH09_RULES: [RuleEntry; 62] = [
             "wf::operator_trait_no_output",
         ],
     ),
-    r(
+    imp(
         22,
         Some(22),
         "logical-range-cast-move-operators",
@@ -208,44 +226,44 @@ pub const CH09_RULES: [RuleEntry; 62] = [
             "prelude",
         ],
     ),
-    r(
+    imp(
         23,
         Some(23),
         "copyable-impl-is-fieldwise-and-defining-module",
         &["wf::copyable_impl", "ty::is_copyable"],
     ),
-    r(
+    imp(
         24,
         Some(24),
         "marker-traits-have-no-methods",
         &["wf::marker_traits"],
     ),
-    r(
+    imp(
         25,
         Some(25),
         "dyn-capable-traits",
         &["wf::dyn_capable", "lower::dyn_type"],
     ),
-    r(
+    imp(
         26,
         Some(26),
         "subsumption-at-check-and-call-sites",
         &["expr::subsume", "call::final_compare"],
     ),
-    r(
+    imp(
         27,
         Some(27),
         "literal-typing",
         &["expr::literal_synth", "expr::check"],
     ),
-    r(28, Some(28), "name-expression-typing", &["expr::name_expr"]),
-    r(
+    imp(28, Some(28), "name-expression-typing", &["expr::name_expr"]),
+    imp(
         29,
         Some(29),
         "operator-and-index-typing",
         &["expr::operator", "expr::operator_index"],
     ),
-    r(
+    imp(
         30,
         Some(30),
         "boolean-and-cast-context-operands",
@@ -258,19 +276,19 @@ pub const CH09_RULES: [RuleEntry; 62] = [
             "body::contract_clause",
         ],
     ),
-    r(
+    imp(
         31,
         Some(31),
         "statement-and-for-and-fn-body-typing",
         &["body::stmt", "body::for_stmt", "body::fn_body"],
     ),
-    r(
+    imp(
         32,
         Some(32),
         "if-and-match-synth-and-check",
         &["expr::if_match_synth", "expr::check"],
     ),
-    r(
+    imp(
         33,
         Some(33),
         "never-typed-let-and-break-continue",
@@ -280,25 +298,25 @@ pub const CH09_RULES: [RuleEntry; 62] = [
             "body::break_continue",
         ],
     ),
-    r(
+    imp(
         34,
         Some(34),
         "struct-literal-and-dot-lit-and-variant-construction",
         &["call::struct_lit", "expr::dot_lit"],
     ),
-    r(
+    imp(
         35,
         Some(35),
         "closure-check-and-synth",
         &["expr::closure_check", "expr::closure_synth"],
     ),
-    r(
+    imp(
         36,
         Some(36),
         "try-and-handler-typing",
         &["expr::try_expr", "expr::handler"],
     ),
-    r(
+    imp(
         37,
         Some(37),
         "comptime-spawn-bare-op-and-named-arg",
@@ -338,7 +356,7 @@ pub const CH09_RULES: [RuleEntry; 62] = [
         "closure-argument-pre-test",
         &["call::visit_args"],
     ),
-    r(42, Some(42), "field-access-typing", &["member::field"]),
+    imp(42, Some(42), "field-access-typing", &["member::field"]),
     r(
         43,
         Some(43),
@@ -362,19 +380,19 @@ pub const CH09_RULES: [RuleEntry; 62] = [
             "flow::render_move_error",
         ],
     ),
-    r(
+    imp(
         47,
         Some(47),
         "bracket-reading-by-operand-target",
         &["expr::bracket"],
     ),
-    r(
+    imp(
         48,
         Some(48),
         "no-member-name-clashes",
         &["wf::member_clashes"],
     ),
-    r(
+    imp(
         49,
         None,
         "member-visibility-is-ch08s-code",
@@ -434,13 +452,13 @@ pub const CH09_RULES: [RuleEntry; 62] = [
         "raises-type-and-fn-ty-equality-and-never-binds-never",
         &["lower::raises_ty", "ty::fn_ty", "subst::one_way_match"],
     ),
-    r(
+    imp(
         61,
         Some(61),
         "projection-lowering-and-assoc-type-use",
         &["lower::projection", "member::assoc_ty"],
     ),
-    r(
+    imp(
         62,
         Some(62),
         "constraint-entries-fn-only-traits-only-well-formed",
@@ -618,12 +636,23 @@ mod tests {
                 "row {i} is out of order or has a gap"
             );
         }
-        // Every row starts Unimplemented in I0; later increments flip
-        // individual rows as they land.
-        assert!(
-            CH09_RULES
-                .iter()
-                .all(|e| e.status == RuleStatus::Unimplemented)
+        // A row's status only ever moves from `Unimplemented` to
+        // `Implemented`, so this is the exact set an increment edits: I2
+        // lands the signature and whole-head rules.
+        let implemented: Vec<u16> = CH09_RULES
+            .iter()
+            .filter(|e| e.status == RuleStatus::Implemented)
+            .map(|e| e.rule)
+            .collect();
+        // I2 flipped the signature and whole-head rows; I3 flips the body
+        // rows it decides (R38-R41 and R43-R46 stay unimplemented: a call
+        // with parameters to determine and method lookup are I4/I5's).
+        assert_eq!(
+            implemented,
+            vec![
+                1, 3, 4, 5, 6, 7, 8, 9, 10, 11, 13, 14, 15, 16, 17, 18, 19, 21, 22, 23, 24, 25, 26,
+                27, 28, 29, 30, 31, 32, 33, 34, 35, 36, 37, 42, 47, 48, 49, 61, 62
+            ]
         );
         // NoCode rows, exactly as design §8 marks them.
         let no_code: Vec<u16> = CH09_RULES
