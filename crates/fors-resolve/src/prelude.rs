@@ -98,3 +98,18 @@ pub fn is_prelude_value(name: &[u8]) -> bool {
 pub fn is_std_module(name: &[u8]) -> bool {
     STD_MODULES.contains(&name)
 }
+
+/// Every prelude name (Rule 17's closed list), for the error path's
+/// did-you-mean only. Never a scope lookup — [`is_prelude_type`] and
+/// [`is_prelude_value`] remain the deciding predicates.
+pub fn prelude_names() -> Vec<&'static [u8]> {
+    let mut out: Vec<&'static [u8]> = Vec::new();
+    out.extend_from_slice(&PRELUDE_TYPES);
+    out.extend_from_slice(&PRELUDE_TYPES2);
+    out.extend_from_slice(&PRELUDE_TYPES3);
+    out.extend_from_slice(&PRELUDE_TYPES4);
+    out.extend_from_slice(&PRELUDE_TYPES5);
+    out.extend_from_slice(&PRELUDE_TYPES6);
+    out.extend_from_slice(&PRELUDE_VALUES);
+    out
+}

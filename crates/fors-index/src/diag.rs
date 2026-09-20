@@ -3,6 +3,8 @@
 //! "Drafting decisions" specifies). Append, never renumber. Never a panic
 //! path.
 
+use fors_diag::Fix;
+
 use crate::ids::FileId;
 
 #[repr(u16)]
@@ -39,6 +41,8 @@ pub struct Diagnostic {
     pub end: u32,
     pub code: DiagCode,
     pub message: String,
+    /// Suggested repairs (see `fors_diag`); empty on all but a few codes.
+    pub fixes: Vec<Fix>,
 }
 
 impl Diagnostic {
@@ -49,7 +53,14 @@ impl Diagnostic {
             end,
             code,
             message,
+            fixes: Vec::new(),
         }
+    }
+
+    #[must_use]
+    pub fn with_fix(mut self, fix: Fix) -> Self {
+        self.fixes.push(fix);
+        self
     }
 }
 
