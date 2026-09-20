@@ -1266,17 +1266,28 @@ pub fn own_first(cx: &BodyCx, node: usize) -> Option<TokenKind> {
 
 impl Wf<'_> {
     /// A body diagnostic: at most one per node and one per declaration.
-    pub fn bemit(&mut self, cx: &mut BodyCx, node: usize, code: u16, site: u16, msg: String) {
+    /// Emits a body diagnostic, and reports whether it did: a caller that
+    /// wants to attach a fix must know whether the quiet flag, the
+    /// one-per-node mark or the per-declaration budget swallowed it.
+    pub fn bemit(
+        &mut self,
+        cx: &mut BodyCx,
+        node: usize,
+        code: u16,
+        site: u16,
+        msg: String,
+    ) -> bool {
         if cx.quiet > 0 {
-            return;
+            return false;
         }
         if cx.mark(node) {
-            return;
+            return false;
         }
         let range = cx.range(node);
         let file = cx.file;
-        self.sink.emit(file, range, t(code), site, msg);
+        let emitted = self.sink.emit(file, range, t(code), site, msg);
         self.spoke_at(cx.home);
+        emitted
     }
 
     /// Lowers a type written inside a body (a `let` annotation, a `with`

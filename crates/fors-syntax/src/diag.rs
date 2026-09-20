@@ -2,6 +2,8 @@
 //! (append, never renumber).
 //! Never a panic path — every parse failure becomes one of these.
 
+use fors_diag::Fix;
+
 #[repr(u16)]
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum DiagCode {
@@ -58,6 +60,10 @@ pub struct Diagnostic {
     pub end: u32,
     pub code: DiagCode,
     pub message: &'static str,
+    /// Suggested repairs, in the order a tool should prefer them. Almost
+    /// always empty, and an empty `Vec` allocates nothing, so carrying it
+    /// on every diagnostic costs one word and no work on the hot path.
+    pub fixes: Vec<Fix>,
 }
 
 impl Diagnostic {
@@ -67,6 +73,13 @@ impl Diagnostic {
             end,
             code,
             message,
+            fixes: Vec::new(),
         }
+    }
+
+    #[must_use]
+    pub fn with_fix(mut self, fix: Fix) -> Self {
+        self.fixes.push(fix);
+        self
     }
 }

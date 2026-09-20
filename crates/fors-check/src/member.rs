@@ -16,7 +16,53 @@ use fors_resolve::target::{Entity, ResolvedTarget};
 use fors_syntax::NodeKind;
 
 use crate::body::{BodyCx, Slot};
+use crate::lower::FileCtx;
 use crate::wf::Wf;
+
+fn is_assign_op(k: TokenKind) -> bool {
+    matches!(
+        k,
+        TokenKind::Eq
+            | TokenKind::PlusEq
+            | TokenKind::MinusEq
+            | TokenKind::StarEq
+            | TokenKind::SlashEq
+            | TokenKind::PercentEq
+            | TokenKind::AmpEq
+            | TokenKind::PipeEq
+            | TokenKind::CaretEq
+            | TokenKind::ShlEq
+            | TokenKind::ShrEq
+    )
+}
+
+/// Whether the expression at `node` stands in a PLACE position: the left
+/// of an assignment, or an argument marked `&`/`move`/`inout` (ch01 R2).
+///
+/// R42's "a method is called, not read" fix appends `()`, and `()` in a
+/// place position is not a wrong guess but a PARSE error — `&out.len()`
+/// and `a[i].c() = 1` both stop the file parsing. The arbiter test proved
+/// it, so the fix is withheld here rather than offered and rejected. Error
+/// path only.
+fn in_place_position(f: &FileCtx, node: usize) -> bool {
+    let kinds = &f.tokens.kinds;
+    let (a, b) = f.tree.token_range(node);
+    let (a, b) = ((a as usize).min(kinds.len()), (b as usize).min(kinds.len()));
+    if let Some(i) = (0..a).rev().find(|i| !kinds[*i].is_trivia())
+        && matches!(
+            kinds[i],
+            TokenKind::Amp | TokenKind::KwMove | TokenKind::KwInout
+        )
+    {
+        return true;
+    }
+    if let Some(i) = (b..kinds.len()).find(|i| !kinds[*i].is_trivia())
+        && is_assign_op(kinds[i])
+    {
+        return true;
+    }
+    false
+}
 
 impl Wf<'_> {
     /// R28: a `path` in expression position.
@@ -279,13 +325,26 @@ impl Wf<'_> {
             TyTag::Prim | TyTag::Fn | TyTag::Dyn => {
                 let n = self.show(recv);
                 let f = String::from_utf8_lossy(self.names.resolve(name)).into_owned();
-                self.bemit(
+                let end = cx.range(node).1;
+                let placed = in_place_position(cx.f, node);
+                let emitted = self.bemit(
                     cx,
                     node,
                     42,
                     42,
                     format!("`{n}` has no fields (`{f}`); a method is called, not read"),
                 );
+                if emitted && !placed {
+                    // R14: whether `{f}` is a method of `{n}`, and whether
+                    // it takes arguments, is not decided here — the edit
+                    // only writes down the reading the message states.
+                    self.sink.attach_fix(fors_diag::Fix::insert(
+                        fors_diag::FixKind::CallMethod,
+                        format!("call it: `{f}()`"),
+                        end,
+                        "()",
+                    ));
+                }
                 TY_ERROR
             }
             _ => TY_ERROR,

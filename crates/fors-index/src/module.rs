@@ -92,6 +92,20 @@ fn byte_range(tree: &Tree, tokens: &Tokens, node: usize) -> (u32, u32) {
     (start, end)
 }
 
+/// Like [`byte_range`], but skipping the leading trivia: the span of the
+/// node's own text, which is what an EDIT has to replace. The diagnostic
+/// range deliberately keeps the trivia — that is the column `fors check`
+/// has always printed, and the text format is a frozen baseline.
+fn sig_byte_range(tree: &Tree, tokens: &Tokens, node: usize) -> (u32, u32) {
+    let (a, b) = tree.token_range(node);
+    let (a, b) = (a as usize, (b as usize).min(tokens.kinds.len()));
+    let sig = |i: &usize| !tokens.kinds[*i].is_trivia();
+    match ((a..b).find(sig), (a..b).rev().find(sig)) {
+        (Some(f), Some(l)) => (tokens.range(f).0, tokens.range(l).1),
+        _ => byte_range(tree, tokens, node),
+    }
+}
+
 /// Reads the dotted identifier segments directly owned by a `Path` node
 /// (`ident { "." ident }`, ch08 R3).
 fn path_segments(
@@ -119,6 +133,10 @@ fn path_segments(
 /// and every `use` path with its byte range.
 pub struct FileFacts {
     pub header: Option<(Segments, (u32, u32))>,
+    /// The header path's own span, leading trivia excluded: what a fix-it
+    /// replaces. `header`'s range is the diagnostic's and keeps the
+    /// trivia, so the two are not interchangeable.
+    pub header_path: Option<(u32, u32)>,
     pub uses: Vec<(Segments, (u32, u32))>,
 }
 
@@ -130,6 +148,7 @@ pub fn extract_module_facts(
     interner: &mut Interner,
 ) -> FileFacts {
     let mut header = None;
+    let mut header_path = None;
     let mut uses = Vec::new();
     if !tree.is_empty() {
         for child in tree.children(0) {
@@ -138,6 +157,7 @@ pub fn extract_module_facts(
                     if let Some(path_node) = tree.children(child).next() {
                         let segs = path_segments(tree, tokens, source, interner, path_node);
                         header = Some((segs, byte_range(tree, tokens, path_node)));
+                        header_path = Some(sig_byte_range(tree, tokens, path_node));
                     }
                 }
                 NodeKind::UseDecl => {
@@ -157,7 +177,11 @@ pub fn extract_module_facts(
             }
         }
     }
-    FileFacts { header, uses }
+    FileFacts {
+        header,
+        header_path,
+        uses,
+    }
 }
 
 pub struct ModuleTable {
@@ -222,13 +246,30 @@ pub fn build_module_graph(
         {
             let got = join_dotted(interner, header_segs);
             let want = join_dotted(interner, name);
-            diags.push(Diagnostic::new(
+            // The file's location decides the module name (Rule 1), so the
+            // header is the half that is wrong and `want` is not a guess --
+            // but only while `want` can be written: a file whose own name
+            // is illegal (Rule 24, `ma"in.fors`) has no header that would
+            // match it, and the fix there is to rename the file.
+            let writable = name.iter().all(|&s| is_legal_segment(interner.resolve(s)));
+            let mut d = Diagnostic::new(
                 table.file[m],
                 range.0,
                 range.1,
                 DiagCode::HeaderPathMismatch,
                 format!("module header `{got}` does not match its file's module name `{want}`"),
-            ));
+            );
+            if writable {
+                let (fa, fb) = facts.header_path.unwrap_or(*range);
+                d = d.with_fix(fors_diag::Fix::replace(
+                    fors_diag::FixKind::FixModuleHeaderPath,
+                    format!("rewrite the header path to `{want}`"),
+                    fa,
+                    fb,
+                    want,
+                ));
+            }
+            diags.push(d);
         }
     }
 
