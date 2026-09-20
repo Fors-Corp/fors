@@ -2,6 +2,11 @@
 resolver = "2"
 members = ["crates/*"]
 
+# The COMPILER version (tag `compiler-vX.Y.Z`); every crate inherits it. The
+# LANGUAGE version is a separate stream and lives in `docs/spec/VERSION`.
+[workspace.package]
+version = "0.1.1"
+
 [profile.release]
 debug = "line-tables-only"
 

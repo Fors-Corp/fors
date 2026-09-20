@@ -7,7 +7,8 @@ commit history, which predates the Conventional Commits convention.
 
 | Language | Compiler | Meaning |
 |---|---|---|
-| `lang-v0.5.0` | `compiler-v0.1.0` | current |
+| `lang-v0.5.0` | `compiler-v0.1.1` | current |
+| `lang-v0.5.0` | `compiler-v0.1.0` | first tagged front end |
 
 ## Language
 
@@ -60,6 +61,33 @@ measurement, the grammar, names and visibility), with a conformance corpus and
 an independent reference parser.
 
 ## Compiler
+
+### compiler-v0.1.1 — 2026-09-20
+
+Type checker increments **I2** and **I3** of `docs/design/type-checker.md`,
+independently verified. Still implements `lang-v0.5.0`; still no code
+generator.
+
+- **I2 — signature lowering.** Every declaration's signature is lowered to
+  FIR: generics with a trait's `[Self, P1 ..]` row, bounds, projections
+  (`I.Item`) with the R61 restrictions, well-formedness, the receiver rules.
+- **I3 — bodies.** The two judgements (`synth` / `check`) over expressions,
+  calls, member access and literals, on a flat tape with no solver.
+- **Coverage.** 40 of chapter 09's 62 rules enforced; 184 chapter-09
+  conformance tests on, 62 pending later increments. 240 Rust tests.
+- **Measured.** Checking cost is flat in program size: x1.004 spread from 13k
+  to 211k lines, t(200k)/t(100k) = 2.03. **Missed budgets, recorded rather
+  than hidden:** signature lowering costs +56% time against a +50% budget and
+  +2.32 B/byte against +1.5; a trait-heavy shape retains 6.77 B/byte against
+  6.0.
+- **A release-only defect found by I3.** `TyStore::new` interned its reserved
+  rows inside `debug_assert_eq!`, so a release build rejected `let n = 1;`.
+- `fors --version` reports both streams; the compiler version now lives in
+  `[workspace.package]` and every crate inherits it.
+- **Process.** `main` is protected: six required checks (tests and parser
+  gates, rustfmt plus `fors fmt` over `std/`, clippy with warnings denied,
+  CodeQL for Rust, Python and Actions), linear history, everything by pull
+  request.
 
 ### compiler-v0.1.0 — 2026-09-20
 
