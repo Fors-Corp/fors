@@ -9,11 +9,13 @@
 needs { syscall };
 
 // Root-capability type (ch04 R21), capability `rng`.
-pub struct Rng { }
+pub struct Rng {}
 
 impl Rng {
-    pub fn fill(inout self: Self, inout into: Slice[u8]) { }                   // STUB, total
-    pub fn u64(inout self: Self) -> u64 { return 0; }                          // STUB, total
+    pub fn fill(inout self: Self, inout into: Slice[u8]) {} // STUB, total
+    pub fn u64(inout self: Self) -> u64 {
+        return 0;
+    } // STUB, total
 }
 
 // A pure value with a fixed, documented algorithm and NO capability: the
@@ -26,12 +28,14 @@ impl Pcg {
     pub fn seeded(let seed: u64) -> Pcg {
         return Pcg { state: seed, inc: 0xda3e39cb94b95bdb };
     }
-    pub fn u64(inout self: Self) -> u64 { return 0; }                          // STUB
+    pub fn u64(inout self: Self) -> u64 {
+        return 0;
+    } // STUB
     // Unbiased; traps (kind div-zero) iff n == 0.
     pub fn bounded(inout self: Self, let n: u64) -> u64
         pre n > 0
     {
-        return self.u64() % n;                                                 // STUB: rejection sampling
+        return self.u64() % n; // STUB: rejection sampling
     }
-    pub fn fill(inout self: Self, inout into: Slice[u8]) { }                    // STUB
+    pub fn fill(inout self: Self, inout into: Slice[u8]) {} // STUB
 }

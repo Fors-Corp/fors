@@ -5,7 +5,7 @@
 // (ch01 R15a). A is the allocator's brand, so a Vec's storage can only be
 // returned to the allocator that produced it (ch01 R18). Imports the two
 // leaves only (alloc, seq); never std.mem, which re-exports this module.
-needs { };
+needs {};
 
 use std.mem.alloc, std.mem.seq;
 
@@ -15,7 +15,7 @@ pub struct Vec[T, A: brand] { n: usize, capacity: usize, store: Option[alloc.Blo
 // Round 6 (R11, ch01 R22): linear ALWAYS, not "once it has capacity" —
 // linearity is a fact of the constructor, never of a value's state or of an
 // instantiation. `deinit` on an empty Vec is total and free.
-impl[T, A: brand] Linear for Vec[T, A] { }
+impl[T, A: brand] Linear for Vec[T, A] {}
 
 impl[T, A: brand] Vec[T, A] {
     // Allocates nothing. T and A come from the CHECK position (ch09 R38c);
@@ -24,59 +24,69 @@ impl[T, A: brand] Vec[T, A] {
         return Vec { n: 0, capacity: 0, store: none };
     }
 
-    pub fn len(let self: Self) -> usize { return self.n; }
-    pub fn cap(let self: Self) -> usize { return self.capacity; }
+    pub fn len(let self: Self) -> usize {
+        return self.n;
+    }
+    pub fn cap(let self: Self) -> usize {
+        return self.capacity;
+    }
 
     // Growth doubles from a first capacity of 4; the schedule is part of
     // R24 because `cap` is observable.
     pub fn push[L: alloc.Allocator[A]](inout self: Self, inout a: L, sink v: T)
         raises alloc.AllocError
     {
-        raise alloc.AllocError.out_of_memory;                // STUB
+        raise alloc.AllocError.out_of_memory; // STUB
     }
 
-    pub fn pop(inout self: Self) -> Option[T] { return none; }               // STUB
+    pub fn pop(inout self: Self) -> Option[T] {
+        return none;
+    } // STUB
 
     pub fn reserve[L: alloc.Allocator[A]](inout self: Self, inout a: L, let extra: usize)
         raises alloc.AllocError
     {
-        raise alloc.AllocError.out_of_memory;                // STUB
+        raise alloc.AllocError.out_of_memory; // STUB
     }
 
-    pub fn shrink_to_fit[L: alloc.Allocator[A]](inout self: Self, inout a: L) { }   // STUB
+    pub fn shrink_to_fit[L: alloc.Allocator[A]](inout self: Self, inout a: L) {} // STUB
 
     pub fn swap_remove(inout self: Self, let i: usize) -> T
         pre i < self.n
     {
-        return self.swap_remove(i);                          // STUB
+        return self.swap_remove(i); // STUB
     }
 
-    @unsafe(invariant: "the view spans len initialised elements and is dead at the next push/reserve/deinit")
+    @unsafe(
+        invariant: "the view spans len initialised elements and is dead at the next push/reserve/deinit"
+    )
     pub fn items(let self: Self) -> scoped(self) Slice[T] {
-        return self.items();                                 // STUB
+        return self.items(); // STUB
     }
 
     @unsafe(invariant: "as items, and exclusive for the extent of the borrow")
     pub fn items_mut(inout self: Self) -> scoped(self) Slice[T] {
-        return self.items_mut();                             // STUB
+        return self.items_mut(); // STUB
     }
 
     // The release for a LINEAR element type (R11c(iii)): the caller has
     // popped and consumed every element, so nothing is dropped here.
     pub fn deinit_empty[L: alloc.Allocator[A]](sink self: Self, inout a: L)
         pre self.len() == 0
-    { }                                                                      // STUB
+    {} // STUB
 }
 
 // Round 6 (R11c(ii)): these DROP elements, so they need `T: Droppable` and
 // are simply unavailable for a linear element type.
 impl[T: Droppable, A: brand] Vec[T, A] {
-    pub fn clear(inout self: Self) { self.n = 0; }                           // STUB
+    pub fn clear(inout self: Self) {
+        self.n = 0;
+    } // STUB
 
     // The ordinary release (R11): `sink self`, so the call `v.deinit(&a)`
     // moves `v` implicitly (ch01 R4, ch09 R46) and discharges its cleanup
     // obligation (ch01 R22d). Written once with `defer`/`errdefer`.
-    pub fn deinit[L: alloc.Allocator[A]](sink self: Self, inout a: L) { }    // STUB
+    pub fn deinit[L: alloc.Allocator[A]](sink self: Self, inout a: L) {} // STUB
 }
 
 impl[T: Copyable, A: brand] Vec[T, A] {
@@ -104,8 +114,12 @@ impl[T, A: brand] IndexMut[usize] for Vec[T, A] {
 // Names its destination and its allocator: a collect that invented a
 // container would allocate ambiently (R3, R35). Lives here, not in seq,
 // because it names Vec and seq must stay a leaf.
-pub fn try_collect_into[I: Iterator, A: brand, L: alloc.Allocator[A]]
-    (sink it: I, inout dst: Vec[I.Item, A], inout a: L) raises alloc.AllocError
-{
-    for x in it { dst.push(&a, move x)?; }                  // `move`: ch01 R2
+pub fn try_collect_into[I: Iterator, A: brand, L: alloc.Allocator[A]](
+    sink it: I,
+    inout dst: Vec[I.Item, A],
+    inout a: L
+) raises alloc.AllocError {
+    for x in it {
+        dst.push(&a, move x)?;
+    } // `move`: ch01 R2
 }

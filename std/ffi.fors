@@ -17,14 +17,16 @@ pub enum Error { not_terminated, interior_nul, other }
 pub struct CStr { n: usize, base: rawptr[u8] }
 
 impl CStr {
-    pub fn len(let self: Self) -> usize { return self.n; }                      // bytes before the NUL
+    pub fn len(let self: Self) -> usize {
+        return self.n;
+    } // bytes before the NUL
 
     pub fn to_str(let self: Self) -> scoped(self) Str raises mem.Utf8Error {
-        raise mem.Utf8Error.invalid_sequence;                                   // STUB
+        raise mem.Utf8Error.invalid_sequence; // STUB
     }
 
     // The bytes MUST contain a NUL.
     pub fn from_bytes(let b: Slice[u8]) -> scoped(b) CStr raises Error {
-        raise Error.not_terminated;                                             // STUB
+        raise Error.not_terminated; // STUB
     }
 }

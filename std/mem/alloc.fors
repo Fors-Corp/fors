@@ -7,7 +7,7 @@
 // container submodule imports it, std.mem re-exports its items, and it
 // imports nothing. It holds no capability: mapping pages is std.mem's
 // (R53), and this module only names what a mapped block looks like.
-needs { };
+needs {};
 
 // ---------------------------------------------------------------- errors
 
@@ -23,14 +23,14 @@ impl Layout {
     // spelling for a type's size yet (ch09 R57 names size_of/align_of
     // as operations, ch08 R17 binds neither): STUB until it does.
     pub fn of[T]() -> Layout {
-        return Layout { size: 0, align: 1 };                 // STUB
+        return Layout { size: 0, align: 1 }; // STUB
     }
     // Raises too_large iff n * size_of[T]() overflows usize (R13).
     pub fn array[T](let n: usize) -> Layout raises AllocError {
         if n > 0 {
-            raise AllocError.too_large;                      // STUB: checked multiply
+            raise AllocError.too_large; // STUB: checked multiply
         }
-        return Layout { size: 0, align: 1 };                 // STUB
+        return Layout { size: 0, align: 1 }; // STUB
     }
 }
 
@@ -43,15 +43,21 @@ pub struct Block[A: brand] { size: usize, align: usize, ptr: rawptr[u8] }
 // Round 6 (R11, ch01 R22): the declared base of linearity for a Block; a
 // Vec, Map or String holding one would be linear by inference anyway
 // (ch01 R22a(b)), and each declares its own impl as well.
-impl[A: brand] Linear for Block[A] { }
+impl[A: brand] Linear for Block[A] {}
 
 impl[A: brand] Block[A] {
-    pub fn len(let self: Self) -> usize { return self.size; }
-    pub fn align(let self: Self) -> usize { return self.align; }
+    pub fn len(let self: Self) -> usize {
+        return self.size;
+    }
+    pub fn align(let self: Self) -> usize {
+        return self.align;
+    }
 
-    @unsafe(invariant: "the returned view spans exactly this block and is dead at the next grow/free")
+    @unsafe(
+        invariant: "the returned view spans exactly this block and is dead at the next grow/free"
+    )
     pub fn bytes_raw(inout self: Self) -> scoped(self) Slice[u8] {
-        return self.bytes_raw();                             // STUB: self.ptr[0 ..< size]
+        return self.bytes_raw(); // STUB: self.ptr[0 ..< size]
     }
 }
 
@@ -61,13 +67,13 @@ impl[A: brand] Block[A] {
 // The block is consumed: the Own now owns it (R12, R28).
 @unsafe(invariant: "b was allocated for Layout.of[T]() by an allocator of brand A")
 pub fn own_raw[T, A: brand](sink b: Block[A], sink v: T) -> Own[T, A] {
-    return own_raw(move b, move v);                          // STUB
+    return own_raw(move b, move v); // STUB
 }
 
 // The inverse: gives back the block and the payload it held.
 @unsafe(invariant: "o was produced by own_raw of this brand and is not yet disowned")
 pub fn disown_raw[T, A: brand](sink o: Own[T, A]) -> (Block[A], T) {
-    return disown_raw(move o);                               // STUB
+    return disown_raw(move o); // STUB
 }
 
 // ----------------------------------------------------------- the interface
