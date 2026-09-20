@@ -3,6 +3,31 @@ category = "parallel"
 description = "Dense NxN double matmul C = A x B, i-k-j loop order (hoist a = A[i][k], inner j loop does C[i][j] += a * B[k][j]). A[i][j] = ((i*j) % 7) + 1, B[i][j] = ((i+j) % 5) + 1, all in flat row-major arrays; every value is a small integer so the result is exact in doubles regardless of summation order. Rows of C are split into contiguous blocks, one per thread. Prints sum of all elements of C, then trace of C, each as an integer (no decimal point, no exponent)."
 reference = "c"
 threads = [1, 2, 4, 6, 8]
+# bound: classification per docs/spec/06-measurement.md Tier A table ("compute-bound (naive
+# i-k-j; blocked pending)"), kept as-is per that table's freeze (rule 3) -- but the naive
+# arithmetic-intensity arithmetic below is a genuine caveat, not a rubber stamp. At N=1800:
+# FLOPs = 2*N^3 ~= 1.166e10. i-k-j order keeps a=A[i][k] in a register and streams one row of
+# B and one row of C per k-step, so for a FIXED i the whole N x N B matrix (1800^2*8 bytes =
+# 25.9 MB) is read once; C's row (8*N bytes) and A's row stay resident across the k-loop. That
+# 25.9 MB B matrix does not fit in the M1 Pro's per-cluster L2 (see host_info/perflevel*), so it
+# is re-streamed from DRAM/SLC on EVERY i iteration: total B traffic ~= N * N^2 * 8 bytes =
+# N^3 * 8 bytes, giving a naive/worst-case arithmetic intensity of 2*N^3 / (N^3*8) = 0.25
+# FLOP/byte -- deep in the bandwidth-bound regime by the roofline model, not compute-bound.
+# Compare bench/results/machine-<host>.json's "balance_point_flops_per_byte" (calibrate.py):
+# 0.25 sitting far below the measured balance point means the naive i-k-j matmul as currently
+# implemented is plausibly bandwidth-limited at this N, contradicting the frozen "compute-bound"
+# label. This file does NOT override the frozen Tier A table (docs/spec/06-measurement.md rule
+# 3: kernels are added, never re-tuned once published-against); it records the arithmetic so a
+# report reader can see the tension. Recommendation for the owner: either re-derive the bound
+# classification once the "blocked" variant lands (blocking is exactly what raises AI towards
+# the compute-bound regime), or explicitly footnote R15 efficiency claims on unblocked matmul.
+bound = "compute"
+# deterministic: sum/trace are computed in a single serial pass over the completed C matrix
+# AFTER all threads join, in every implemented language (c, c-fma, rust, go, swift, zig, java, node, deno, python where
+# present), and verified empirically by `run.py determinism`, which runs EVERY declared thread
+# count at the check size and requires byte-identical stdout -- row-block assignment never changes a row's own
+# computed values, and the final reduction order (fixed i,j sweep) does not depend on thread count.
+deterministic = true
 
 [sizes]
 check = ["64"]
