@@ -13,6 +13,16 @@ private partial sum; partials are added together at the end. Print the total
 """
 reference = "c"
 threads = [1, 2, 4, 6, 8]
+# bound: pure integer hash-chain arithmetic per index, no array reads at all; classification
+# per docs/spec/06-measurement.md Tier A table.
+bound = "compute"
+# deterministic: each thread keeps a private uint64/u64 partial sum, stored by thread index
+# (not append order), summed serially after join in every implemented language (c, c-fma, rust, go, swift, zig, java, node, deno, python where
+# present), and verified empirically by `run.py determinism`, which runs EVERY declared thread
+# count at the check size and requires byte-identical stdout. Integer addition is exact and
+# associative in this range (spec guarantees the total stays below 2^53 for N up to 1e9), so the
+# total does not depend on how many threads split the range or in what order partials were added.
+deterministic = true
 
 [sizes]
 check = ["100000"]
