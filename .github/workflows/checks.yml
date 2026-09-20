@@ -1,0 +1,47 @@
+name: checks
+
+# The gates a pull request must clear beyond `ci` (tests + the reference
+# parser): formatting and clippy. Benchmarks never run here - they belong on
+# the pinned M1 box, never on a shared runner whose neighbours are unknown.
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: checks-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  format:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - run: rustup update stable --no-self-update && rustup default stable && rustup component add rustfmt
+      - name: Rust is rustfmt-clean
+        run: cargo fmt --all --check
+      - name: Every std module is canonical under `fors fmt`
+        # The conformance corpus is deliberately excluded: ~101 of its files do
+        # not parse on purpose, and several others encode a specific layout as
+        # part of what they test. std/ is the style exhibit, so it must be
+        # canonical.
+        run: cargo run -q -p fors-fmt --example fmt -- $(find std -name '*.fors' | sort)
+
+  clippy:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - run: rustup update stable --no-self-update && rustup default stable && rustup component add clippy
+      - uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            target
+          key: clippy-${{ runner.os }}-${{ hashFiles('Cargo.lock') }}
+      - run: cargo clippy --workspace --all-targets -- -D warnings

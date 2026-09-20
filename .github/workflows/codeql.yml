@@ -1,0 +1,87 @@
+name: codeql
+
+# The repository is private on a Team plan, where code scanning's Security tab
+# needs the paid Code Security add-on. So CodeQL runs here as an ORDINARY GATE:
+# the database is built and analysed, nothing is uploaded, and the job fails if
+# the analysis produces any result. Findings land in the job log and in the
+# SARIF artefact rather than in a dashboard. Switch `upload` to `always` and
+# delete the gate step if Code Security is ever enabled.
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  schedule:
+    - cron: "17 4 * * 1"
+
+permissions:
+  contents: read
+  actions: read
+
+concurrency:
+  group: codeql-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  analyze:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        # `rust` is CodeQL's newest pack; `python` covers the reference parser
+        # and the benchmark harness, which are real code with real inputs.
+        language: [rust, python, actions]
+    steps:
+      - uses: actions/checkout@v4
+
+      - if: matrix.language == 'rust'
+        run: rustup update stable --no-self-update && rustup default stable
+
+      - name: Initialize CodeQL
+        uses: github/codeql-action/init@v3
+        with:
+          languages: ${{ matrix.language }}
+          queries: security-and-quality
+
+      - name: Autobuild
+        uses: github/codeql-action/autobuild@v3
+
+      - name: Analyze
+        id: analyze
+        uses: github/codeql-action/analyze@v3
+        with:
+          category: /language:${{ matrix.language }}
+          upload: never
+          output: sarif
+
+      - name: Upload the SARIF as an artefact
+        if: always() && hashFiles('sarif/*.sarif') != ''
+        uses: actions/upload-artifact@v4
+        with:
+          name: codeql-${{ matrix.language }}
+          path: sarif/
+          retention-days: 30
+
+      - name: Fail on any CodeQL result
+        if: always() && hashFiles('sarif/*.sarif') != ''
+        run: |
+          python3 - <<'PY'
+          import glob, json, sys
+          total = 0
+          for path in sorted(glob.glob("sarif/*.sarif")):
+              sarif = json.load(open(path))
+              for run in sarif.get("runs", []):
+                  rules = {r["id"]: r for r in run.get("tool", {}).get("driver", {}).get("rules", [])}
+                  for res in run.get("results", []):
+                      total += 1
+                      loc = res.get("locations", [{}])[0].get("physicalLocation", {})
+                      art = loc.get("artifactLocation", {}).get("uri", "?")
+                      line = loc.get("region", {}).get("startLine", "?")
+                      rule = res.get("ruleId", "?")
+                      sev = rules.get(rule, {}).get("properties", {}).get("problem.severity", "?")
+                      text = res.get("message", {}).get("text", "")
+                      print(f"{art}:{line}: [{sev}] {rule}: {text}")
+          print(f"\nCodeQL results: {total}")
+          sys.exit(1 if total else 0)
+          PY
