@@ -5,13 +5,13 @@ needs { syscall };
 pub enum Error { not_found, permission, invalid_program, no_resources, other }
 
 // Root-capability type (ch04 R21), capability `exec`.
-pub struct Exec { }
+pub struct Exec {}
 
 impl Exec {
     // args verbatim: no shell, no PATH search of its own, no environment
     // decision — `prog` is resolved by the operating system as given.
     pub fn run(let self: Self, let prog: Str, let args: Slice[Str]) -> Child raises Error {
-        raise Error.not_found;                                                 // STUB
+        raise Error.not_found; // STUB
     }
 }
 
@@ -19,15 +19,21 @@ impl Exec {
 pub struct Child { id: u64 }
 
 // Round 6 (R11, ch01 R22): linear — consumed by `wait` on every path.
-impl Linear for Child { }
+impl Linear for Child {}
 
 impl Child {
-    pub fn pid(let self: Self) -> u64 { return self.id; }
-    pub fn wait(sink self: Self) -> i32 raises Error { raise Error.other; }    // STUB
+    pub fn pid(let self: Self) -> u64 {
+        return self.id;
+    }
+    pub fn wait(sink self: Self) -> i32 raises Error {
+        raise Error.other;
+    } // STUB
 }
 
 // The ONE ambient read std allows (R50): a scheduling hint, no capability.
 // The language's own `parallel` already depends on the runtime knowing it,
 // it reveals nothing beyond the machine's width, and it can affect nothing
 // outside the process.
-pub fn hardware_threads() -> usize { return 1; }                               // STUB
+pub fn hardware_threads() -> usize {
+    return 1;
+} // STUB

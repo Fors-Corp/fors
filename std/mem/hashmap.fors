@@ -9,33 +9,85 @@
 // The module is named `hashmap`, not `map`, so that `use std.mem.hashmap;`
 // can never be ambiguous with std.mem's re-exported function `map`
 // (ch08 R4: a path that is both a module and a pub item is an error).
-needs { };
+needs {};
 
 use std.mem.alloc;
 
 // ------------------------------------------------------------------ Hash
 
-pub trait Hash { fn hash(let self: Self, let seed: u64) -> u64; }
+pub trait Hash {
+    fn hash(let self: Self, let seed: u64) -> u64;
+}
 
 // Fixed, non-cryptographic, target-independent, address-independent (R29).
 // Implemented for Str, every integer type, bool, and Slice[T] of Hash T;
 // NOT for f32/f64. Orphan rule (ch08 R21): this module defines Hash.
-impl Hash for u8    { fn hash(let self: Self, let seed: u64) -> u64 { return (self as u64) ^ seed; } }  // STUB
-impl Hash for u16   { fn hash(let self: Self, let seed: u64) -> u64 { return (self as u64) ^ seed; } }  // STUB
-impl Hash for u32   { fn hash(let self: Self, let seed: u64) -> u64 { return (self as u64) ^ seed; } }  // STUB
-impl Hash for u64   { fn hash(let self: Self, let seed: u64) -> u64 { return self ^ seed; } }           // STUB
-impl Hash for usize { fn hash(let self: Self, let seed: u64) -> u64 { return (self as u64) ^ seed; } }  // STUB
-impl Hash for i8    { fn hash(let self: Self, let seed: u64) -> u64 { return (self as u64) ^ seed; } }  // STUB
-impl Hash for i16   { fn hash(let self: Self, let seed: u64) -> u64 { return (self as u64) ^ seed; } }  // STUB
-impl Hash for i32   { fn hash(let self: Self, let seed: u64) -> u64 { return (self as u64) ^ seed; } }  // STUB
-impl Hash for i64   { fn hash(let self: Self, let seed: u64) -> u64 { return (self as u64) ^ seed; } }  // STUB
-impl Hash for isize { fn hash(let self: Self, let seed: u64) -> u64 { return (self as u64) ^ seed; } }  // STUB
-impl Hash for bool  { fn hash(let self: Self, let seed: u64) -> u64 { return seed; } }                  // STUB
-impl Hash for Str   { fn hash(let self: Self, let seed: u64) -> u64 { return seed; } }                  // STUB
+impl Hash for u8 {
+    fn hash(let self: Self, let seed: u64) -> u64 {
+        return (self as u64) ^ seed;
+    }
+} // STUB
+impl Hash for u16 {
+    fn hash(let self: Self, let seed: u64) -> u64 {
+        return (self as u64) ^ seed;
+    }
+} // STUB
+impl Hash for u32 {
+    fn hash(let self: Self, let seed: u64) -> u64 {
+        return (self as u64) ^ seed;
+    }
+} // STUB
+impl Hash for u64 {
+    fn hash(let self: Self, let seed: u64) -> u64 {
+        return self ^ seed;
+    }
+} // STUB
+impl Hash for usize {
+    fn hash(let self: Self, let seed: u64) -> u64 {
+        return (self as u64) ^ seed;
+    }
+} // STUB
+impl Hash for i8 {
+    fn hash(let self: Self, let seed: u64) -> u64 {
+        return (self as u64) ^ seed;
+    }
+} // STUB
+impl Hash for i16 {
+    fn hash(let self: Self, let seed: u64) -> u64 {
+        return (self as u64) ^ seed;
+    }
+} // STUB
+impl Hash for i32 {
+    fn hash(let self: Self, let seed: u64) -> u64 {
+        return (self as u64) ^ seed;
+    }
+} // STUB
+impl Hash for i64 {
+    fn hash(let self: Self, let seed: u64) -> u64 {
+        return (self as u64) ^ seed;
+    }
+} // STUB
+impl Hash for isize {
+    fn hash(let self: Self, let seed: u64) -> u64 {
+        return (self as u64) ^ seed;
+    }
+} // STUB
+impl Hash for bool {
+    fn hash(let self: Self, let seed: u64) -> u64 {
+        return seed;
+    }
+} // STUB
+impl Hash for Str {
+    fn hash(let self: Self, let seed: u64) -> u64 {
+        return seed;
+    }
+} // STUB
 impl[T: Hash] Hash for Slice[T] {
     fn hash(let self: Self, let seed: u64) -> u64 {
         var h: u64 = seed;
-        for x in self { h = x.hash(h); }                     // STUB: elements by value
+        for x in self {
+            h = x.hash(h);
+        } // STUB: elements by value
         return h;
     }
 }
@@ -43,10 +95,15 @@ impl[T: Hash] Hash for Slice[T] {
 // ------------------------------------------------------------------- Map
 
 // Opaque, linear while cap > 0 (R11).
-pub struct Map[K, V, A: brand] { n: usize, capacity: usize, seed: u64, store: Option[alloc.Block[A]] }
+pub struct Map[K, V, A: brand] {
+    n: usize,
+    capacity: usize,
+    seed: u64,
+    store: Option[alloc.Block[A]]
+}
 
 // Round 6 (R11, ch01 R22): linear ALWAYS, exactly as Vec is.
-impl[K, V, A: brand] Linear for Map[K, V, A] { }
+impl[K, V, A: brand] Linear for Map[K, V, A] {}
 
 impl[K: Eq + Hash, V, A: brand] Map[K, V, A] {
     pub fn new() -> Map[K, V, A] {
@@ -57,49 +114,66 @@ impl[K: Eq + Hash, V, A: brand] Map[K, V, A] {
         return Map { n: 0, capacity: 0, seed: seed, store: none };
     }
 
-    pub fn len(let self: Self) -> usize { return self.n; }
-
-    pub fn has(let self: Self, let k: K) -> bool { return false; }            // STUB
-
-    // Returns the displaced value, if the key was present (R6c).
-    pub fn insert[L: alloc.Allocator[A]](inout self: Self, inout a: L, sink k: K, sink v: V)
-        -> Option[V] raises alloc.AllocError
-    {
-        raise alloc.AllocError.out_of_memory;                // STUB
+    pub fn len(let self: Self) -> usize {
+        return self.n;
     }
 
-    pub fn remove(inout self: Self, let k: K) -> Option[V] { return none; }   // STUB
+    pub fn has(let self: Self, let k: K) -> bool {
+        return false;
+    } // STUB
+
+    // Returns the displaced value, if the key was present (R6c).
+    pub fn insert[L: alloc.Allocator[A]](
+        inout self: Self,
+        inout a: L,
+        sink k: K,
+        sink v: V
+    ) -> Option[V] raises alloc.AllocError {
+        raise alloc.AllocError.out_of_memory; // STUB
+    }
+
+    pub fn remove(inout self: Self, let k: K) -> Option[V] {
+        return none;
+    } // STUB
 
     pub fn reserve[L: alloc.Allocator[A]](inout self: Self, inout a: L, let extra: usize)
         raises alloc.AllocError
     {
-        raise alloc.AllocError.out_of_memory;                // STUB
+        raise alloc.AllocError.out_of_memory; // STUB
     }
 
     // The release for a LINEAR value type (R11c(iii)): the caller has
     // removed and consumed every value first.
     pub fn deinit_empty[L: alloc.Allocator[A]](sink self: Self, inout a: L)
         pre self.len() == 0
-    { }                                                                      // STUB
+    {} // STUB
 }
 
 // Round 6 (R11c(ii)): these DROP values, so they need `V: Droppable`. `K`
 // is already Copyable through `Eq + Hash` (R29), so a linear key cannot
 // arise.
 impl[K: Eq + Hash, V: Droppable, A: brand] Map[K, V, A] {
-    pub fn clear(inout self: Self) { self.n = 0; }
+    pub fn clear(inout self: Self) {
+        self.n = 0;
+    }
 
-    pub fn deinit[L: alloc.Allocator[A]](sink self: Self, inout a: L) { }     // STUB
+    pub fn deinit[L: alloc.Allocator[A]](sink self: Self, inout a: L) {} // STUB
 }
 
 // Option[V] can carry a value only when V is Copyable, so the two
 // value-returning reads live in their own impl (R25).
 impl[K: Eq + Hash, V: Copyable, A: brand] Map[K, V, A] {
-    pub fn get(let self: Self, let k: K) -> Option[V] { return none; }        // STUB
+    pub fn get(let self: Self, let k: K) -> Option[V] {
+        return none;
+    } // STUB
     pub fn get_or(let self: Self, let k: K, let fallback: V) -> V {
         match self.get(k) {
-            some(let v) => { return v; }
-            none => { return fallback; }
+            some(let v) => {
+                return v;
+            }
+            none => {
+                return fallback;
+            }
         }
     }
 }
@@ -110,9 +184,13 @@ impl[K: Eq + Hash, V: Copyable, A: brand] Map[K, V, A] {
 // Traps (kind bounds) if the key is absent: the checked form is has + [].
 impl[K: Eq + Hash, V, A: brand] Index[K] for Map[K, V, A] {
     type Output = V;
-    fn at(let self: Self, let i: K) -> scoped(self) Self.Output { return self.at(i); }   // STUB
+    fn at(let self: Self, let i: K) -> scoped(self) Self.Output {
+        return self.at(i);
+    } // STUB
 }
 
 impl[K: Eq + Hash, V, A: brand] IndexMut[K] for Map[K, V, A] {
-    fn at_mut(inout self: Self, let i: K) -> scoped(self) Self.Output { return self.at_mut(i); }   // STUB
+    fn at_mut(inout self: Self, let i: K) -> scoped(self) Self.Output {
+        return self.at_mut(i);
+    } // STUB
 }

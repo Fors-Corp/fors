@@ -24,7 +24,7 @@
 // an adaptor carries every parameter it needs in its own head (`Mapped[I,
 // U]`, since ch09 R18 would leave `U` unconstrained otherwise). A callable
 // FIELD is called as `(self.f)(move x)`, never `self.f(x)` (ch09 T0043).
-needs { };
+needs {};
 
 // ------------------------------------------------------------- the trait
 
@@ -37,11 +37,11 @@ pub trait Iterator {
     // U: Droppable is forced by ch09 R17/R21: Mapped's `type Item = U;`
     // must satisfy `Item: Droppable` with U rigid, and the bound here makes
     // a closure returning a linear value fail at `map` (T0012).
-    fn map[U: Droppable](sink self, let f: fn (sink Self.Item) -> U) -> Mapped[Self, U] {
+    fn map[U: Droppable](sink self, let f: fn(sink Self.Item) -> U) -> Mapped[Self, U] {
         return Mapped { src: self, f: f };
     }
 
-    fn filter(sink self, let p: fn (let Self.Item) -> bool) -> Filtered[Self] {
+    fn filter(sink self, let p: fn(let Self.Item) -> bool) -> Filtered[Self] {
         return Filtered { src: self, p: p };
     }
 
@@ -66,53 +66,76 @@ pub trait Iterator {
     // ch01 R4a(c)-(d) forbid moving out of a field or an `inout` parameter.
     @unsafe(invariant: "src points at the receiver for the extent of the scoped result")
     fn by_ref(inout self) -> scoped(self) ByRef[Self] {
-        return self.by_ref();                                // STUB
+        return self.by_ref(); // STUB
     }
 
     // ---- consumers (R35): each uses the iterator up ----
 
     fn count(sink self) -> usize {
         var n: usize = 0;
-        for x in self { n = n + 1; }
+        for x in self {
+            n = n + 1;
+        }
         return n;
     }
 
     // Strictly left to right; never reassociated, whatever the algebra (R37).
-    fn fold[B](sink self, sink init: B, let f: fn (sink B, sink Self.Item) -> B) -> B {
+    fn fold[B](sink self, sink init: B, let f: fn(sink B, sink Self.Item) -> B) -> B {
         var acc: B = move init;
-        for x in self { acc = f(move acc, move x); }
+        for x in self {
+            acc = f(move acc, move x);
+        }
         return acc;
     }
 
-    fn for_each(sink self, let f: fn (sink Self.Item)) {
-        for x in self { f(move x); }
+    fn for_each(sink self, let f: fn(sink Self.Item)) {
+        for x in self {
+            f(move x);
+        }
     }
 
-    fn all(sink self, let p: fn (let Self.Item) -> bool) -> bool {
-        for x in self { if not p(x) { return false; } }
+    fn all(sink self, let p: fn(let Self.Item) -> bool) -> bool {
+        for x in self {
+            if not p(x) {
+                return false;
+            }
+        }
         return true;
     }
 
-    fn any(sink self, let p: fn (let Self.Item) -> bool) -> bool {
-        for x in self { if p(x) { return true; } }
+    fn any(sink self, let p: fn(let Self.Item) -> bool) -> bool {
+        for x in self {
+            if p(x) {
+                return true;
+            }
+        }
         return false;
     }
 
-    fn find(sink self, let p: fn (let Self.Item) -> bool) -> Option[Self.Item] {
-        for x in self { if p(x) { return some(x); } }
+    fn find(sink self, let p: fn(let Self.Item) -> bool) -> Option[Self.Item] {
+        for x in self {
+            if p(x) {
+                return some(x);
+            }
+        }
         return none;
     }
 
     // The try_ siblings (R8): same name modulo the prefix, same order.
-    fn try_fold[B, E](sink self, sink init: B,
-                      let f: fn (sink B, sink Self.Item) -> B raises E) -> B raises E {
+    fn try_fold[B, E](sink self, sink init: B, let f: fn(sink B, sink Self.Item) -> B raises E) -> B
+        raises E
+    {
         var acc: B = move init;
-        for x in self { acc = f(move acc, move x)?; }
+        for x in self {
+            acc = f(move acc, move x)?;
+        }
         return acc;
     }
 
-    fn try_for_each[E](sink self, let f: fn (sink Self.Item) raises E) raises E {
-        for x in self { f(move x)?; }
+    fn try_for_each[E](sink self, let f: fn(sink Self.Item) raises E) raises E {
+        for x in self {
+            f(move x)?;
+        }
     }
 }
 
@@ -126,7 +149,7 @@ impl[T: Copyable] Iterator for SliceIter[T] {
     fn next(inout self) -> Option[Self.Item] {
         if self.at < self.n {
             self.at = self.at + 1;
-            return self.load(self.at - 1);                   // STUB
+            return self.load(self.at - 1); // STUB
         }
         return none;
     }
@@ -137,14 +160,14 @@ impl[T: Copyable] Iterator for SliceIter[T] {
 // whatever `s` is scoped to, borrowed `let` for the iterator's life.
 @unsafe(invariant: "base and n span s; the scoped result keeps s borrowed")
 pub fn iter[T: Copyable](let s: Slice[T]) -> scoped(s) SliceIter[T] {
-    return iter(s);                                          // STUB
+    return iter(s); // STUB
 }
 
 // ------------------------------------------------------------- adaptors
 
 // Each OWNS its source (R34); only `ByRef` holds a raw pointer.
-pub struct Mapped[I: Iterator, U: Droppable] { src: I, f: fn (sink I.Item) -> U }
-pub struct Filtered[I: Iterator] { src: I, p: fn (let I.Item) -> bool }
+pub struct Mapped[I: Iterator, U: Droppable] { src: I, f: fn(sink I.Item) -> U }
+pub struct Filtered[I: Iterator] { src: I, p: fn(let I.Item) -> bool }
 pub struct Taken[I: Iterator] { src: I, left: usize }
 pub struct Skipped[I: Iterator] { src: I, to_skip: usize }
 pub struct Enumerated[I: Iterator] { src: I, at: usize }
@@ -157,8 +180,12 @@ impl[I: Iterator, U: Droppable] Iterator for Mapped[I, U] {
     type Item = U;
     fn next(inout self) -> Option[U] {
         match self.src.next() {
-            some(let x) => { return some((self.f)(move x)); }
-            none => { return none; }
+            some(let x) => {
+                return some((self.f)(move x));
+            }
+            none => {
+                return none;
+            }
         }
     }
 }
@@ -168,8 +195,14 @@ impl[I: Iterator] Iterator for Filtered[I] {
     fn next(inout self) -> Option[I.Item] {
         while true {
             match self.src.next() {
-                some(let x) => { if (self.p)(x) { return some(x); } }
-                none => { return none; }
+                some(let x) => {
+                    if (self.p)(x) {
+                        return some(x);
+                    }
+                }
+                none => {
+                    return none;
+                }
             }
         }
         return none;
@@ -179,7 +212,9 @@ impl[I: Iterator] Iterator for Filtered[I] {
 impl[I: Iterator] Iterator for Taken[I] {
     type Item = I.Item;
     fn next(inout self) -> Option[I.Item] {
-        if self.left == 0 { return none; }
+        if self.left == 0 {
+            return none;
+        }
         self.left = self.left - 1;
         return self.src.next();
     }
@@ -191,8 +226,10 @@ impl[I: Iterator] Iterator for Skipped[I] {
         while self.to_skip > 0 {
             self.to_skip = self.to_skip - 1;
             match self.src.next() {
-                some(let skipped) => { }
-                none => { return none; }
+                some(let skipped) => {}
+                none => {
+                    return none;
+                }
             }
         }
         return self.src.next();
@@ -203,8 +240,14 @@ impl[I: Iterator] Iterator for Enumerated[I] {
     type Item = (usize, I.Item);
     fn next(inout self) -> Option[Self.Item] {
         match self.src.next() {
-            some(let x) => { let i: usize = self.at; self.at = self.at + 1; return some((i, x)); }
-            none => { return none; }
+            some(let x) => {
+                let i: usize = self.at;
+                self.at = self.at + 1;
+                return some((i, x));
+            }
+            none => {
+                return none;
+            }
         }
     }
 }
@@ -215,11 +258,17 @@ impl[I: Iterator, J: Iterator] Iterator for Zipped[I, J] {
         match self.a.next() {
             some(let x) => {
                 match self.b.next() {
-                    some(let y) => { return some((x, y)); }
-                    none => { return none; }
+                    some(let y) => {
+                        return some((x, y));
+                    }
+                    none => {
+                        return none;
+                    }
                 }
             }
-            none => { return none; }
+            none => {
+                return none;
+            }
         }
     }
 }
@@ -227,10 +276,12 @@ impl[I: Iterator, J: Iterator] Iterator for Zipped[I, J] {
 impl[I: Iterator] Iterator for ByRef[I] {
     type Item = I.Item;
     fn next(inout self) -> Option[I.Item] {
-        return self.pull();                                  // STUB: (*src).next()
+        return self.pull(); // STUB: (*src).next()
     }
 }
 
 impl[I: Iterator] ByRef[I] {
-    fn pull(inout self) -> Option[I.Item] { return self.pull(); }   // STUB
+    fn pull(inout self) -> Option[I.Item] {
+        return self.pull();
+    } // STUB
 }

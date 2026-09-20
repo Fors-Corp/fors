@@ -8,13 +8,15 @@ needs { syscall };
 pub enum Error { lost, unsupported, out_of_device_memory, other }
 
 // Root-capability type (ch04 R21), capability `gpu`.
-pub struct Device { }
+pub struct Device {}
 
 pub struct Info { pub compute_units: u32, pub lanes: u32, pub shared_bytes: usize }
 
 impl Device {
     pub fn info(let self: Self) -> Info {
-        return Info { compute_units: 0, lanes: 0, shared_bytes: 0 };           // STUB
+        return Info { compute_units: 0, lanes: 0, shared_bytes: 0 }; // STUB
     }
-    pub fn sync(inout self: Self) raises Error { raise Error.lost; }            // STUB
+    pub fn sync(inout self: Self) raises Error {
+        raise Error.lost;
+    } // STUB
 }

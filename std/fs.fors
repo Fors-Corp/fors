@@ -10,8 +10,18 @@ needs { syscall };
 
 use std.io;
 
-pub enum Error { not_found, exists, permission, invalid_name, is_dir, not_dir,
-                 no_space, would_block, interrupted, other }
+pub enum Error {
+    not_found,
+    exists,
+    permission,
+    invalid_name,
+    is_dir,
+    not_dir,
+    no_space,
+    would_block,
+    interrupted,
+    other
+}
 
 pub enum Kind { file, dir, other }
 
@@ -26,41 +36,39 @@ impl Dir {
     // Downward-only (ch04 R7): a subdirectory of the receiver, never a
     // sibling or an ancestor, and never through a symlink that leaves it.
     pub fn open_dir(let self: Self, let name: Str) -> Dir raises Error {
-        raise Error.invalid_name;                            // STUB
+        raise Error.invalid_name; // STUB
     }
 
-    pub fn read_into(let self: Self, let name: Str, inout into: Slice[u8])
-        -> usize raises Error
-    {
-        raise Error.not_found;                               // STUB
+    pub fn read_into(let self: Self, let name: Str, inout into: Slice[u8]) -> usize raises Error {
+        raise Error.not_found; // STUB
     }
 
     pub fn write_all(let self: Self, let name: Str, let bytes: Slice[u8]) raises Error {
-        raise Error.permission;                              // STUB
+        raise Error.permission; // STUB
     }
 
     pub fn open(let self: Self, let name: Str) -> File raises Error {
-        raise Error.not_found;                               // STUB
+        raise Error.not_found; // STUB
     }
 
     pub fn create(let self: Self, let name: Str) -> File raises Error {
-        raise Error.permission;                              // STUB
+        raise Error.permission; // STUB
     }
 
     pub fn metadata(let self: Self, let name: Str) -> Meta raises Error {
-        raise Error.not_found;                               // STUB
+        raise Error.not_found; // STUB
     }
 
     pub fn remove(let self: Self, let name: Str) raises Error {
-        raise Error.not_found;                               // STUB
+        raise Error.not_found; // STUB
     }
 
     pub fn rename(let self: Self, let from: Str, let to: Str) raises Error {
-        raise Error.not_found;                               // STUB
+        raise Error.not_found; // STUB
     }
 
     pub fn entries(let self: Self) -> Entries raises Error {
-        raise Error.permission;                              // STUB
+        raise Error.permission; // STUB
     }
 }
 
@@ -68,34 +76,36 @@ impl Dir {
 pub struct File { fd: i32 }
 
 // Round 6 (R11, ch01 R22): linear — consumed by `close` on every path.
-impl Linear for File { }
+impl Linear for File {}
 
 impl File {
     pub fn read_into(inout self: Self, inout into: Slice[u8]) -> usize raises Error {
-        raise Error.would_block;                             // STUB
+        raise Error.would_block; // STUB
     }
     pub fn write_all(inout self: Self, let bytes: Slice[u8]) raises Error {
-        raise Error.no_space;                                // STUB
+        raise Error.no_space; // STUB
     }
-    pub fn len(let self: Self) -> u64 raises Error { raise Error.other; }      // STUB
-    pub fn close(sink self: Self) raises Error { }                            // STUB
+    pub fn len(let self: Self) -> u64 raises Error {
+        raise Error.other;
+    } // STUB
+    pub fn close(sink self: Self) raises Error {} // STUB
 }
 
 // Orphan rule (ch08 R21): foreign trait, local type.
 impl io.Reader for File {
     fn read(inout self: Self, inout into: Slice[u8]) -> usize raises io.Error {
-        raise io.Error.closed;                               // STUB
+        raise io.Error.closed; // STUB
     }
 }
 
 impl io.Writer for File {
     fn write(inout self: Self, let bytes: Slice[u8]) -> usize raises io.Error {
-        raise io.Error.closed;                               // STUB
+        raise io.Error.closed; // STUB
     }
     fn write_all(inout self: Self, let bytes: Slice[u8]) raises io.Error {
-        raise io.Error.closed;                               // STUB
+        raise io.Error.closed; // STUB
     }
-    fn flush(inout self: Self) raises io.Error { }                            // STUB
+    fn flush(inout self: Self) raises io.Error {} // STUB
 }
 
 // NOT an Iterator: its item would have to borrow a name buffer (R10d), so
@@ -103,13 +113,13 @@ impl io.Writer for File {
 pub struct Entries { fd: i32, at: u64 }
 
 // Round 6 (R11, ch01 R22): linear — consumed by `close` on every path.
-impl Linear for Entries { }
+impl Linear for Entries {}
 
 impl Entries {
     pub fn next_into(inout self: Self, inout name: Slice[u8]) -> Option[Meta] raises Error {
-        raise Error.other;                                   // STUB
+        raise Error.other; // STUB
     }
-    pub fn close(sink self: Self) { }                                         // STUB
+    pub fn close(sink self: Self) {} // STUB
 }
 
 // COMPTIME-ONLY (R42) — there is no `comptime fn` in the grammar
@@ -118,4 +128,6 @@ impl Entries {
 // error. `path` must be a comptime constant listed in the caller module's
 // `inputs { ... };` clause (ch04 R13). No capability, and TOTAL — a missing
 // input is a BUILD error, which is why the corpus writes it with no `?`.
-pub fn read_to_string(let path: Str) -> Str { return ""; }                    // STUB
+pub fn read_to_string(let path: Str) -> Str {
+    return "";
+} // STUB

@@ -9,16 +9,20 @@
 needs { syscall };
 
 // Root-capability type (ch04 R21), capability `clock`.
-pub struct Clock { }
+pub struct Clock {}
 
 pub struct Instant { pub nanos: u64 }
 pub struct Wall { pub unix_nanos: i64 }
 pub struct Duration { pub nanos: u64 }
 
 impl Clock {
-    pub fn now(let self: Self) -> Instant { return Instant { nanos: 0 }; }     // STUB, monotonic
-    pub fn wall(let self: Self) -> Wall { return Wall { unix_nanos: 0 }; }     // STUB
-    pub fn sleep(let self: Self, let d: Duration) { }                          // STUB
+    pub fn now(let self: Self) -> Instant {
+        return Instant { nanos: 0 };
+    } // STUB, monotonic
+    pub fn wall(let self: Self) -> Wall {
+        return Wall { unix_nanos: 0 };
+    } // STUB
+    pub fn sleep(let self: Self, let d: Duration) {} // STUB
 }
 
 impl Instant {

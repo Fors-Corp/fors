@@ -31,63 +31,81 @@ pub struct Stderr { fd: i32, latched: Option[Error] }
 pub struct Stdin { fd: i32 }
 
 impl Stdout {
-    pub fn write_line(inout self: Self, let s: Str) { }                       // STUB, total
-    pub fn write_str(inout self: Self, let s: Str) { }                        // STUB, total
-    pub fn write_int(inout self: Self, let v: i64) { }                        // STUB, base 10, no locale
-    pub fn write_uint(inout self: Self, let v: u64) { }                       // STUB, base 10, no locale
-    pub fn write_bytes(inout self: Self, let b: Slice[u8]) { }                // STUB, total
+    pub fn write_line(inout self: Self, let s: Str) {} // STUB, total
+    pub fn write_str(inout self: Self, let s: Str) {} // STUB, total
+    pub fn write_int(inout self: Self, let v: i64) {} // STUB, base 10, no locale
+    pub fn write_uint(inout self: Self, let v: u64) {} // STUB, base 10, no locale
+    pub fn write_bytes(inout self: Self, let b: Slice[u8]) {} // STUB, total
 
     // Surface a latched error (R39).
     pub fn check(inout self: Self) raises Error {
         match self.latched {
-            some(let e) => { raise e; }
-            none => { }
+            some(let e) => {
+                raise e;
+            }
+            none => {}
         }
     }
 
-    pub fn clear_error(inout self: Self) { self.latched = none; }
+    pub fn clear_error(inout self: Self) {
+        self.latched = none;
+    }
 }
 
 impl Stderr {
-    pub fn write_line(inout self: Self, let s: Str) { }                       // STUB, total
-    pub fn write_str(inout self: Self, let s: Str) { }                        // STUB, total
-    pub fn write_int(inout self: Self, let v: i64) { }                        // STUB, total
-    pub fn write_uint(inout self: Self, let v: u64) { }                       // STUB, total
-    pub fn write_bytes(inout self: Self, let b: Slice[u8]) { }                // STUB, total
+    pub fn write_line(inout self: Self, let s: Str) {} // STUB, total
+    pub fn write_str(inout self: Self, let s: Str) {} // STUB, total
+    pub fn write_int(inout self: Self, let v: i64) {} // STUB, total
+    pub fn write_uint(inout self: Self, let v: u64) {} // STUB, total
+    pub fn write_bytes(inout self: Self, let b: Slice[u8]) {} // STUB, total
 
     pub fn check(inout self: Self) raises Error {
         match self.latched {
-            some(let e) => { raise e; }
-            none => { }
+            some(let e) => {
+                raise e;
+            }
+            none => {}
         }
     }
 
-    pub fn clear_error(inout self: Self) { self.latched = none; }
+    pub fn clear_error(inout self: Self) {
+        self.latched = none;
+    }
 }
 
 impl Stdin {
     // none at end of input; Error.no_space if the line does not fit.
-    pub fn read_line_into(inout self: Self, inout into: Slice[u8])
-        -> Option[usize] raises Error
-    {
-        raise Error.closed;                                  // STUB
+    pub fn read_line_into(inout self: Self, inout into: Slice[u8]) -> Option[usize] raises Error {
+        raise Error.closed; // STUB
     }
 }
 
 // The FALLIBLE surface. Every generic (`T: io.Writer`) and `dyn io.Writer`
 // use goes through these; the trait is never a root-capability type.
 impl Writer for Stdout {
-    fn write(inout self: Self, let bytes: Slice[u8]) -> usize raises Error { raise Error.closed; }   // STUB
-    fn write_all(inout self: Self, let bytes: Slice[u8]) raises Error { raise Error.closed; }        // STUB
-    fn flush(inout self: Self) raises Error { raise Error.closed; }                                  // STUB
+    fn write(inout self: Self, let bytes: Slice[u8]) -> usize raises Error {
+        raise Error.closed;
+    } // STUB
+    fn write_all(inout self: Self, let bytes: Slice[u8]) raises Error {
+        raise Error.closed;
+    } // STUB
+    fn flush(inout self: Self) raises Error {
+        raise Error.closed;
+    } // STUB
 }
 
 impl Writer for Stderr {
-    fn write(inout self: Self, let bytes: Slice[u8]) -> usize raises Error { raise Error.closed; }   // STUB
-    fn write_all(inout self: Self, let bytes: Slice[u8]) raises Error { raise Error.closed; }        // STUB
-    fn flush(inout self: Self) raises Error { }                                                      // unbuffered
+    fn write(inout self: Self, let bytes: Slice[u8]) -> usize raises Error {
+        raise Error.closed;
+    } // STUB
+    fn write_all(inout self: Self, let bytes: Slice[u8]) raises Error {
+        raise Error.closed;
+    } // STUB
+    fn flush(inout self: Self) raises Error {} // unbuffered
 }
 
 impl Reader for Stdin {
-    fn read(inout self: Self, inout into: Slice[u8]) -> usize raises Error { raise Error.closed; }   // STUB
+    fn read(inout self: Self, inout into: Slice[u8]) -> usize raises Error {
+        raise Error.closed;
+    } // STUB
 }
