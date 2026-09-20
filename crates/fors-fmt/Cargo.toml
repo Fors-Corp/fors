@@ -1,0 +1,14 @@
+[package]
+name = "fors-fmt"
+version = "0.1.0"
+edition = "2024"
+publish = false
+
+[dependencies]
+fors-lex = { path = "../fors-lex" }
+fors-syntax = { path = "../fors-syntax" }
+
+[dev-dependencies]
+fors-lex = { path = "../fors-lex" }
+fors-index = { path = "../fors-index" }
+fors-resolve = { path = "../fors-resolve" }
