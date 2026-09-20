@@ -341,21 +341,11 @@ const CROSS_CHAPTER: &[(&str, &str)] = &[
     ),
 ];
 
-/// A `std` declaration ch09 rejects. `std/**` is not this increment's to edit.
-const STD_CONFLICTS: &[(&str, &str)] = &[
-    (
-        "std/mem/alloc.fors",
-        "R48: `Block.align()` is an inherent method named like the field `align`",
-    ),
-    (
-        "std/net.fors",
-        "R48: `Addr.v6()` is an inherent method named like the field `v6`",
-    ),
-    (
-        "std/net.fors",
-        "R48: `Addr.port()` is an inherent method named like the field `port`",
-    ),
-];
+/// A `std` declaration ch09 rejects. Empty: the three known R48 conflicts (`Block.align`,
+/// `Addr.v6`, `Addr.port` -- an inherent method named like a field of the same type, ch09 Rule
+/// 48) were fixed by renaming the methods (`alignment`, `from_v6`, `port_number`; see
+/// docs/spec/10-std.md), so `std` now type-checks clean under ch09 with zero listed exceptions.
+const STD_CONFLICTS: &[(&str, &str)] = &[];
 
 /// The no-regression assertion the I2 gate names: outside the tests this
 /// increment turned on, the checker stays silent on every program another

@@ -12,6 +12,15 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 BASELINE = "c"
+# The four axes a kernel run can produce (ch06-measurement.md); fixed order so the scoreboard's
+# per-axis headline always reads the same way run to run.
+AXES = ("runtime", "memory", "compile", "scaling")
+AXIS_TITLES = {
+    "runtime": "Runtime (vs C, best median wall time)",
+    "memory": "Memory (vs C, peak RSS)",
+    "compile": "Compile (vs C, clean build wall time)",
+    "scaling": "Scaling (speedup/capacity at the top thread count -- NOT vs C, parallel kernels only)",
+}
 
 
 def load_machine(host):
@@ -112,7 +121,8 @@ def group_scaling(by_series):
 
 
 def score(ratios):
-    """Collapse the per-kernel ratios into ONE number per language (lower = better).
+    """DECIDED policy (owner decision; not a stub): a per-axis headline plus an equal-weight
+    summary, never a single compile-weighted number.
 
     ratios[lang][axis] is a list with one entry per kernel. "runtime", "memory" and "compile" are
     relative to the C baseline (1.0 = same as C, 2.0 = twice as slow / large):
@@ -121,18 +131,40 @@ def score(ratios):
       "compile"  clean build wall time (axis absent for languages with no build step)
       "scaling"  threads / speedup at the highest thread count: 1.0 = perfect linear scaling.
                  NOT relative to C. Parallel kernels only.
-    Return {lang: number}.
 
-    Default: weighted geometric mean of the per-axis geometric means. The weights are a value judgment
-    about what Fors is for (compile speed first) - edit them. A language with no "compile" axis is
-    scored over the axes it has.
+    Returns {lang: {"axes": {axis: geomean}, "coverage": {axis: n_kernels}, "summary": geomean}}.
+    "axes"/"coverage" hold only the axes `lang` was actually measured on -- a missing axis is a
+    missing key, never a 1.0 filler (a language with no build step has no "compile" opinion to
+    report).
+
+    "axes" is the headline: report.py ranks languages SEPARATELY per axis, because collapsing four
+    unlike quantities (wall time, bytes, wall time again, a dimensionless speedup) into one number
+    always smuggles in a weighting choice. The previous default (compile:3, runtime:2, scaling:2,
+    memory:1) was exactly such a choice, and it flattered Fors by construction (compile speed is
+    this project's headline goal) -- the same "one number that happens to favour the thing you are
+    selling" trap as LoC/sec, which docs/spec/06-measurement.md's vocabulary rule (line 66: no
+    comparative claim without a reproducible harness run) exists to keep this report out of.
+    "summary" is an EQUAL-weight geometric mean over whatever axes `lang` has, kept for a rough
+    at-a-glance number, but it is exactly that -- a SUMMARY, not a ranking claim -- and every
+    caller MUST print it labelled as one.
+
+    ch06 R9: a language measured on fewer kernels than another MUST NOT share a ranking with it, on
+    any axis. This function reports each axis's coverage (kernel count) so callers can label and
+    exclude a partial-coverage row rather than silently interleaving it with fully-measured ones --
+    main() does this per axis and for the summary.
     """
-    weights = {"compile": 3, "runtime": 2, "scaling": 2, "memory": 1}
-    totals = {}
+    out = {}
     for lang, axes in ratios.items():
-        log_sum = sum(weights[axis] * statistics.fmean(map(math.log, values)) for axis, values in axes.items())
-        totals[lang] = math.exp(log_sum / sum(weights[axis] for axis in axes))
-    return totals
+        per_axis = {axis: math.exp(statistics.fmean(map(math.log, values)))
+                    for axis, values in axes.items() if values}
+        if not per_axis:
+            continue
+        out[lang] = {
+            "axes": per_axis,
+            "coverage": {axis: len(values) for axis, values in axes.items() if values},
+            "summary": math.exp(statistics.fmean(math.log(v) for v in per_axis.values())),
+        }
+    return out
 
 
 def load(argv):
@@ -298,17 +330,34 @@ def main():
                         print(f"| {label} | " + " | ".join(num(fracs.get(t), ".2f") for t in counts) + " |")
 
     print("\n## Aggregate\n")
-    try:
-        totals = score(ratios)
-    except NotImplementedError:
-        print("_Not defined yet: implement `score()` in bench/harness/report.py._")
-    else:
-        # Normalised so the baseline reads 1.00; a language measured on fewer kernels is not comparable.
-        base = totals.get(BASELINE) or 1.0
-        for series, value in sorted(totals.items(), key=lambda kv: kv[1]):
-            covered = len(ratios[series].get("runtime", []))
-            partial = "" if covered == len(kernels) else f"  (partial: {covered}/{len(kernels)} kernels - not comparable)"
-            print(f"- {series}: {value / base:.2f}{partial}")
+    results = score(ratios)
+    print("Each axis below ranks languages SEPARATELY (lower is better); a language measured on "
+          "fewer kernels than another on the SAME axis is labelled `partial` and excluded from "
+          "that axis's ranking (ch06 R9) -- such rows are listed AFTER the ranked ones, so a "
+          "partial-coverage language never occupies a rank, however good its number looks.")
+    for axis in AXES:
+        rows = [(lang, r["axes"][axis], r["coverage"][axis]) for lang, r in results.items() if axis in r["axes"]]
+        if not rows:
+            continue
+        max_cov = max(cov for _, _, cov in rows)
+        print(f"\n### {AXIS_TITLES[axis]}\n")
+        # R9 is "excluded from ranking", not merely "annotated": partial rows sort after every
+        # ranked one (`cov != max_cov` first in the key), so the top of the list is always a
+        # fully-measured language. Within each group the order is still by value.
+        for lang, value, cov in sorted(rows, key=lambda row: (row[2] != max_cov, row[1])):
+            partial = "" if cov == max_cov else f"  (partial: {cov}/{max_cov} kernels - not ranked)"
+            print(f"- {lang}: {value:.2f}{partial}")
+
+    print("\n### Summary (equal-weight geometric mean over each language's own axes -- a summary, "
+          "not a ranking claim)\n")
+    # Normalised so the baseline reads 1.00; a language measured on fewer kernels is not comparable.
+    base = results.get(BASELINE, {}).get("summary") or 1.0
+    # Same R9 ordering rule as the per-axis sections above: not-comparable rows last.
+    def summary_partial(r):
+        covered = r["coverage"].get("runtime", 0)
+        return "" if covered == len(kernels) else f"  (partial: {covered}/{len(kernels)} kernels - not comparable)"
+    for lang, r in sorted(results.items(), key=lambda kv: (bool(summary_partial(kv[1])), kv[1]["summary"])):
+        print(f"- {lang}: {r['summary'] / base:.2f}{summary_partial(r)}")
 
     failed = [r for r in doc["results"] if not r["correct"]]
     if failed:
