@@ -1363,7 +1363,14 @@ impl<'a> Parser<'a> {
                     return;
                 }
                 self.b.start_node(NodeKind::TupleBinding);
-                self.delimited(LParen, RParen, None, |p| p.binding());
+                // ch07: `binding = ident | "_" | "(" binding {"," binding}
+                // [","] ")"` — the parenthesised form has at least one inner
+                // binding, so `()` is not a binding. Found by the differential
+                // fuzzer (tools/fuzz): the reference parser rejected `let () =
+                // 0;` and this one accepted it.
+                self.delimited(LParen, RParen, Some("expected at least one binding"), |p| {
+                    p.binding()
+                });
                 self.b.finish_node();
                 self.leave();
             }

@@ -1,0 +1,19 @@
+//! name: fuzz_empty_parens_binding
+//! rule: 07.Grammar
+//! expect: parse-error
+//! detail: found by tools/fuzz. `binding = ident | "_" | "(" binding
+//!   { "," binding } [ "," ] ")"` requires at least ONE `binding` inside
+//!   the parens: unlike `tuple_or_paren`'s value form (`"(" [ expr {","
+//!   expr} [","] ] ")"`, whose element list is wrapped in `[ ]` and so
+//!   allows zero, spelling the unit value `()`), the first `binding` here
+//!   is NOT inside an optional bracket. `tools/ref/fors_parse.py`
+//!   correctly enforces this (its `clist(s.binding, ")", 1)` passes a
+//!   minimum count of 1 and reports "expected at least 1 item" on `()`);
+//!   the Rust parser currently accepts `let () = 0;` as though `()` were
+//!   the unit value reused as a binding, which the grammar does not
+//!   provide for. Also reproduces via `for () in xs { }` and any other
+//!   `binding` slot.
+
+fn f() {
+    let () = 0;
+}
