@@ -1,0 +1,12 @@
+//! name: detach-without-captures
+//! expect: verify-reject
+//! code: DetachWithoutCaptures
+// ch05 Rule 9: a spawn region with no `captures` clause at all (absent,
+// not merely empty). The `do spawn r0` that opens the region is what the
+// diagnostic anchors to, so the rejection carries a real site.
+
+decl 3 sig 1
+region r0 spawn
+block bb0
+do spawn r0
+do unreachable

@@ -40,13 +40,16 @@ impl Net {
 pub struct Addr { v6: bool, port: u16, octets: Array[u8, 16] }
 
 impl Addr {
-    pub fn v4(let octets: Array[u8, 4], let port: u16) -> Addr {
+    pub fn from_v4(let octets: Array[u8, 4], let port: u16) -> Addr {
         return Addr { v6: false, port: port, octets: [0; 16] }; // STUB
     }
-    pub fn v6(let octets: Array[u8, 16], let port: u16) -> Addr {
+    // ch09 R48: named `from_v6`, not `v6`, because `v6` is already this struct's field (matches
+    // `from_bytes`/`from_str`/`from_utf8` elsewhere in std for a labelled constructor).
+    pub fn from_v6(let octets: Array[u8, 16], let port: u16) -> Addr {
         return Addr { v6: true, port: port, octets: octets };
     }
-    pub fn port(let self: Self) -> u16 {
+    // ch09 R48: named `port_number`, not `port`, because `port` is already this struct's field.
+    pub fn port_number(let self: Self) -> u16 {
         return self.port;
     }
 }

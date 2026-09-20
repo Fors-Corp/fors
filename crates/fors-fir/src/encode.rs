@@ -89,13 +89,15 @@ fn decl_kind_from_u8(v: u8) -> Option<DeclKind> {
     DECL_KINDS.get(v as usize).copied()
 }
 
-/// The three questions design §14 Q4/Q5/Q6 reserve for Marc, as data.
-/// [`decl_fingerprint`] is the one place their values are chosen.
+/// The three policy questions design §14 Q4/Q5/Q6 pose for [`decl_fingerprint`]'s hash. Q4 and
+/// Q5 were the two the owner reserved; both are now DECIDED (see [`FINGERPRINT_POLICY`]'s
+/// comment for the reasoning and its consequence). Q6 was never a real choice -- also explained
+/// there.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub struct FingerprintPolicy {
-    /// Q4: does a `const` declaration's comptime value enter its hash?
+    /// Q4 (DECIDED): does a `const` declaration's comptime value enter its hash? Yes.
     pub include_const_value: bool,
-    /// Q5: are generic-parameter names left out (alpha-equivalence)?
+    /// Q5 (DECIDED): are generic-parameter names left out (alpha-equivalence)? Yes.
     pub exclude_gparam_names: bool,
     /// Q6: are bound lists sorted before hashing (`T: Eq + Ord` == `T: Ord + Eq`)?
     pub sort_bound_lists: bool,
@@ -117,18 +119,41 @@ impl FingerprintPolicy {
     }
 }
 
-// MARC: this function is the invalidation policy of the whole incremental
-// build, and each of the three questions below is one line you can flip. Get it
-// wrong in one direction and the compiler over-invalidates: it rebuilds
-// declarations whose meaning did not change, which costs rebuild time and
-// nothing else. Get it wrong in the other direction and it under-invalidates:
-// it keeps a result that is now wrong, which is a stale-build bug — the kind
-// that survives a `cargo test`, reappears after a clean build, and cannot be
-// reproduced from the source alone. One unit test per line pins the current
-// answer (`const_value_enters_the_fingerprint`,
-// `gparam_names_do_not_enter_the_fingerprint`,
-// `bound_order_does_not_change_the_fingerprint`), so flipping a line tells you
-// exactly which behaviour you changed.
+// This function is the invalidation policy of the whole incremental build. Get a line wrong in
+// one direction and the compiler over-invalidates: it rebuilds declarations whose meaning did not
+// change, which costs rebuild time and nothing else. Get it wrong in the other direction and it
+// under-invalidates: it keeps a result that is now wrong, which is a stale-build bug — the kind
+// that survives a `cargo test`, reappears after a clean build, and cannot be reproduced from the
+// source alone. One unit test per line pins the current answer
+// (`const_value_enters_the_fingerprint`, `gparam_names_do_not_enter_the_fingerprint`,
+// `bound_order_does_not_change_the_fingerprint`), so flipping a line tells you exactly which
+// behaviour you would be changing. Below are DECIDED policy, not stub values:
+//
+// Q4 `include_const_value = true`: a `const`'s comptime VALUE is part of its SIGNATURE hash, so
+// changing `const N: usize = 8` to `16` invalidates every dependent. Chosen sound-by-construction
+// over a separate value query with its own early cutoff, because a missed invalidation here is a
+// MISCOMPILE, not merely a slow build.
+//
+// Q5 `exclude_gparam_names = true`: generic-parameter names are EXCLUDED from the hash, so
+// `fn f[T](x: T)` and `fn f[U](x: U)` hash identically and renaming a parameter re-checks nothing
+// downstream. Consequence the owner must honour: a dependent's diagnostics MUST render a generic
+// parameter's name from the CURRENT source at print time — because a rename does not invalidate,
+// a diagnostic built from a name that came back out of the cache would keep showing the old name
+// after the rename.
+//
+// Where that stands today, stated precisely, because the obvious reading is too generous:
+// `show_into` (`fors-check/src/show.rs`) and `render` (`fors-check/src/wf.rs`) each resolve a
+// `TyTag::Param`'s name through `fir.sigs.generics_store.param(g, ord).name` — that is, out of
+// `Fir::sigs`, which is exactly the store `decode_sig` below fills. Neither caches a rendered
+// string, but neither is a guard against this either: when `exclude_gparam_names` is true,
+// `decode_sig` cannot recover the name and interns the positional placeholder `_0`, `_1`, ... So
+// the property that actually holds today is narrower: `decode_sig` has NO production caller (its
+// only callers are `fors-fir/tests/fir.rs` and `fors-check/tests/sighash.rs`), so no `Fir` a
+// diagnostic is rendered from has ever been through it, and design §11's `DepSet` recording
+// (`deps.rs`, `every_body_records_its_dep_set`) is groundwork for a future early-cutoff
+// increment, not a cache that feeds sigs back in. THE INCREMENT THAT FIRST DECODES A SIG INTO A
+// `Fir` THAT DIAGNOSTICS RENDER FROM must re-derive generic-parameter names from the current
+// source (or re-lower the sig) before printing; a `_0` in a user-facing message is the symptom.
 //
 // MARC (verification round): the three lines were flipped one at a time and
 // the suite run each time. Q4 and Q5 each move exactly their own test. Q6
@@ -142,8 +167,8 @@ impl FingerprintPolicy {
 // roundtrip`, `encoding_is_independent_of_pool_warmth_and_interner_order`),
 // which is the signal that `false` is not a choice.
 pub const FINGERPRINT_POLICY: FingerprintPolicy = FingerprintPolicy {
-    include_const_value: true, // §14 Q4: over-invalidate rather than risk a stale dependent
-    exclude_gparam_names: true, // §14 Q5: R38(a) is positional, so a name is not observable
+    include_const_value: true, // §14 Q4 (DECIDED): sound-by-construction; see comment above
+    exclude_gparam_names: true, // §14 Q5 (DECIDED): R38(a) is positional, a name is not observable
     sort_bound_lists: true,    // §14 Q6: `T: Eq + Ord` is the same bound set as `T: Ord + Eq`
 };
 
@@ -1459,5 +1484,27 @@ mod tests {
             let p = FingerprintPolicy::from_byte(bits);
             assert_eq!(p.to_byte(), bits);
         }
+    }
+
+    #[test]
+    fn fingerprint_policy_q4_includes_const_value_by_owner_decision() {
+        // §14 Q4 (DECIDED, owner): sound-by-construction over a separate value query with its own
+        // early cutoff -- a missed invalidation here is a miscompile, not merely a slow build.
+        // `const_value_enters_the_fingerprint` (fors-fir/tests/fir.rs) pins the resulting hash
+        // behaviour end to end; this pins the flag itself, so flipping the literal without
+        // reading the comment above `FINGERPRINT_POLICY` still fails a test.
+        const { assert!(FINGERPRINT_POLICY.include_const_value) };
+    }
+
+    #[test]
+    fn fingerprint_policy_q5_excludes_gparam_names_by_owner_decision() {
+        // §14 Q5 (DECIDED, owner): R38(a) is positional, so a generic parameter's name is not
+        // observable through it, and excluding it means a rename re-checks nothing downstream.
+        // Consequence the owner must honour: a dependent's diagnostics must render the name from
+        // the CURRENT declaration at print time, never a string cached earlier (see the comment
+        // on `FINGERPRINT_POLICY`). `gparam_names_do_not_enter_the_fingerprint`
+        // (fors-fir/tests/fir.rs) pins the resulting hash behaviour end to end; this pins the flag
+        // itself, so flipping the literal without reading the comment above it still fails a test.
+        const { assert!(FINGERPRINT_POLICY.exclude_gparam_names) };
     }
 }

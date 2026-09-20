@@ -1,0 +1,10 @@
+//! name: declassify-inside-unsafe-accepted
+//! expect: verify-accept
+// Positive control for entry 13: the same declassify, now inside a decl
+// carrying `unsafe`.
+
+decl 14 sig 1 unsafe
+block bb0
+val %s = param 0 ty 1 secret ct=0
+do declassify %s
+do unreachable
