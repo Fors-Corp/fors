@@ -373,7 +373,7 @@ parsed one, and `std/` holds the same signatures with placeholder bodies.
     pub struct Block[A: brand] { }          // opaque, linear, not Copyable
     impl[A: brand] Block[A] {
         pub fn len(let self: Self) -> usize;
-        pub fn align(let self: Self) -> usize;
+        pub fn alignment(let self: Self) -> usize;
         @unsafe(invariant: "the returned view spans exactly this block and is dead at the next grow/free")
         pub fn bytes_raw(inout self: Self) -> scoped(self) Slice[u8];
     }
@@ -1106,9 +1106,9 @@ parsed one, and `std/` holds the same signatures with placeholder bodies.
     }
     pub struct Addr { }         // Copyable
     impl Addr {
-        pub fn v4(let octets: Array[u8, 4], let port: u16) -> Addr;
-        pub fn v6(let octets: Array[u8, 16], let port: u16) -> Addr;
-        pub fn port(let self: Self) -> u16;
+        pub fn from_v4(let octets: Array[u8, 4], let port: u16) -> Addr;
+        pub fn from_v6(let octets: Array[u8, 16], let port: u16) -> Addr;
+        pub fn port_number(let self: Self) -> u16;
     }
     pub struct Conn { }         // linear
     impl Conn {

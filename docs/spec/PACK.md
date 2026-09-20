@@ -5,7 +5,7 @@ regenerate. Source: `docs/spec/*.md` (normative), `tests/conformance/`
 (corpus) and `std/**/*.fors` (standard library).
 
 Language version: 0.5.0 (`docs/spec/VERSION`)
-Inputs SHA-256: 2e695cf11a733348fe7c9eedc145c31ae3e1b89e5e9effb93626e8616e766ade
+Inputs SHA-256: 80459ef21223866ed473b2c57286fc3ac2e325f2b2ae7b0cf40d3c12896591e4
 
 This pack exists because no model has seen Fors before: guessing from
 Rust/Zig/Swift/C is wrong more often than it is right. Read section 1 first.
@@ -856,7 +856,7 @@ pub struct Block[A: brand] { ... }
 impl[A: brand] Linear for Block[A] {}
 impl[A: brand] Block[A] {
     pub fn len(let self: Self) -> usize { ... }
-    pub fn align(let self: Self) -> usize { ... }
+    pub fn alignment(let self: Self) -> usize { ... }
     pub fn bytes_raw(inout self: Self) -> scoped(self) Slice[u8] { ... }
 }
 pub fn own_raw[T, A: brand](sink b: Block[A], sink v: T) -> Own[T, A] { ... }
@@ -1199,9 +1199,9 @@ impl Net {
 }
 pub struct Addr { ... }
 impl Addr {
-    pub fn v4(let octets: Array[u8, 4], let port: u16) -> Addr { ... }
-    pub fn v6(let octets: Array[u8, 16], let port: u16) -> Addr { ... }
-    pub fn port(let self: Self) -> u16 { ... }
+    pub fn from_v4(let octets: Array[u8, 4], let port: u16) -> Addr { ... }
+    pub fn from_v6(let octets: Array[u8, 16], let port: u16) -> Addr { ... }
+    pub fn port_number(let self: Self) -> u16 { ... }
 }
 pub struct Conn { ... }
 impl Linear for Conn {}
