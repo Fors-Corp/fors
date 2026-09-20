@@ -1,0 +1,10 @@
+//! name: spawn-empty-captures-accepted
+//! expect: verify-accept
+// Positive control for entry 03: ch05 Rule 9 requires the capture list to
+// be EXPLICIT, not non-empty -- an explicit empty list is legal.
+
+decl 18 sig 1
+region r0 spawn captures
+block bb0
+do spawn r0
+do unreachable

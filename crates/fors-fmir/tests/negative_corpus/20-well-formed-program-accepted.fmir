@@ -1,0 +1,16 @@
+//! name: well-formed-program-accepted
+//! expect: verify-accept
+// A larger positive baseline: several ops together, nothing secret,
+// every memory op seeded, one real contract check -- verify() must have
+// nothing to say about it.
+
+decl 20 sig 5
+block bb0
+val %a = param 0 ty 1 nosecret ct=0
+val %b = param 1 ty 1 nosecret ct=0
+val %sum = add %a %b ty 1 nosecret ct=0
+val %sz = param 2 ty 1 nosecret ct=0
+val %al = param 3 ty 1 nosecret ct=0
+val %p = alloc %sz %al ty 1 nosecret ct=0 seed own0
+do check_pre %sum
+do ret %sum

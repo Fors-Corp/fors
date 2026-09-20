@@ -1,0 +1,11 @@
+//! name: declassify-requires-unsafe
+//! expect: verify-reject
+//! code: DeclassifyRequiresUnsafe
+// ch05 Rule 6a: declassify is only legal inside @unsafe(invariant:). This
+// decl carries no `unsafe` marker.
+
+decl 13 sig 1
+block bb0
+val %s = param 0 ty 1 secret ct=0
+do declassify %s
+do unreachable

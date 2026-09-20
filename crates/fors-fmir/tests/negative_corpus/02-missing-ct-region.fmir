@@ -1,0 +1,9 @@
+//! name: missing-ct-region
+//! expect: verify-reject
+//! code: MissingCtRegion
+// ch05 Rule 6: a value textually missing its `ct_region` token.
+
+decl 2 sig 1
+block bb0
+val %x = param 0 ty 1 nosecret ct=?
+do unreachable

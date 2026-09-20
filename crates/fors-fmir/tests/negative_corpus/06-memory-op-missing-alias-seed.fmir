@@ -1,0 +1,12 @@
+//! name: alloc-missing-alias-seed
+//! expect: verify-reject
+//! code: MemoryOpMissingAliasSeed
+// design section 3.4a / ch05 Rule 5: alloc is memory-producing and has no
+// `seed` clause here, so its AliasSeed defaults to None.
+
+decl 6 sig 1
+block bb0
+val %sz = param 0 ty 1 nosecret ct=0
+val %al = param 1 ty 1 nosecret ct=0
+val %p = alloc %sz %al ty 1 nosecret ct=0
+do unreachable

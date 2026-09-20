@@ -1,0 +1,11 @@
+//! name: arena-deref-missing-alias-seed
+//! expect: verify-reject
+//! code: MemoryOpMissingAliasSeed
+// A second memory-producing op (design section 3.4a's own second example,
+// arena_deref) with no seed clause -- distinct from entry 06's alloc case.
+
+decl 17 sig 1
+block bb0
+val %r = param 0 ty 1 nosecret ct=0
+val %p = arena_deref %r ty 1 nosecret ct=0
+do unreachable
