@@ -1,0 +1,20 @@
+[package]
+name = "fors-fmir"
+version.workspace = true
+edition = "2024"
+publish = false
+
+# CHECKER DEPENDENCY: none (design docs/design/fmir-interpreter.md §2, §4.2).
+# fors-index for ids/Symbol/fingerprint, fors-fir for TyId/SigStore/DeclKeyId
+# per the design's crate table. Deliberately NOT the type checker crate, NOT
+# the concrete-syntax-tree crate: the verifier must not be able to see the
+# checker or the CST (design §2, "Why three"; ch05-ir-contract.md Rule 3).
+# tests/no_checker_dependency.rs greps this file (by exact crate name) to
+# keep that true, which is also why this comment names neither crate
+# literally.
+[dependencies]
+fors-index = { path = "../fors-index" }
+fors-fir = { path = "../fors-fir" }
+
+[lints]
+workspace = true

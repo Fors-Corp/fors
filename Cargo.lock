@@ -44,6 +44,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "fors-fmir"
+version = "0.1.1"
+dependencies = [
+ "fors-fir",
+ "fors-index",
+]
+
+[[package]]
 name = "fors-fmt"
 version = "0.1.1"
 dependencies = [

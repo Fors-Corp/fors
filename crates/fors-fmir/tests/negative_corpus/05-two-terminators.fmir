@@ -1,0 +1,13 @@
+//! name: two-terminators-in-one-block
+//! expect: verify-reject
+//! code: TwoTerminators
+// `br` is written as the block's first line, not its last, so it lands in
+// the regular instruction range while `unreachable` becomes `term` --
+// see block.rs's module docs for why this is what "two terminators" means.
+
+decl 5 sig 1
+block bb0
+do br bb1
+do unreachable
+block bb1
+do unreachable
