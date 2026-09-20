@@ -1,0 +1,10 @@
+//! name: tile-op-before-m6
+//! expect: verify-reject
+//! code: TileOpPresent
+// design section 1.2: no tile.* opcode is defined before M6; any
+// tile.* mnemonic parses to the TileOp sentinel and is rejected.
+
+decl 4 sig 1
+block bb0
+do tile.dot
+do unreachable
