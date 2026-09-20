@@ -1463,3 +1463,39 @@ Assumptions not verified and flagged: the frontend figures (95k lines in
 `scale_100k_lines`, not re-run here; every per-node and per-declaration
 time budget in §12 is an estimate from the data layout, not a measurement;
 the prelude's `ErrorFrom` shape (§14 Q10).
+
+---
+
+## 17. Amendments from the I1 normalisation spike (2026-09-20)
+
+`spikes/fir-normalise/` ran before any checker code, as §13 I1 required. It
+changed one decision of this document and added two that were missing. The
+counters it prints (`cargo run --release` in that directory) are the evidence.
+
+1. **The substitution memo key of §7.5 was unsound, not merely slow.**
+   `(TyId, TraitRefId)` gives a WRONG ANSWER: with
+   `impl[T] Iter[C] for Vec[T] { type Item = T; }`, the queries `Vec[i32].Item`
+   and `Vec[u8].Item` share one `TraitRefId` and one right-hand side
+   `Param(impl, 0)`, so the second reads the first's answer. `impl_lookup`
+   binds impl parameters from the **self type** as well as the trait
+   arguments, so the *binding* — not the trait reference — identifies the
+   question. The key is now `(TyId, BindingKey)` over an interned binding.
+   The spike's witness run prints `DesignTraitRef -> WRONG ANSWER`,
+   `InternedBinding -> SOUND`; `fors-fir` implements the latter.
+2. **Linearity in chain depth holds only for a bounded set of trait
+   arguments.** A chain asked under a widening set of arguments (spike shape
+   Y) is Θ(depth²) in *distinct* questions with every memo enabled, so no
+   memo can flatten it. `NORMALISE_DEPTH_MAX` does not bound it, because the
+   depth of each question is fine; the count is not. **I6 must therefore
+   carry a per-query work budget — memo misses per top-level normalisation —
+   and report T0055-style "ask for this to be split" rather than grinding.**
+3. **Impl buckets need an exact index, not only a head bucket.** Shape Z (k
+   impls in one `(trait, HeadKey)` bucket, distinguished only deep in the
+   self type) costs k²/2 match steps per query: 131 840 steps at k = 512.
+   **I4 must consult an exact `(trait, self TyId)` map before the bucket
+   scan**, which makes every concrete impl one probe and leaves the scan for
+   genuinely generic heads.
+
+Items 2 and 3 are gates on their increments, not advice: I4 and I6 are not
+green until the spike's shapes Y and Z are re-run against the real
+`fors-fir`/`fors-check` and stay inside the stated bounds.
