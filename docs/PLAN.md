@@ -118,6 +118,9 @@ Full subsystem designs live in the repo: `docs/design/{compiler-architecture,saf
 
 ## 5. Roadmap
 
+**M1 progress (2026-09-20).** Landed: lexer, lossless parser, declaration index with separate signature/body fingerprints, module graph, name resolver, `fors check`, spec chapters 01-10 (~920 conformance tests), `fors-fir` (interned types, canonical signature encoding, `sig_hash`), **`fors-fmt`** (one canonical style, lossless + idempotent + diagnostic-neutral over the whole corpus) and **`fors-lsp`** (JSON-RPC over stdio, zero dependencies). The Mach-O backend spike is GO. Outstanding for the M1 gate: the type checker itself (increments I2-I11 of `docs/design/type-checker.md`, in progress), the FMIR interpreter, and the query engine that makes the exit gates (a) 100k-line check, (b) CI-proven near-linear cost and (c) single-declaration invalidation measurable.
+
+
 **Schedule honesty.** The roadmap architect's top-down estimate was 6.5 years to 1.0; summing the subsystem owners' own estimates gives ~70 months uncontingented = **9–9.5 years at the plan's own 1.6× contingency**. With the 4.3(2) thinning, ~7. Public **v0.1 (CPU-only, safe, fast-building, capability-confined) ≈ 2–2.5 years**. No-LLVM costs ~18–24 months on G1 specifically. Re-baseline at every milestone exit.
 
 | # | Milestone | Size | Exit gate (all measured by the harness) |
