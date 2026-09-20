@@ -4,7 +4,7 @@ version = 4
 
 [[package]]
 name = "fors-check"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "fors-fir",
  "fors-index",
@@ -15,7 +15,7 @@ dependencies = [
 
 [[package]]
 name = "fors-cli"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "fors-check",
  "fors-index",
@@ -27,14 +27,14 @@ dependencies = [
 
 [[package]]
 name = "fors-fir"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "fors-index",
 ]
 
 [[package]]
 name = "fors-fmt"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "fors-index",
  "fors-lex",
@@ -44,7 +44,7 @@ dependencies = [
 
 [[package]]
 name = "fors-index"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "fors-lex",
  "fors-syntax",
@@ -52,11 +52,11 @@ dependencies = [
 
 [[package]]
 name = "fors-lex"
-version = "0.1.0"
+version = "0.1.1"
 
 [[package]]
 name = "fors-lsp"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "fors-fmt",
  "fors-index",
@@ -67,11 +67,11 @@ dependencies = [
 
 [[package]]
 name = "fors-query"
-version = "0.1.0"
+version = "0.1.1"
 
 [[package]]
 name = "fors-resolve"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "fors-index",
  "fors-lex",
@@ -80,7 +80,7 @@ dependencies = [
 
 [[package]]
 name = "fors-syntax"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "fors-lex",
 ]

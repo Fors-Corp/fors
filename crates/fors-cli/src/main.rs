@@ -383,8 +383,20 @@ fn main() -> ExitCode {
     match args.first().map(String::as_str) {
         Some("parse") => run_parse(&args[1..]),
         Some("check") => run_check(&args[1..]),
+        // Two streams (CONTRIBUTING.md): the compiler's own version, and the
+        // language version it implements.
+        Some("--version" | "-V") => {
+            println!(
+                "fors {} (language {})",
+                env!("CARGO_PKG_VERSION"),
+                include_str!("../../../docs/spec/VERSION").trim()
+            );
+            ExitCode::SUCCESS
+        }
         _ => {
-            eprintln!("usage: fors parse [--tree] <file>...\n       fors check <path>...");
+            eprintln!(
+                "usage: fors parse [--tree] <file>...\n       fors check <path>...\n       fors --version"
+            );
             ExitCode::from(2)
         }
     }
