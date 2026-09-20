@@ -775,21 +775,64 @@ impl<'a> Enc<'a> {
 
 /// The canonical bytes of one declaration's signature under `policy`.
 pub fn encode_sig(fir: &Fir, names: &Interner, def: DefId, policy: FingerprintPolicy) -> Vec<u8> {
+    let mut scratch = EncodeScratch::default();
+    encode_sig_into(fir, names, def, policy, &mut scratch).to_vec()
+}
+
+/// The buffers one encoding needs, reusable across declarations. Encoding a
+/// signature is otherwise four fresh allocations (two byte buffers, a
+/// position map, the output), and the freeze phase (§7.1 step 5) encodes
+/// EVERY declaration in the build: on the 100k-line corpus that is 45 000
+/// encodings, where the allocator alone was a third of the phase.
+#[derive(Default)]
+pub struct EncodeScratch {
+    tys: Vec<u8>,
+    body: Vec<u8>,
+    pos: std::collections::HashMap<TyId, u32>,
+    out: Vec<u8>,
+}
+
+/// [`encode_sig`] into a reusable scratch buffer; the result borrows it and
+/// is valid until the next call.
+pub fn encode_sig_into<'s>(
+    fir: &Fir,
+    names: &Interner,
+    def: DefId,
+    policy: FingerprintPolicy,
+    scratch: &'s mut EncodeScratch,
+) -> &'s [u8] {
     let self_key = fir.defs.key_of(def);
-    let parent_key = if self_key == NO_DECL_KEY {
-        NO_DECL_KEY
-    } else {
-        fir.keys.parent_of(self_key)
+    let parent_key = if self_key == NO_DECL_KEY { NO_DECL_KEY } else { fir.keys.parent_of(self_key) };
+    scratch.tys.clear();
+    scratch.body.clear();
+    scratch.pos.clear();
+    scratch.out.clear();
+    let mut e = Enc {
+        fir,
+        names,
+        policy,
+        tys: std::mem::take(&mut scratch.tys),
+        body: std::mem::take(&mut scratch.body),
+        pos: std::mem::take(&mut scratch.pos),
+        next: 0,
+        self_key,
+        parent_key,
     };
-    let mut e = Enc::new(fir, names, policy, self_key, parent_key);
     e.encode(def);
-    let mut out = Vec::with_capacity(e.tys.len() + e.body.len() + 8);
-    out.extend_from_slice(MAGIC);
-    out.push(policy.to_byte());
-    uleb(&mut out, e.next as u64);
-    out.extend_from_slice(&e.tys);
-    out.extend_from_slice(&e.body);
-    out
+    scratch.out.extend_from_slice(MAGIC);
+    scratch.out.push(policy.to_byte());
+    uleb(&mut scratch.out, e.next as u64);
+    scratch.out.extend_from_slice(&e.tys);
+    scratch.out.extend_from_slice(&e.body);
+    scratch.tys = e.tys;
+    scratch.body = e.body;
+    scratch.pos = e.pos;
+    &scratch.out
+}
+
+/// [`sig_hash`] with a reusable buffer.
+pub fn sig_hash_with(fir: &Fir, names: &Interner, def: DefId, scratch: &mut EncodeScratch) -> u128 {
+    hash_bytes(encode_sig_into(fir, names, def, FINGERPRINT_POLICY, scratch))
 }
 
 // ------------------------------------------------------------------ reading

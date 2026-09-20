@@ -142,6 +142,21 @@ impl DeclKeyTable {
         id
     }
 
+    /// The id `key` already has, without creating one. `defs::build` uses it
+    /// to keep a `DeclKey` injective over declarations: two declarations that
+    /// agree on parent, module, kind and name (ch08 R27's error, already
+    /// reported) must still get one row each, or a member list would name the
+    /// other one's `DefId`.
+    pub fn try_find(&self, key: DeclKey) -> Option<DeclKeyId> {
+        let h = ConsTable::key3(
+            SALT_KEY,
+            ((key.parent.0 as u64) << 32) | key.module.0 as u64,
+            ((key.kind as u64) << 32) | key.name.map_or(u32::MAX, |s| s.0) as u64,
+            key.disamb as u64,
+        );
+        self.cons.lookup(h, |v| self.row(DeclKeyId(v)) == key).map(DeclKeyId)
+    }
+
     pub fn row(&self, id: DeclKeyId) -> DeclKey {
         let i = id.index();
         DeclKey {

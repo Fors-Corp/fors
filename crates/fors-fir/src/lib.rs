@@ -28,19 +28,18 @@ pub mod cons;
 pub mod constval;
 pub mod defpath;
 pub mod encode;
+pub mod impls;
+pub mod prelude;
 pub mod sig;
 pub mod subst;
 pub mod ty;
 
 pub use cons::ConsTable;
 pub use constval::ConstValue;
-pub use defpath::{
-    DeclKey, DeclKeyId, DeclKeyTable, DefKeys, HeadKey, ModulePathId, ModulePathTable, NO_DECL_KEY,
-    NO_DEF, ROOT_PATH,
-};
+pub use defpath::{DeclKey, DeclKeyId, DeclKeyTable, DefKeys, HeadKey, ModulePathId, ModulePathTable, NO_DECL_KEY, NO_DEF, ROOT_PATH};
 pub use encode::{
-    DecodeError, FINGERPRINT_POLICY, FingerprintPolicy, decl_fingerprint, decode_sig, encode_sig,
-    sig_hash,
+    decl_fingerprint, decode_sig, encode_sig, encode_sig_into, sig_hash, sig_hash_with, DecodeError, EncodeScratch,
+    FingerprintPolicy, FINGERPRINT_POLICY,
 };
 pub use sig::{
     Assoc, AssocListId, AssocStore, ConstraintListId, ConstraintStore, Conv, FnSigId, FnSigStore,
@@ -121,7 +120,19 @@ impl Fir {
     /// Computes and stores `SigStore.sig_hash` for `def` (§5.4). Derived, so it
     /// is written after lowering and never read as an input.
     pub fn refresh_sig_hash(&mut self, names: &fors_index::interner::Interner, def: DefId) -> u128 {
-        let h = sig_hash(self, names, def);
+        let mut scratch = EncodeScratch::default();
+        self.refresh_sig_hash_with(names, def, &mut scratch)
+    }
+
+    /// [`Fir::refresh_sig_hash`] with a reusable encoding buffer: what the
+    /// freeze phase uses, since it hashes every declaration in the build.
+    pub fn refresh_sig_hash_with(
+        &mut self,
+        names: &fors_index::interner::Interner,
+        def: DefId,
+        scratch: &mut EncodeScratch,
+    ) -> u128 {
+        let h = sig_hash_with(self, names, def, scratch);
         self.sigs.set_sig_hash(def, h);
         h
     }
