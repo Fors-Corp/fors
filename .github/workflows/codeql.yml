@@ -42,7 +42,12 @@ jobs:
         uses: github/codeql-action/init@v3
         with:
           languages: ${{ matrix.language }}
-          queries: security-and-quality
+          # `security-extended` rather than `security-and-quality`: the quality
+          # half is a style suite (51 hits for "first argument not named self"
+          # in the reference parser alone), and a gate that cries wolf is a gate
+          # people learn to ignore. Style is rustfmt's and fors-fmt's job.
+          queries: security-extended
+          config-file: .github/codeql/codeql-config.yml
 
       - name: Autobuild
         uses: github/codeql-action/autobuild@v3

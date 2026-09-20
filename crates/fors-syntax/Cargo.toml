@@ -6,3 +6,6 @@ publish = false
 
 [dependencies]
 fors-lex = { path = "../fors-lex" }
+
+[lints]
+workspace = true

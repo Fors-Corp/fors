@@ -145,7 +145,11 @@ pub fn render(ops: &[Op], src: &[u8]) -> Vec<u8> {
         match op {
             Op::Open => {
                 let inherited = *flat.last().unwrap_or(&false);
-                let at = if pending > 0 { indent * INDENT } else { col + space as usize };
+                let at = if pending > 0 {
+                    indent * INDENT
+                } else {
+                    col + space as usize
+                };
                 let need = gw[i].saturating_add(tail[gend[i] + 1]);
                 flat.push(inherited || (need < INF && at as u64 + need <= MARGIN as u64));
             }
@@ -214,11 +218,11 @@ pub fn render(ops: &[Op], src: &[u8]) -> Vec<u8> {
                 // asked for. It costs two byte compares per token and it is
                 // the last line of defence behind the corpus-wide losslessness
                 // test.
-                if let Some(p) = last {
-                    if glues(p, text[0], text.get(1).copied()) {
-                        out.push(b' ');
-                        col += 1;
-                    }
+                if let Some(p) = last
+                    && glues(p, text[0], text.get(1).copied())
+                {
+                    out.push(b' ');
+                    col += 1;
                 }
                 out.extend_from_slice(text);
                 match text_width(text) {
@@ -238,7 +242,11 @@ pub fn render(ops: &[Op], src: &[u8]) -> Vec<u8> {
                 // that here on the first pass is what makes the two passes
                 // agree. (Only a comment can start with `//` or `/*`: a
                 // `/` operator is a one-byte token.)
-                if at_line_start && text.len() >= 2 && text[0] == b'/' && matches!(text[1], b'/' | b'*') {
+                if at_line_start
+                    && text.len() >= 2
+                    && text[0] == b'/'
+                    && matches!(text[1], b'/' | b'*')
+                {
                     pending = pending.max(1);
                     space = false;
                 }

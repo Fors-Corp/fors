@@ -75,7 +75,13 @@ pub fn hash_tokens(tokens: &Tokens, source: &[u8], first: u32, end: u32) -> u128
 /// signatures, but NOT its members' bodies, which are the holes. Each
 /// hole contributes one separator so two bodies cannot be merged into one
 /// without a signature-level trace.
-pub fn hash_tokens_excluding(tokens: &Tokens, source: &[u8], first: u32, end: u32, holes: &[(u32, u32)]) -> u128 {
+pub fn hash_tokens_excluding(
+    tokens: &Tokens,
+    source: &[u8],
+    first: u32,
+    end: u32,
+    holes: &[(u32, u32)],
+) -> u128 {
     let mut lo = FNV_OFFSET_LO;
     let mut hi = FNV_OFFSET_HI;
     let mut hole = 0usize;

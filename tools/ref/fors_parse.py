@@ -499,7 +499,8 @@ if __name__=="__main__":
     for d,_,fs in sorted(os.walk(root)):
         for f in sorted(fs):
             if not f.endswith(".fors"): continue
-            fp=os.path.join(d,f);src=open(fp).read()
+            fp=os.path.join(d,f)
+            with open(fp) as fh: src=fh.read()
             m=re.search(r"^//! expect: (\S+)",src,re.M)
             exp=m.group(1) if m else "(none)"
             r=check(src)

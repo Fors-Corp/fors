@@ -62,6 +62,11 @@ pub struct Diagnostic {
 
 impl Diagnostic {
     pub fn new(start: u32, end: u32, code: DiagCode, message: &'static str) -> Self {
-        Diagnostic { start, end, code, message }
+        Diagnostic {
+            start,
+            end,
+            code,
+            message,
+        }
     }
 }

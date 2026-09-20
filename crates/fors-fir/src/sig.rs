@@ -11,7 +11,7 @@ use fors_index::ids::DefId;
 use fors_index::interner::Symbol;
 
 use crate::cons::ConsTable;
-use crate::ty::{ArgsId, ConstId, TraitRefId, TyId, NO_CONST, NO_TY};
+use crate::ty::{ArgsId, ConstId, NO_CONST, NO_TY, TraitRefId, TyId};
 
 macro_rules! index_newtype {
     ($name:ident) => {
@@ -156,12 +156,16 @@ impl TraitRefLists {
         sorted.dedup();
         let raw: Vec<u32> = sorted.iter().map(|t| t.0).collect();
         let key = ConsTable::key_slice(SALT_BOUNDS, &raw);
-        if let Some(id) = self.cons.lookup(key, |v| self.get(TraitRefListId(v)) == sorted.as_slice()) {
+        if let Some(id) = self
+            .cons
+            .lookup(key, |v| self.get(TraitRefListId(v)) == sorted.as_slice())
+        {
             return TraitRefListId(id);
         }
         let id = TraitRefListId(self.start.len() as u32);
         self.start.push(self.items.len() as u32);
-        self.len.push(u16::try_from(sorted.len()).expect("more than u16::MAX bounds"));
+        self.len
+            .push(u16::try_from(sorted.len()).expect("more than u16::MAX bounds"));
         self.items.extend_from_slice(&sorted);
         self.cons.insert(key, id.0);
         id
@@ -216,7 +220,8 @@ impl GenericsStore {
     pub fn push(&mut self, params: &[GParam], constraints: ConstraintListId) -> GenericsId {
         let id = GenericsId(self.start.len() as u32);
         self.start.push(self.gp_name.len() as u32);
-        self.len.push(u16::try_from(params.len()).expect("more than u16::MAX generic parameters"));
+        self.len
+            .push(u16::try_from(params.len()).expect("more than u16::MAX generic parameters"));
         self.constraints.push(constraints);
         for p in params {
             self.gp_name.push(p.name);
@@ -233,7 +238,11 @@ impl GenericsStore {
     pub fn param(&self, id: GenericsId, ordinal: usize) -> GParam {
         let i = self.start[id.index()] as usize + ordinal;
         debug_assert!(ordinal < self.count(id));
-        GParam { name: self.gp_name[i], kind: self.gp_kind[i], bounds: self.gp_bounds[i] }
+        GParam {
+            name: self.gp_name[i],
+            kind: self.gp_kind[i],
+            bounds: self.gp_bounds[i],
+        }
     }
 
     pub fn constraints(&self, id: GenericsId) -> ConstraintListId {
@@ -270,7 +279,8 @@ impl ConstraintStore {
     pub fn push(&mut self, entries: &[(TyId, TraitRefListId)]) -> ConstraintListId {
         let id = ConstraintListId(self.start.len() as u32);
         self.start.push(self.subject.len() as u32);
-        self.len.push(u16::try_from(entries.len()).expect("more than u16::MAX constraint entries"));
+        self.len
+            .push(u16::try_from(entries.len()).expect("more than u16::MAX constraint entries"));
         for &(s, b) in entries {
             self.subject.push(s);
             self.bounds.push(b);
@@ -345,7 +355,8 @@ impl FnSigStore {
     ) -> FnSigId {
         let id = FnSigId(self.result.len() as u32);
         self.p_start.push(self.p_name.len() as u32);
-        self.p_len.push(u8::try_from(params.len()).expect("more than 255 parameters"));
+        self.p_len
+            .push(u8::try_from(params.len()).expect("more than 255 parameters"));
         self.result.push(result);
         self.raises.push(raises);
         self.scoped.push(scoped);
@@ -366,7 +377,11 @@ impl FnSigStore {
 
     pub fn param(&self, id: FnSigId, i: usize) -> Param {
         let at = self.p_start[id.index()] as usize + i;
-        Param { name: self.p_name[at], conv: self.p_conv[at], ty: self.p_ty[at] }
+        Param {
+            name: self.p_name[at],
+            conv: self.p_conv[at],
+            ty: self.p_ty[at],
+        }
     }
 
     pub fn result(&self, id: FnSigId) -> TyId {
@@ -500,11 +515,19 @@ impl Member {
     }
 
     pub fn tuple_variant(name: Symbol, args: ArgsId) -> Member {
-        Member { payload: PayloadKind::Tuple, args, ..Member::unit_variant(name) }
+        Member {
+            payload: PayloadKind::Tuple,
+            args,
+            ..Member::unit_variant(name)
+        }
     }
 
     pub fn record_variant(name: Symbol, sub: MemberListId) -> Member {
-        Member { payload: PayloadKind::Record, sub, ..Member::unit_variant(name) }
+        Member {
+            payload: PayloadKind::Record,
+            sub,
+            ..Member::unit_variant(name)
+        }
     }
 }
 
@@ -608,7 +631,8 @@ impl AssocStore {
     pub fn push(&mut self, entries: &[Assoc]) -> AssocListId {
         let id = AssocListId(self.start.len() as u32);
         self.start.push(self.a_name.len() as u32);
-        self.len.push(u16::try_from(entries.len()).expect("more than u16::MAX associated types"));
+        self.len
+            .push(u16::try_from(entries.len()).expect("more than u16::MAX associated types"));
         for e in entries {
             self.a_name.push(e.name);
             self.a_bounds.push(e.bounds);
@@ -623,7 +647,11 @@ impl AssocStore {
 
     pub fn get(&self, id: AssocListId, i: usize) -> Assoc {
         let at = self.start[id.index()] as usize + i;
-        Assoc { name: self.a_name[at], bounds: self.a_bounds[at], rhs: self.a_rhs[at] }
+        Assoc {
+            name: self.a_name[at],
+            bounds: self.a_bounds[at],
+            rhs: self.a_rhs[at],
+        }
     }
 
     /// The right-hand side an impl gives `name`, or [`NO_TY`].
@@ -860,8 +888,16 @@ mod tests {
     fn fn_sig_params_read_back_in_order() {
         let mut s = SigStore::new();
         let ps = [
-            Param { name: Symbol(1), conv: Conv::Let, ty: TY_UNIT },
-            Param { name: Symbol(2), conv: Conv::Inout, ty: TY_UNIT },
+            Param {
+                name: Symbol(1),
+                conv: Conv::Let,
+                ty: TY_UNIT,
+            },
+            Param {
+                name: Symbol(2),
+                conv: Conv::Inout,
+                ty: TY_UNIT,
+            },
         ];
         let id = s.fn_sigs.push(&ps, TY_UNIT, NO_TY, NO_SLOT, 0, (0, 0), 0);
         assert_eq!(s.fn_sigs.count(id), 2);

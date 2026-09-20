@@ -2,7 +2,7 @@
 //! disambiguation rules that are decided in the lexer rather than the
 //! parser.
 
-use fors_lex::{lex, DiagCode, TokenKind};
+use fors_lex::{DiagCode, TokenKind, lex};
 
 /// Lexes `src` and returns only the non-trivia token kinds (comments and
 /// whitespace dropped), which is what most of these hazards care about.
@@ -66,7 +66,10 @@ fn lex_munch() {
     assert_eq!(kinds("a<=-b"), vec![Ident, LtEq, Minus, Ident]);
     assert_eq!(texts("a<=-b"), vec!["a", "<=", "-", "b"]);
     assert_eq!(kinds("x=>y"), vec![Ident, FatArrow, Ident]);
-    assert_eq!(kinds("f()?.x"), vec![Ident, LParen, RParen, Question, Dot, Ident]);
+    assert_eq!(
+        kinds("f()?.x"),
+        vec![Ident, LParen, RParen, Question, Dot, Ident]
+    );
 
     let (tokens, diags) = lex(b"..");
     assert!(tokens.kinds.contains(&TokenKind::Error));
@@ -97,7 +100,11 @@ fn lex_multiline_string() {
     let ms: Vec<usize> = (0..tokens.len())
         .filter(|&i| tokens.kinds[i] == TokenKind::MultilineStr)
         .collect();
-    assert_eq!(ms.len(), 1, "two adjacent \\\\ lines must merge into one token");
+    assert_eq!(
+        ms.len(),
+        1,
+        "two adjacent \\\\ lines must merge into one token"
+    );
 
     let src2 = "\"a\\\\b\"";
     let (tokens2, diags2) = lex(src2.as_bytes());
@@ -119,7 +126,9 @@ fn contextual_kw_as_identifier() {
                let scoped = 5; let needs = 6; let pre = 7; let grain = 8;";
     let (_tokens, diags) = lex(src.as_bytes());
     assert!(diags.is_empty());
-    for word in ["arena", "brand", "out", "set", "scoped", "needs", "pre", "grain"] {
+    for word in [
+        "arena", "brand", "out", "set", "scoped", "needs", "pre", "grain",
+    ] {
         assert!(texts(src).contains(&word.to_string()));
     }
 }
@@ -129,7 +138,11 @@ fn reserved_words_are_not_identifiers() {
     for word in ["secret", "in", "true", "false", "iso", "dyn", "not"] {
         let ks = kinds(word);
         assert_eq!(ks.len(), 1);
-        assert_ne!(ks[0], TokenKind::Ident, "{word:?} must be a reserved keyword token");
+        assert_ne!(
+            ks[0],
+            TokenKind::Ident,
+            "{word:?} must be a reserved keyword token"
+        );
     }
     assert_eq!(kinds("_"), vec![TokenKind::Underscore]);
 }
@@ -170,14 +183,23 @@ fn oversized_source_is_one_diagnostic_and_still_ends_in_eof() {
     let (tokens, diags) = fors_lex::lex(&src);
     assert_eq!(diags.len(), 1);
     assert_eq!(diags[0].code, fors_lex::DiagCode::FileTooLarge);
-    assert_eq!(tokens.kinds, [fors_lex::TokenKind::Error, fors_lex::TokenKind::Eof]);
+    assert_eq!(
+        tokens.kinds,
+        [fors_lex::TokenKind::Error, fors_lex::TokenKind::Eof]
+    );
     assert_eq!(tokens.starts.len(), tokens.kinds.len() + 1);
 }
 
 #[test]
 fn utf8_boundary() {
     use fors_lex::DiagCode::*;
-    let codes = |src: &[u8]| fors_lex::lex(src).1.iter().map(|d| (d.code, d.start, d.end)).collect::<Vec<_>>();
+    let codes = |src: &[u8]| {
+        fors_lex::lex(src)
+            .1
+            .iter()
+            .map(|d| (d.code, d.start, d.end))
+            .collect::<Vec<_>>()
+    };
     // legal inside comments and strings
     assert!(codes("// é\n/* ü */ \"ß\" \\\\ ø".as_bytes()).is_empty());
     // one error per run outside them, not one per byte

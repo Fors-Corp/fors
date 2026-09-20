@@ -12,11 +12,18 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 fn repo_root() -> PathBuf {
-    Path::new(env!("CARGO_MANIFEST_DIR")).parent().unwrap().parent().unwrap().to_path_buf()
+    Path::new(env!("CARGO_MANIFEST_DIR"))
+        .parent()
+        .unwrap()
+        .parent()
+        .unwrap()
+        .to_path_buf()
 }
 
 fn walk_rs(dir: &Path, out: &mut Vec<PathBuf>) {
-    let Ok(entries) = fs::read_dir(dir) else { return };
+    let Ok(entries) = fs::read_dir(dir) else {
+        return;
+    };
     for entry in entries.flatten() {
         let path = entry.path();
         if path.is_dir() {
@@ -35,7 +42,15 @@ fn fors_fir_src_mentions_neither_fors_syntax_nor_fors_lex() {
     assert!(!files.is_empty(), "fors-fir/src has no .rs files to check");
     for path in &files {
         let text = fs::read_to_string(path).unwrap();
-        assert!(!text.contains("fors_syntax"), "{} mentions fors_syntax", path.display());
-        assert!(!text.contains("fors_lex"), "{} mentions fors_lex", path.display());
+        assert!(
+            !text.contains("fors_syntax"),
+            "{} mentions fors_syntax",
+            path.display()
+        );
+        assert!(
+            !text.contains("fors_lex"),
+            "{} mentions fors_lex",
+            path.display()
+        );
     }
 }

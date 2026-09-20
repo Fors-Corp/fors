@@ -34,22 +34,29 @@ pub mod ty;
 
 pub use cons::ConsTable;
 pub use constval::ConstValue;
-pub use defpath::{DeclKey, DeclKeyId, DeclKeyTable, DefKeys, HeadKey, ModulePathId, ModulePathTable, NO_DECL_KEY, NO_DEF, ROOT_PATH};
-pub use encode::{decl_fingerprint, decode_sig, encode_sig, sig_hash, DecodeError, FingerprintPolicy, FINGERPRINT_POLICY};
+pub use defpath::{
+    DeclKey, DeclKeyId, DeclKeyTable, DefKeys, HeadKey, ModulePathId, ModulePathTable, NO_DECL_KEY,
+    NO_DEF, ROOT_PATH,
+};
+pub use encode::{
+    DecodeError, FINGERPRINT_POLICY, FingerprintPolicy, decl_fingerprint, decode_sig, encode_sig,
+    sig_hash,
+};
 pub use sig::{
-    Assoc, AssocListId, AssocStore, ConstraintListId, ConstraintStore, Conv, FnSigId, FnSigStore, GParam, GParamKind,
-    GenericsId, GenericsStore, Member, MemberKind, MemberListId, MemberStore, Param, PayloadKind, SigKind, SigStore,
-    TraitRefListId, TraitRefLists, NO_ASSOC, NO_BOUNDS, NO_CONSTRAINTS, NO_FN_SIG, NO_GENERICS, NO_MEMBERS, NO_SLOT,
-    NO_TRAIT_REF, SIG_SOA, VIS_PRIVATE, VIS_PUBLIC,
+    Assoc, AssocListId, AssocStore, ConstraintListId, ConstraintStore, Conv, FnSigId, FnSigStore,
+    GParam, GParamKind, GenericsId, GenericsStore, Member, MemberKind, MemberListId, MemberStore,
+    NO_ASSOC, NO_BOUNDS, NO_CONSTRAINTS, NO_FN_SIG, NO_GENERICS, NO_MEMBERS, NO_SLOT, NO_TRAIT_REF,
+    Param, PayloadKind, SIG_SOA, SigKind, SigStore, TraitRefListId, TraitRefLists, VIS_PRIVATE,
+    VIS_PUBLIC,
 };
 pub use subst::{
-    one_way_match, one_way_match_with, subst_norm, subst_norm_cached, subst_norm_with, Binding, BindingKey,
-    NeutralOnly, ProjSolver, SubstMemo,
+    Binding, BindingKey, NeutralOnly, ProjSolver, SubstMemo, one_way_match, one_way_match_with,
+    subst_norm, subst_norm_cached, subst_norm_with,
 };
 pub use ty::{
-    ArgsId, BrandId, BrandKind, BrandRow, ConstId, FnTyId, FnTys, PrimKind, ProjKeyId, Quals, TraitRefId, TyId,
-    TyStore, TyTag, F_BRAND, F_ERROR, F_FRESH, F_OPEN, F_PARAM, F_PROJ, NO_ARGS, NO_CONST, NO_TY, Q_IMM, Q_ISO,
-    Q_SECRET, TY_ERROR, TY_NEVER, TY_UNIT,
+    ArgsId, BrandId, BrandKind, BrandRow, ConstId, F_BRAND, F_ERROR, F_FRESH, F_OPEN, F_PARAM,
+    F_PROJ, FnTyId, FnTys, NO_ARGS, NO_CONST, NO_TY, PrimKind, ProjKeyId, Q_IMM, Q_ISO, Q_SECRET,
+    Quals, TY_ERROR, TY_NEVER, TY_UNIT, TraitRefId, TyId, TyStore, TyTag,
 };
 
 use fors_index::ids::DefId;
@@ -73,7 +80,12 @@ pub struct Fir {
 
 impl Fir {
     pub fn new() -> Fir {
-        Fir { tys: TyStore::new(), sigs: SigStore::new(), keys: DeclKeyTable::new(), defs: DefKeys::new() }
+        Fir {
+            tys: TyStore::new(),
+            sigs: SigStore::new(),
+            keys: DeclKeyTable::new(),
+            defs: DefKeys::new(),
+        }
     }
 
     /// This build's row for `key`, allocating an [`SigKind::Absent`] row if the
@@ -130,7 +142,13 @@ mod tests {
             fir.keys.paths.intern(&[s])
         };
         let name = names.intern(b"S");
-        let k = fir.keys.intern(DeclKey { parent: NO_DECL_KEY, module: m, kind: DeclKind::Struct, name: Some(name), disamb: 0 });
+        let k = fir.keys.intern(DeclKey {
+            parent: NO_DECL_KEY,
+            module: m,
+            kind: DeclKind::Struct,
+            name: Some(name),
+            disamb: 0,
+        });
         let a = fir.def_for_key(k);
         let b = fir.def_for_key(k);
         assert_eq!(a, b);

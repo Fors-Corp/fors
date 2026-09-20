@@ -42,7 +42,11 @@ fn generate(target_lines: usize) -> String {
 fn bench_100k_lines() {
     let src = generate(100_000);
     let bytes = src.as_bytes();
-    eprintln!("generated {} lines, {} bytes", src.lines().count(), bytes.len());
+    eprintln!(
+        "generated {} lines, {} bytes",
+        src.lines().count(),
+        bytes.len()
+    );
 
     // best of 5: the first run pays for page faults on fresh allocations
     let mut best = std::time::Duration::MAX;
@@ -55,7 +59,11 @@ fn bench_100k_lines() {
     let elapsed = best;
     let (tree, tokens, diags) = (&parsed.tree, &parsed.tokens, &parsed.diags);
 
-    assert!(diags.is_empty(), "generated source must be diagnostic-free: {:?}", &diags[..diags.len().min(5)]);
+    assert!(
+        diags.is_empty(),
+        "generated source must be diagnostic-free: {:?}",
+        &diags[..diags.len().min(5)]
+    );
 
     let ms = elapsed.as_secs_f64() * 1000.0;
     let mib = 1024.0 * 1024.0;
@@ -63,7 +71,8 @@ fn bench_100k_lines() {
     let node_count = tree.kinds.len();
 
     let tree_bytes = node_count * (size_of::<fors_syntax::NodeKind>() + 3 * size_of::<u32>());
-    let token_bytes = tokens.kinds.len() * size_of::<fors_lex::TokenKind>() + tokens.starts.len() * size_of::<u32>();
+    let token_bytes = tokens.kinds.len() * size_of::<fors_lex::TokenKind>()
+        + tokens.starts.len() * size_of::<u32>();
 
     println!(
         "lex+parse: {:.2} ms, {:.1} MiB/s, {:.2} M lines/s | {} tokens, {} nodes ({:.1} M nodes/s) | tree {:.2} MiB = {:.2} bytes/source byte, tokens {:.2} MiB = {:.2} bytes/source byte, total {:.2} MiB",

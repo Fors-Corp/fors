@@ -8,3 +8,6 @@ publish = false
 fors-lex = { path = "../fors-lex" }
 fors-syntax = { path = "../fors-syntax" }
 fors-index = { path = "../fors-index" }
+
+[lints]
+workspace = true

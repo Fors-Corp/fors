@@ -6,12 +6,17 @@ use std::collections::HashMap;
 use std::fs;
 use std::path::{Path, PathBuf};
 
-use fors_index::{module::is_legal_segment, Interner, Segments};
+use fors_index::{Interner, Segments, module::is_legal_segment};
 use fors_resolve::{Code, Diagnostic, FileInput};
 use fors_syntax::parse_file;
 
 fn repo_root() -> PathBuf {
-    Path::new(env!("CARGO_MANIFEST_DIR")).parent().unwrap().parent().unwrap().to_path_buf()
+    Path::new(env!("CARGO_MANIFEST_DIR"))
+        .parent()
+        .unwrap()
+        .parent()
+        .unwrap()
+        .to_path_buf()
 }
 
 struct Case {
@@ -27,7 +32,9 @@ fn parse_directives(src: &str) -> Case {
     let mut rule_num = 0u16;
     let mut expect = String::new();
     for line in src.lines() {
-        let Some(rest) = line.strip_prefix("//!") else { break };
+        let Some(rest) = line.strip_prefix("//!") else {
+            break;
+        };
         let rest = rest.trim();
         if let Some(v) = rest.strip_prefix("name:") {
             name = v.trim().to_string();
@@ -36,22 +43,27 @@ fn parse_directives(src: &str) -> Case {
             // "08.R7" or "07.Grammar" etc; we only care about "NN.Rk".
             // Ch10 numbers its rules "10.S2" (its codes are S00nn), so the
             // prefix letter is per chapter, not always `R`.
-            if let Some((ch, r)) = v.split_once('.') {
-                if let Some(k) = r.strip_prefix('R').or_else(|| r.strip_prefix('S')) {
-                    // "2a" -> "2", "11c" -> "11", "22h" -> "22": a rule
-                    // number is digits plus an optional letter suffix.
-                    let k: &str = &k[..k.find(|c: char| !c.is_ascii_digit()).unwrap_or(k.len())];
-                    if let (Ok(c), Ok(n)) = (ch.parse::<u8>(), k.parse::<u16>()) {
-                        rule_chapter = c;
-                        rule_num = n;
-                    }
+            if let Some((ch, r)) = v.split_once('.')
+                && let Some(k) = r.strip_prefix('R').or_else(|| r.strip_prefix('S'))
+            {
+                // "2a" -> "2", "11c" -> "11", "22h" -> "22": a rule
+                // number is digits plus an optional letter suffix.
+                let k: &str = &k[..k.find(|c: char| !c.is_ascii_digit()).unwrap_or(k.len())];
+                if let (Ok(c), Ok(n)) = (ch.parse::<u8>(), k.parse::<u16>()) {
+                    rule_chapter = c;
+                    rule_num = n;
                 }
             }
         } else if let Some(v) = rest.strip_prefix("expect:") {
             expect = v.split("--").next().unwrap_or(v).trim().to_string();
         }
     }
-    Case { name, rule_chapter, rule_num, expect }
+    Case {
+        name,
+        rule_chapter,
+        rule_num,
+        expect,
+    }
 }
 
 /// Builds and resolves one test target (a directory package or a single
@@ -67,7 +79,9 @@ fn resolve_target(path: &Path) -> Vec<Diagnostic> {
 
     if path.is_dir() {
         fn walk(dir: &Path, out: &mut Vec<PathBuf>) {
-            let Ok(entries) = fs::read_dir(dir) else { return };
+            let Ok(entries) = fs::read_dir(dir) else {
+                return;
+            };
             let mut entries: Vec<_> = entries.flatten().map(|e| e.path()).collect();
             entries.sort();
             for p in entries {
@@ -87,7 +101,11 @@ fn resolve_target(path: &Path) -> Vec<Diagnostic> {
             let mut segs = Vec::new();
             for (i, c) in comps.iter().enumerate() {
                 let os = c.as_os_str().to_string_lossy();
-                let seg = if i + 1 == comps.len() { os.strip_suffix(".fors").unwrap_or(&os).to_string() } else { os.to_string() };
+                let seg = if i + 1 == comps.len() {
+                    os.strip_suffix(".fors").unwrap_or(&os).to_string()
+                } else {
+                    os.to_string()
+                };
                 segs.push(interner.intern(seg.as_bytes()));
             }
             if comps.len() == 1 && rel.file_stem().is_some_and(|s| s == "main") {
@@ -100,7 +118,11 @@ fn resolve_target(path: &Path) -> Vec<Diagnostic> {
         let src = fs::read(path).unwrap();
         let name = header_name(&src, &mut interner).unwrap_or_else(|| {
             let stem = path.file_stem().unwrap().to_string_lossy().into_owned();
-            let stem = if is_legal_segment(stem.as_bytes()) { stem } else { "m".to_string() };
+            let stem = if is_legal_segment(stem.as_bytes()) {
+                stem
+            } else {
+                "m".to_string()
+            };
             vec![interner.intern(stem.as_bytes())]
         });
         names.push(name);
@@ -113,7 +135,12 @@ fn resolve_target(path: &Path) -> Vec<Diagnostic> {
         .iter()
         .zip(sources.iter())
         .zip(names.iter())
-        .map(|((p, s), n)| FileInput { tree: &p.tree, tokens: &p.tokens, source: s, name: n.clone() })
+        .map(|((p, s), n)| FileInput {
+            tree: &p.tree,
+            tokens: &p.tokens,
+            source: s,
+            name: n.clone(),
+        })
         .collect();
     let out = fors_resolve::resolve(&mut interner, &inputs, root);
     out.files.into_iter().flat_map(|f| f.diagnostics).collect()
@@ -165,13 +192,14 @@ fn code_matches(code: Code, chapter: u8, num: u16) -> bool {
 
 fn corpus_targets(dir: &Path) -> Vec<PathBuf> {
     let mut out = Vec::new();
-    let Ok(entries) = fs::read_dir(dir) else { return out };
+    let Ok(entries) = fs::read_dir(dir) else {
+        return out;
+    };
     let mut entries: Vec<_> = entries.flatten().map(|e| e.path()).collect();
     entries.sort();
     for p in entries {
-        if p.is_dir() {
-            out.push(p);
-        } else if p.extension().is_some_and(|e| e == "fors") {
+        // A target is a directory (a multi-file package) or a single .fors file.
+        if p.is_dir() || p.extension().is_some_and(|e| e == "fors") {
             out.push(p);
         }
     }
@@ -189,13 +217,22 @@ fn directive_source(target: &Path) -> String {
 /// Ch04 rules this crate does not implement (need types or the
 /// manifest): listed here, with why, instead of asserted against.
 const PENDING_04: &[(u16, &str)] = &[
-    (2, "needs types (exported requirement over the module graph's edges)"),
+    (
+        2,
+        "needs types (exported requirement over the module graph's edges)",
+    ),
     (3, "needs types (sealed-operation site classification)"),
     (7, "needs the manifest (per-target/per-dependency policy)"),
-    (10, "needs types (comptime purity: capability/clock/RNG reachability)"),
+    (
+        10,
+        "needs types (comptime purity: capability/clock/RNG reachability)",
+    ),
     (12, "needs types (root-capability construction sites)"),
     (13, "needs the manifest (lockfile capability pinning)"),
-    (14, "needs types (root-capability construction outside `main`)"),
+    (
+        14,
+        "needs types (root-capability construction outside `main`)",
+    ),
 ];
 
 /// Ch08 tests this phase does not decide: Rule 11 explicitly says
@@ -218,7 +255,10 @@ fn ch08_names_corpus() {
             continue;
         }
         if PENDING_08.contains(&case.name.as_str()) {
-            eprintln!("PENDING 08.R{} ({}): needs a type (Rule 11's own carve-out to the checker)", case.rule_num, case.name);
+            eprintln!(
+                "PENDING 08.R{} ({}): needs a type (Rule 11's own carve-out to the checker)",
+                case.rule_num, case.name
+            );
             continue;
         }
         let diags = resolve_target(target);
@@ -228,10 +268,10 @@ fn ch08_names_corpus() {
                     failures.push(format!("{}: expected check-ok, got {:?}", case.name, diags.iter().map(|d| d.code.as_string()).collect::<Vec<_>>()));
                 }
             }
-            "check-error" => {
+            "check-error"
                 // One root cause, one diagnostic: nothing but the cited
                 // rule may fire, and it may fire only once.
-                if diags.len() != 1 || !code_matches(diags[0].code, 8, case.rule_num) {
+                if (diags.len() != 1 || !code_matches(diags[0].code, 8, case.rule_num)) => {
                     failures.push(format!(
                         "{}: expected exactly one diagnostic N{:04} (rule 08.R{}), got {:?}",
                         case.name,
@@ -240,11 +280,14 @@ fn ch08_names_corpus() {
                         diags.iter().map(|d| d.code.as_string()).collect::<Vec<_>>()
                     ));
                 }
-            }
             _ => {}
         }
     }
-    assert!(failures.is_empty(), "ch08 corpus failures:\n{}", failures.join("\n"));
+    assert!(
+        failures.is_empty(),
+        "ch08 corpus failures:\n{}",
+        failures.join("\n")
+    );
 }
 
 /// Ch09 (types) corpus, round 4: this crate has no type checker, so a
@@ -259,20 +302,39 @@ fn ch08_names_corpus() {
 fn ch09_types_corpus_resolver_view() {
     let dir = repo_root().join("tests/conformance/09-types");
     let targets = corpus_targets(&dir);
-    assert!(targets.len() >= 150, "09-types corpus not found or truncated: {}", targets.len());
+    assert!(
+        targets.len() >= 150,
+        "09-types corpus not found or truncated: {}",
+        targets.len()
+    );
     let mut failures = Vec::new();
     for target in &targets {
         let src = directive_source(target);
         let case = parse_directives(&src);
-        assert_eq!(case.rule_chapter, 9, "{}: every 09-types test cites 09.Rk", case.name);
-        let detail = src.lines().find_map(|l| l.strip_prefix("//! detail:")).unwrap_or("").trim().to_string();
-        let expected_n: Option<u16> = detail.strip_prefix("N").and_then(|r| r.get(..4)).and_then(|d| d.parse().ok());
+        assert_eq!(
+            case.rule_chapter, 9,
+            "{}: every 09-types test cites 09.Rk",
+            case.name
+        );
+        let detail = src
+            .lines()
+            .find_map(|l| l.strip_prefix("//! detail:"))
+            .unwrap_or("")
+            .trim()
+            .to_string();
+        let expected_n: Option<u16> = detail
+            .strip_prefix("N")
+            .and_then(|r| r.get(..4))
+            .and_then(|d| d.parse().ok());
         let diags = resolve_target(target);
         let got: Vec<String> = diags.iter().map(|d| d.code.as_string()).collect();
         match (case.expect.as_str(), expected_n) {
             ("check-error", Some(n)) => {
                 if diags.len() != 1 || diags[0].code != Code::N(n) {
-                    failures.push(format!("{}: expected exactly one N{n:04}, got {got:?}", case.name));
+                    failures.push(format!(
+                        "{}: expected exactly one N{n:04}, got {got:?}",
+                        case.name
+                    ));
                 }
             }
             ("check-ok", _) | ("check-error", None) => {
@@ -283,7 +345,11 @@ fn ch09_types_corpus_resolver_view() {
             (other, _) => failures.push(format!("{}: unexpected expectation {other:?}", case.name)),
         }
     }
-    assert!(failures.is_empty(), "ch09 corpus (resolver view) failures:\n{}", failures.join("\n"));
+    assert!(
+        failures.is_empty(),
+        "ch09 corpus (resolver view) failures:\n{}",
+        failures.join("\n")
+    );
 }
 
 /// Ch10's corpus, resolver view. The std surface is typed, not resolved, so
@@ -298,13 +364,26 @@ fn ch09_types_corpus_resolver_view() {
 fn ch10_std_corpus_resolver_view() {
     let dir = repo_root().join("tests/conformance/10-std");
     let targets = corpus_targets(&dir);
-    assert!(targets.len() >= 40, "10-std corpus not found or truncated: {}", targets.len());
+    assert!(
+        targets.len() >= 40,
+        "10-std corpus not found or truncated: {}",
+        targets.len()
+    );
     let mut failures = Vec::new();
     for target in &targets {
         let src = directive_source(target);
         let case = parse_directives(&src);
-        assert_eq!(case.rule_chapter, 10, "{}: every 10-std test cites 10.Sk", case.name);
-        let detail = src.lines().find_map(|l| l.strip_prefix("//! detail:")).unwrap_or("").trim().to_string();
+        assert_eq!(
+            case.rule_chapter, 10,
+            "{}: every 10-std test cites 10.Sk",
+            case.name
+        );
+        let detail = src
+            .lines()
+            .find_map(|l| l.strip_prefix("//! detail:"))
+            .unwrap_or("")
+            .trim()
+            .to_string();
         let expected: Option<Code> = match detail.as_bytes().first() {
             Some(b'N') => detail.get(1..5).and_then(|d| d.parse().ok()).map(Code::N),
             Some(b'A') => detail.get(1..5).and_then(|d| d.parse().ok()).map(Code::A),
@@ -315,7 +394,11 @@ fn ch10_std_corpus_resolver_view() {
         match expected {
             Some(code) => {
                 if diags.len() != 1 || diags[0].code != code {
-                    failures.push(format!("{}: expected exactly one {}, got {got:?}", case.name, code.as_string()));
+                    failures.push(format!(
+                        "{}: expected exactly one {}, got {got:?}",
+                        case.name,
+                        code.as_string()
+                    ));
                 }
             }
             None => {
@@ -325,7 +408,11 @@ fn ch10_std_corpus_resolver_view() {
             }
         }
     }
-    assert!(failures.is_empty(), "ch10 corpus (resolver view) failures:\n{}", failures.join("\n"));
+    assert!(
+        failures.is_empty(),
+        "ch10 corpus (resolver view) failures:\n{}",
+        failures.join("\n")
+    );
 }
 
 #[test]
@@ -342,31 +429,40 @@ fn ch04_authority_corpus_subset() {
             continue;
         }
         if PENDING_04.iter().any(|(k, _)| *k == case.rule_num) {
-            pending.entry(case.rule_num).or_default().push(case.name.clone());
+            pending
+                .entry(case.rule_num)
+                .or_default()
+                .push(case.name.clone());
             continue;
         }
         let diags = resolve_target(target);
         match case.expect.as_str() {
             "check-ok" | "run-ok" => {
                 if !diags.is_empty() {
-                    failures.push(format!("{}: expected no diagnostics, got {:?}", case.name, diags.iter().map(|d| d.code.as_string()).collect::<Vec<_>>()));
-                }
-            }
-            "check-error" => {
-                if !diags.iter().any(|d| code_matches(d.code, 4, case.rule_num)) {
                     failures.push(format!(
-                        "{}: expected a diagnostic A{:04} (rule 04.R{}), got {:?}",
+                        "{}: expected no diagnostics, got {:?}",
                         case.name,
-                        case.rule_num,
-                        case.rule_num,
                         diags.iter().map(|d| d.code.as_string()).collect::<Vec<_>>()
                     ));
                 }
             }
+            "check-error" if !diags.iter().any(|d| code_matches(d.code, 4, case.rule_num)) => {
+                failures.push(format!(
+                    "{}: expected a diagnostic A{:04} (rule 04.R{}), got {:?}",
+                    case.name,
+                    case.rule_num,
+                    case.rule_num,
+                    diags.iter().map(|d| d.code.as_string()).collect::<Vec<_>>()
+                ));
+            }
             _ => {}
         }
     }
-    assert!(failures.is_empty(), "ch04 subset failures:\n{}", failures.join("\n"));
+    assert!(
+        failures.is_empty(),
+        "ch04 subset failures:\n{}",
+        failures.join("\n")
+    );
     // PENDING table (printed on failure/verbose run; not itself a test
     // assertion): rules 04 needs types or the manifest, out of scope for
     // this phase per the task's own boundary.
@@ -382,7 +478,9 @@ fn ch04_authority_corpus_subset() {
 #[test]
 fn no_panic_over_whole_corpus() {
     fn walk(dir: &Path, out: &mut Vec<PathBuf>) {
-        let Ok(entries) = fs::read_dir(dir) else { return };
+        let Ok(entries) = fs::read_dir(dir) else {
+            return;
+        };
         let mut entries: Vec<_> = entries.flatten().map(|e| e.path()).collect();
         entries.sort();
         for p in entries {
@@ -408,7 +506,9 @@ fn no_panic_over_whole_corpus() {
     }
     // Directory targets too.
     fn walk_dirs(dir: &Path, out: &mut Vec<PathBuf>) {
-        let Ok(entries) = fs::read_dir(dir) else { return };
+        let Ok(entries) = fs::read_dir(dir) else {
+            return;
+        };
         for e in entries.flatten() {
             let p = e.path();
             if p.is_dir() {
@@ -434,8 +534,14 @@ fn determinism_resolving_twice() {
     for target in corpus_targets(&dir) {
         let a = resolve_target(&target);
         let b = resolve_target(&target);
-        let sa: Vec<String> = a.iter().map(|d| format!("{}:{}:{}:{}", d.start, d.end, d.code.as_string(), d.message)).collect();
-        let sb: Vec<String> = b.iter().map(|d| format!("{}:{}:{}:{}", d.start, d.end, d.code.as_string(), d.message)).collect();
+        let sa: Vec<String> = a
+            .iter()
+            .map(|d| format!("{}:{}:{}:{}", d.start, d.end, d.code.as_string(), d.message))
+            .collect();
+        let sb: Vec<String> = b
+            .iter()
+            .map(|d| format!("{}:{}:{}:{}", d.start, d.end, d.code.as_string(), d.message))
+            .collect();
         assert_eq!(sa, sb, "non-deterministic diagnostics for {target:?}");
     }
 }
@@ -452,7 +558,11 @@ fn determinism_resolving_twice() {
 fn ch01_ownership_corpus_resolver_view() {
     let dir = repo_root().join("tests/conformance/01-ownership");
     let targets = corpus_targets(&dir);
-    assert!(targets.len() >= 90, "01-ownership corpus not found or truncated: {}", targets.len());
+    assert!(
+        targets.len() >= 90,
+        "01-ownership corpus not found or truncated: {}",
+        targets.len()
+    );
     let mut failures = Vec::new();
     let mut checked = 0usize;
     for target in &targets {
@@ -478,7 +588,12 @@ fn ch01_ownership_corpus_resolver_view() {
         if NAME_SHAPED.contains(&case.name.as_str()) {
             continue;
         }
-        let detail = src.lines().find_map(|l| l.strip_prefix("//! detail:")).unwrap_or("").trim().to_string();
+        let detail = src
+            .lines()
+            .find_map(|l| l.strip_prefix("//! detail:"))
+            .unwrap_or("")
+            .trim()
+            .to_string();
         // A test whose `detail` names an ch08/ch04 code is that phase's.
         let expected: Option<Code> = match detail.as_bytes().first() {
             Some(b'N') => detail.get(1..5).and_then(|d| d.parse().ok()).map(Code::N),
@@ -491,16 +606,30 @@ fn ch01_ownership_corpus_resolver_view() {
         match expected {
             Some(code) => {
                 if diags.len() != 1 || diags[0].code != code {
-                    failures.push(format!("{}: expected exactly one {}, got {got:?}", case.name, code.as_string()));
+                    failures.push(format!(
+                        "{}: expected exactly one {}, got {got:?}",
+                        case.name,
+                        code.as_string()
+                    ));
                 }
             }
             None => {
                 if !diags.is_empty() {
-                    failures.push(format!("{}: expected the resolver to be clean (the test is ch01's), got {got:?}", case.name));
+                    failures.push(format!(
+                        "{}: expected the resolver to be clean (the test is ch01's), got {got:?}",
+                        case.name
+                    ));
                 }
             }
         }
     }
-    assert!(checked >= 60, "expected ch01's check-* tests to be found, saw {checked}");
-    assert!(failures.is_empty(), "ch01 corpus (resolver view) failures:\n{}", failures.join("\n"));
+    assert!(
+        checked >= 60,
+        "expected ch01's check-* tests to be found, saw {checked}"
+    );
+    assert!(
+        failures.is_empty(),
+        "ch01 corpus (resolver view) failures:\n{}",
+        failures.join("\n")
+    );
 }

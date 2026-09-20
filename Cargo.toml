@@ -4,3 +4,13 @@ members = ["crates/*"]
 
 [profile.release]
 debug = "line-tables-only"
+
+# Clippy is a required check (`-D warnings`), so these two are decided here
+# rather than argued at every site. Both fight this codebase's shape instead of
+# finding defects in it: a compiler pass legitimately takes a table, a span, an
+# interner and two output sinks, and the tables are tuple-typed BECAUSE they are
+# struct-of-arrays. Seven arguments and N type nestings are thresholds, not
+# invariants. Everything else clippy says is obeyed.
+[workspace.lints.clippy]
+too_many_arguments = "allow"
+type_complexity = "allow"

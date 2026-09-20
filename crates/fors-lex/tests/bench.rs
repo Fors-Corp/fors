@@ -14,7 +14,9 @@ fn generate_source(target_lines: usize) -> Vec<u8> {
             1 => out.push_str(&format!("    let y{i} = x + {i} * 2 - 1_000;\n")),
             2 => out.push_str("    // a line comment with some words in it\n"),
             3 => out.push_str(&format!("    let s{i} = \"hello \\n world {i}\";\n")),
-            4 => out.push_str(&format!("    if x <= {i} {{ return x; }} else {{ return {i}; }}\n")),
+            4 => out.push_str(&format!(
+                "    if x <= {i} {{ return x; }} else {{ return {i}; }}\n"
+            )),
             _ => out.push_str("}\n\n"),
         }
     }

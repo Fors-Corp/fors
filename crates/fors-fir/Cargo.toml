@@ -6,3 +6,6 @@ publish = false
 
 [dependencies]
 fors-index = { path = "../fors-index" }
+
+[lints]
+workspace = true

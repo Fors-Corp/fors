@@ -172,13 +172,19 @@ mod tests {
 
     #[test]
     fn arithmetic_traps_instead_of_wrapping() {
-        assert_eq!(add(ConstValue::I(1), ConstValue::I(2)), Some(ConstValue::I(3)));
+        assert_eq!(
+            add(ConstValue::I(1), ConstValue::I(2)),
+            Some(ConstValue::I(3))
+        );
         assert_eq!(add(ConstValue::I(i128::MAX), ConstValue::I(1)), None);
         assert_eq!(div(ConstValue::I(1), ConstValue::I(0)), None);
         assert_eq!(rem(ConstValue::I(1), ConstValue::I(0)), None);
         assert_eq!(neg(ConstValue::I(i128::MIN)), None);
         assert_eq!(shl(ConstValue::I(1), ConstValue::I(-1)), None);
-        assert_eq!(shl(ConstValue::I(1), ConstValue::I(4)), Some(ConstValue::I(16)));
+        assert_eq!(
+            shl(ConstValue::I(1), ConstValue::I(4)),
+            Some(ConstValue::I(16))
+        );
     }
 
     #[test]

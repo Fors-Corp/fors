@@ -1,0 +1,19 @@
+name: fors
+
+# One exclusion, and it is deliberate.
+#
+# `rust/hard-coded-cryptographic-value` fires 20 times in `fors-fir` on the
+# FNV-1a and SplitMix64 constants behind `hash_bytes`, `splitmix64` and the
+# type interner. Those are NOT cryptography: they are the compiler's internal
+# content hashes, used to decide whether a declaration's signature changed.
+# The threat model is a compiler talking to itself, where a collision costs a
+# wrong incremental rebuild, not a security property.
+#
+# This exclusion has an expiry. `docs/design/type-checker.md` §14 Q2 commits to
+# an in-tree BLAKE3 before M4's bit-identical-rebuild gate or any shared
+# content-addressed cache, because a non-cryptographic hash IS attackable once
+# the artefacts it names are shared between machines. When that lands, delete
+# this filter: at that point the rule is telling the truth.
+query-filters:
+  - exclude:
+      id: rust/hard-coded-cryptographic-value

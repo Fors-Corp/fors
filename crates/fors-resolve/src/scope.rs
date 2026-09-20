@@ -10,7 +10,7 @@ use fors_lex::{TokenKind, Tokens};
 use fors_syntax::{NodeKind, Tree};
 
 use crate::diag::{Code, Diagnostic};
-use crate::items::{binder_name, Export, Exports, ModuleScope, Prelude};
+use crate::items::{Export, Exports, ModuleScope, Prelude, binder_name};
 use crate::paths::{byte_range, own_span, segments_with_ranges};
 use crate::target::{DeferReason, Entity, NameUseTable, ResolvedTarget};
 
@@ -55,7 +55,22 @@ impl<'a> BodyCtx<'a> {
         uses: &'a mut NameUseTable,
     ) -> Self {
         let self_sym = interner.intern(b"Self");
-        BodyCtx { tree, tokens, source, interner, modules, exports, prelude, file, module, diags, uses, frames: Vec::new(), fn_params: Vec::new(), self_sym }
+        BodyCtx {
+            tree,
+            tokens,
+            source,
+            interner,
+            modules,
+            exports,
+            prelude,
+            file,
+            module,
+            diags,
+            uses,
+            frames: Vec::new(),
+            fn_params: Vec::new(),
+            self_sym,
+        }
     }
 
     fn push_frame(&mut self) {
@@ -72,7 +87,12 @@ impl<'a> BodyCtx<'a> {
     }
 
     pub fn param_symbols(&mut self, params: &[usize]) -> Vec<Symbol> {
-        params.iter().filter_map(|&p| binder_name(self.tree, self.tokens, self.source, self.interner, p).map(|(s, _)| s)).collect()
+        params
+            .iter()
+            .filter_map(|&p| {
+                binder_name(self.tree, self.tokens, self.source, self.interner, p).map(|(s, _)| s)
+            })
+            .collect()
     }
 
     fn lookup(&self, name: Symbol) -> Option<Found<'a>> {
@@ -85,7 +105,9 @@ impl<'a> BodyCtx<'a> {
         if let Some(row) = module.lookup(name) {
             return Some(Found::Entity(row.entity, row.variants));
         }
-        self.prelude.get(module, name).map(|e| Found::Entity(e, &[]))
+        self.prelude
+            .get(module, name)
+            .map(|e| Found::Entity(e, &[]))
     }
 
     /// Ch08 Rule 18: declares `name` (introduced at `node`) in the
@@ -118,26 +140,64 @@ impl<'a> BodyCtx<'a> {
     /// `allocator` identifier), false for a generic parameter. Every other
     /// shadow case (locals, module-scope items/imports, `Self`) is an
     /// error regardless.
-    fn declare_coded(&mut self, name: Symbol, node: usize, range: (u32, u32), rule: u16, allow_prelude_shadow: bool) {
+    fn declare_coded(
+        &mut self,
+        name: Symbol,
+        node: usize,
+        range: (u32, u32),
+        rule: u16,
+        allow_prelude_shadow: bool,
+    ) {
         if name == self.self_sym {
-            self.diags.push(Diagnostic::new(range.0, range.1, Code::N(13), "no item, import or binding may be named `Self`".to_string()));
+            self.diags.push(Diagnostic::new(
+                range.0,
+                range.1,
+                Code::N(13),
+                "no item, import or binding may be named `Self`".to_string(),
+            ));
             return;
         }
-        if let Some(f) = self.frames.last() {
-            if f.iter().any(|&(n, _)| n == name) {
-                self.diags.push(Diagnostic::new(range.0, range.1, Code::N(rule), "binding reuses a name already declared in this group".to_string()));
-                return;
-            }
+        if let Some(f) = self.frames.last()
+            && f.iter().any(|&(n, _)| n == name)
+        {
+            self.diags.push(Diagnostic::new(
+                range.0,
+                range.1,
+                Code::N(rule),
+                "binding reuses a name already declared in this group".to_string(),
+            ));
+            return;
         }
         // A shadowing binding is reported once and then bound anyway, so
         // that its later uses mean what the author meant instead of each
         // becoming a second error against the shadowed entity.
-        if self.frames.iter().rev().skip(1).any(|f| f.iter().any(|&(n, _)| n == name)) {
-            self.diags.push(Diagnostic::new(range.0, range.1, Code::N(rule), "binding shadows a binding of an enclosing scope".to_string()));
+        if self
+            .frames
+            .iter()
+            .rev()
+            .skip(1)
+            .any(|f| f.iter().any(|&(n, _)| n == name))
+        {
+            self.diags.push(Diagnostic::new(
+                range.0,
+                range.1,
+                Code::N(rule),
+                "binding shadows a binding of an enclosing scope".to_string(),
+            ));
         } else if self.module.lookup(name).is_some() {
-            self.diags.push(Diagnostic::new(range.0, range.1, Code::N(rule), "binding shadows a module-scope name (item or import)".to_string()));
+            self.diags.push(Diagnostic::new(
+                range.0,
+                range.1,
+                Code::N(rule),
+                "binding shadows a module-scope name (item or import)".to_string(),
+            ));
         } else if !allow_prelude_shadow && self.prelude.get(self.module, name).is_some() {
-            self.diags.push(Diagnostic::new(range.0, range.1, Code::N(rule), "binding shadows a prelude name".to_string()));
+            self.diags.push(Diagnostic::new(
+                range.0,
+                range.1,
+                Code::N(rule),
+                "binding shadows a prelude name".to_string(),
+            ));
         }
         if self.frames.is_empty() {
             self.frames.push(Vec::new());
@@ -173,14 +233,22 @@ impl<'a> BodyCtx<'a> {
             // Ch08 Rule 17 (round 5, D3): a std module is a name only
             // where the header imports it, so an unresolved head that
             // spells one gets the missing `use` named in the message.
-            let msg = if segs.len() > 1 && crate::prelude::is_std_module(self.interner.resolve(name0)) {
-                let m = String::from_utf8_lossy(self.interner.resolve(name0)).into_owned();
-                format!("unresolved name (add `use std.{m};` to import the std module `{m}`)")
-            } else {
-                "unresolved name".to_string()
-            };
-            self.diags.push(Diagnostic::new(range0.0, range0.1, Code::N(14), msg));
-            self.record(node, ResolvedTarget::Deferred { reason: DeferReason::Diagnosed }, 0);
+            let msg =
+                if segs.len() > 1 && crate::prelude::is_std_module(self.interner.resolve(name0)) {
+                    let m = String::from_utf8_lossy(self.interner.resolve(name0)).into_owned();
+                    format!("unresolved name (add `use std.{m};` to import the std module `{m}`)")
+                } else {
+                    "unresolved name".to_string()
+                };
+            self.diags
+                .push(Diagnostic::new(range0.0, range0.1, Code::N(14), msg));
+            self.record(
+                node,
+                ResolvedTarget::Deferred {
+                    reason: DeferReason::Diagnosed,
+                },
+                0,
+            );
             return;
         };
         let (mut head, mut variants) = match found {
@@ -197,8 +265,20 @@ impl<'a> BodyCtx<'a> {
                 Entity::Module(mid) => {
                     let Some(&(sn, sr)) = segs.get(idx) else {
                         let r = byte_range(self.tree, self.tokens, node);
-                        self.diags.push(Diagnostic::new(r.0, r.1, Code::N(16), "the path ends on a module; a module is not a value or a type".to_string()));
-                        self.record(node, ResolvedTarget::Deferred { reason: DeferReason::Diagnosed }, idx as u8);
+                        self.diags.push(Diagnostic::new(
+                            r.0,
+                            r.1,
+                            Code::N(16),
+                            "the path ends on a module; a module is not a value or a type"
+                                .to_string(),
+                        ));
+                        self.record(
+                            node,
+                            ResolvedTarget::Deferred {
+                                reason: DeferReason::Diagnosed,
+                            },
+                            idx as u8,
+                        );
                         return;
                     };
                     match self.exports.get(mid, sn) {
@@ -208,41 +288,91 @@ impl<'a> BodyCtx<'a> {
                             idx += 1;
                         }
                         other => {
-                            let mname = self.modules.name.get(mid.index()).map(|n| fors_index::module::join_dotted(self.interner, n)).unwrap_or_default();
+                            let mname = self
+                                .modules
+                                .name
+                                .get(mid.index())
+                                .map(|n| fors_index::module::join_dotted(self.interner, n))
+                                .unwrap_or_default();
                             let (code, msg) = if other.is_some() {
-                                (Code::N(10), format!("this item of module `{mname}` is not `pub`"))
+                                (
+                                    Code::N(10),
+                                    format!("this item of module `{mname}` is not `pub`"),
+                                )
                             } else {
-                                (Code::N(16), format!("module `{mname}` has no `pub` module-scope name at this segment"))
+                                (
+                                    Code::N(16),
+                                    format!(
+                                        "module `{mname}` has no `pub` module-scope name at this segment"
+                                    ),
+                                )
                             };
                             self.diags.push(Diagnostic::new(sr.0, sr.1, code, msg));
-                            self.record(node, ResolvedTarget::Deferred { reason: DeferReason::Diagnosed }, idx as u8);
+                            self.record(
+                                node,
+                                ResolvedTarget::Deferred {
+                                    reason: DeferReason::Diagnosed,
+                                },
+                                idx as u8,
+                            );
                             return;
                         }
                     }
                 }
-                Entity::PreludeModule(_, Some(mid)) if idx < segs.len() => head = Entity::Module(mid),
+                Entity::PreludeModule(_, Some(mid)) if idx < segs.len() => {
+                    head = Entity::Module(mid)
+                }
                 // `std` is not part of this build: the rest is left to
                 // the checker rather than guessed.
                 Entity::PreludeModule(_, None) if idx < segs.len() => {
-                    self.record(node, ResolvedTarget::Deferred { reason: DeferReason::StdAbsent }, idx as u8);
+                    self.record(
+                        node,
+                        ResolvedTarget::Deferred {
+                            reason: DeferReason::StdAbsent,
+                        },
+                        idx as u8,
+                    );
                     return;
                 }
                 Entity::PreludeModule(..) => {
                     let r = byte_range(self.tree, self.tokens, node);
-                    self.diags.push(Diagnostic::new(r.0, r.1, Code::N(16), "the path ends on a module; a module is not a value or a type".to_string()));
-                    self.record(node, ResolvedTarget::Deferred { reason: DeferReason::Diagnosed }, idx as u8);
+                    self.diags.push(Diagnostic::new(
+                        r.0,
+                        r.1,
+                        Code::N(16),
+                        "the path ends on a module; a module is not a value or a type".to_string(),
+                    ));
+                    self.record(
+                        node,
+                        ResolvedTarget::Deferred {
+                            reason: DeferReason::Diagnosed,
+                        },
+                        idx as u8,
+                    );
                     return;
                 }
                 Entity::Poisoned => {
-                    self.record(node, ResolvedTarget::Deferred { reason: DeferReason::Diagnosed }, idx as u8);
+                    self.record(
+                        node,
+                        ResolvedTarget::Deferred {
+                            reason: DeferReason::Diagnosed,
+                        },
+                        idx as u8,
+                    );
                     return;
                 }
                 Entity::Item { file, decl } => {
                     // Rule 16, enum item: a variant if the next segment
                     // names one; any other tail is deferred (Rule 22).
-                    let variant = segs.get(idx).and_then(|&(sn, _)| variants.iter().position(|&v| v == sn));
+                    let variant = segs
+                        .get(idx)
+                        .and_then(|&(sn, _)| variants.iter().position(|&v| v == sn));
                     let target = match variant {
-                        Some(i) => Entity::Variant { file, decl, index: i as u32 },
+                        Some(i) => Entity::Variant {
+                            file,
+                            decl,
+                            index: i as u32,
+                        },
                         None => head,
                     };
                     let consumed = idx + variant.is_some() as usize;
@@ -271,18 +401,25 @@ impl<'a> BodyCtx<'a> {
                 }
             }
             ScopedType => {
-                if let Some((name, range)) = scoped_ident(self.tree, self.tokens, self.source, self.interner, node) {
+                if let Some((name, range)) =
+                    scoped_ident(self.tree, self.tokens, self.source, self.interner, node)
+                {
                     if self.fn_params.contains(&name) {
                         self.record(node, ResolvedTarget::Local { node: node as u32 }, 1);
                     } else {
-                        self.diags.push(Diagnostic::new(range.0, range.1, Code::N(20), "`scoped(...)` must name a parameter of this function".to_string()));
+                        self.diags.push(Diagnostic::new(
+                            range.0,
+                            range.1,
+                            Code::N(20),
+                            "`scoped(...)` must name a parameter of this function".to_string(),
+                        ));
                     }
                 }
                 for c in self.tree.children(node) {
                     self.walk(c);
                 }
             }
-            Contract => {} // ch02's (Rule 26)
+            Contract => {}  // ch02's (Rule 26)
             Attribute => {} // not names (Rule 23)
             Block => {
                 self.push_frame();
@@ -296,7 +433,10 @@ impl<'a> BodyCtx<'a> {
                 for &c in children.iter().skip(1) {
                     self.walk(c);
                 }
-                if let Some(&binding) = children.first().filter(|&&c| matches!(self.tree.kinds[c], Binding | TupleBinding)) {
+                if let Some(&binding) = children
+                    .first()
+                    .filter(|&&c| matches!(self.tree.kinds[c], Binding | TupleBinding))
+                {
                     self.declare_binding_tree(binding);
                 }
             }
@@ -305,8 +445,14 @@ impl<'a> BodyCtx<'a> {
                 // not in the iterable or `grain` expression. A malformed
                 // loop (parse error) may lack any of the three parts.
                 let children: Vec<usize> = self.tree.children(node).collect();
-                let binding = children.first().copied().filter(|&c| matches!(self.tree.kinds[c], Binding | TupleBinding));
-                let block = children.last().copied().filter(|&c| self.tree.kinds[c] == Block);
+                let binding = children
+                    .first()
+                    .copied()
+                    .filter(|&c| matches!(self.tree.kinds[c], Binding | TupleBinding));
+                let block = children
+                    .last()
+                    .copied()
+                    .filter(|&c| self.tree.kinds[c] == Block);
                 for &c in &children {
                     if Some(c) != binding && Some(c) != block {
                         self.walk(c);
@@ -325,7 +471,9 @@ impl<'a> BodyCtx<'a> {
                 // Rule 19: the binding is in scope in the header type too.
                 let children: Vec<usize> = self.tree.children(node).collect();
                 self.push_frame();
-                if let Some((name, range)) = with_ident(self.tree, self.tokens, self.source, self.interner, node) {
+                if let Some((name, range)) =
+                    with_ident(self.tree, self.tokens, self.source, self.interner, node)
+                {
                     self.declare(name, node, range);
                 }
                 for c in children {
@@ -335,11 +483,16 @@ impl<'a> BodyCtx<'a> {
             }
             Closure => {
                 let children: Vec<usize> = self.tree.children(node).collect();
-                let cparam_count = children.iter().take_while(|&&c| self.tree.kinds[c] == CParam).count();
+                let cparam_count = children
+                    .iter()
+                    .take_while(|&&c| self.tree.kinds[c] == CParam)
+                    .count();
                 let (cparams, body) = children.split_at(cparam_count);
                 self.push_frame();
                 for &cp in cparams {
-                    if let Some((name, range)) = binder_name(self.tree, self.tokens, self.source, self.interner, cp) {
+                    if let Some((name, range)) =
+                        binder_name(self.tree, self.tokens, self.source, self.interner, cp)
+                    {
                         self.declare(name, cp, range);
                     }
                 }
@@ -356,7 +509,9 @@ impl<'a> BodyCtx<'a> {
             Handler => {
                 let children: Vec<usize> = self.tree.children(node).collect();
                 self.push_frame();
-                if let Some((name, range)) = binder_name(self.tree, self.tokens, self.source, self.interner, node) {
+                if let Some((name, range)) =
+                    binder_name(self.tree, self.tokens, self.source, self.interner, node)
+                {
                     self.declare(name, node, range);
                 }
                 for c in children {
@@ -399,7 +554,9 @@ impl<'a> BodyCtx<'a> {
             }
             return;
         }
-        if let Some((name, range)) = binder_name(self.tree, self.tokens, self.source, self.interner, node) {
+        if let Some((name, range)) =
+            binder_name(self.tree, self.tokens, self.source, self.interner, node)
+        {
             self.declare(name, node, range);
         }
     }
@@ -413,13 +570,19 @@ impl<'a> BodyCtx<'a> {
         match self.tree.kinds[node] {
             PatWild | PatLit => {}
             PatLet => {
-                if let Some((name, range)) = binder_name(self.tree, self.tokens, self.source, self.interner, node) {
+                if let Some((name, range)) =
+                    binder_name(self.tree, self.tokens, self.source, self.interner, node)
+                {
                     self.declare(name, node, range);
                 }
             }
             PatPath => {
-                let segs = segments_with_ranges(self.tree, self.tokens, self.source, self.interner, node);
-                let has_payload = self.tree.children(node).any(|c| self.tree.kinds[c] == Payload);
+                let segs =
+                    segments_with_ranges(self.tree, self.tokens, self.source, self.interner, node);
+                let has_payload = self
+                    .tree
+                    .children(node)
+                    .any(|c| self.tree.kinds[c] == Payload);
                 if segs.len() == 1 && !has_payload {
                     let (name, range) = segs[0];
                     match self.lookup(name) {
@@ -427,10 +590,24 @@ impl<'a> BodyCtx<'a> {
                             // Rule 16 applies to a pattern path like any
                             // other: a path that ends on a module is an
                             // error, not a constant to compare against.
-                            self.diags.push(Diagnostic::new(range.0, range.1, Code::N(16), "the path ends on a module; a module is not a value or a type".to_string()));
-                            self.record(node, ResolvedTarget::Deferred { reason: DeferReason::Diagnosed }, 1);
+                            self.diags.push(Diagnostic::new(
+                                range.0,
+                                range.1,
+                                Code::N(16),
+                                "the path ends on a module; a module is not a value or a type"
+                                    .to_string(),
+                            ));
+                            self.record(
+                                node,
+                                ResolvedTarget::Deferred {
+                                    reason: DeferReason::Diagnosed,
+                                },
+                                1,
+                            );
                         }
-                        Some(Found::Entity(e, _)) => self.record(node, ResolvedTarget::Entity(e), 1),
+                        Some(Found::Entity(e, _)) => {
+                            self.record(node, ResolvedTarget::Entity(e), 1)
+                        }
                         Some(Found::Local(_)) => {
                             // Rule 25: a bare pattern name that resolves to
                             // a local binding, parameter or generic
@@ -443,11 +620,28 @@ impl<'a> BodyCtx<'a> {
                                 Code::N(25),
                                 "a pattern names a local binding, parameter or generic parameter; write \"let n\" to bind a fresh name instead".to_string(),
                             ));
-                            self.record(node, ResolvedTarget::Deferred { reason: DeferReason::Diagnosed }, 1);
+                            self.record(
+                                node,
+                                ResolvedTarget::Deferred {
+                                    reason: DeferReason::Diagnosed,
+                                },
+                                1,
+                            );
                         }
                         None => {
-                            self.diags.push(Diagnostic::new(range.0, range.1, Code::N(14), "unresolved name (to bind, write \"let n\")".to_string()));
-                            self.record(node, ResolvedTarget::Deferred { reason: DeferReason::Diagnosed }, 0);
+                            self.diags.push(Diagnostic::new(
+                                range.0,
+                                range.1,
+                                Code::N(14),
+                                "unresolved name (to bind, write \"let n\")".to_string(),
+                            ));
+                            self.record(
+                                node,
+                                ResolvedTarget::Deferred {
+                                    reason: DeferReason::Diagnosed,
+                                },
+                                0,
+                            );
                         }
                     }
                 } else {
@@ -461,7 +655,13 @@ impl<'a> BodyCtx<'a> {
                 // A dot-literal pattern (`.some`) names a variant by
                 // shape alone: genuinely deferred to the checker (Rule
                 // 22), never diagnosed here.
-                self.record(node, ResolvedTarget::Deferred { reason: DeferReason::Member }, 0);
+                self.record(
+                    node,
+                    ResolvedTarget::Deferred {
+                        reason: DeferReason::Member,
+                    },
+                    0,
+                );
                 for c in self.tree.children(node) {
                     self.walk_pattern(c);
                 }
@@ -477,7 +677,9 @@ impl<'a> BodyCtx<'a> {
                     // `x: pattern` -- `x` is a field name only (Rule 23);
                     // whatever `pattern` binds is its own affair.
                     self.walk_pattern(sub);
-                } else if let Some((name, range)) = fpat_let_name(self.tree, self.tokens, self.source, self.interner, node) {
+                } else if let Some((name, range)) =
+                    fpat_let_name(self.tree, self.tokens, self.source, self.interner, node)
+                {
                     // `"let" x` -- shorthand for `x: let x` (D1): binds
                     // `x`, under the same Rule 18 as any other binding.
                     self.declare(name, node, range);
@@ -497,10 +699,15 @@ impl<'a> BodyCtx<'a> {
                 // order, so "earlier" is "already in scope"), a generic
                 // parameter of the enclosing impl/trait, or `Self`. Its
                 // second identifier is a deferred segment (Rule 16).
-                if let Some((name, range)) = binder_name(self.tree, self.tokens, self.source, self.interner, g) {
+                if let Some((name, range)) =
+                    binder_name(self.tree, self.tokens, self.source, self.interner, g)
+                {
                     let ok = match self.lookup(name) {
                         Some(Found::Local(n)) => {
-                            matches!(self.tree.kinds[n as usize], NodeKind::GParam | NodeKind::ImplDecl | NodeKind::TraitDecl)
+                            matches!(
+                                self.tree.kinds[n as usize],
+                                NodeKind::GParam | NodeKind::ImplDecl | NodeKind::TraitDecl
+                            )
                         }
                         _ => false,
                     };
@@ -519,7 +726,9 @@ impl<'a> BodyCtx<'a> {
                 }
                 continue;
             }
-            if let Some((name, range)) = binder_name(self.tree, self.tokens, self.source, self.interner, g) {
+            if let Some((name, range)) =
+                binder_name(self.tree, self.tokens, self.source, self.interner, g)
+            {
                 // Round 3, D3: unlike other bindings, a generic parameter
                 // may not shadow a prelude name.
                 self.declare_gparam(name, g, range);
@@ -560,7 +769,9 @@ impl<'a> BodyCtx<'a> {
             for c in self.tree.children(p) {
                 self.walk(c);
             }
-            if let Some((name, range)) = binder_name(self.tree, self.tokens, self.source, self.interner, p) {
+            if let Some((name, range)) =
+                binder_name(self.tree, self.tokens, self.source, self.interner, p)
+            {
                 self.declare(name, p, range);
             }
         }
@@ -574,7 +785,9 @@ impl<'a> BodyCtx<'a> {
     /// The target recorded for `node` at row `mark` of the use table, if
     /// walking `node` recorded its own head there (ch08 R21).
     pub fn target_at(&self, mark: usize, node: usize) -> Option<ResolvedTarget> {
-        (self.uses.node.get(mark) == Some(&(node as u32))).then(|| self.uses.target.get(mark).copied()).flatten()
+        (self.uses.node.get(mark) == Some(&(node as u32)))
+            .then(|| self.uses.target.get(mark).copied())
+            .flatten()
     }
 
     pub fn push_diag(&mut self, d: Diagnostic) {
@@ -584,7 +797,13 @@ impl<'a> BodyCtx<'a> {
 
 /// `scoped ( ident )`: `scoped` itself lexes as `Ident`, so the target is
 /// the *second* `Ident` token in the node's own span.
-fn scoped_ident(tree: &Tree, tokens: &Tokens, source: &[u8], interner: &mut Interner, node: usize) -> Option<(Symbol, (u32, u32))> {
+fn scoped_ident(
+    tree: &Tree,
+    tokens: &Tokens,
+    source: &[u8],
+    interner: &mut Interner,
+    node: usize,
+) -> Option<(Symbol, (u32, u32))> {
     let (first, end) = own_span(tree, node);
     let mut idents = Vec::new();
     for i in first as usize..end as usize {
@@ -598,12 +817,20 @@ fn scoped_ident(tree: &Tree, tokens: &Tokens, source: &[u8], interner: &mut Inte
 
 /// `with arena|allocator IDENT : T { ... }`: `arena`/`allocator` also lex
 /// as `Ident`, so the region name is the identifier right after that word.
-fn with_ident(tree: &Tree, tokens: &Tokens, source: &[u8], interner: &mut Interner, node: usize) -> Option<(Symbol, (u32, u32))> {
+fn with_ident(
+    tree: &Tree,
+    tokens: &Tokens,
+    source: &[u8],
+    interner: &mut Interner,
+    node: usize,
+) -> Option<(Symbol, (u32, u32))> {
     let (first, end) = own_span(tree, node);
     let mut i = first as usize;
     let end = end as usize;
     while i < end {
-        if tokens.kinds[i] == TokenKind::Ident && matches!(tokens.text(i, source), b"arena" | b"allocator") {
+        if tokens.kinds[i] == TokenKind::Ident
+            && matches!(tokens.text(i, source), b"arena" | b"allocator")
+        {
             let mut j = i + 1;
             while j < end && tokens.kinds[j].is_trivia() {
                 j += 1;
@@ -620,7 +847,12 @@ fn with_ident(tree: &Tree, tokens: &Tokens, source: &[u8], interner: &mut Intern
 
 /// The bound name of an `FPat`'s `"let" ident` form (D1): `binder_name`
 /// already skips the leading `let` looking for the first `Ident`/`_`.
-fn fpat_let_name(tree: &Tree, tokens: &Tokens, source: &[u8], interner: &mut Interner, node: usize) -> Option<(Symbol, (u32, u32))> {
+fn fpat_let_name(
+    tree: &Tree,
+    tokens: &Tokens,
+    source: &[u8],
+    interner: &mut Interner,
+    node: usize,
+) -> Option<(Symbol, (u32, u32))> {
     binder_name(tree, tokens, source, interner, node)
 }
-

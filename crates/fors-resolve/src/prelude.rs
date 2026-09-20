@@ -4,8 +4,8 @@
 //! holds NO modules: a std module is a name only where it is imported.
 
 pub const PRELUDE_TYPES: [&[u8]; 20] = [
-    b"i8", b"i16", b"i32", b"i64", b"u8", b"u16", b"u32", b"u64", b"isize", b"usize", b"f32", b"f64", b"bool", b"Str",
-    b"Slice", b"Array", b"vector", b"mask", b"atomic", b"rawptr",
+    b"i8", b"i16", b"i32", b"i64", b"u8", b"u16", b"u32", b"u64", b"isize", b"usize", b"f32",
+    b"f64", b"bool", b"Str", b"Slice", b"Array", b"vector", b"mask", b"atomic", b"rawptr",
 ];
 pub const PRELUDE_TYPES2: [&[u8]; 4] = [b"Own", b"Ref", b"Arena", b"Option"];
 pub const PRELUDE_TYPES3: [&[u8]; 2] = [b"Shared", b"ErrorFrom"];
@@ -13,8 +13,26 @@ pub const PRELUDE_TYPES3: [&[u8]; 2] = [b"Shared", b"ErrorFrom"];
 /// Round 4 (owner decisions 2026-09-19): the names ch09 Rules 4, 5, 21
 /// and 23 make language-known.
 pub const PRELUDE_TYPES4: [&[u8]; 20] = [
-    b"never", b"Range", b"RangeIncl", b"Copyable", b"Eq", b"Ord", b"Add", b"Sub", b"Mul", b"Div", b"Rem", b"Neg", b"BitAnd",
-    b"BitOr", b"BitXor", b"Shl", b"Shr", b"Iterator", b"Index", b"IndexMut",
+    b"never",
+    b"Range",
+    b"RangeIncl",
+    b"Copyable",
+    b"Eq",
+    b"Ord",
+    b"Add",
+    b"Sub",
+    b"Mul",
+    b"Div",
+    b"Rem",
+    b"Neg",
+    b"BitAnd",
+    b"BitOr",
+    b"BitXor",
+    b"Shl",
+    b"Shr",
+    b"Iterator",
+    b"Index",
+    b"IndexMut",
 ];
 
 pub const PRELUDE_VALUES: [&[u8]; 3] = [b"some", b"none", b"reduce"];
@@ -27,11 +45,16 @@ pub const PRELUDE_VALUES: [&[u8]; 3] = [b"some", b"none", b"reduce"];
 /// for explicit allocators, `ffi` the home ch04's sealed-capability
 /// corpus imports (`use std.ffi;`); the other eight are ch04 Rule 21's
 /// root-capability homes.
-pub const STD_MODULES: [&[u8]; 10] = [b"io", b"fs", b"net", b"proc", b"time", b"rand", b"env", b"gpu", b"mem", b"ffi"];
+pub const STD_MODULES: [&[u8]; 10] = [
+    b"io", b"fs", b"net", b"proc", b"time", b"rand", b"env", b"gpu", b"mem", b"ffi",
+];
 
 /// The list as the N0017 diagnostic prints it.
 pub fn std_modules_list() -> String {
-    let names: Vec<String> = STD_MODULES.iter().map(|n| String::from_utf8_lossy(n).into_owned()).collect();
+    let names: Vec<String> = STD_MODULES
+        .iter()
+        .map(|n| String::from_utf8_lossy(n).into_owned())
+        .collect();
     names.join(" ")
 }
 

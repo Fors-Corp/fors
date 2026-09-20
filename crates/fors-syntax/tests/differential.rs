@@ -31,10 +31,16 @@ fn differential_against_reference_parser() {
 
     let mut reference: HashMap<String, bool> = HashMap::new(); // rel -> is_err
     for line in stdout.lines() {
-        let Some((rel, verdict)) = line.split_once('\t') else { continue };
+        let Some((rel, verdict)) = line.split_once('\t') else {
+            continue;
+        };
         reference.insert(rel.to_string(), verdict == "err");
     }
-    assert!(reference.len() >= 200, "expected ~230 reference verdicts, got {}", reference.len());
+    assert!(
+        reference.len() >= 200,
+        "expected ~230 reference verdicts, got {}",
+        reference.len()
+    );
 
     let mut disagreements = Vec::new();
     for (rel, ref_is_err) in &reference {
@@ -43,9 +49,16 @@ fn differential_against_reference_parser() {
         let (_tree, diags) = fors_syntax::parse(&src);
         let ours_is_err = !diags.is_empty();
         if ours_is_err != *ref_is_err {
-            disagreements.push(format!("{rel}: reference={ref_is_err} rust={ours_is_err} diags={diags:?}"));
+            disagreements.push(format!(
+                "{rel}: reference={ref_is_err} rust={ours_is_err} diags={diags:?}"
+            ));
         }
     }
     disagreements.sort();
-    assert!(disagreements.is_empty(), "{} disagreement(s):\n{}", disagreements.len(), disagreements.join("\n"));
+    assert!(
+        disagreements.is_empty(),
+        "{} disagreement(s):\n{}",
+        disagreements.len(),
+        disagreements.join("\n")
+    );
 }

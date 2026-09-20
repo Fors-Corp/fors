@@ -43,7 +43,13 @@ pub struct Diagnostic {
 
 impl Diagnostic {
     pub fn new(file: FileId, start: u32, end: u32, code: DiagCode, message: String) -> Self {
-        Diagnostic { file, start, end, code, message }
+        Diagnostic {
+            file,
+            start,
+            end,
+            code,
+            message,
+        }
     }
 }
 

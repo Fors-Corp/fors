@@ -99,7 +99,6 @@ def main():
 
     for kernel, by_lang in kernels.items():
         best = {lang: min(cells, key=lambda c: c["stats"]["median"]) for lang, cells in by_lang.items()}
-        base = best.get(BASELINE)
         print(f"\n## {kernel}\n")
         print("| language | threads | median s | vs C | peak RSS MiB | vs C | build s | binary KiB | runs |")
         print("|---|---:|---:|---:|---:|---:|---:|---:|---:|")

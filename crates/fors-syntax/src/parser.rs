@@ -44,7 +44,11 @@ pub struct Parse {
 pub fn parse_file(source: &[u8]) -> Parse {
     let (tokens, lex_diags) = fors_lex::lex(source);
     let (tree, diags) = parse_tokens(&tokens, &lex_diags, source);
-    Parse { tokens, tree, diags }
+    Parse {
+        tokens,
+        tree,
+        diags,
+    }
 }
 
 pub fn parse(source: &[u8]) -> (Tree, Vec<Diagnostic>) {
@@ -66,7 +70,11 @@ fn lex_message(code: fors_lex::DiagCode) -> &'static str {
     }
 }
 
-fn parse_tokens(tokens: &Tokens, lex_diags: &[fors_lex::Diagnostic], source: &[u8]) -> (Tree, Vec<Diagnostic>) {
+fn parse_tokens(
+    tokens: &Tokens,
+    lex_diags: &[fors_lex::Diagnostic],
+    source: &[u8],
+) -> (Tree, Vec<Diagnostic>) {
     // Lexical-error tokens are reported once (by the lexer) and skipped:
     // to the grammar they are trivia.
     let mut sig = Vec::with_capacity(tokens.len() / 2 + 1);
@@ -77,11 +85,20 @@ fn parse_tokens(tokens: &Tokens, lex_diags: &[fors_lex::Diagnostic], source: &[u
     }
     let mut diags: Vec<Diagnostic> = lex_diags
         .iter()
-        .map(|d| Diagnostic::new(d.start, d.end.max(d.start.saturating_add(1)), DiagCode::LexError, lex_message(d.code)))
+        .map(|d| {
+            Diagnostic::new(
+                d.start,
+                d.end.max(d.start.saturating_add(1)),
+                DiagCode::LexError,
+                lex_message(d.code),
+            )
+        })
         .collect();
     let has_lex_diags = !diags.is_empty();
 
-    let ends_in_eof = sig.last().is_some_and(|&i| tokens.kinds[i as usize] == TokenKind::Eof);
+    let ends_in_eof = sig
+        .last()
+        .is_some_and(|&i| tokens.kinds[i as usize] == TokenKind::Eof);
     if !ends_in_eof {
         // `lex` always ends the stream with `Eof`; never let a stream that
         // does not reach the cursor logic.
@@ -136,7 +153,8 @@ struct Parser<'a> {
 }
 
 /// The one fixed diagnostic of ch07 Disambiguation 21 (round 5, D1).
-const RECEIVER_SHORTHAND_MSG: &str = "only a parameter named \"self\", in a trait or impl body, may omit its type annotation";
+const RECEIVER_SHORTHAND_MSG: &str =
+    "only a parameter named \"self\", in a trait or impl body, may omit its type annotation";
 
 fn is_mul_op(k: TokenKind) -> bool {
     matches!(k, TokenKind::Star | TokenKind::Slash | TokenKind::Percent)
@@ -166,32 +184,69 @@ fn is_binop(k: TokenKind) -> bool {
 
 fn is_assign_op(k: TokenKind) -> bool {
     use TokenKind::*;
-    matches!(k, Eq | PlusEq | MinusEq | StarEq | SlashEq | PercentEq | AmpEq | PipeEq | CaretEq | ShlEq | ShrEq)
+    matches!(
+        k,
+        Eq | PlusEq
+            | MinusEq
+            | StarEq
+            | SlashEq
+            | PercentEq
+            | AmpEq
+            | PipeEq
+            | CaretEq
+            | ShlEq
+            | ShrEq
+    )
 }
 
 /// Operator tokens that cannot begin an expression: a `bare_op` on one
 /// token of lookahead (rule 7). `-`, `|`, `&` need the second token.
 fn is_unambiguous_bare_op(k: TokenKind) -> bool {
     use TokenKind::*;
-    matches!(k, Plus | Star | Slash | Percent | Caret | Shl | Shr | KwAnd | KwOr) || is_cmp_op(k)
+    matches!(
+        k,
+        Plus | Star | Slash | Percent | Caret | Shl | Shr | KwAnd | KwOr
+    ) || is_cmp_op(k)
 }
 
 fn is_stmt_keyword(k: TokenKind) -> bool {
     use TokenKind::*;
     matches!(
         k,
-        KwLet | KwVar | KwIf | KwMatch | KwFor | KwWhile | KwBreak | KwContinue | KwReturn | KwRaise | KwWith
-            | KwParallel | KwSimd | KwSpawn | KwConsume | KwDiscard | KwComptime
-            | KwDefer | KwErrdefer
+        KwLet
+            | KwVar
+            | KwIf
+            | KwMatch
+            | KwFor
+            | KwWhile
+            | KwBreak
+            | KwContinue
+            | KwReturn
+            | KwRaise
+            | KwWith
+            | KwParallel
+            | KwSimd
+            | KwSpawn
+            | KwConsume
+            | KwDiscard
+            | KwComptime
+            | KwDefer
+            | KwErrdefer
     )
 }
 
 fn is_opener(k: TokenKind) -> bool {
-    matches!(k, TokenKind::LParen | TokenKind::LBracket | TokenKind::LBrace)
+    matches!(
+        k,
+        TokenKind::LParen | TokenKind::LBracket | TokenKind::LBrace
+    )
 }
 
 fn is_closer(k: TokenKind) -> bool {
-    matches!(k, TokenKind::RParen | TokenKind::RBracket | TokenKind::RBrace)
+    matches!(
+        k,
+        TokenKind::RParen | TokenKind::RBracket | TokenKind::RBrace
+    )
 }
 
 fn open_msg(k: TokenKind) -> &'static str {
@@ -256,7 +311,11 @@ impl<'a> Parser<'a> {
     }
 
     fn prev_end(&self) -> u32 {
-        if self.p == 0 { 0 } else { self.tokens.range(self.sig[self.p - 1] as usize).1 }
+        if self.p == 0 {
+            0
+        } else {
+            self.tokens.range(self.sig[self.p - 1] as usize).1
+        }
     }
 
     /// Consumes the current significant token and its leading trivia.
@@ -270,7 +329,8 @@ impl<'a> Parser<'a> {
 
     fn bump_any(&mut self) {
         let raw = self.sig[self.p];
-        self.b.bump_raw((raw + 1).saturating_sub(self.b.cur_token()));
+        self.b
+            .bump_raw((raw + 1).saturating_sub(self.b.cur_token()));
     }
 
     fn opt(&mut self, k: TokenKind) -> bool {
@@ -287,7 +347,12 @@ impl<'a> Parser<'a> {
             return;
         }
         self.last_err_p = self.p;
-        self.diags.push(Diagnostic::new(start, end.max(start.saturating_add(1)), code, msg));
+        self.diags.push(Diagnostic::new(
+            start,
+            end.max(start.saturating_add(1)),
+            code,
+            msg,
+        ));
     }
 
     fn err_here(&mut self, code: DiagCode, msg: &'static str) {
@@ -411,7 +476,11 @@ impl<'a> Parser<'a> {
 
     fn at_stmt_sync(&self) -> bool {
         let k = self.cur();
-        k == TokenKind::Semi || k == TokenKind::RBrace || k == TokenKind::Eof || is_stmt_keyword(k) || self.at_decl_sync()
+        k == TokenKind::Semi
+            || k == TokenKind::RBrace
+            || k == TokenKind::Eof
+            || is_stmt_keyword(k)
+            || self.at_decl_sync()
     }
 
     /// Tokens an error production must not swallow: the enclosing
@@ -419,7 +488,10 @@ impl<'a> Parser<'a> {
     fn at_recovery_stop(&self) -> bool {
         use TokenKind::*;
         let k = self.cur();
-        matches!(k, Semi | Comma | FatArrow | LBrace | KwElse | At | Eof) || is_closer(k) || is_stmt_keyword(k) || self.at_decl_sync()
+        matches!(k, Semi | Comma | FatArrow | LBrace | KwElse | At | Eof)
+            || is_closer(k)
+            || is_stmt_keyword(k)
+            || self.at_decl_sync()
     }
 
     fn error_node(&mut self) {
@@ -448,7 +520,12 @@ impl<'a> Parser<'a> {
         if self.at_stmt_sync() {
             // virtual insertion: nothing is skipped
             let e = self.prev_end();
-            self.err_at(e.saturating_sub(1), e, DiagCode::MissingSemicolon, "missing ';'");
+            self.err_at(
+                e.saturating_sub(1),
+                e,
+                DiagCode::MissingSemicolon,
+                "missing ';'",
+            );
             return;
         }
         self.err_here(DiagCode::Expected, "expected ';'");
@@ -456,7 +533,8 @@ impl<'a> Parser<'a> {
         let mut depth = 0u32;
         while !self.at(TokenKind::Eof) && !self.at_decl_sync() {
             let k = self.cur();
-            if depth == 0 && (k == TokenKind::Semi || k == TokenKind::RBrace || is_stmt_keyword(k)) {
+            if depth == 0 && (k == TokenKind::Semi || k == TokenKind::RBrace || is_stmt_keyword(k))
+            {
                 break;
             }
             if is_opener(k) {
@@ -473,7 +551,13 @@ impl<'a> Parser<'a> {
     // ---- delimited lists ----
 
     /// `open [ item { "," item } [ "," ] ] close`.
-    fn delimited(&mut self, open: TokenKind, close: TokenKind, min_one: Option<&'static str>, mut item: impl FnMut(&mut Self)) {
+    fn delimited(
+        &mut self,
+        open: TokenKind,
+        close: TokenKind,
+        min_one: Option<&'static str>,
+        mut item: impl FnMut(&mut Self),
+    ) {
         let (os, oe) = self.cur_range();
         if !self.expect(open, open_msg(open)) {
             return;
@@ -501,7 +585,12 @@ impl<'a> Parser<'a> {
             return;
         }
         if self.at(TokenKind::Eof) || self.at_decl_sync() {
-            self.err_at(open_start, open_end, DiagCode::UnclosedBrace, unclosed_msg(close));
+            self.err_at(
+                open_start,
+                open_end,
+                DiagCode::UnclosedBrace,
+                unclosed_msg(close),
+            );
             return;
         }
         self.err_here(DiagCode::Expected, close_msg(close));
@@ -638,7 +727,10 @@ impl<'a> Parser<'a> {
         self.bump(); // @
         self.expect(TokenKind::Ident, "expected attribute name");
         if self.at(TokenKind::LBracket) {
-            self.err_here(DiagCode::Expected, "attribute arguments take '( )', not '[ ]'");
+            self.err_here(
+                DiagCode::Expected,
+                "attribute arguments take '( )', not '[ ]'",
+            );
             self.skip_group();
         } else if self.at(TokenKind::LParen) {
             self.delimited(TokenKind::LParen, TokenKind::RParen, None, |p| p.attr_arg());
@@ -656,7 +748,10 @@ impl<'a> Parser<'a> {
             if self.at(TokenKind::Ident) {
                 self.path(NodeKind::Path);
             } else {
-                self.err_here(DiagCode::Expected, "expected a literal or a path as attribute argument");
+                self.err_here(
+                    DiagCode::Expected,
+                    "expected a literal or a path as attribute argument",
+                );
             }
         }
         self.b.finish_node();
@@ -722,7 +817,12 @@ impl<'a> Parser<'a> {
                 if self.at(LBracket) {
                     self.generics();
                 }
-                self.delimited(LBrace, RBrace, Some("expected at least one enum variant"), |p| p.evariant());
+                self.delimited(
+                    LBrace,
+                    RBrace,
+                    Some("expected at least one enum variant"),
+                    |p| p.evariant(),
+                );
                 NodeKind::EnumDecl
             }
             KwTrait => {
@@ -758,7 +858,10 @@ impl<'a> Parser<'a> {
             }
             KwType => {
                 // ch07 Error recovery: one fixed diagnostic, skip to `;`.
-                self.err_here(DiagCode::UnexpectedToken, "type aliases do not exist; \"type\" is legal only inside a trait or impl body");
+                self.err_here(
+                    DiagCode::UnexpectedToken,
+                    "type aliases do not exist; \"type\" is legal only inside a trait or impl body",
+                );
                 self.bump();
                 self.skip_assoc_item();
                 NodeKind::Error
@@ -793,7 +896,11 @@ impl<'a> Parser<'a> {
         self.in_member_body += 1;
         while !self.at(RBrace) && !self.at(Eof) && !self.at_body_overrun() {
             let before = self.p;
-            self.b.start_node(if impl_body { NodeKind::FnDecl } else { NodeKind::TraitItem });
+            self.b.start_node(if impl_body {
+                NodeKind::FnDecl
+            } else {
+                NodeKind::TraitItem
+            });
             while self.at(At) {
                 self.attribute();
             }
@@ -809,7 +916,10 @@ impl<'a> Parser<'a> {
                 // ch07 Disambiguation 20: an associated-type item takes no
                 // attribute and no `pub`.
                 if self.p != before {
-                    self.err_here(DiagCode::UnexpectedToken, "an associated-type item takes no attribute and no 'pub'");
+                    self.err_here(
+                        DiagCode::UnexpectedToken,
+                        "an associated-type item takes no attribute and no 'pub'",
+                    );
                 }
                 self.assoc_type_item(impl_body);
             } else {
@@ -829,7 +939,11 @@ impl<'a> Parser<'a> {
     /// (`assoc_type_def`) body; the enclosing item node is already open.
     fn assoc_type_item(&mut self, impl_body: bool) {
         use TokenKind::*;
-        self.b.set_current_kind(if impl_body { NodeKind::AssocTypeDef } else { NodeKind::AssocTypeDecl });
+        self.b.set_current_kind(if impl_body {
+            NodeKind::AssocTypeDef
+        } else {
+            NodeKind::AssocTypeDecl
+        });
         self.bump(); // type
         if !self.expect(Ident, "expected associated type name") {
             self.skip_assoc_item();
@@ -842,10 +956,16 @@ impl<'a> Parser<'a> {
             } else if self.at(Semi) || self.at(Colon) {
                 self.err_here(DiagCode::Expected, "an impl defines \"type A = T;\"");
             } else {
-                self.err_here(DiagCode::Expected, "expected '=' and the associated type's definition");
+                self.err_here(
+                    DiagCode::Expected,
+                    "expected '=' and the associated type's definition",
+                );
             }
         } else if self.at(Eq) {
-            self.err_here(DiagCode::UnexpectedToken, "a trait declares \"type A;\" - the definition belongs in an impl");
+            self.err_here(
+                DiagCode::UnexpectedToken,
+                "a trait declares \"type A;\" - the definition belongs in an impl",
+            );
         } else if self.opt(Colon) {
             self.bounds();
         }
@@ -928,16 +1048,28 @@ impl<'a> Parser<'a> {
         self.b.start_node(NodeKind::EVariant);
         self.expect(Ident, "expected variant name");
         if self.at(LParen) {
-            self.delimited(LParen, RParen, Some("expected at least one payload type"), |p| p.type_(false));
+            self.delimited(
+                LParen,
+                RParen,
+                Some("expected at least one payload type"),
+                |p| p.type_(false),
+            );
         } else if self.at(LBrace) {
-            self.delimited(LBrace, RBrace, Some("expected at least one field"), |p| p.field());
+            self.delimited(LBrace, RBrace, Some("expected at least one field"), |p| {
+                p.field()
+            });
         }
         self.b.finish_node();
     }
 
     fn generics(&mut self) {
         self.b.start_node(NodeKind::Generics);
-        self.delimited(TokenKind::LBracket, TokenKind::RBracket, Some("expected a generic parameter"), |p| p.gparam());
+        self.delimited(
+            TokenKind::LBracket,
+            TokenKind::RBracket,
+            Some("expected a generic parameter"),
+            |p| p.gparam(),
+        );
         self.b.finish_node();
     }
 
@@ -952,7 +1084,8 @@ impl<'a> Parser<'a> {
             if self.expect(Ident, "expected an associated type name after '.'") {
                 if self.at(Eq) {
                     self.equality_bound();
-                } else if self.expect(Colon, "expected ':' and the bounds of the constraint entry") {
+                } else if self.expect(Colon, "expected ':' and the bounds of the constraint entry")
+                {
                     self.bounds();
                 }
             }
@@ -976,7 +1109,10 @@ impl<'a> Parser<'a> {
     /// At `=` in a `gentry`: fixed message, recover at the next `,` / `]`.
     fn equality_bound(&mut self) {
         use TokenKind::*;
-        self.err_here(DiagCode::UnexpectedToken, "associated-type equality bounds do not exist; constrain with \":\"");
+        self.err_here(
+            DiagCode::UnexpectedToken,
+            "associated-type equality bounds do not exist; constrain with \":\"",
+        );
         self.b.start_node(NodeKind::Error);
         let mut depth = 0u32;
         while !self.at(Eof) && !self.at_decl_sync() {
@@ -999,7 +1135,10 @@ impl<'a> Parser<'a> {
         if matches!(self.cur(), KwLet | KwInout | KwSink) || self.is_word(b"set") {
             self.bump();
         } else {
-            self.err_here(DiagCode::Expected, "expected a convention (let/inout/sink/set)");
+            self.err_here(
+                DiagCode::Expected,
+                "expected a convention (let/inout/sink/set)",
+            );
         }
     }
 
@@ -1131,7 +1270,14 @@ impl<'a> Parser<'a> {
                 self.b.finish_node();
             }
             _ => {
-                self.err_here(DiagCode::Expected, if ret { "expected a return type" } else { "expected a type" });
+                self.err_here(
+                    DiagCode::Expected,
+                    if ret {
+                        "expected a return type"
+                    } else {
+                        "expected a type"
+                    },
+                );
                 self.b.empty_node(NodeKind::Error);
             }
         }
@@ -1143,7 +1289,12 @@ impl<'a> Parser<'a> {
         self.path_tokens();
         let bare = !self.at(TokenKind::LBracket);
         if !bare {
-            self.delimited(TokenKind::LBracket, TokenKind::RBracket, Some("expected a generic argument"), |p| p.targ());
+            self.delimited(
+                TokenKind::LBracket,
+                TokenKind::RBracket,
+                Some("expected a generic argument"),
+                |p| p.targ(),
+            );
         }
         self.b.finish_node();
         bare
@@ -1217,7 +1368,10 @@ impl<'a> Parser<'a> {
                 self.leave();
             }
             _ => {
-                self.err_here(DiagCode::Expected, "expected a binding (a name, '_' or a tuple of bindings)");
+                self.err_here(
+                    DiagCode::Expected,
+                    "expected a binding (a name, '_' or a tuple of bindings)",
+                );
                 self.b.empty_node(NodeKind::Error);
             }
         }
@@ -1264,7 +1418,11 @@ impl<'a> Parser<'a> {
                 self.b.finish_node();
             }
             KwBreak | KwContinue => {
-                self.b.start_node(if self.at(KwBreak) { NodeKind::BreakStmt } else { NodeKind::ContinueStmt });
+                self.b.start_node(if self.at(KwBreak) {
+                    NodeKind::BreakStmt
+                } else {
+                    NodeKind::ContinueStmt
+                });
                 self.bump();
                 self.expect_semi();
                 self.b.finish_node();
@@ -1279,7 +1437,11 @@ impl<'a> Parser<'a> {
                 self.b.finish_node();
             }
             KwRaise | KwSpawn => {
-                self.b.start_node(if self.at(KwRaise) { NodeKind::RaiseStmt } else { NodeKind::SpawnStmt });
+                self.b.start_node(if self.at(KwRaise) {
+                    NodeKind::RaiseStmt
+                } else {
+                    NodeKind::SpawnStmt
+                });
                 self.bump();
                 self.expr(false);
                 self.expect_semi();
@@ -1291,7 +1453,10 @@ impl<'a> Parser<'a> {
                 if self.is_word(b"arena") || self.is_word(b"allocator") {
                     self.bump();
                 } else {
-                    self.err_here(DiagCode::Expected, "expected 'arena' or 'allocator' after 'with'");
+                    self.err_here(
+                        DiagCode::Expected,
+                        "expected 'arena' or 'allocator' after 'with'",
+                    );
                     if self.at(Ident) && self.nth(1) == Ident {
                         self.bump();
                     }
@@ -1325,7 +1490,11 @@ impl<'a> Parser<'a> {
                 self.b.finish_node();
             }
             KwConsume | KwDiscard => {
-                self.b.start_node(if self.at(KwConsume) { NodeKind::ConsumeStmt } else { NodeKind::DiscardStmt });
+                self.b.start_node(if self.at(KwConsume) {
+                    NodeKind::ConsumeStmt
+                } else {
+                    NodeKind::DiscardStmt
+                });
                 self.bump();
                 self.place();
                 self.expect_semi();
@@ -1362,7 +1531,10 @@ impl<'a> Parser<'a> {
                 let is_place = self.expr(false);
                 if is_assign_op(self.cur()) {
                     if !is_place {
-                        self.err_here(DiagCode::AssignTargetNotPlace, "the left side of an assignment must be a place (name, field or index)");
+                        self.err_here(
+                            DiagCode::AssignTargetNotPlace,
+                            "the left side of an assignment must be a place (name, field or index)",
+                        );
                     }
                     self.b.wrap_last_sibling(NodeKind::AssignStmt);
                     self.bump();
@@ -1384,7 +1556,10 @@ impl<'a> Parser<'a> {
     fn place(&mut self) {
         use TokenKind::*;
         if !self.at(Ident) {
-            self.err_here(DiagCode::Expected, "expected a place (name, field or index)");
+            self.err_here(
+                DiagCode::Expected,
+                "expected a place (name, field or index)",
+            );
             self.b.empty_node(NodeKind::Error);
             return;
         }
@@ -1463,7 +1638,10 @@ impl<'a> Parser<'a> {
             self.bump();
             self.range_or_bit(ns, false);
             if is_cmp_op(self.cur()) {
-                self.err_here(DiagCode::ComparisonChained, "comparison operators do not chain; parenthesize");
+                self.err_here(
+                    DiagCode::ComparisonChained,
+                    "comparison operators do not chain; parenthesize",
+                );
                 self.eat_operator_tail(ns);
             }
             self.b.finish_node();
@@ -1532,7 +1710,10 @@ impl<'a> Parser<'a> {
             self.bump();
             self.add_expr(ns);
             if is_range_op(self.cur()) {
-                self.err_here(DiagCode::RangeChained, "range operators do not chain; parenthesize");
+                self.err_here(
+                    DiagCode::RangeChained,
+                    "range operators do not chain; parenthesize",
+                );
                 self.eat_operator_tail(ns);
             }
             self.b.finish_node();
@@ -1749,7 +1930,10 @@ impl<'a> Parser<'a> {
                     // `invariant`s), so this is an error either way; the deeper
                     // peek only picks the better diagnostic and recovery.
                     if !self.in_struct_header && self.nth(1) == Ident && self.nth(2) == Colon {
-                        self.err_here(DiagCode::Expected, "a struct literal here must be parenthesized");
+                        self.err_here(
+                            DiagCode::Expected,
+                            "a struct literal here must be parenthesized",
+                        );
                         self.struct_lit_tail();
                         return false;
                     }
@@ -1758,12 +1942,18 @@ impl<'a> Parser<'a> {
             }
             LParen | LBracket | Pipe | KwIf | KwMatch | KwComptime | KwAsm => {}
             KwNot => {
-                self.err_here(DiagCode::Expected, "'not' binds looser than this operator; parenthesize the 'not' expression");
+                self.err_here(
+                    DiagCode::Expected,
+                    "'not' binds looser than this operator; parenthesize the 'not' expression",
+                );
                 self.not_expr(ns);
                 return false;
             }
             Amp => {
-                self.err_here(DiagCode::Expected, "'&' is only an argument marker (f(&x)), not an expression operator");
+                self.err_here(
+                    DiagCode::Expected,
+                    "'&' is only an argument marker (f(&x)), not an expression operator",
+                );
                 if self.enter() {
                     self.b.start_node(NodeKind::Error);
                     self.bump();
@@ -1774,7 +1964,10 @@ impl<'a> Parser<'a> {
                 return false;
             }
             Dot if matches!(self.nth(1), Int | Float) => {
-                self.err_here(DiagCode::Expected, "a number literal cannot start with '.'; write '0.5'");
+                self.err_here(
+                    DiagCode::Expected,
+                    "a number literal cannot start with '.'; write '0.5'",
+                );
                 self.b.start_node(NodeKind::Error);
                 self.bump();
                 self.bump();
@@ -1852,7 +2045,12 @@ impl<'a> Parser<'a> {
             }
         });
         if !has_string {
-            self.err_at(os, oe, DiagCode::Expected, "an 'asm' block needs at least one string instruction");
+            self.err_at(
+                os,
+                oe,
+                DiagCode::Expected,
+                "an 'asm' block needs at least one string instruction",
+            );
         }
         self.b.finish_node();
     }
@@ -1890,7 +2088,10 @@ impl<'a> Parser<'a> {
                 false
             }
             _ => {
-                self.err_here(DiagCode::Expected, "expected 'in', 'out', 'clobber', or a string");
+                self.err_here(
+                    DiagCode::Expected,
+                    "expected 'in', 'out', 'clobber', or a string",
+                );
                 self.error_node();
                 false
             }
@@ -1902,7 +2103,9 @@ impl<'a> Parser<'a> {
     fn cparam(&mut self) {
         use TokenKind::*;
         self.b.start_node(NodeKind::CParam);
-        if matches!(self.cur(), KwLet | KwInout | KwSink) || (matches!(self.nth(1), Ident | Underscore) && self.is_word(b"set")) {
+        if matches!(self.cur(), KwLet | KwInout | KwSink)
+            || (matches!(self.nth(1), Ident | Underscore) && self.is_word(b"set"))
+        {
             self.bump();
         }
         if matches!(self.cur(), Ident | Underscore) {
@@ -2031,35 +2234,45 @@ impl<'a> Parser<'a> {
                 if matches!(self.cur(), LParen | LBrace) && self.enter() {
                     self.b.start_node(NodeKind::Payload);
                     if self.at(LParen) {
-                        self.delimited(LParen, RParen, Some("expected at least one pattern"), |p| p.pattern());
+                        self.delimited(
+                            LParen,
+                            RParen,
+                            Some("expected at least one pattern"),
+                            |p| p.pattern(),
+                        );
                     } else {
-                        self.delimited(LBrace, RBrace, Some("expected at least one field pattern"), |p| {
-                            p.b.start_node(NodeKind::FPat);
-                            if p.at(KwLet) {
-                                // "let" ident: binds the field and its name
-                                // together (D1). Shorthand for `x: (let x)`.
-                                p.bump();
-                                p.expect(Ident, "expected an identifier after 'let'");
-                            } else {
-                                let name_range = p.cur_range();
-                                p.expect(Ident, "expected field name");
-                                if p.opt(Colon) {
-                                    p.pattern();
+                        self.delimited(
+                            LBrace,
+                            RBrace,
+                            Some("expected at least one field pattern"),
+                            |p| {
+                                p.b.start_node(NodeKind::FPat);
+                                if p.at(KwLet) {
+                                    // "let" ident: binds the field and its name
+                                    // together (D1). Shorthand for `x: (let x)`.
+                                    p.bump();
+                                    p.expect(Ident, "expected an identifier after 'let'");
                                 } else {
-                                    // The bare `ident` shorthand is removed
-                                    // (round 3, D1): a bare field name no
-                                    // longer binds. Reported at the
-                                    // identifier, per ch07 Error recovery.
-                                    p.err_at(
-                                        name_range.0,
-                                        name_range.1,
-                                        DiagCode::Expected,
-                                        "write \"let x\" to bind the field or \"x: pattern\"",
-                                    );
+                                    let name_range = p.cur_range();
+                                    p.expect(Ident, "expected field name");
+                                    if p.opt(Colon) {
+                                        p.pattern();
+                                    } else {
+                                        // The bare `ident` shorthand is removed
+                                        // (round 3, D1): a bare field name no
+                                        // longer binds. Reported at the
+                                        // identifier, per ch07 Error recovery.
+                                        p.err_at(
+                                            name_range.0,
+                                            name_range.1,
+                                            DiagCode::Expected,
+                                            "write \"let x\" to bind the field or \"x: pattern\"",
+                                        );
+                                    }
                                 }
-                            }
-                            p.b.finish_node();
-                        });
+                                p.b.finish_node();
+                            },
+                        );
                     }
                     self.b.finish_node();
                     self.leave();

@@ -53,13 +53,21 @@ fn corpus_matches_expectations_and_round_trips() {
     let root = conformance_root();
     let mut files = Vec::new();
     walk(&root, &mut files);
-    assert!(!files.is_empty(), "no .fors corpus files found under {}", root.display());
+    assert!(
+        !files.is_empty(),
+        "no .fors corpus files found under {}",
+        root.display()
+    );
 
     let mut failures = Vec::new();
     let mut checked = 0usize;
 
     for path in &files {
-        let rel = path.strip_prefix(&root).unwrap().to_string_lossy().to_string();
+        let rel = path
+            .strip_prefix(&root)
+            .unwrap()
+            .to_string_lossy()
+            .to_string();
         if KNOWN_DISAGREEMENTS.contains(&rel.as_str()) {
             continue;
         }
@@ -92,12 +100,24 @@ fn corpus_matches_expectations_and_round_trips() {
         let (tokens, _) = fors_lex::lex(&src);
         let rebuilt = fors_syntax::reconstruct(&tree, &tokens, &src);
         if rebuilt != src {
-            failures.push(format!("{rel}: round trip mismatch ({} vs {} bytes)", rebuilt.len(), src.len()));
+            failures.push(format!(
+                "{rel}: round trip mismatch ({} vs {} bytes)",
+                rebuilt.len(),
+                src.len()
+            ));
         }
     }
 
-    assert!(checked >= 200, "expected the ~230-file corpus, only found {checked}");
-    assert!(failures.is_empty(), "{} failing file(s):\n{}", failures.len(), failures.join("\n"));
+    assert!(
+        checked >= 200,
+        "expected the ~230-file corpus, only found {checked}"
+    );
+    assert!(
+        failures.is_empty(),
+        "{} failing file(s):\n{}",
+        failures.len(),
+        failures.join("\n")
+    );
 }
 
 #[test]
@@ -119,15 +139,29 @@ fn round4_type_item_recovery_is_exactly_one_diagnostic() {
     let src = fs::read(&path).expect("fixture must exist");
     let (tree, diags) = fors_syntax::parse(&src);
     assert_eq!(diags.len(), 1, "diags: {diags:?}");
-    assert!(diags[0].message.contains("type aliases do not exist"), "{}", diags[0].message);
-    assert!(tree.children(0).any(|c| tree.kinds[c] == fors_syntax::NodeKind::FnDecl));
+    assert!(
+        diags[0].message.contains("type aliases do not exist"),
+        "{}",
+        diags[0].message
+    );
+    assert!(
+        tree.children(0)
+            .any(|c| tree.kinds[c] == fors_syntax::NodeKind::FnDecl)
+    );
 
     let path = conformance_root().join("07-grammar/recover-assoc-type-item.fors");
     let src = fs::read(&path).expect("fixture must exist");
     let (tree, diags) = fors_syntax::parse(&src);
     assert_eq!(diags.len(), 1, "diags: {diags:?}");
-    let impl_node = tree.children(0).find(|&c| tree.kinds[c] == fors_syntax::NodeKind::ImplDecl).expect("impl in CST");
-    assert!(tree.children(impl_node).any(|c| tree.kinds[c] == fors_syntax::NodeKind::FnDecl), "`f` must survive the recovery");
+    let impl_node = tree
+        .children(0)
+        .find(|&c| tree.kinds[c] == fors_syntax::NodeKind::ImplDecl)
+        .expect("impl in CST");
+    assert!(
+        tree.children(impl_node)
+            .any(|c| tree.kinds[c] == fors_syntax::NodeKind::FnDecl),
+        "`f` must survive the recovery"
+    );
 }
 
 #[test]
@@ -146,7 +180,9 @@ fn recover_missing_brace_is_exactly_one_diagnostic_and_resumes() {
     let top_level_decls = dump
         .lines()
         .filter(|l| l.starts_with("  ") && !l.starts_with("   "))
-        .filter(|l| l.trim_start().starts_with("FnDecl") || l.trim_start().starts_with("StructDecl"))
+        .filter(|l| {
+            l.trim_start().starts_with("FnDecl") || l.trim_start().starts_with("StructDecl")
+        })
         .count();
     assert_eq!(top_level_decls, 3, "tree:\n{dump}");
 }

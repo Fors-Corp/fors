@@ -18,12 +18,14 @@ pub mod ids;
 pub mod interner;
 pub mod module;
 
-pub use decl::{build_decl_table, DeclKind, DeclTable, Visibility};
+pub use decl::{DeclKind, DeclTable, Visibility, build_decl_table};
 pub use diag::{Code, DiagCode, Diagnostic};
-pub use fingerprint::{decl_fingerprint, hash_bytes, hash_tokens, splitmix64, NO_BODY};
+pub use fingerprint::{NO_BODY, decl_fingerprint, hash_bytes, hash_tokens, splitmix64};
 pub use ids::{DeclId, DefId, FileId, ModuleId, ScopeId};
 pub use interner::{Interner, Symbol};
-pub use module::{build_module_graph, extract_module_facts, module_segments, FileFacts, ModuleTable, Segments};
+pub use module::{
+    FileFacts, ModuleTable, Segments, build_module_graph, extract_module_facts, module_segments,
+};
 
 /// Indexes one file in the single pass the crate's design commits to:
 /// its declaration table plus the module facts (header/`use` paths) a
@@ -44,7 +46,10 @@ pub fn index_file(
 ) -> FileIndex {
     let decls = build_decl_table(tree, tokens, source, interner);
     let module_facts = extract_module_facts(tree, tokens, source, interner);
-    FileIndex { decls, module_facts }
+    FileIndex {
+        decls,
+        module_facts,
+    }
 }
 
 #[cfg(test)]

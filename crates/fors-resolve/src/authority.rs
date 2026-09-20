@@ -32,10 +32,19 @@ enum HeadBinding {
     StdModule(Vec<u8>),
 }
 
-fn head_binding(interner: &mut Interner, scope: Option<&ModuleScope>, modules: &ModuleTable, head: &[u8]) -> HeadBinding {
-    let Some(scope) = scope else { return HeadBinding::Unbound };
+fn head_binding(
+    interner: &mut Interner,
+    scope: Option<&ModuleScope>,
+    modules: &ModuleTable,
+    head: &[u8],
+) -> HeadBinding {
+    let Some(scope) = scope else {
+        return HeadBinding::Unbound;
+    };
     let sym = interner.intern(head);
-    let Some(row) = scope.lookup(sym) else { return HeadBinding::Unbound };
+    let Some(row) = scope.lookup(sym) else {
+        return HeadBinding::Unbound;
+    };
     match row.entity {
         Entity::PreludeModule(m, _) => HeadBinding::StdModule(interner.resolve(m).to_vec()),
         Entity::Module(mid) => {
@@ -110,7 +119,12 @@ fn words(tree: &Tree, tokens: &Tokens, source: &[u8], node: usize) -> Vec<Vec<u8
 
 /// Ch04 Rule 1's needs vocabulary: every path in a `NeedsClause` must
 /// spell one of the fourteen capability words.
-pub fn check_needs_vocabulary(tree: &Tree, tokens: &Tokens, source: &[u8], diags: &mut Vec<Diagnostic>) {
+pub fn check_needs_vocabulary(
+    tree: &Tree,
+    tokens: &Tokens,
+    source: &[u8],
+    diags: &mut Vec<Diagnostic>,
+) {
     if tree.is_empty() {
         return;
     }
@@ -122,7 +136,12 @@ pub fn check_needs_vocabulary(tree: &Tree, tokens: &Tokens, source: &[u8], diags
             let w = words(tree, tokens, source, path_node);
             if !CAPABILITIES.iter().any(|c| eq_words(&w, c)) {
                 let r = byte_range(tree, tokens, path_node);
-                diags.push(Diagnostic::new(r.0, r.1, Code::A(1), "not a declared capability word".to_string()));
+                diags.push(Diagnostic::new(
+                    r.0,
+                    r.1,
+                    Code::A(1),
+                    "not a declared capability word".to_string(),
+                ));
             }
         }
     }
@@ -136,7 +155,10 @@ fn needs_words(tree: &Tree, tokens: &Tokens, source: &[u8]) -> Vec<Vec<Vec<u8>>>
     }
     for child in tree.children(0) {
         if tree.kinds[child] == NodeKind::NeedsClause {
-            return tree.children(child).map(|p| words(tree, tokens, source, p)).collect();
+            return tree
+                .children(child)
+                .map(|p| words(tree, tokens, source, p))
+                .collect();
         }
     }
     Vec::new()
@@ -156,7 +178,15 @@ pub fn check_main(
     root_decls: &DeclTable,
     diags: &mut Vec<Diagnostic>,
 ) {
-    check_main_impl(interner, root_tree, root_tokens, root_source, root_decls, None, diags);
+    check_main_impl(
+        interner,
+        root_tree,
+        root_tokens,
+        root_source,
+        root_decls,
+        None,
+        diags,
+    );
 }
 
 /// Ch04 Rule 8/21: `main`'s structural and parameter rules, checked only
@@ -176,7 +206,15 @@ pub fn check_main_bound(
     modules: &ModuleTable,
     diags: &mut Vec<Diagnostic>,
 ) {
-    check_main_impl(interner, root_tree, root_tokens, root_source, root_decls, Some((root_scope, modules)), diags);
+    check_main_impl(
+        interner,
+        root_tree,
+        root_tokens,
+        root_source,
+        root_decls,
+        Some((root_scope, modules)),
+        diags,
+    );
 }
 
 fn check_main_impl(
@@ -191,29 +229,62 @@ fn check_main_impl(
     let main_sym = interner.intern(b"main");
     let Some(row) = (0..root_decls.len()).find(|&i| {
         root_decls.parent[i] == fors_index::decl::NO_PARENT
-            && matches!(root_decls.kind[i], fors_index::DeclKind::Fn | fors_index::DeclKind::ExternFn)
+            && matches!(
+                root_decls.kind[i],
+                fors_index::DeclKind::Fn | fors_index::DeclKind::ExternFn
+            )
             && root_decls.name[i] == Some(main_sym)
     }) else {
         return;
     };
     let range = (root_decls.range_start[row], root_decls.range_end[row]);
     if root_decls.kind[row] == fors_index::DeclKind::ExternFn {
-        diags.push(Diagnostic::new(range.0, range.1, Code::A(8), "`main` must not be `extern`".to_string()));
+        diags.push(Diagnostic::new(
+            range.0,
+            range.1,
+            Code::A(8),
+            "`main` must not be `extern`".to_string(),
+        ));
         return;
     }
     let node = root_decls.node[row] as usize;
-    let Some(sig) = root_tree.children(node).find(|&c| root_tree.kinds[c] == NodeKind::FnSig) else { return };
+    let Some(sig) = root_tree
+        .children(node)
+        .find(|&c| root_tree.kinds[c] == NodeKind::FnSig)
+    else {
+        return;
+    };
     let sig_children: Vec<usize> = root_tree.children(sig).collect();
-    if sig_children.iter().any(|&c| root_tree.kinds[c] == NodeKind::Generics) {
-        diags.push(Diagnostic::new(range.0, range.1, Code::A(8), "`main` must not be generic".to_string()));
+    if sig_children
+        .iter()
+        .any(|&c| root_tree.kinds[c] == NodeKind::Generics)
+    {
+        diags.push(Diagnostic::new(
+            range.0,
+            range.1,
+            Code::A(8),
+            "`main` must not be generic".to_string(),
+        ));
     }
     let needs = needs_words(root_tree, root_tokens, root_source);
-    let Some(&params_node) = sig_children.iter().find(|&&c| root_tree.kinds[c] == NodeKind::Params) else { return };
+    let Some(&params_node) = sig_children
+        .iter()
+        .find(|&&c| root_tree.kinds[c] == NodeKind::Params)
+    else {
+        return;
+    };
     let mut seen_types: Vec<&[&[u8]]> = Vec::new();
     for param in root_tree.children(params_node) {
-        let Some(ty) = root_tree.children(param).next() else { continue };
+        let Some(ty) = root_tree.children(param).next() else {
+            continue;
+        };
         if root_tree.kinds[ty] != NodeKind::TypeApp {
-            diags.push(Diagnostic::new(range.0, range.1, Code::A(8), "`main` parameter type is not one of the twelve root-capability types".to_string()));
+            diags.push(Diagnostic::new(
+                range.0,
+                range.1,
+                Code::A(8),
+                "`main` parameter type is not one of the twelve root-capability types".to_string(),
+            ));
             continue;
         }
         let has_targs = root_tree.children(ty).next().is_some();
@@ -221,18 +292,18 @@ fn check_main_impl(
         // Round 5 (D3): the head must denote the std module, not merely
         // spell its name. Canonicalise `w.Stdout` (an aliased import) to
         // `io.Stdout`, and refuse `io.Stdout` when `io` is a user module.
-        if let Some((scope, modules)) = binding {
-            if w.len() == 2 {
-                match head_binding(interner, scope, modules, &w[0]) {
-                    HeadBinding::StdModule(m) => w[0] = m,
-                    // N0014 already names the unresolved head (and, for a
-                    // known std module, the missing `use`): one cause, one
-                    // code, so Rule 8 stays silent on this parameter.
-                    HeadBinding::Unbound => continue,
-                    HeadBinding::Other => {
-                        diags.push(Diagnostic::new(range.0, range.1, Code::A(8), "`main` parameter type is not one of the twelve root-capability types: its module is not the std module (a user module or item of the same name cannot supply a root capability, Rule 7)".to_string()));
-                        continue;
-                    }
+        if let Some((scope, modules)) = binding
+            && w.len() == 2
+        {
+            match head_binding(interner, scope, modules, &w[0]) {
+                HeadBinding::StdModule(m) => w[0] = m,
+                // N0014 already names the unresolved head (and, for a
+                // known std module, the missing `use`): one cause, one
+                // code, so Rule 8 stays silent on this parameter.
+                HeadBinding::Unbound => continue,
+                HeadBinding::Other => {
+                    diags.push(Diagnostic::new(range.0, range.1, Code::A(8), "`main` parameter type is not one of the twelve root-capability types: its module is not the std module (a user module or item of the same name cannot supply a root capability, Rule 7)".to_string()));
+                    continue;
                 }
             }
         }
@@ -240,11 +311,18 @@ fn check_main_impl(
         match matched {
             Some((t, mapped_cap)) if !has_targs => {
                 if seen_types.contains(t) {
-                    diags.push(Diagnostic::new(range.0, range.1, Code::A(8), "two `main` parameters of the same root-capability type".to_string()));
+                    diags.push(Diagnostic::new(
+                        range.0,
+                        range.1,
+                        Code::A(8),
+                        "two `main` parameters of the same root-capability type".to_string(),
+                    ));
                 }
                 seen_types.push(t);
                 let cap: &[&[u8]] = if eq_words(&[b"fs".to_vec(), b"Dir".to_vec()], t) {
-                    if needs.iter().any(|n| eq_words(n, &[b"fs", b"read"])) || needs.iter().any(|n| eq_words(n, &[b"fs", b"write"])) {
+                    if needs.iter().any(|n| eq_words(n, &[b"fs", b"read"]))
+                        || needs.iter().any(|n| eq_words(n, &[b"fs", b"write"]))
+                    {
                         continue;
                     }
                     &[b"fs", b"read"]
@@ -262,7 +340,13 @@ fn check_main_impl(
                 }
             }
             _ => {
-                diags.push(Diagnostic::new(range.0, range.1, Code::A(8), "`main` parameter type is not one of the twelve root-capability types".to_string()));
+                diags.push(Diagnostic::new(
+                    range.0,
+                    range.1,
+                    Code::A(8),
+                    "`main` parameter type is not one of the twelve root-capability types"
+                        .to_string(),
+                ));
             }
         }
     }

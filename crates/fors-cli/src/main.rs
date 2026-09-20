@@ -18,7 +18,7 @@ use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
-use fors_index::{module::is_legal_segment, Interner, Segments};
+use fors_index::{Interner, Segments, module::is_legal_segment};
 
 fn line_col(source: &[u8], byte_offset: u32) -> (u32, u32) {
     let offset = (byte_offset as usize).min(source.len());
@@ -67,7 +67,12 @@ fn run_parse(args: &[String]) -> ExitCode {
         for d in &parsed.diags {
             any_diag = true;
             let (line, col) = line_col(&bytes, d.start);
-            let _ = writeln!(out, "{path}:{line}:{col}: error[{}]: {}", d.code.as_str(), d.message);
+            let _ = writeln!(
+                out,
+                "{path}:{line}:{col}: error[{}]: {}",
+                d.code.as_str(),
+                d.message
+            );
         }
         if show_tree {
             let mut dump = String::new();
@@ -96,7 +101,9 @@ struct PkgFile {
 }
 
 fn walk_fors_files(root: &Path, out: &mut Vec<PathBuf>) {
-    let Ok(entries) = std::fs::read_dir(root) else { return };
+    let Ok(entries) = std::fs::read_dir(root) else {
+        return;
+    };
     let mut entries: Vec<_> = entries.flatten().collect();
     entries.sort_by_key(|e| e.file_name());
     for entry in entries {
@@ -128,9 +135,18 @@ fn build_package(path: &Path, interner: &mut Interner) -> Option<(Vec<PkgFile>, 
             let comps: Vec<_> = rel.components().collect();
             for (i, c) in comps.iter().enumerate() {
                 let os = c.as_os_str().to_string_lossy();
-                let seg = if i + 1 == comps.len() { os.strip_suffix(".fors").unwrap_or(&os).to_string() } else { os.to_string() };
+                let seg = if i + 1 == comps.len() {
+                    os.strip_suffix(".fors").unwrap_or(&os).to_string()
+                } else {
+                    os.to_string()
+                };
                 if !is_legal_segment(seg.as_bytes()) {
-                    extra.push((0, 0, "N0024", format!("illegal file/directory name segment `{seg}`")));
+                    extra.push((
+                        0,
+                        0,
+                        "N0024",
+                        format!("illegal file/directory name segment `{seg}`"),
+                    ));
                 }
                 segs_bytes.push(seg.into_bytes());
             }
@@ -138,7 +154,12 @@ fn build_package(path: &Path, interner: &mut Interner) -> Option<(Vec<PkgFile>, 
                 root = Some(files.len());
             }
             let name: Segments = segs_bytes.iter().map(|s| interner.intern(s)).collect();
-            files.push(PkgFile { display: p.display().to_string(), source, name, extra });
+            files.push(PkgFile {
+                display: p.display().to_string(),
+                source,
+                name,
+                extra,
+            });
         }
         if root.is_none() && files.len() == 1 {
             root = Some(0);
@@ -149,7 +170,12 @@ fn build_package(path: &Path, interner: &mut Interner) -> Option<(Vec<PkgFile>, 
                 if files[i].name == files[j].name {
                     let other = files[j].display.clone();
                     let mname = fors_index::module::join_dotted(interner, &files[i].name);
-                    files[i].extra.push((0, 0, "N0024", format!("also names module `{mname}` as `{other}`")));
+                    files[i].extra.push((
+                        0,
+                        0,
+                        "N0024",
+                        format!("also names module `{mname}` as `{other}`"),
+                    ));
                 }
             }
         }
@@ -165,14 +191,25 @@ fn build_package(path: &Path, interner: &mut Interner) -> Option<(Vec<PkgFile>, 
         let name: Segments = match real_header_segments(&source, interner) {
             Some(segs) => segs,
             None => {
-                let stem = path.file_stem().map(|s| s.to_string_lossy().into_owned()).unwrap_or_else(|| "main".to_string());
+                let stem = path
+                    .file_stem()
+                    .map(|s| s.to_string_lossy().into_owned())
+                    .unwrap_or_else(|| "main".to_string());
                 if !is_legal_segment(stem.as_bytes()) {
                     extra.push((0, 0, "N0024", format!("illegal file name `{stem}`")));
                 }
                 vec![interner.intern(stem.as_bytes())]
             }
         };
-        Some((vec![PkgFile { display: path.display().to_string(), source, name, extra }], Some(0)))
+        Some((
+            vec![PkgFile {
+                display: path.display().to_string(),
+                source,
+                name,
+                extra,
+            }],
+            Some(0),
+        ))
     }
 }
 
@@ -192,19 +229,30 @@ fn run_check(args: &[String]) -> ExitCode {
             any = true;
             continue;
         };
-        let parsed: Vec<fors_syntax::Parse> = files.iter().map(|f| fors_syntax::parse_file(&f.source)).collect();
+        let parsed: Vec<fors_syntax::Parse> = files
+            .iter()
+            .map(|f| fors_syntax::parse_file(&f.source))
+            .collect();
         let inputs: Vec<fors_resolve::FileInput> = files
             .iter()
             .zip(parsed.iter())
-            .map(|(f, p)| fors_resolve::FileInput { tree: &p.tree, tokens: &p.tokens, source: &f.source, name: f.name.clone() })
+            .map(|(f, p)| fors_resolve::FileInput {
+                tree: &p.tree,
+                tokens: &p.tokens,
+                source: &f.source,
+                name: f.name.clone(),
+            })
             .collect();
         // The package name comes from the manifest (ch08 Rule 1), which has no
         // chapter yet, so infer it from the source root's directory name. It
         // matters only for `std` itself: inside package `std` the module paths
         // carry no `std` segment, so nothing else could tell that an `impl` of
         // a prelude type is at home (ch08 Rule 21, ch10 Rule 1).
-        let package = std::path::Path::new(path).file_name().map(|n| n.as_encoded_bytes().to_vec());
-        let output = fors_resolve::resolve_in_package(&mut interner, &inputs, root, package.as_deref());
+        let package = std::path::Path::new(path)
+            .file_name()
+            .map(|n| n.as_encoded_bytes().to_vec());
+        let output =
+            fors_resolve::resolve_in_package(&mut interner, &inputs, root, package.as_deref());
         // Design §4.4/§13, increment I0: `fors check` calls `check_build`
         // after resolution; it emits nothing yet (no phase runs before
         // I2), so `checked.diagnostics` is always empty here today. Kept
@@ -218,16 +266,31 @@ fn run_check(args: &[String]) -> ExitCode {
             for d in &parsed[i].diags {
                 any = true;
                 let (l, c) = line_col(&f.source, d.start);
-                lines.push((f.display.clone(), d.start, d.start, format!("{l}:{c}: error[{}]: {}", d.code.as_str(), d.message)));
+                lines.push((
+                    f.display.clone(),
+                    d.start,
+                    d.start,
+                    format!("{l}:{c}: error[{}]: {}", d.code.as_str(), d.message),
+                ));
             }
             for (_, _, code, msg) in &f.extra {
                 any = true;
-                lines.push((f.display.clone(), 0, 0, format!("1:1: error[{code}]: {msg}")));
+                lines.push((
+                    f.display.clone(),
+                    0,
+                    0,
+                    format!("1:1: error[{code}]: {msg}"),
+                ));
             }
             for d in &output.files[i].diagnostics {
                 any = true;
                 let (l, c) = line_col(&f.source, d.start);
-                lines.push((f.display.clone(), d.start, d.start, format!("{l}:{c}: error[{}]: {}", d.code.as_string(), d.message)));
+                lines.push((
+                    f.display.clone(),
+                    d.start,
+                    d.start,
+                    format!("{l}:{c}: error[{}]: {}", d.code.as_string(), d.message),
+                ));
             }
         }
         // I0: `checked.diagnostics` is always empty (see above), so this
@@ -267,11 +330,7 @@ fn real_header_segments(source: &[u8], interner: &mut Interner) -> Option<Segmen
             out.push(interner.intern(parsed.tokens.text(i, source)));
         }
     }
-    if out.is_empty() {
-        None
-    } else {
-        Some(out)
-    }
+    if out.is_empty() { None } else { Some(out) }
 }
 
 fn main() -> ExitCode {

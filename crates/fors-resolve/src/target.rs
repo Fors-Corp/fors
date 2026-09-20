@@ -8,12 +8,19 @@ use fors_index::{DeclId, FileId, ModuleId, Symbol};
 /// file's function body, addressed by the tree node that introduced them.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum Entity {
-    Item { file: FileId, decl: DeclId },
+    Item {
+        file: FileId,
+        decl: DeclId,
+    },
     Module(ModuleId),
     /// An enum variant: the enum's own `(file, decl)` plus the variant's
     /// ordinal among that enum's distinct variant names — not a tree node,
     /// so an edit elsewhere in the defining file cannot change it.
-    Variant { file: FileId, decl: DeclId, index: u32 },
+    Variant {
+        file: FileId,
+        decl: DeclId,
+        index: u32,
+    },
     /// Ch08 Rule 17 prelude type/trait (`i32`, `Str`, `Option`, ...).
     PreludeType(Symbol),
     /// Ch08 Rule 17 prelude value (`some`, `none`, `reduce`).
@@ -71,11 +78,15 @@ pub enum ResolvedTarget {
     /// recorded via its owning `WithStmt` node, `Handler`'s identifier via
     /// the `Handler` node, or the implicit `Self` via its `ImplDecl`/
     /// `TraitDecl` node).
-    Local { node: u32 },
+    Local {
+        node: u32,
+    },
     /// Unresolved on purpose: a deferred segment (Rule 16) or anything
     /// Rule 22 assigns to the checker. Never paired with a diagnostic
     /// unless `reason` is [`DeferReason::Diagnosed`].
-    Deferred { reason: DeferReason },
+    Deferred {
+        reason: DeferReason,
+    },
 }
 
 /// One file's name-use side table: parallel to a `Tree`'s nodes, index-
@@ -115,7 +126,11 @@ impl NameUseTable {
         let mut order: Vec<usize> = (0..self.node.len()).collect();
         order.sort_by_key(|&i| self.node[i]);
         for w in order.windows(2) {
-            assert_ne!(self.node[w[0]], self.node[w[1]], "a name-use node was recorded twice: {}", self.node[w[0]]);
+            assert_ne!(
+                self.node[w[0]], self.node[w[1]],
+                "a name-use node was recorded twice: {}",
+                self.node[w[0]]
+            );
         }
         let node = order.iter().map(|&i| self.node[i]).collect();
         let target = order.iter().map(|&i| self.target[i]).collect();
@@ -130,7 +145,10 @@ impl NameUseTable {
     /// [`Self::finish`] to have run (panics otherwise, since an unsorted
     /// table cannot be searched).
     pub fn target_of(&self, node: u32) -> Option<ResolvedTarget> {
-        assert!(self.sorted, "NameUseTable::target_of called before finish()");
+        assert!(
+            self.sorted,
+            "NameUseTable::target_of called before finish()"
+        );
         self.node.binary_search(&node).ok().map(|i| self.target[i])
     }
 }

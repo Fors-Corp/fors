@@ -14,11 +14,14 @@ use std::collections::HashMap;
 use fors_fir::constval::ConstValue;
 use fors_fir::defpath::{DeclKey, DeclKeyId, ModulePathId, NO_DECL_KEY};
 use fors_fir::sig::{
-    Assoc, Conv, GParam, GParamKind, Member, Param, SigKind, VIS_PRIVATE, VIS_PUBLIC, NO_BOUNDS, NO_SLOT,
+    Assoc, Conv, GParam, GParamKind, Member, NO_BOUNDS, NO_SLOT, Param, SigKind, VIS_PRIVATE,
+    VIS_PUBLIC,
 };
-use fors_fir::subst::{one_way_match, subst_norm, Binding};
-use fors_fir::ty::{PrimKind, Quals, TyId, TyTag, NO_TY, TY_ERROR, TY_NEVER, TY_UNIT};
-use fors_fir::{decl_fingerprint, decode_sig, encode_sig, sig_hash, Fir, FingerprintPolicy, FINGERPRINT_POLICY};
+use fors_fir::subst::{Binding, one_way_match, subst_norm};
+use fors_fir::ty::{NO_TY, PrimKind, Quals, TY_ERROR, TY_NEVER, TY_UNIT, TyId, TyTag};
+use fors_fir::{
+    FINGERPRINT_POLICY, FingerprintPolicy, Fir, decl_fingerprint, decode_sig, encode_sig, sig_hash,
+};
 use fors_index::decl::DeclKind;
 use fors_index::ids::DefId;
 use fors_index::interner::{Interner, Symbol};
@@ -31,7 +34,10 @@ struct Lcg(u64);
 
 impl Lcg {
     fn next(&mut self) -> u64 {
-        self.0 = self.0.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
+        self.0 = self
+            .0
+            .wrapping_mul(6364136223846793005)
+            .wrapping_add(1442695040888963407);
         self.0 >> 17
     }
 
@@ -61,16 +67,34 @@ impl W {
 
     fn key(&mut self, kind: DeclKind, name: &str) -> DeclKeyId {
         let n = self.sym(name);
-        self.fir.keys.intern(DeclKey { parent: NO_DECL_KEY, module: self.module, kind, name: Some(n), disamb: 0 })
+        self.fir.keys.intern(DeclKey {
+            parent: NO_DECL_KEY,
+            module: self.module,
+            kind,
+            name: Some(n),
+            disamb: 0,
+        })
     }
 
     fn child_key(&mut self, parent: DeclKeyId, kind: DeclKind, name: &str) -> DeclKeyId {
         let n = self.sym(name);
-        self.fir.keys.intern(DeclKey { parent, module: self.module, kind, name: Some(n), disamb: 0 })
+        self.fir.keys.intern(DeclKey {
+            parent,
+            module: self.module,
+            kind,
+            name: Some(n),
+            disamb: 0,
+        })
     }
 
     fn impl_key(&mut self, disamb: u32) -> DeclKeyId {
-        self.fir.keys.intern(DeclKey { parent: NO_DECL_KEY, module: self.module, kind: DeclKind::Impl, name: None, disamb })
+        self.fir.keys.intern(DeclKey {
+            parent: NO_DECL_KEY,
+            module: self.module,
+            kind: DeclKind::Impl,
+            name: None,
+            disamb,
+        })
     }
 
     /// Declares a nominal head and returns its `DefId`.
@@ -103,11 +127,16 @@ struct Pool {
 }
 
 fn build_pool(w: &mut W) -> Pool {
-    let heads = ["Buf", "Vec", "Map", "Pair", "Own", "Ref", "Array", "Slice", "Option", "Range"]
+    let heads = [
+        "Buf", "Vec", "Map", "Pair", "Own", "Ref", "Array", "Slice", "Option", "Range",
+    ]
+    .iter()
+    .map(|n| w.head(n))
+    .collect();
+    let traits = ["Eq", "Ord", "Display", "Iterator", "Index", "Copyable"]
         .iter()
-        .map(|n| w.head(n))
+        .map(|n| w.trait_head(n))
         .collect();
-    let traits = ["Eq", "Ord", "Display", "Iterator", "Index", "Copyable"].iter().map(|n| w.trait_head(n)).collect();
     let assoc_names = ["Item", "Output", "Key"].iter().map(|n| w.sym(n)).collect();
     let prims = vec![
         PrimKind::I8,
@@ -121,7 +150,12 @@ fn build_pool(w: &mut W) -> Pool {
         PrimKind::Str,
         PrimKind::RawPtr,
     ];
-    Pool { heads, traits, assoc_names, prims }
+    Pool {
+        heads,
+        traits,
+        assoc_names,
+        prims,
+    }
 }
 
 #[derive(Clone, Copy)]
@@ -187,7 +221,11 @@ fn gen_ty(w: &mut W, rng: &mut Lcg, pool: &Pool, cx: GenCx, depth: u32) -> TyId 
                 params.push((conv, gen_ty(w, rng, pool, cx, depth + 1)));
             }
             let result = gen_ty(w, rng, pool, cx, depth + 1);
-            let raises = if rng.below(4) == 0 { gen_ty(w, rng, pool, cx, depth + 1) } else { NO_TY };
+            let raises = if rng.below(4) == 0 {
+                gen_ty(w, rng, pool, cx, depth + 1)
+            } else {
+                NO_TY
+            };
             let closure = false; // never in a signature (§5.1)
             let f = w.fir.tys.intern_fn_ty(&params, result, raises, closure);
             w.fir.tys.fn_ty(f)
@@ -243,7 +281,15 @@ fn gen_ty(w: &mut W, rng: &mut Lcg, pool: &Pool, cx: GenCx, depth: u32) -> TyId 
 /// structurally distinct (a uniquely named member or a unique const value), so
 /// the birthday run really does hash 10^5 *different* byte strings.
 fn gen_sig(w: &mut W, rng: &mut Lcg, pool: &Pool, i: usize) -> (DeclKeyId, DefId) {
-    let kinds = [SigKind::Fn, SigKind::ExternFn, SigKind::Struct, SigKind::Enum, SigKind::Trait, SigKind::Impl, SigKind::Const];
+    let kinds = [
+        SigKind::Fn,
+        SigKind::ExternFn,
+        SigKind::Struct,
+        SigKind::Enum,
+        SigKind::Trait,
+        SigKind::Impl,
+        SigKind::Const,
+    ];
     let kind = kinds[rng.below(kinds.len() as u64) as usize];
     let decl_kind = match kind {
         SigKind::Fn => DeclKind::Fn,
@@ -254,12 +300,20 @@ fn gen_sig(w: &mut W, rng: &mut Lcg, pool: &Pool, i: usize) -> (DeclKeyId, DefId
         SigKind::Impl => DeclKind::Impl,
         _ => DeclKind::Const,
     };
-    let key = if kind == SigKind::Impl { w.impl_key(i as u32) } else { w.key(decl_kind, &format!("d{i}")) };
+    let key = if kind == SigKind::Impl {
+        w.impl_key(i as u32)
+    } else {
+        w.key(decl_kind, &format!("d{i}"))
+    };
     let def = w.fir.declare(key, kind);
 
     // Generic parameters and their bounds.
     let ngp = rng.below(4) as u16;
-    let cx = GenCx { owner: def, ngp, allow_proj: true };
+    let cx = GenCx {
+        owner: def,
+        ngp,
+        allow_proj: true,
+    };
     let mut gparams = Vec::new();
     for g in 0..ngp {
         let name = w.sym(&format!("G{g}"));
@@ -288,7 +342,11 @@ fn gen_sig(w: &mut W, rng: &mut Lcg, pool: &Pool, i: usize) -> (DeclKeyId, DefId
             trs.push(w.trait_ref(td, &args));
         }
         let bounds = w.bounds(&trs);
-        gparams.push(GParam { name, kind: gk, bounds });
+        gparams.push(GParam {
+            name,
+            kind: gk,
+            bounds,
+        });
     }
     // Constraint entries (R62).
     let nc = rng.below(2);
@@ -310,7 +368,11 @@ fn gen_sig(w: &mut W, rng: &mut Lcg, pool: &Pool, i: usize) -> (DeclKeyId, DefId
             let n = rng.below(4);
             let mut params = Vec::new();
             let marker_ty = gen_ty(w, rng, pool, cx, 1);
-            params.push(Param { name: marker, conv: Conv::Let, ty: marker_ty });
+            params.push(Param {
+                name: marker,
+                conv: Conv::Let,
+                ty: marker_ty,
+            });
             for p in 0..n {
                 let name = w.sym(&format!("a{p}"));
                 let conv = match rng.below(4) {
@@ -323,11 +385,23 @@ fn gen_sig(w: &mut W, rng: &mut Lcg, pool: &Pool, i: usize) -> (DeclKeyId, DefId
                 params.push(Param { name, conv, ty });
             }
             let result = gen_ty(w, rng, pool, cx, 1);
-            let raises = if rng.below(3) == 0 { gen_ty(w, rng, pool, cx, 2) } else { NO_TY };
+            let raises = if rng.below(3) == 0 {
+                gen_ty(w, rng, pool, cx, 2)
+            } else {
+                NO_TY
+            };
             let scoped = if rng.below(4) == 0 { 0 } else { NO_SLOT };
             let receiver = if rng.below(2) == 0 { 0 } else { NO_SLOT };
             let contract = rng.next() as u128;
-            let f = w.fir.sigs.fn_sigs.push(&params, result, raises, scoped, receiver, (0, 0), contract);
+            let f = w.fir.sigs.fn_sigs.push(
+                &params,
+                result,
+                raises,
+                scoped,
+                receiver,
+                (0, 0),
+                contract,
+            );
             w.fir.sigs.set_fn_sig(def, f);
         }
         SigKind::Struct => {
@@ -338,7 +412,11 @@ fn gen_sig(w: &mut W, rng: &mut Lcg, pool: &Pool, i: usize) -> (DeclKeyId, DefId
             for fi in 0..n {
                 let name = w.sym(&format!("f{fi}"));
                 let ty = gen_ty(w, rng, pool, cx, 1);
-                let vis = if rng.below(2) == 0 { VIS_PUBLIC } else { VIS_PRIVATE };
+                let vis = if rng.below(2) == 0 {
+                    VIS_PUBLIC
+                } else {
+                    VIS_PRIVATE
+                };
                 ms.push(Member::field(name, vis, ty));
             }
             let list = w.fir.sigs.member_store.push(&ms);
@@ -379,13 +457,21 @@ fn gen_sig(w: &mut W, rng: &mut Lcg, pool: &Pool, i: usize) -> (DeclKeyId, DefId
             w.fir.sigs.set_members(def, list);
         }
         SigKind::Trait => {
-            let mut assocs = vec![Assoc { name: marker, bounds: NO_BOUNDS, rhs: NO_TY }];
+            let mut assocs = vec![Assoc {
+                name: marker,
+                bounds: NO_BOUNDS,
+                rhs: NO_TY,
+            }];
             for ai in 0..rng.below(3) {
                 let name = pool.assoc_names[ai as usize % pool.assoc_names.len()];
                 let td = pool.traits[rng.below(pool.traits.len() as u64) as usize];
                 let tr = w.trait_ref(td, &[]);
                 let b = w.bounds(&[tr]);
-                assocs.push(Assoc { name, bounds: b, rhs: NO_TY });
+                assocs.push(Assoc {
+                    name,
+                    bounds: b,
+                    rhs: NO_TY,
+                });
             }
             let a = w.fir.sigs.assocs.push(&assocs);
             w.fir.sigs.set_assoc(def, a);
@@ -400,7 +486,10 @@ fn gen_sig(w: &mut W, rng: &mut Lcg, pool: &Pool, i: usize) -> (DeclKeyId, DefId
             w.fir.sigs.set_members(def, list);
         }
         SigKind::Impl => {
-            let cx2 = GenCx { allow_proj: false, ..cx };
+            let cx2 = GenCx {
+                allow_proj: false,
+                ..cx
+            };
             let self_ty = gen_ty(w, rng, pool, cx2, 1);
             w.fir.sigs.set_self_ty(def, self_ty);
             if rng.below(4) != 0 {
@@ -414,11 +503,19 @@ fn gen_sig(w: &mut W, rng: &mut Lcg, pool: &Pool, i: usize) -> (DeclKeyId, DefId
                 w.fir.sigs.set_trait_ref(def, tr);
             }
             let rhs = gen_ty(w, rng, pool, cx, 1);
-            let mut assocs = vec![Assoc { name: marker, bounds: NO_BOUNDS, rhs }];
+            let mut assocs = vec![Assoc {
+                name: marker,
+                bounds: NO_BOUNDS,
+                rhs,
+            }];
             for ai in 0..rng.below(2) {
                 let name = pool.assoc_names[ai as usize % pool.assoc_names.len()];
                 let rhs = gen_ty(w, rng, pool, cx, 1);
-                assocs.push(Assoc { name, bounds: NO_BOUNDS, rhs });
+                assocs.push(Assoc {
+                    name,
+                    bounds: NO_BOUNDS,
+                    rhs,
+                });
             }
             let a = w.fir.sigs.assocs.push(&assocs);
             w.fir.sigs.set_assoc(def, a);
@@ -459,8 +556,14 @@ fn intern_is_deterministic() {
         let pool = build_pool(&mut w);
         let mut rng = Lcg(seed);
         let owner = w.head("Owner");
-        let cx = GenCx { owner, ngp: 3, allow_proj: true };
-        let ts: Vec<TyId> = (0..2000).map(|_| gen_ty(&mut w, &mut rng, &pool, cx, 0)).collect();
+        let cx = GenCx {
+            owner,
+            ngp: 3,
+            allow_proj: true,
+        };
+        let ts: Vec<TyId> = (0..2000)
+            .map(|_| gen_ty(&mut w, &mut rng, &pool, cx, 0))
+            .collect();
         (ts, w.fir.tys.len())
     };
     let (a, la) = build(12345);
@@ -473,14 +576,22 @@ fn intern_is_deterministic() {
     let mut w = W::new("m");
     let pool = build_pool(&mut w);
     let owner = w.head("Owner");
-    let cx = GenCx { owner, ngp: 2, allow_proj: true };
+    let cx = GenCx {
+        owner,
+        ngp: 2,
+        allow_proj: true,
+    };
     let mut rng = Lcg(7);
     let t = gen_ty(&mut w, &mut rng, &pool, cx, 0);
     let before = w.fir.tys.len();
     let mut rng2 = Lcg(7);
     let t2 = gen_ty(&mut w, &mut rng2, &pool, cx, 0);
     assert_eq!(t, t2);
-    assert_eq!(w.fir.tys.len(), before, "re-interning an existing type grew the store");
+    assert_eq!(
+        w.fir.tys.len(),
+        before,
+        "re-interning an existing type grew the store"
+    );
 }
 
 // ------------------------------------------------- 2. the one-way match
@@ -493,18 +604,32 @@ fn one_way_match_properties() {
     let mut rng = Lcg(0xFEED);
 
     // (a) Reflexivity on ground types, binding nothing.
-    let ground = GenCx { owner, ngp: 0, allow_proj: false };
+    let ground = GenCx {
+        owner,
+        ngp: 0,
+        allow_proj: false,
+    };
     for _ in 0..500 {
         let t = gen_ty(&mut w, &mut rng, &pool, ground, 0);
         let mut b = Binding::new(&[(owner, 3)]);
-        assert!(one_way_match(&mut w.fir.tys, t, t, &mut b), "a type failed to match itself");
-        assert!(b.slots().iter().all(|&s| s == NO_TY), "matching a ground type bound a slot");
+        assert!(
+            one_way_match(&mut w.fir.tys, t, t, &mut b),
+            "a type failed to match itself"
+        );
+        assert!(
+            b.slots().iter().all(|&s| s == NO_TY),
+            "matching a ground type bound a slot"
+        );
     }
 
     // (b) Soundness: a complete match means substitution reproduces the target
     // exactly. Patterns here are projection-free, since a projection on an
     // unbound parameter is deliberately skipped rather than matched (R38(e)).
-    let open = GenCx { owner, ngp: 3, allow_proj: false };
+    let open = GenCx {
+        owner,
+        ngp: 3,
+        allow_proj: false,
+    };
     let mut checked = 0;
     for _ in 0..3000 {
         let pattern = gen_ty(&mut w, &mut rng, &pool, open, 0);
@@ -513,9 +638,14 @@ fn one_way_match_properties() {
             let t = gen_ty(&mut w, &mut rng, &pool, ground, 1);
             assert!(src.bind(owner, o, t));
         }
-        let Some(target) = subst_norm(&mut w.fir.tys, pattern, &src) else { continue };
+        let Some(target) = subst_norm(&mut w.fir.tys, pattern, &src) else {
+            continue;
+        };
         let mut b = Binding::new(&[(owner, 3)]);
-        assert!(one_way_match(&mut w.fir.tys, pattern, target, &mut b), "a substituted instance did not match");
+        assert!(
+            one_way_match(&mut w.fir.tys, pattern, target, &mut b),
+            "a substituted instance did not match"
+        );
         assert_eq!(
             subst_norm(&mut w.fir.tys, pattern, &b),
             Some(target),
@@ -523,7 +653,10 @@ fn one_way_match_properties() {
         );
         checked += 1;
     }
-    assert!(checked > 100, "the soundness sweep never got off the ground ({checked} cases)");
+    assert!(
+        checked > 100,
+        "the soundness sweep never got off the ground ({checked} cases)"
+    );
 
     // (c) One-way: nothing in the target is ever bound. A ground pattern facing
     // a parameter-bearing target matches only if they are literally equal.
@@ -560,7 +693,11 @@ fn one_way_match_properties() {
 
 fn rebuild_key(dst: &mut W, src: &W, key: DeclKeyId) -> DeclKeyId {
     let row = src.fir.keys.row(key);
-    let parent = if row.parent == NO_DECL_KEY { NO_DECL_KEY } else { rebuild_key(dst, src, row.parent) };
+    let parent = if row.parent == NO_DECL_KEY {
+        NO_DECL_KEY
+    } else {
+        rebuild_key(dst, src, row.parent)
+    };
     let segs: Vec<Symbol> = src
         .fir
         .keys
@@ -577,7 +714,13 @@ fn rebuild_key(dst: &mut W, src: &W, key: DeclKeyId) -> DeclKeyId {
         let bytes = src.names.resolve(n).to_vec();
         dst.names.intern(&bytes)
     });
-    dst.fir.keys.intern(DeclKey { parent, module, kind: row.kind, name, disamb: row.disamb })
+    dst.fir.keys.intern(DeclKey {
+        parent,
+        module,
+        kind: row.kind,
+        name,
+        disamb: row.disamb,
+    })
 }
 
 #[test]
@@ -607,7 +750,11 @@ fn encode_decode_roundtrip() {
             bytes.len(),
             again.len()
         );
-        assert_eq!(sig_hash(&dst.fir, &dst.names, dst_def), hash, "signature {i}: hash changed across a round trip");
+        assert_eq!(
+            sig_hash(&dst.fir, &dst.names, dst_def),
+            hash,
+            "signature {i}: hash changed across a round trip"
+        );
     }
 }
 
@@ -640,13 +787,21 @@ fn build_fn(
 
     let eq_ref = w.trait_ref(eq, &[]);
     let ord_ref = w.trait_ref(ord, &[]);
-    let list = if bounds_reversed { vec![ord_ref, eq_ref] } else { vec![eq_ref, ord_ref] };
+    let list = if bounds_reversed {
+        vec![ord_ref, eq_ref]
+    } else {
+        vec![eq_ref, ord_ref]
+    };
     // The store sorts, so the *encoder* is what this case really exercises:
     // build the list in both orders through the raw pools.
     let bounds = w.bounds(&list);
     let gname = w.sym(gparam_name);
     let g = w.fir.sigs.generics_store.push(
-        &[GParam { name: gname, kind: GParamKind::Type, bounds }],
+        &[GParam {
+            name: gname,
+            kind: GParamKind::Type,
+            bounds,
+        }],
         fors_fir::NO_CONSTRAINTS,
     );
     w.fir.sigs.set_generics(def, g);
@@ -655,11 +810,19 @@ fn build_fn(
     let i32_ty = w.fir.tys.prim(PrimKind::I32);
     let pair_ty = w.fir.tys.nominal_of(pair, &[t, i32_ty]);
     let pname = w.sym(param_name);
-    let f = w
-        .fir
-        .sigs
-        .fn_sigs
-        .push(&[Param { name: pname, conv: Conv::Let, ty: pair_ty }], t, NO_TY, NO_SLOT, NO_SLOT, (0, 0), 0);
+    let f = w.fir.sigs.fn_sigs.push(
+        &[Param {
+            name: pname,
+            conv: Conv::Let,
+            ty: pair_ty,
+        }],
+        t,
+        NO_TY,
+        NO_SLOT,
+        NO_SLOT,
+        (0, 0),
+        0,
+    );
     w.fir.sigs.set_fn_sig(def, f);
     (w, def)
 }
@@ -677,7 +840,10 @@ fn sig_hash_is_invariant_under_construction_order() {
         b.fir.tys.len(),
         "the two builds were meant to differ in how many types they interned"
     );
-    assert_eq!(sig_hash(&a.fir, &a.names, da), sig_hash(&b.fir, &b.names, db));
+    assert_eq!(
+        sig_hash(&a.fir, &a.names, da),
+        sig_hash(&b.fir, &b.names, db)
+    );
 }
 
 #[test]
@@ -701,11 +867,17 @@ fn bound_order_does_not_change_the_fingerprint() {
     );
     let (a, da) = build_fn("m", "T", "x", false, false);
     let (b, db) = build_fn("m", "T", "x", true, false);
-    assert_eq!(decl_fingerprint(&a.fir, &a.names, da), decl_fingerprint(&b.fir, &b.names, db));
+    assert_eq!(
+        decl_fingerprint(&a.fir, &a.names, da),
+        decl_fingerprint(&b.fir, &b.names, db)
+    );
 
     // The unsorted policy is what makes the two differ, which is what the line
     // in `FINGERPRINT_POLICY` selects between.
-    let unsorted = FingerprintPolicy { sort_bound_lists: false, ..FINGERPRINT_POLICY };
+    let unsorted = FingerprintPolicy {
+        sort_bound_lists: false,
+        ..FINGERPRINT_POLICY
+    };
     assert_ne!(
         encode_sig(&fwd.fir, &fwd.names, x, unsorted),
         encode_sig(&rev.fir, &rev.names, y, unsorted),
@@ -728,13 +900,20 @@ fn raw_bounds_sig(w: &mut W, reversed: bool) -> DefId {
     let key = w.key(DeclKind::Fn, "f");
     let def = w.fir.declare(key, SigKind::Fn);
     let gname = w.sym("T");
-    let g = w
+    let g = w.fir.sigs.generics_store.push(
+        &[GParam {
+            name: gname,
+            kind: GParamKind::Type,
+            bounds,
+        }],
+        fors_fir::NO_CONSTRAINTS,
+    );
+    w.fir.sigs.set_generics(def, g);
+    let f = w
         .fir
         .sigs
-        .generics_store
-        .push(&[GParam { name: gname, kind: GParamKind::Type, bounds }], fors_fir::NO_CONSTRAINTS);
-    w.fir.sigs.set_generics(def, g);
-    let f = w.fir.sigs.fn_sigs.push(&[], TY_UNIT, NO_TY, NO_SLOT, NO_SLOT, (0, 0), 0);
+        .fn_sigs
+        .push(&[], TY_UNIT, NO_TY, NO_SLOT, NO_SLOT, (0, 0), 0);
     w.fir.sigs.set_fn_sig(def, f);
     def
 }
@@ -744,7 +923,10 @@ fn gparam_names_do_not_enter_the_fingerprint() {
     // §14 Q5. Flip `exclude_gparam_names` and this is the test that changes.
     let (a, da) = build_fn("m", "T", "x", false, false);
     let (b, db) = build_fn("m", "U", "x", false, false);
-    assert_eq!(decl_fingerprint(&a.fir, &a.names, da), decl_fingerprint(&b.fir, &b.names, db));
+    assert_eq!(
+        decl_fingerprint(&a.fir, &a.names, da),
+        decl_fingerprint(&b.fir, &b.names, db)
+    );
 }
 
 #[test]
@@ -752,7 +934,10 @@ fn a_value_parameter_rename_changes_the_hash() {
     // R37 makes a label observable, so this one MUST move.
     let (a, da) = build_fn("m", "T", "x", false, false);
     let (b, db) = build_fn("m", "T", "y", false, false);
-    assert_ne!(sig_hash(&a.fir, &a.names, da), sig_hash(&b.fir, &b.names, db));
+    assert_ne!(
+        sig_hash(&a.fir, &a.names, da),
+        sig_hash(&b.fir, &b.names, db)
+    );
 }
 
 #[test]
@@ -772,13 +957,20 @@ fn an_associated_type_right_hand_side_change_changes_the_hash() {
         w.fir.sigs.set_trait_ref(def, tr);
         let item = w.sym("Item");
         let rhs = if rhs_is_i32 { i32_ty } else { u8_ty };
-        let a = w.fir.sigs.assocs.push(&[Assoc { name: item, bounds: NO_BOUNDS, rhs }]);
+        let a = w.fir.sigs.assocs.push(&[Assoc {
+            name: item,
+            bounds: NO_BOUNDS,
+            rhs,
+        }]);
         w.fir.sigs.set_assoc(def, a);
         (w, def)
     };
     let (a, da) = build(true);
     let (b, db) = build(false);
-    assert_ne!(sig_hash(&a.fir, &a.names, da), sig_hash(&b.fir, &b.names, db));
+    assert_ne!(
+        sig_hash(&a.fir, &a.names, da),
+        sig_hash(&b.fir, &b.names, db)
+    );
 }
 
 #[test]
@@ -802,8 +994,15 @@ fn const_value_enters_the_fingerprint() {
     );
 
     // And the other policy really is distinguishable, so the line matters.
-    let excluded = FingerprintPolicy { include_const_value: false, exclude_gparam_names: true, sort_bound_lists: true };
-    assert_eq!(encode_sig(&a.fir, &a.names, da, excluded), encode_sig(&b.fir, &b.names, db, excluded));
+    let excluded = FingerprintPolicy {
+        include_const_value: false,
+        exclude_gparam_names: true,
+        sort_bound_lists: true,
+    };
+    assert_eq!(
+        encode_sig(&a.fir, &a.names, da, excluded),
+        encode_sig(&b.fir, &b.names, db, excluded)
+    );
 }
 
 // ------------------------------------------------- 5. birthday bound
@@ -813,7 +1012,7 @@ fn sig_hash_has_no_collision_over_100k_signatures() {
     const N: usize = 100_000;
     let mut w = W::new("m");
     let pool = build_pool(&mut w);
-    let mut rng = Lcg(0xB17D_A1);
+    let mut rng = Lcg(0x00B1_7DA1);
     let policy = FINGERPRINT_POLICY;
     let mut seen: HashMap<u128, Vec<u8>> = HashMap::with_capacity(N);
     let mut distinct = 0usize;
@@ -832,7 +1031,10 @@ fn sig_hash_has_no_collision_over_100k_signatures() {
             ),
         }
     }
-    assert!(distinct >= 100_000, "only {distinct} distinct signatures were generated");
+    assert!(
+        distinct >= 100_000,
+        "only {distinct} distinct signatures were generated"
+    );
 }
 
 // ------------------------------------------------- misc invariants
@@ -881,7 +1083,9 @@ fn struct_eq(sa: &fors_fir::TyStore, a: TyId, sb: &fors_fir::TyStore, b: TyId) -
     match sa.tag(a) {
         TyTag::Error | TyTag::Unit | TyTag::Never => true,
         TyTag::Prim | TyTag::Param => sa.a(a) == sb.a(b) && sa.b(a) == sb.b(b),
-        TyTag::Nominal => sa.a(a) == sb.a(b) && args_eq(fors_fir::ArgsId(sa.b(a)), fors_fir::ArgsId(sb.b(b))),
+        TyTag::Nominal => {
+            sa.a(a) == sb.a(b) && args_eq(fors_fir::ArgsId(sa.b(a)), fors_fir::ArgsId(sb.b(b)))
+        }
         TyTag::Tuple => args_eq(fors_fir::ArgsId(sa.b(a)), fors_fir::ArgsId(sb.b(b))),
         TyTag::Dyn => tr_eq(fors_fir::TraitRefId(sa.a(a)), fors_fir::TraitRefId(sb.a(b))),
         TyTag::Fn => {
@@ -900,11 +1104,15 @@ fn struct_eq(sa: &fors_fir::TyStore, a: TyId, sb: &fors_fir::TyStore, b: TyId) -
                 && sa.fn_tys().is_closure(fa) == sb.fn_tys().is_closure(fb)
         }
         TyTag::Proj => {
-            let ((ta, na), (tb, nb)) =
-                (sa.proj_key(fors_fir::ProjKeyId(sa.b(a))), sb.proj_key(fors_fir::ProjKeyId(sb.b(b))));
+            let ((ta, na), (tb, nb)) = (
+                sa.proj_key(fors_fir::ProjKeyId(sa.b(a))),
+                sb.proj_key(fors_fir::ProjKeyId(sb.b(b))),
+            );
             na == nb && tr_eq(ta, tb) && struct_eq(sa, TyId(sa.a(a)), sb, TyId(sb.a(b)))
         }
-        TyTag::Brand => sa.brand(fors_fir::BrandId(sa.b(a))) == sb.brand(fors_fir::BrandId(sb.b(b))),
+        TyTag::Brand => {
+            sa.brand(fors_fir::BrandId(sa.b(a))) == sb.brand(fors_fir::BrandId(sb.b(b)))
+        }
         TyTag::ConstVal => {
             sa.const_value(fors_fir::ConstId(sa.a(a))) == sb.const_value(fors_fir::ConstId(sb.a(b)))
                 && struct_eq(sa, TyId(sa.b(a)), sb, TyId(sb.b(b)))
@@ -917,37 +1125,59 @@ fn interning_is_exactly_structural_equality() {
     let mut w = W::new("m");
     let pool = build_pool(&mut w);
     let owner = w.head("Owner");
-    let cx = GenCx { owner, ngp: 3, allow_proj: true };
+    let cx = GenCx {
+        owner,
+        ngp: 3,
+        allow_proj: true,
+    };
     let mut rng = Lcg(0xA11CE);
-    let ts: Vec<TyId> = (0..700).map(|_| gen_ty(&mut w, &mut rng, &pool, cx, 0)).collect();
+    let ts: Vec<TyId> = (0..700)
+        .map(|_| gen_ty(&mut w, &mut rng, &pool, cx, 0))
+        .collect();
     let mut equal_pairs = 0u32;
     for i in 0..ts.len() {
         for j in 0..ts.len() {
             let by_id = ts[i] == ts[j];
             let by_shape = struct_eq(&w.fir.tys, ts[i], &w.fir.tys, ts[j]);
-            assert_eq!(by_id, by_shape, "ids {:?} / {:?}: id-equality and structural equality disagree", ts[i], ts[j]);
+            assert_eq!(
+                by_id, by_shape,
+                "ids {:?} / {:?}: id-equality and structural equality disagree",
+                ts[i], ts[j]
+            );
             if by_id && i != j {
                 equal_pairs += 1;
             }
         }
     }
-    assert!(equal_pairs > 50, "the sweep produced too few duplicate types ({equal_pairs}) to mean anything");
+    assert!(
+        equal_pairs > 50,
+        "the sweep produced too few duplicate types ({equal_pairs}) to mean anything"
+    );
 
     // Across two stores warmed differently the ids differ but shapes agree:
     // the same generator sequence yields structurally equal rows at each step.
     let mut w2 = W::new("m");
     let pool2 = build_pool(&mut w2);
     let owner2 = w2.head("Owner");
-    let cx2 = GenCx { owner: owner2, ngp: 3, allow_proj: true };
+    let cx2 = GenCx {
+        owner: owner2,
+        ngp: 3,
+        allow_proj: true,
+    };
     let mut junk = Lcg(99);
     for _ in 0..1500 {
         let _ = gen_ty(&mut w2, &mut junk, &pool2, cx2, 0);
     }
     let mut rng2 = Lcg(0xA11CE);
-    let ts2: Vec<TyId> = (0..700).map(|_| gen_ty(&mut w2, &mut rng2, &pool2, cx2, 0)).collect();
+    let ts2: Vec<TyId> = (0..700)
+        .map(|_| gen_ty(&mut w2, &mut rng2, &pool2, cx2, 0))
+        .collect();
     assert_ne!(ts, ts2, "the warm store was meant to assign different ids");
     for i in 0..ts.len() {
-        assert!(struct_eq(&w.fir.tys, ts[i], &w2.fir.tys, ts2[i]), "step {i}: the warm store built a different shape");
+        assert!(
+            struct_eq(&w.fir.tys, ts[i], &w2.fir.tys, ts2[i]),
+            "step {i}: the warm store built a different shape"
+        );
     }
 }
 
@@ -961,9 +1191,21 @@ fn substitution_composes_and_is_idempotent() {
     let a = w.head("A");
     let bdef = w.head("B");
     let mut rng = Lcg(0xC0DE);
-    let over_a = GenCx { owner: a, ngp: 3, allow_proj: true };
-    let over_b = GenCx { owner: bdef, ngp: 2, allow_proj: true };
-    let ground = GenCx { owner: bdef, ngp: 0, allow_proj: false };
+    let over_a = GenCx {
+        owner: a,
+        ngp: 3,
+        allow_proj: true,
+    };
+    let over_b = GenCx {
+        owner: bdef,
+        ngp: 2,
+        allow_proj: true,
+    };
+    let ground = GenCx {
+        owner: bdef,
+        ngp: 0,
+        allow_proj: false,
+    };
     let (mut composed, mut identity) = (0, 0);
     for _ in 0..3000 {
         let p = gen_ty(&mut w, &mut rng, &pool, over_a, 0);
@@ -989,15 +1231,28 @@ fn substitution_composes_and_is_idempotent() {
         if !all {
             continue;
         }
-        let stepwise = subst_norm(&mut w.fir.tys, p, &b1).and_then(|q| subst_norm(&mut w.fir.tys, q, &b2));
+        let stepwise =
+            subst_norm(&mut w.fir.tys, p, &b1).and_then(|q| subst_norm(&mut w.fir.tys, q, &b2));
         let direct = subst_norm(&mut w.fir.tys, p, &b12);
         assert_eq!(stepwise, direct, "substitution did not compose on {p:?}");
         if let Some(r) = direct {
             composed += 1;
             let before = w.fir.tys.len();
-            assert_eq!(subst_norm(&mut w.fir.tys, r, &b12), Some(r), "not idempotent");
-            assert_eq!(subst_norm(&mut w.fir.tys, r, &b1), Some(r), "a ground result changed under a second substitution");
-            assert_eq!(w.fir.tys.len(), before, "re-substituting a fixed point interned something");
+            assert_eq!(
+                subst_norm(&mut w.fir.tys, r, &b12),
+                Some(r),
+                "not idempotent"
+            );
+            assert_eq!(
+                subst_norm(&mut w.fir.tys, r, &b1),
+                Some(r),
+                "a ground result changed under a second substitution"
+            );
+            assert_eq!(
+                w.fir.tys.len(),
+                before,
+                "re-substituting a fixed point interned something"
+            );
         }
         // A type with no parameter of A is untouched by a binding of A.
         let free = gen_ty(&mut w, &mut rng, &pool, over_b, 0);
@@ -1017,8 +1272,16 @@ fn one_way_match_never_revises_and_never_binds_the_target() {
     let a = w.head("A");
     let bdef = w.head("B");
     let mut rng = Lcg(0xB1AD);
-    let over_a = GenCx { owner: a, ngp: 3, allow_proj: false };
-    let over_b = GenCx { owner: bdef, ngp: 2, allow_proj: true };
+    let over_a = GenCx {
+        owner: a,
+        ngp: 3,
+        allow_proj: false,
+    };
+    let over_b = GenCx {
+        owner: bdef,
+        ngp: 2,
+        allow_proj: true,
+    };
     let mut revisits = 0;
     for _ in 0..3000 {
         let p = gen_ty(&mut w, &mut rng, &pool, over_a, 0);
@@ -1027,7 +1290,9 @@ fn one_way_match_never_revises_and_never_binds_the_target() {
             let t = gen_ty(&mut w, &mut rng, &pool, over_b, 1);
             assert!(src.bind(a, o, t));
         }
-        let Some(target) = subst_norm(&mut w.fir.tys, p, &src) else { continue };
+        let Some(target) = subst_norm(&mut w.fir.tys, p, &src) else {
+            continue;
+        };
         // The target mentions B's parameters; the binding owns only A, so the
         // only way to "bind" B would be to write into a slot that is not
         // there — `Binding::bind` refuses, and the slots stay A's.
@@ -1043,29 +1308,36 @@ fn one_way_match_never_revises_and_never_binds_the_target() {
         }
         // Matching again is a no-op: same answer, same slots.
         assert!(one_way_match(&mut w.fir.tys, p, target, &mut b));
-        assert_eq!(b.slots(), snapshot.as_slice(), "a second identical match revised a slot");
+        assert_eq!(
+            b.slots(),
+            snapshot.as_slice(),
+            "a second identical match revised a slot"
+        );
         // A different instance of the same pattern cannot re-bind a bound slot.
         let mut src2 = Binding::new(&[(a, 3)]);
         for o in 0..3 {
             let t = gen_ty(&mut w, &mut rng, &pool, over_b, 1);
             assert!(src2.bind(a, o, t));
         }
-        if let Some(target2) = subst_norm(&mut w.fir.tys, p, &src2) {
-            if target2 != target {
-                // The instances differ, so some slot the pattern mentions must
-                // disagree: the match fails, and every slot that was bound
-                // before is exactly what it was (a failed match may bind a
-                // slot that was free — that is R38's "bound by an earlier
-                // argument" — but it never rewrites one).
-                let ok = one_way_match(&mut w.fir.tys, p, target2, &mut b);
-                assert!(!ok, "a binding accepted a second, different instance of its pattern");
-                for (i, &s) in snapshot.iter().enumerate() {
-                    if s != NO_TY {
-                        assert_eq!(b.slots()[i], s, "a failed match revised slot {i}");
-                    }
+        if let Some(target2) = subst_norm(&mut w.fir.tys, p, &src2)
+            && target2 != target
+        {
+            // The instances differ, so some slot the pattern mentions must
+            // disagree: the match fails, and every slot that was bound
+            // before is exactly what it was (a failed match may bind a
+            // slot that was free — that is R38's "bound by an earlier
+            // argument" — but it never rewrites one).
+            let ok = one_way_match(&mut w.fir.tys, p, target2, &mut b);
+            assert!(
+                !ok,
+                "a binding accepted a second, different instance of its pattern"
+            );
+            for (i, &s) in snapshot.iter().enumerate() {
+                if s != NO_TY {
+                    assert_eq!(b.slots()[i], s, "a failed match revised slot {i}");
                 }
-                revisits += 1;
             }
+            revisits += 1;
         }
     }
     assert!(revisits > 100, "too few revision attempts ({revisits})");
@@ -1085,7 +1357,10 @@ fn encoding_is_independent_of_pool_warmth_and_interner_order() {
         (0..300)
             .map(|i| {
                 let (_, def) = gen_sig(&mut w, &mut rng, &pool, i);
-                (encode_sig(&w.fir, &w.names, def, policy), sig_hash(&w.fir, &w.names, def))
+                (
+                    encode_sig(&w.fir, &w.names, def, policy),
+                    sig_hash(&w.fir, &w.names, def),
+                )
             })
             .collect::<Vec<_>>()
     };
@@ -1098,14 +1373,31 @@ fn encoding_is_independent_of_pool_warmth_and_interner_order() {
         let pool = build_pool(&mut w);
         let mut junk = Lcg(round);
         for _ in 0..warm_types {
-            let _ = gen_ty(&mut w, &mut junk, &pool, GenCx { owner: junk_owner, ngp: 2, allow_proj: true }, 0);
+            let _ = gen_ty(
+                &mut w,
+                &mut junk,
+                &pool,
+                GenCx {
+                    owner: junk_owner,
+                    ngp: 2,
+                    allow_proj: true,
+                },
+                0,
+            );
         }
         let mut rng = Lcg(0x5EED);
-        for i in 0..300 {
+        for (i, cold_i) in cold.iter().enumerate().take(300) {
             let (_, def) = gen_sig(&mut w, &mut rng, &pool, i);
             let bytes = encode_sig(&w.fir, &w.names, def, policy);
-            assert!(bytes == cold[i].0, "round {round}, signature {i}: the encoding depends on pool warmth");
-            assert_eq!(sig_hash(&w.fir, &w.names, def), cold[i].1, "round {round}, signature {i}: hash moved");
+            assert!(
+                bytes == cold_i.0,
+                "round {round}, signature {i}: the encoding depends on pool warmth"
+            );
+            assert_eq!(
+                sig_hash(&w.fir, &w.names, def),
+                cold[i].1,
+                "round {round}, signature {i}: hash moved"
+            );
         }
     }
 }
@@ -1140,7 +1432,10 @@ fn decode_never_panics_on_malformed_bytes() {
             }
         }
     }
-    assert!(errs > 500 && oks > 0, "mutation sweep: {oks} ok / {errs} err");
+    assert!(
+        errs > 500 && oks > 0,
+        "mutation sweep: {oks} ok / {errs} err"
+    );
 
     // Crafted bombs: each was a panic or an abort before the count guards.
     let head = |n_entries: &[u8]| -> Vec<u8> {
@@ -1152,39 +1447,64 @@ fn decode_never_panics_on_malformed_bytes() {
     // 2^62 entries: capacity overflow.
     let mut v = head(&[0x80, 0x80, 0x80, 0x80, 0x80, 0x80, 0x80, 0x80, 0x40]);
     v.extend_from_slice(&[0; 32]);
-    assert!(matches!(decode_sig(&v, &mut dst.fir, &mut dst.names, anchor), Err(DecodeError::BadCount(_))));
+    assert!(matches!(
+        decode_sig(&v, &mut dst.fir, &mut dst.names, anchor),
+        Err(DecodeError::BadCount(_))
+    ));
     // A function type with 300 parameters: `expect("more than 255 parameters")`.
     let mut v = head(&[1]);
     v.extend_from_slice(&[7, 0, 0, 0xAC, 0x02]);
     v.extend_from_slice(&[0; 900]);
-    assert!(matches!(decode_sig(&v, &mut dst.fir, &mut dst.names, anchor), Err(DecodeError::BadCount(300))));
+    assert!(matches!(
+        decode_sig(&v, &mut dst.fir, &mut dst.names, anchor),
+        Err(DecodeError::BadCount(300))
+    ));
     // An empty tuple: a store-invariant violation.
     let mut v = head(&[1]);
     v.extend_from_slice(&[6, 0, 0]);
-    assert!(matches!(decode_sig(&v, &mut dst.fir, &mut dst.names, anchor), Err(DecodeError::BadShape)));
+    assert!(matches!(
+        decode_sig(&v, &mut dst.fir, &mut dst.names, anchor),
+        Err(DecodeError::BadShape)
+    ));
     // A projection on a concrete head.
     let mut v = head(&[2]);
     v.extend_from_slice(&[4, 0, 1]); // a primitive
     v.extend_from_slice(&[10, 0, 0]); // proj, quals 0, head = entry 0
     v.extend_from_slice(&[0; 16]);
-    assert!(matches!(decode_sig(&v, &mut dst.fir, &mut dst.names, anchor), Err(DecodeError::BadShape)));
+    assert!(matches!(
+        decode_sig(&v, &mut dst.fir, &mut dst.names, anchor),
+        Err(DecodeError::BadShape)
+    ));
     // `iso imm` and an unknown qualifier bit.
     for q in [3u8, 0x80] {
         let mut v = head(&[1]);
         v.extend_from_slice(&[2, q]);
-        assert!(matches!(decode_sig(&v, &mut dst.fir, &mut dst.names, anchor), Err(DecodeError::BadShape)));
+        assert!(matches!(
+            decode_sig(&v, &mut dst.fir, &mut dst.names, anchor),
+            Err(DecodeError::BadShape)
+        ));
     }
     // A declaration key nested 100 000 deep: a stack overflow before.
     let mut v = head(&[1]);
     v.extend_from_slice(&[5, 0]);
     v.extend_from_slice(&[1u8; 100_000]);
-    assert!(matches!(decode_sig(&v, &mut dst.fir, &mut dst.names, anchor), Err(DecodeError::TooDeep)));
+    assert!(matches!(
+        decode_sig(&v, &mut dst.fir, &mut dst.names, anchor),
+        Err(DecodeError::TooDeep)
+    ));
     // The encoder's "no DeclKey" marker (mark 2) on a nominal head: this was
     // `def_for_key(NO_DECL_KEY)`, a 16 GB table resize, 2.7 s per byte flip.
     let mut v = head(&[1]);
     v.extend_from_slice(&[5, 0, 2]);
     v.extend_from_slice(&[0; 8]);
     let t = std::time::Instant::now();
-    assert!(matches!(decode_sig(&v, &mut dst.fir, &mut dst.names, anchor), Err(DecodeError::BadShape)));
-    assert!(t.elapsed().as_millis() < 500, "the no-key marker took {:?} to reject", t.elapsed());
+    assert!(matches!(
+        decode_sig(&v, &mut dst.fir, &mut dst.names, anchor),
+        Err(DecodeError::BadShape)
+    ));
+    assert!(
+        t.elapsed().as_millis() < 500,
+        "the no-key marker took {:?} to reject",
+        t.elapsed()
+    );
 }
