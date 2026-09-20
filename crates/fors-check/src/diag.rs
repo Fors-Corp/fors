@@ -7,6 +7,7 @@
 //! R17's site with R21's code when the violated bound is one R21 declares),
 //! and a message.
 
+use fors_diag::Fix;
 use fors_index::diag::Code;
 use fors_index::ids::FileId;
 
@@ -20,6 +21,8 @@ pub struct Diagnostic {
     /// emission site's rule must be the cited rule").
     pub site: u16,
     pub message: String,
+    /// Suggested repairs (see `fors_diag`); empty on all but a few codes.
+    pub fixes: Vec<Fix>,
 }
 
 /// Design §10's bounded output. I2's budget is one diagnostic per
@@ -53,6 +56,10 @@ impl Sink {
         self.charged >= PER_DECL_BUDGET
     }
 
+    /// Emits, and reports whether it did: the per-declaration budget can
+    /// swallow the call, and a caller that wants to attach a fix
+    /// ([`Sink::attach_fix`]) must not attach it to someone else's
+    /// diagnostic.
     pub fn emit(
         &mut self,
         file: FileId,
@@ -60,9 +67,9 @@ impl Sink {
         code: Code,
         site: u16,
         message: String,
-    ) {
+    ) -> bool {
         if self.poisoned() {
-            return;
+            return false;
         }
         self.charged += 1;
         self.out.push(Diagnostic {
@@ -72,7 +79,17 @@ impl Sink {
             code,
             site,
             message,
+            fixes: Vec::new(),
         });
+        true
+    }
+
+    /// Attaches `fix` to the diagnostic just emitted. Only ever called
+    /// after an [`Sink::emit`] that returned `true`.
+    pub fn attach_fix(&mut self, fix: Fix) {
+        if let Some(d) = self.out.last_mut() {
+            d.fixes.push(fix);
+        }
     }
 
     pub fn len(&self) -> usize {

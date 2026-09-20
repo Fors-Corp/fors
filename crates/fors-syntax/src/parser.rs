@@ -513,6 +513,19 @@ impl<'a> Parser<'a> {
         self.b.finish_node();
     }
 
+    /// Attaches `fix` to the diagnostic the immediately preceding
+    /// `err_at`/`err_here` pushed — `before` is `self.diags.len()` from
+    /// just before that call, because the one-error-per-token dedup in
+    /// [`Self::err_at`] can swallow it and the fix would then land on an
+    /// unrelated diagnostic.
+    fn attach_fix(&mut self, before: usize, fix: fors_diag::Fix) {
+        if self.diags.len() > before
+            && let Some(d) = self.diags.last_mut()
+        {
+            d.fixes.push(fix);
+        }
+    }
+
     fn expect_semi(&mut self) {
         if self.opt(TokenKind::Semi) {
             return;
@@ -520,14 +533,29 @@ impl<'a> Parser<'a> {
         if self.at_stmt_sync() {
             // virtual insertion: nothing is skipped
             let e = self.prev_end();
+            let before = self.diags.len();
             self.err_at(
                 e.saturating_sub(1),
                 e,
                 DiagCode::MissingSemicolon,
                 "missing ';'",
             );
+            // The parse that follows this point is already the parse of the
+            // text WITH the `;`, so the insertion point is not a guess.
+            self.attach_fix(
+                before,
+                fors_diag::Fix::insert(fors_diag::FixKind::InsertSemicolon, "insert `;`", e, ";"),
+            );
             return;
         }
+        // MARC: no fix-it here, deliberately. Unlike the branch above, this
+        // one goes on to SKIP tokens to a sync point, so "a `;` is missing"
+        // is only one reading of what the parser found — in the corpus it
+        // is usually the WRONG one (a reserved word used as an identifier,
+        // an `else` after `?`). The arbiter test (`fors-cli/tests/fixes.rs`)
+        // measured it: inserting `;` at all fifteen corpus sites introduced
+        // a new parse error at several of them. A fix that has to be
+        // reviewed AND is usually wrong costs an agent more than no fix.
         self.err_here(DiagCode::Expected, "expected ';'");
         self.b.start_node(NodeKind::Error);
         let mut depth = 0u32;

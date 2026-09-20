@@ -1,0 +1,13 @@
+[package]
+name = "fors-diag"
+version.workspace = true
+edition = "2024"
+publish = false
+
+# Deliberately dependency-free, and a leaf of the crate graph: every phase
+# that raises a diagnostic (lex, syntax, index, resolve, check) depends on
+# this crate, so it may depend on none of them.
+[dependencies]
+
+[lints]
+workspace = true

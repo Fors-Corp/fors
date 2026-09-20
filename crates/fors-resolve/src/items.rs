@@ -84,6 +84,14 @@ pub enum Export<'a> {
 }
 
 impl ModuleScope {
+    /// Every module-scope name (items and imports), in declaration order.
+    /// Only the error path reads this — `index` stays the lookup — and it
+    /// exists so a diagnostic can offer a did-you-mean candidate that is
+    /// really in scope rather than one from a global name pool.
+    pub fn names(&self) -> &[Symbol] {
+        &self.name
+    }
+
     fn row(&self, i: usize) -> Row<'_> {
         let (s, l) = (self.var_start[i] as usize, self.var_len[i] as usize);
         Row {

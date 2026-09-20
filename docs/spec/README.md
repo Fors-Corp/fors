@@ -19,6 +19,12 @@ other document (chapter, design doc, comment, test) MAY only cite it
 9. `09-types.md` — type universe and equality, the closed coercion list, well-formedness, traits and impls with associated types, overlap, the closed operator-trait table, `Copyable`, the two typing judgements per form, generic-argument determination, member lookup and receivers, pattern typing and exhaustiveness, generic bodies, the signature-only interface. Draft, 2026-09-19; round-4 owner decisions applied.
 10. `10-std.md` — the standard-library SURFACE (signatures and guarantees, never implementations): the closed module and prelude lists, the allocator interface and the concrete allocators, the core types (`Buffer`, `Vec`, `Map`, `String`, `Str`, `Slice`), iteration, the operations each capability module unlocks with their failure behaviour, concurrency and determinism, and the rules std itself obeys. Draft, 2026-09-20; implements round 5's D5 (explicit allocators, root heap at `main`, allocation is not authority) and closes the type half of ch08 Q1.
 
+Not a chapter, but generated from the ten above plus the conformance corpus
+and std: `PACK.md` — the spec-in-context pack an AI agent loads before
+writing Fors (orientation, grammar, a rule index, the std surface, worked
+examples and common mistakes). GENERATED; do not hand-edit, run
+`tools/specpack/gen.py --write`.
+
 ## Fact -> owning chapter
 
 | Fact | Owner |
