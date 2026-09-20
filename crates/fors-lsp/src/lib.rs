@@ -75,8 +75,13 @@ impl LineIndex {
     /// line past the end of the buffer to the buffer's end). A character
     /// inside a surrogate pair maps past that pair.
     pub fn offset(&self, src: &[u8], line: u32, character: u32) -> u32 {
-        let Some(&at) = self.starts.get(line as usize) else { return src.len() as u32 };
-        let end = self.starts.get(line as usize + 1).map_or(src.len(), |&n| n as usize - 1);
+        let Some(&at) = self.starts.get(line as usize) else {
+            return src.len() as u32;
+        };
+        let end = self
+            .starts
+            .get(line as usize + 1)
+            .map_or(src.len(), |&n| n as usize - 1);
         let line_bytes = &src[at as usize..end];
         let mut used = 0u32;
         let mut i = 0usize;
@@ -135,8 +140,20 @@ fn range_json(ix: &LineIndex, src: &[u8], start: u32, end: u32) -> Json {
     let (sl, sc) = ix.pos(src, start);
     let (el, ec) = ix.pos(src, end);
     Json::obj(vec![
-        ("start", Json::obj(vec![("line", Json::int(sl as i64)), ("character", Json::int(sc as i64))])),
-        ("end", Json::obj(vec![("line", Json::int(el as i64)), ("character", Json::int(ec as i64))])),
+        (
+            "start",
+            Json::obj(vec![
+                ("line", Json::int(sl as i64)),
+                ("character", Json::int(sc as i64)),
+            ]),
+        ),
+        (
+            "end",
+            Json::obj(vec![
+                ("line", Json::int(el as i64)),
+                ("character", Json::int(ec as i64)),
+            ]),
+        ),
     ])
 }
 
@@ -205,26 +222,47 @@ impl Server {
             "exit" => self.exited = true,
             "textDocument/didOpen" => {
                 if let Some(td) = params.get("textDocument") {
-                    let uri = td.get("uri").and_then(|u| u.as_str()).unwrap_or("").to_string();
-                    let text = td.get("text").and_then(|t| t.as_str()).unwrap_or("").as_bytes().to_vec();
+                    let uri = td
+                        .get("uri")
+                        .and_then(|u| u.as_str())
+                        .unwrap_or("")
+                        .to_string();
+                    let text = td
+                        .get("text")
+                        .and_then(|t| t.as_str())
+                        .unwrap_or("")
+                        .as_bytes()
+                        .to_vec();
                     let version = td.get("version").and_then(|v| v.as_u32()).unwrap_or(0) as i64;
                     self.docs.retain(|d| d.uri != uri);
-                    self.docs.push(Doc { uri: uri.clone(), text, version });
+                    self.docs.push(Doc {
+                        uri: uri.clone(),
+                        text,
+                        version,
+                    });
                     out.push(self.diagnostics(&uri));
                 }
             }
             "textDocument/didChange" => {
                 let uri = uri_of(&params);
-                let version =
-                    params.get("textDocument").and_then(|t| t.get("version")).and_then(|v| v.as_u32()).unwrap_or(0) as i64;
+                let version = params
+                    .get("textDocument")
+                    .and_then(|t| t.get("version"))
+                    .and_then(|v| v.as_u32())
+                    .unwrap_or(0) as i64;
                 // full sync only: the last change with no range is the document
-                if let Some(changes) = params.get("contentChanges").and_then(|c| c.as_arr()) {
-                    if let Some(full) = changes.iter().rev().find(|c| c.get("range").is_none()) {
-                        let text = full.get("text").and_then(|t| t.as_str()).unwrap_or("").as_bytes().to_vec();
-                        if let Some(d) = self.docs.iter_mut().find(|d| d.uri == uri) {
-                            d.text = text;
-                            d.version = version;
-                        }
+                if let Some(changes) = params.get("contentChanges").and_then(|c| c.as_arr())
+                    && let Some(full) = changes.iter().rev().find(|c| c.get("range").is_none())
+                {
+                    let text = full
+                        .get("text")
+                        .and_then(|t| t.as_str())
+                        .unwrap_or("")
+                        .as_bytes()
+                        .to_vec();
+                    if let Some(d) = self.docs.iter_mut().find(|d| d.uri == uri) {
+                        d.text = text;
+                        d.version = version;
                     }
                 }
                 out.push(self.diagnostics(&uri));
@@ -234,7 +272,10 @@ impl Server {
                 self.docs.retain(|d| d.uri != uri);
                 out.push(notification(
                     "textDocument/publishDiagnostics",
-                    Json::obj(vec![("uri", Json::str(uri)), ("diagnostics", Json::Arr(Vec::new()))]),
+                    Json::obj(vec![
+                        ("uri", Json::str(uri)),
+                        ("diagnostics", Json::Arr(Vec::new())),
+                    ]),
                 ));
             }
             "textDocument/formatting" => {
@@ -277,7 +318,10 @@ impl Server {
             ),
             (
                 "serverInfo",
-                Json::obj(vec![("name", Json::str("fors-lsp")), ("version", Json::str(env!("CARGO_PKG_VERSION")))]),
+                Json::obj(vec![
+                    ("name", Json::str("fors-lsp")),
+                    ("version", Json::str(env!("CARGO_PKG_VERSION"))),
+                ]),
             ),
         ])
     }
@@ -286,7 +330,9 @@ impl Server {
     /// formatter's minimal edits. A file that does not parse produces no
     /// edits at all rather than a mangled buffer.
     fn format(&self, uri: &str, range: Option<Json>) -> Json {
-        let Some(doc) = self.doc(uri) else { return Json::Arr(Vec::new()) };
+        let Some(doc) = self.doc(uri) else {
+            return Json::Arr(Vec::new());
+        };
         let src = &doc.text;
         let ix = LineIndex::new(src);
         let check = match &range {
@@ -303,7 +349,10 @@ impl Server {
                 .map(|e| {
                     Json::obj(vec![
                         ("range", range_json(&ix, src, e.start, e.end)),
-                        ("newText", Json::str(String::from_utf8_lossy(&e.new_text).into_owned())),
+                        (
+                            "newText",
+                            Json::str(String::from_utf8_lossy(&e.new_text).into_owned()),
+                        ),
                     ])
                 })
                 .collect(),
@@ -314,7 +363,10 @@ impl Server {
         let Some(doc) = self.doc(uri) else {
             return notification(
                 "textDocument/publishDiagnostics",
-                Json::obj(vec![("uri", Json::str(uri)), ("diagnostics", Json::Arr(Vec::new()))]),
+                Json::obj(vec![
+                    ("uri", Json::str(uri)),
+                    ("diagnostics", Json::Arr(Vec::new())),
+                ]),
             );
         };
         let src = &doc.text;
@@ -330,10 +382,22 @@ impl Server {
         if parse.diags.is_empty() {
             let mut interner = Interner::new();
             let name: Segments = vec![interner.intern(module_stem(uri).as_bytes())];
-            let inputs = vec![fors_resolve::FileInput { tree: &parse.tree, tokens: &parse.tokens, source: src, name }];
+            let inputs = vec![fors_resolve::FileInput {
+                tree: &parse.tree,
+                tokens: &parse.tokens,
+                source: src,
+                name,
+            }];
             let out = fors_resolve::resolve_in_package(&mut interner, &inputs, Some(0), None);
             for d in &out.files[0].diagnostics {
-                items.push(diag_json(&ix, src, d.start, d.end, &d.code.as_string(), &d.message));
+                items.push(diag_json(
+                    &ix,
+                    src,
+                    d.start,
+                    d.end,
+                    &d.code.as_string(),
+                    &d.message,
+                ));
             }
         }
         notification(
@@ -347,7 +411,9 @@ impl Server {
     }
 
     fn symbols(&self, uri: &str) -> Json {
-        let Some(doc) = self.doc(uri) else { return Json::Arr(Vec::new()) };
+        let Some(doc) = self.doc(uri) else {
+            return Json::Arr(Vec::new());
+        };
         let src = &doc.text;
         let ix = LineIndex::new(src);
         let parse = fors_syntax::parse_file(src);
@@ -376,7 +442,11 @@ impl Server {
             let first = (table.range_start[i] as usize).min(ntok - 1);
             let last = (table.range_end[i] as usize).min(ntok);
             let start = parse.tokens.range(first).0;
-            let end = if last > first { parse.tokens.range(last - 1).1 } else { start };
+            let end = if last > first {
+                parse.tokens.range(last - 1).1
+            } else {
+                start
+            };
             let name = String::from_utf8_lossy(interner.resolve(sym)).into_owned();
             out.push(Json::obj(vec![
                 ("name", Json::str(name)),
@@ -392,7 +462,9 @@ impl Server {
     /// tokens span more than one line folds, which is exactly what a tree
     /// with every token in it can answer for free.
     fn folding(&self, uri: &str) -> Json {
-        let Some(doc) = self.doc(uri) else { return Json::Arr(Vec::new()) };
+        let Some(doc) = self.doc(uri) else {
+            return Json::Arr(Vec::new());
+        };
         let src = &doc.text;
         let ix = LineIndex::new(src);
         let parse = fors_syntax::parse_file(src);
@@ -445,7 +517,11 @@ impl Server {
 fn module_stem(uri: &str) -> String {
     let file = uri.rsplit('/').next().unwrap_or(uri);
     let stem = file.strip_suffix(".fors").unwrap_or(file);
-    if stem.is_empty() { "m".to_string() } else { stem.replace('-', "_") }
+    if stem.is_empty() {
+        "m".to_string()
+    } else {
+        stem.replace('-', "_")
+    }
 }
 
 fn uri_of(params: &Json) -> String {
@@ -460,8 +536,14 @@ fn uri_of(params: &Json) -> String {
 fn json_range(ix: &LineIndex, src: &[u8], r: &Json) -> (u32, u32) {
     let at = |key: &str| -> u32 {
         let p = r.get(key);
-        let line = p.and_then(|p| p.get("line")).and_then(|v| v.as_u32()).unwrap_or(0);
-        let ch = p.and_then(|p| p.get("character")).and_then(|v| v.as_u32()).unwrap_or(0);
+        let line = p
+            .and_then(|p| p.get("line"))
+            .and_then(|v| v.as_u32())
+            .unwrap_or(0);
+        let ch = p
+            .and_then(|p| p.get("character"))
+            .and_then(|v| v.as_u32())
+            .unwrap_or(0);
         ix.offset(src, line, ch)
     };
     let (s, e) = (at("start"), at("end"));
@@ -479,19 +561,33 @@ fn diag_json(ix: &LineIndex, src: &[u8], start: u32, end: u32, code: &str, messa
 }
 
 fn response(id: Option<Json>, result: Json) -> Json {
-    Json::obj(vec![("jsonrpc", Json::str("2.0")), ("id", id.unwrap_or(Json::Null)), ("result", result)])
+    Json::obj(vec![
+        ("jsonrpc", Json::str("2.0")),
+        ("id", id.unwrap_or(Json::Null)),
+        ("result", result),
+    ])
 }
 
 fn error(id: Option<Json>, code: i64, message: &str) -> Json {
     Json::obj(vec![
         ("jsonrpc", Json::str("2.0")),
         ("id", id.unwrap_or(Json::Null)),
-        ("error", Json::obj(vec![("code", Json::int(code)), ("message", Json::str(message))])),
+        (
+            "error",
+            Json::obj(vec![
+                ("code", Json::int(code)),
+                ("message", Json::str(message)),
+            ]),
+        ),
     ])
 }
 
 fn notification(method: &str, params: Json) -> Json {
-    Json::obj(vec![("jsonrpc", Json::str("2.0")), ("method", Json::str(method)), ("params", params)])
+    Json::obj(vec![
+        ("jsonrpc", Json::str("2.0")),
+        ("method", Json::str(method)),
+        ("params", params),
+    ])
 }
 
 // ---- framing ----------------------------------------------------------
@@ -517,13 +613,19 @@ pub fn read_message(r: &mut impl std::io::BufRead) -> std::io::Result<Option<Vec
         // Content-Type is accepted and ignored; any other header too.
     }
     let Some(len) = len else {
-        return Err(std::io::Error::new(std::io::ErrorKind::InvalidData, "message without Content-Length"));
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidData,
+            "message without Content-Length",
+        ));
     };
     // MARC: a header claiming a multi-gigabyte body would otherwise be an
     // allocation of that size before a single byte is read — an abort, from
     // one line of input. 64 MiB is far beyond any document an editor sends.
     if len > MAX_MESSAGE {
-        return Err(std::io::Error::new(std::io::ErrorKind::InvalidData, "Content-Length too large"));
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidData,
+            "Content-Length too large",
+        ));
     }
     let mut buf = vec![0u8; len];
     r.read_exact(&mut buf)?;
@@ -592,21 +694,27 @@ mod tests {
         let src = "fn f( ) {let  x=1 ;}\n";
         let src2 = "fn f() {\n    let x = 1;\n}\nfn g( {\n";
         let mut input: Vec<u8> = Vec::new();
-        input.extend(frame(r#"{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"capabilities":{}}}"#));
-        input.extend(frame(r#"{"jsonrpc":"2.0","method":"initialized","params":{}}"#));
+        input.extend(frame(
+            r#"{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"capabilities":{}}}"#,
+        ));
+        input.extend(frame(
+            r#"{"jsonrpc":"2.0","method":"initialized","params":{}}"#,
+        ));
         input.extend(frame(&format!(
             r#"{{"jsonrpc":"2.0","method":"textDocument/didOpen","params":{{"textDocument":{{"uri":"file:///w/m.fors","languageId":"fors","version":1,"text":{}}}}}}}"#,
-            Json::str(src).to_string()
+            Json::str(src)
         )));
         input.extend(frame(r#"{"jsonrpc":"2.0","id":2,"method":"textDocument/formatting","params":{"textDocument":{"uri":"file:///w/m.fors"},"options":{"tabSize":4,"insertSpaces":true}}}"#));
         input.extend(frame(&format!(
             r#"{{"jsonrpc":"2.0","method":"textDocument/didChange","params":{{"textDocument":{{"uri":"file:///w/m.fors","version":2}},"contentChanges":[{{"text":{}}}]}}}}"#,
-            Json::str(src2).to_string()
+            Json::str(src2)
         )));
         // a response from the client (no method) must be ignored, not answered
         input.extend(frame(r#"{"jsonrpc":"2.0","id":77,"result":null}"#));
         // a malformed body must produce a parse error and NOT stop the loop
-        input.extend(frame(r#"{"jsonrpc":"2.0","id":3,"method":"textDocument/formatting","params":{"#));
+        input.extend(frame(
+            r#"{"jsonrpc":"2.0","id":3,"method":"textDocument/formatting","params":{"#,
+        ));
         input.extend(frame(r#"{"jsonrpc":"2.0","id":4,"method":"textDocument/foldingRange","params":{"textDocument":{"uri":"file:///w/m.fors"}}}"#));
         input.extend(frame(r#"{"jsonrpc":"2.0","id":5,"method":"shutdown"}"#));
         input.extend(frame(r#"{"jsonrpc":"2.0","id":6,"method":"textDocument/documentSymbol","params":{"textDocument":{"uri":"file:///w/m.fors"}}}"#));
@@ -617,14 +725,21 @@ mod tests {
         let mut output: Vec<u8> = Vec::new();
         serve(std::io::Cursor::new(input), &mut output).unwrap();
         let msgs = unframe(&output);
-        let method = |m: &Json| m.get("method").and_then(|v| v.as_str()).unwrap_or("").to_string();
+        let method = |m: &Json| {
+            m.get("method")
+                .and_then(|v| v.as_str())
+                .unwrap_or("")
+                .to_string()
+        };
         let id = |m: &Json| m.get("id").cloned();
 
         // 1. initialize: the capability object, field by field, against the
         //    LSP specification's names (a typo silently disables a feature)
         assert_eq!(id(&msgs[0]), Some(Json::int(1)));
         let caps = msgs[0].get("result").unwrap().get("capabilities").unwrap();
-        let Json::Obj(fields) = caps else { panic!("capabilities is not an object") };
+        let Json::Obj(fields) = caps else {
+            panic!("capabilities is not an object")
+        };
         let names: Vec<&str> = fields.iter().map(|(k, _)| k.as_str()).collect();
         assert_eq!(
             names,
@@ -640,7 +755,15 @@ mod tests {
         for k in &names[1..] {
             assert_eq!(caps.get(k), Some(&Json::Bool(true)), "{k}");
         }
-        assert_eq!(msgs[0].get("result").unwrap().get("serverInfo").unwrap().get("name"), Some(&Json::str("fors-lsp")));
+        assert_eq!(
+            msgs[0]
+                .get("result")
+                .unwrap()
+                .get("serverInfo")
+                .unwrap()
+                .get("name"),
+            Some(&Json::str("fors-lsp"))
+        );
 
         // 2. didOpen -> publishDiagnostics for that uri and version
         assert_eq!(method(&msgs[1]), "textDocument/publishDiagnostics");
@@ -658,7 +781,11 @@ mod tests {
             .iter()
             .map(|e| {
                 let (a, b) = json_range(&ix, src.as_bytes(), e.get("range").unwrap());
-                (a, b, e.get("newText").unwrap().as_str().unwrap().to_string())
+                (
+                    a,
+                    b,
+                    e.get("newText").unwrap().as_str().unwrap().to_string(),
+                )
             })
             .collect();
         spans.sort_by_key(|(a, _, _)| *a);
@@ -679,13 +806,19 @@ mod tests {
         for k in ["range", "severity", "code", "source", "message"] {
             assert!(d.get(k).is_some(), "diagnostic lacks `{k}`");
         }
-        assert_eq!(d.get("range").unwrap().get("start").unwrap().get("line"), Some(&Json::int(3)));
+        assert_eq!(
+            d.get("range").unwrap().get("start").unwrap().get("line"),
+            Some(&Json::int(3))
+        );
 
         // 5. the client's response was ignored; the malformed body got a
         //    parse error with a null id and the loop went on
         let e = &msgs[4];
         assert_eq!(id(e), Some(Json::Null));
-        assert_eq!(e.get("error").unwrap().get("code"), Some(&Json::int(-32700)));
+        assert_eq!(
+            e.get("error").unwrap().get("code"),
+            Some(&Json::int(-32700))
+        );
 
         // 6. folding still answered after the bad frame
         assert_eq!(id(&msgs[5]), Some(Json::int(4)));
@@ -697,7 +830,10 @@ mod tests {
         assert_eq!(id(&msgs[6]), Some(Json::int(5)));
         assert_eq!(msgs[6].get("result"), Some(&Json::Null));
         assert_eq!(id(&msgs[7]), Some(Json::int(6)));
-        assert_eq!(msgs[7].get("error").unwrap().get("code"), Some(&Json::int(-32600)));
+        assert_eq!(
+            msgs[7].get("error").unwrap().get("code"),
+            Some(&Json::int(-32600))
+        );
 
         // 8. exit ended the loop: nothing for id 7
         assert_eq!(msgs.len(), 8, "{msgs:?}");
@@ -762,12 +898,21 @@ mod tests {
         let src = "fn f( ) {let  x=1 ;}\n\n\n\nfn g( ) {let  y=2 ;}\n";
         open(&mut s, src);
         let params = Json::obj(vec![
-            ("textDocument", Json::obj(vec![("uri", Json::str("file:///w/m.fors"))])),
+            (
+                "textDocument",
+                Json::obj(vec![("uri", Json::str("file:///w/m.fors"))]),
+            ),
             (
                 "range",
                 Json::obj(vec![
-                    ("start", Json::obj(vec![("line", Json::int(4)), ("character", Json::int(0))])),
-                    ("end", Json::obj(vec![("line", Json::int(4)), ("character", Json::int(5))])),
+                    (
+                        "start",
+                        Json::obj(vec![("line", Json::int(4)), ("character", Json::int(0))]),
+                    ),
+                    (
+                        "end",
+                        Json::obj(vec![("line", Json::int(4)), ("character", Json::int(5))]),
+                    ),
                 ]),
             ),
         ]);
@@ -775,8 +920,18 @@ mod tests {
         let edits = out[0].get("result").unwrap().as_arr().unwrap();
         assert!(!edits.is_empty());
         for e in edits {
-            let line = e.get("range").unwrap().get("start").unwrap().get("line").unwrap();
-            assert_ne!(line, &Json::int(0), "an edit outside the range was returned: {e:?}");
+            let line = e
+                .get("range")
+                .unwrap()
+                .get("start")
+                .unwrap()
+                .get("line")
+                .unwrap();
+            assert_ne!(
+                line,
+                &Json::int(0),
+                "an edit outside the range was returned: {e:?}"
+            );
         }
     }
 
@@ -808,7 +963,10 @@ mod tests {
     }
 
     fn doc_param() -> Json {
-        Json::obj(vec![("textDocument", Json::obj(vec![("uri", Json::str("file:///w/m.fors"))]))])
+        Json::obj(vec![(
+            "textDocument",
+            Json::obj(vec![("uri", Json::str("file:///w/m.fors"))]),
+        )])
     }
 
     #[test]
@@ -816,8 +974,14 @@ mod tests {
         let mut s = Server::new();
         let out = s.handle(&req("initialize", 1, Json::Null));
         let caps = out[0].get("result").unwrap().get("capabilities").unwrap();
-        assert_eq!(caps.get("documentFormattingProvider"), Some(&Json::Bool(true)));
-        assert_eq!(caps.get("documentRangeFormattingProvider"), Some(&Json::Bool(true)));
+        assert_eq!(
+            caps.get("documentFormattingProvider"),
+            Some(&Json::Bool(true))
+        );
+        assert_eq!(
+            caps.get("documentRangeFormattingProvider"),
+            Some(&Json::Bool(true))
+        );
     }
 
     #[test]
@@ -836,14 +1000,21 @@ mod tests {
             .map(|e| {
                 let r = e.get("range").unwrap();
                 let (a, b) = json_range(&LineIndex::new(src.as_bytes()), src.as_bytes(), r);
-                (a, b, e.get("newText").unwrap().as_str().unwrap().to_string())
+                (
+                    a,
+                    b,
+                    e.get("newText").unwrap().as_str().unwrap().to_string(),
+                )
             })
             .collect();
         spans.sort_by_key(|(a, _, _)| *a);
         for (a, b, t) in spans.into_iter().rev() {
             buf.splice(a as usize..b as usize, t.bytes());
         }
-        assert_eq!(String::from_utf8(buf).unwrap(), String::from_utf8(want.text).unwrap());
+        assert_eq!(
+            String::from_utf8(buf).unwrap(),
+            String::from_utf8(want.text).unwrap()
+        );
     }
 
     #[test]
@@ -866,21 +1037,40 @@ mod tests {
                 Json::obj(vec![
                     (
                         "textDocument",
-                        Json::obj(vec![("uri", Json::str("file:///w/m.fors")), ("version", Json::int(2))]),
+                        Json::obj(vec![
+                            ("uri", Json::str("file:///w/m.fors")),
+                            ("version", Json::int(2)),
+                        ]),
                     ),
-                    ("contentChanges", Json::Arr(vec![Json::obj(vec![("text", Json::str("fn f( {\n"))])])),
+                    (
+                        "contentChanges",
+                        Json::Arr(vec![Json::obj(vec![("text", Json::str("fn f( {\n"))])]),
+                    ),
                 ]),
             ),
         ]));
         let params = note[0].get("params").unwrap();
-        assert_eq!(note[0].get("method").unwrap().as_str(), Some("textDocument/publishDiagnostics"));
-        assert!(!params.get("diagnostics").unwrap().as_arr().unwrap().is_empty());
+        assert_eq!(
+            note[0].get("method").unwrap().as_str(),
+            Some("textDocument/publishDiagnostics")
+        );
+        assert!(
+            !params
+                .get("diagnostics")
+                .unwrap()
+                .as_arr()
+                .unwrap()
+                .is_empty()
+        );
     }
 
     #[test]
     fn symbols_and_folding() {
         let mut s = Server::new();
-        open(&mut s, "fn f() {\n    let x = 1;\n}\n\nstruct P { x: i32 }\n");
+        open(
+            &mut s,
+            "fn f() {\n    let x = 1;\n}\n\nstruct P { x: i32 }\n",
+        );
         let syms = s.handle(&req("textDocument/documentSymbol", 4, doc_param()));
         let arr = syms[0].get("result").unwrap().as_arr().unwrap();
         let names: Vec<&str> = arr.iter().filter_map(|s| s.get("name")?.as_str()).collect();
@@ -906,7 +1096,10 @@ mod tests {
         write_message(&mut buf, &Json::obj(vec![("a", Json::int(1))])).unwrap();
         let mut cur = std::io::Cursor::new(buf);
         let msg = read_message(&mut cur).unwrap().unwrap();
-        assert_eq!(json::parse(&msg).unwrap().get("a").unwrap().as_u32(), Some(1));
+        assert_eq!(
+            json::parse(&msg).unwrap().get("a").unwrap().as_u32(),
+            Some(1)
+        );
     }
 
     /// A reader that hands back one byte at a time, so `read_message` must
@@ -933,13 +1126,22 @@ mod tests {
         // not the char count (é😀 is 2 chars but 5 bytes).
         write_message(&mut buf, &Json::obj(vec![("s", Json::str("é😀"))])).unwrap();
         let header_end = buf.windows(4).position(|w| w == b"\r\n\r\n").unwrap() + 4;
-        let declared: usize =
-            String::from_utf8_lossy(&buf[16..header_end - 4]).trim().parse().unwrap();
-        assert_eq!(declared, buf.len() - header_end, "Content-Length must count bytes, not chars");
+        let declared: usize = String::from_utf8_lossy(&buf[16..header_end - 4])
+            .trim()
+            .parse()
+            .unwrap();
+        assert_eq!(
+            declared,
+            buf.len() - header_end,
+            "Content-Length must count bytes, not chars"
+        );
 
         let mut r = std::io::BufReader::new(Trickle { data: &buf, at: 0 });
         let msg = read_message(&mut r).unwrap().unwrap();
-        assert_eq!(json::parse(&msg).unwrap().get("s").unwrap().as_str(), Some("é😀"));
+        assert_eq!(
+            json::parse(&msg).unwrap().get("s").unwrap().as_str(),
+            Some("é😀")
+        );
     }
 
     #[test]
@@ -957,9 +1159,15 @@ mod tests {
         s.handle(&req("shutdown", 1, Json::Null));
         assert!(s.shutdown_requested);
         let out = s.handle(&req("initialize", 2, Json::Null));
-        assert!(out[0].get("error").is_some(), "a request after shutdown must be rejected");
+        assert!(
+            out[0].get("error").is_some(),
+            "a request after shutdown must be rejected"
+        );
         // `exit` itself still goes through
-        s.handle(&Json::obj(vec![("jsonrpc", Json::str("2.0")), ("method", Json::str("exit"))]));
+        s.handle(&Json::obj(vec![
+            ("jsonrpc", Json::str("2.0")),
+            ("method", Json::str("exit")),
+        ]));
         assert!(s.exited);
     }
 
@@ -975,14 +1183,32 @@ mod tests {
                 Json::obj(vec![
                     (
                         "textDocument",
-                        Json::obj(vec![("uri", Json::str("file:///w/m.fors")), ("version", Json::int(2))]),
+                        Json::obj(vec![
+                            ("uri", Json::str("file:///w/m.fors")),
+                            ("version", Json::int(2)),
+                        ]),
                     ),
-                    ("contentChanges", Json::Arr(vec![Json::obj(vec![("text", Json::str("fn f( {\n"))])])),
+                    (
+                        "contentChanges",
+                        Json::Arr(vec![Json::obj(vec![("text", Json::str("fn f( {\n"))])]),
+                    ),
                 ]),
             ),
         ]));
-        assert_eq!(note[0].get("method").unwrap().as_str(), Some("textDocument/publishDiagnostics"));
-        assert!(!note[0].get("params").unwrap().get("diagnostics").unwrap().as_arr().unwrap().is_empty());
+        assert_eq!(
+            note[0].get("method").unwrap().as_str(),
+            Some("textDocument/publishDiagnostics")
+        );
+        assert!(
+            !note[0]
+                .get("params")
+                .unwrap()
+                .get("diagnostics")
+                .unwrap()
+                .as_arr()
+                .unwrap()
+                .is_empty()
+        );
     }
 
     #[test]
@@ -992,7 +1218,8 @@ mod tests {
         let src = "let a = 1;\nlet café = \"日本語😀\";\n".as_bytes();
         let line1_start = src.iter().position(|&b| b == b'\n').unwrap() as u32 + 1;
         // "let café = \"" = 12 ascii chars but "é" is 1 code point -> +1 utf16
-        let after_open_quote = line1_start + "let caf".len() as u32 + "é".len() as u32 + " = \"".len() as u32;
+        let after_open_quote =
+            line1_start + "let caf".len() as u32 + "é".len() as u32 + " = \"".len() as u32;
         let (line, ch) = offset_to_pos(src, after_open_quote);
         assert_eq!(line, 1);
         assert_eq!(ch, "let café = \"".chars().map(utf16_len).sum::<u32>());
@@ -1011,7 +1238,10 @@ mod tests {
     struct Lcg(u64);
     impl Lcg {
         fn next(&mut self) -> u64 {
-            self.0 = self.0.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
+            self.0 = self
+                .0
+                .wrapping_mul(6364136223846793005)
+                .wrapping_add(1442695040888963407);
             self.0
         }
         fn byte(&mut self) -> u8 {

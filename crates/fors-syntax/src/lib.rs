@@ -13,17 +13,28 @@ mod tree;
 
 pub use diag::{DiagCode, Diagnostic};
 pub use node_kind::NodeKind;
-pub use parser::{parse, parse_file, Parse};
+pub use parser::{Parse, parse, parse_file};
 pub use tree::Tree;
 
 /// Pretty-prints the tree, one node per line, indented by nesting depth,
 /// each line naming the node kind and the source text it spans (truncated
 /// for readability). Used by `fors parse --tree`.
 pub fn dump_tree(tree: &Tree, tokens: &fors_lex::Tokens, source: &[u8], out: &mut String) {
-    fn rec(tree: &Tree, tokens: &fors_lex::Tokens, source: &[u8], i: usize, depth: usize, out: &mut String) {
+    fn rec(
+        tree: &Tree,
+        tokens: &fors_lex::Tokens,
+        source: &[u8],
+        i: usize,
+        depth: usize,
+        out: &mut String,
+    ) {
         let (a, b) = tree.token_range(i);
         let byte_start = tokens.range(a as usize).0;
-        let byte_end = if b > a { tokens.range(b as usize - 1).1 } else { byte_start };
+        let byte_end = if b > a {
+            tokens.range(b as usize - 1).1
+        } else {
+            byte_start
+        };
         for _ in 0..depth {
             out.push_str("  ");
         }
@@ -96,10 +107,17 @@ pub fn validate(tree: &Tree, tokens: &fors_lex::Tokens, source: &[u8]) -> Result
         return Err(format!("root is {:?}", tree.kinds[0]));
     }
     if tree.token_range(0) != (0, tokens.len() as u32) {
-        return Err(format!("root spans {:?}, stream has {} tokens", tree.token_range(0), tokens.len()));
+        return Err(format!(
+            "root spans {:?}, stream has {} tokens",
+            tree.token_range(0),
+            tokens.len()
+        ));
     }
     if tree.subtree_len[0] as usize != n {
-        return Err(format!("root subtree_len {} != {n} nodes", tree.subtree_len[0]));
+        return Err(format!(
+            "root subtree_len {} != {n} nodes",
+            tree.subtree_len[0]
+        ));
     }
     // (end node index, end token, next free token) per open ancestor
     let mut stack: Vec<(usize, u32, u32)> = Vec::new();
@@ -114,7 +132,10 @@ pub fn validate(tree: &Tree, tokens: &fors_lex::Tokens, source: &[u8]) -> Result
         }
         if let Some(&mut (pend, pend_tok, ref mut next_tok)) = stack.last_mut() {
             if i + sub > pend {
-                return Err(format!("node {i} ({:?}): subtree overruns its parent", tree.kinds[i]));
+                return Err(format!(
+                    "node {i} ({:?}): subtree overruns its parent",
+                    tree.kinds[i]
+                ));
             }
             if first < *next_tok || end_tok > pend_tok {
                 return Err(format!(
@@ -126,7 +147,14 @@ pub fn validate(tree: &Tree, tokens: &fors_lex::Tokens, source: &[u8]) -> Result
         }
         if stack.len() == 1 {
             let k = tree.kinds[i];
-            let header = matches!(k, NodeKind::ModuleHdr | NodeKind::ContractsClause | NodeKind::NeedsClause | NodeKind::InputsClause | NodeKind::UseDecl);
+            let header = matches!(
+                k,
+                NodeKind::ModuleHdr
+                    | NodeKind::ContractsClause
+                    | NodeKind::NeedsClause
+                    | NodeKind::InputsClause
+                    | NodeKind::UseDecl
+            );
             if !(header || k.is_decl() || k == NodeKind::Error) {
                 return Err(format!("node {i}: {k:?} is a direct child of File"));
             }
@@ -139,14 +167,24 @@ pub fn validate(tree: &Tree, tokens: &fors_lex::Tokens, source: &[u8]) -> Result
                 let k = tokens.kinds[sig[w]];
                 let next = sig.get(w + 1).map(|&t| tokens.kinds[t]);
                 let starts_decl = match k {
-                    T::KwModule | T::KwUse | T::KwStruct | T::KwEnum | T::KwTrait | T::KwImpl | T::KwConst | T::KwExtern => true,
+                    T::KwModule
+                    | T::KwUse
+                    | T::KwStruct
+                    | T::KwEnum
+                    | T::KwTrait
+                    | T::KwImpl
+                    | T::KwConst
+                    | T::KwExtern => true,
                     T::KwFn => next == Some(T::Ident),
                     T::Ident => next == Some(T::KwStruct) && tokens.text(sig[w], source) == b"soa",
                     _ => false,
                 };
                 // the keyword right after a swallowed `pub` is part of the same sync sequence
                 if starts_decl && !(w == 1 && tokens.kinds[sig[0]] == T::KwPub) {
-                    return Err(format!("Error node {i} swallows a declaration start at token {}", sig[w]));
+                    return Err(format!(
+                        "Error node {i} swallows a declaration start at token {}",
+                        sig[w]
+                    ));
                 }
             }
         }

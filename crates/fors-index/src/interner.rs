@@ -33,7 +33,10 @@ impl Default for Interner {
 
 impl Interner {
     pub fn new() -> Self {
-        Interner { strings: Vec::new(), lookup: HashMap::new() }
+        Interner {
+            strings: Vec::new(),
+            lookup: HashMap::new(),
+        }
     }
 
     /// Interns `bytes`, returning its `Symbol`. Repeated interning of

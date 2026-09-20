@@ -11,5 +11,5 @@ mod lexer;
 mod token;
 
 pub use diag::{DiagCode, Diagnostic};
-pub use lexer::{lex, Tokens, MAX_SOURCE_LEN};
-pub use token::{keyword_kind, TokenKind};
+pub use lexer::{MAX_SOURCE_LEN, Tokens, lex};
+pub use token::{TokenKind, keyword_kind};

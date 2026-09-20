@@ -12,7 +12,7 @@
 //! necessarily a whole-build step, since ch08 R4's "is this prefix a
 //! module" test depends on the full module-name set.
 
-use fors_lex::{keyword_kind, TokenKind, Tokens};
+use fors_lex::{TokenKind, Tokens, keyword_kind};
 use fors_syntax::{NodeKind, Tree};
 use std::collections::HashMap;
 
@@ -33,7 +33,10 @@ pub fn is_legal_segment(bytes: &[u8]) -> bool {
     if !first_ok {
         return false;
     }
-    if !bytes.iter().all(|&b| b == b'_' || b.is_ascii_lowercase() || b.is_ascii_digit()) {
+    if !bytes
+        .iter()
+        .all(|&b| b == b'_' || b.is_ascii_lowercase() || b.is_ascii_digit())
+    {
         return false;
     }
     keyword_kind(bytes).is_none()
@@ -42,13 +45,21 @@ pub fn is_legal_segment(bytes: &[u8]) -> bool {
 /// Ch08 R1: joins `package` (already-validated manifest segments) and
 /// `path` (directory segments then file stem, all relative to the source
 /// root) into one module name. `Err(i)` names the illegal `path` segment.
-pub fn module_segments(interner: &mut Interner, package: &[&[u8]], path: &[&[u8]]) -> Result<Segments, usize> {
+pub fn module_segments(
+    interner: &mut Interner,
+    package: &[&[u8]],
+    path: &[&[u8]],
+) -> Result<Segments, usize> {
     for (i, seg) in path.iter().enumerate() {
         if !is_legal_segment(seg) {
             return Err(i);
         }
     }
-    Ok(package.iter().chain(path.iter()).map(|s| interner.intern(s)).collect())
+    Ok(package
+        .iter()
+        .chain(path.iter())
+        .map(|s| interner.intern(s))
+        .collect())
 }
 
 pub fn segments_eq(a: &[Symbol], b: &[Symbol]) -> bool {
@@ -73,13 +84,23 @@ fn is_sig(tokens: &Tokens, i: usize) -> bool {
 fn byte_range(tree: &Tree, tokens: &Tokens, node: usize) -> (u32, u32) {
     let (a, b) = tree.token_range(node);
     let start = tokens.range(a as usize).0;
-    let end = if b > a { tokens.range(b as usize - 1).1 } else { start };
+    let end = if b > a {
+        tokens.range(b as usize - 1).1
+    } else {
+        start
+    };
     (start, end)
 }
 
 /// Reads the dotted identifier segments directly owned by a `Path` node
 /// (`ident { "." ident }`, ch08 R3).
-fn path_segments(tree: &Tree, tokens: &Tokens, source: &[u8], interner: &mut Interner, path_node: usize) -> Segments {
+fn path_segments(
+    tree: &Tree,
+    tokens: &Tokens,
+    source: &[u8],
+    interner: &mut Interner,
+    path_node: usize,
+) -> Segments {
     let (first, end) = tree.token_range(path_node);
     let mut segs = Vec::new();
     let mut i = first as usize;
@@ -102,7 +123,12 @@ pub struct FileFacts {
 }
 
 /// Per-file extraction: depends only on this file's tree/tokens.
-pub fn extract_module_facts(tree: &Tree, tokens: &Tokens, source: &[u8], interner: &mut Interner) -> FileFacts {
+pub fn extract_module_facts(
+    tree: &Tree,
+    tokens: &Tokens,
+    source: &[u8],
+    interner: &mut Interner,
+) -> FileFacts {
     let mut header = None;
     let mut uses = Vec::new();
     if !tree.is_empty() {
@@ -172,30 +198,37 @@ pub fn build_module_graph(
     files: Vec<(FileId, Segments, FileFacts)>,
 ) -> (ModuleTable, Vec<(ModuleId, ModuleId)>, Vec<Diagnostic>) {
     let mut diags = Vec::new();
-    let mut table = ModuleTable { file: Vec::new(), name: Vec::new(), by_name: HashMap::new() };
+    let mut table = ModuleTable {
+        file: Vec::new(),
+        name: Vec::new(),
+        by_name: HashMap::new(),
+    };
     for (i, (fid, name, _)) in files.iter().enumerate() {
         table.file.push(*fid);
         table.name.push(name.clone());
         // Two files mapping to one name (Rule 24) is the caller's build
         // error; the first keeps the name so ids stay order-stable.
-        table.by_name.entry(name.clone()).or_insert(ModuleId(i as u32));
+        table
+            .by_name
+            .entry(name.clone())
+            .or_insert(ModuleId(i as u32));
     }
     let by_name = &table.by_name;
 
     // Rule 1: header path must equal the file's derived name.
     for (m, (_, name, facts)) in files.iter().enumerate() {
-        if let Some((header_segs, range)) = &facts.header {
-            if !segments_eq(header_segs, name) {
-                let got = join_dotted(interner, header_segs);
-                let want = join_dotted(interner, name);
-                diags.push(Diagnostic::new(
-                    table.file[m],
-                    range.0,
-                    range.1,
-                    DiagCode::HeaderPathMismatch,
-                    format!("module header `{got}` does not match its file's module name `{want}`"),
-                ));
-            }
+        if let Some((header_segs, range)) = &facts.header
+            && !segments_eq(header_segs, name)
+        {
+            let got = join_dotted(interner, header_segs);
+            let want = join_dotted(interner, name);
+            diags.push(Diagnostic::new(
+                table.file[m],
+                range.0,
+                range.1,
+                DiagCode::HeaderPathMismatch,
+                format!("module header `{got}` does not match its file's module name `{want}`"),
+            ));
         }
     }
 
@@ -203,11 +236,20 @@ pub fn build_module_graph(
     for (m, (_, _, facts)) in files.iter().enumerate() {
         let from = ModuleId(m as u32);
         for (path, range) in &facts.uses {
-            resolve_use_edge(by_name, from, table.file[m], path, *range, &mut edges, &mut diags, interner);
+            resolve_use_edge(
+                by_name,
+                from,
+                table.file[m],
+                path,
+                *range,
+                &mut edges,
+                &mut diags,
+                interner,
+            );
         }
     }
 
-    edges.sort_by(|a, b| (a.from, a.to).cmp(&(b.from, b.to)));
+    edges.sort_by_key(|a| (a.from, a.to));
     edges.dedup_by(|a, b| a.from == b.from && a.to == b.to);
 
     let cycle_diags = detect_cycles(&table, &edges, interner);
@@ -229,6 +271,11 @@ fn push_edge_dedup(edges: &mut Vec<Edge>, e: Edge) {
 /// (case b, an item import); otherwise the path is left unresolved (no
 /// edge) — this crate does not perform Rule 4(c)'s unresolved-import
 /// check, which needs full item visibility, not just the module set.
+/// A cycle found in the module graph (ch08 Rule 7): the modules on it, in
+/// order, and the byte range of the `use` path that forms each edge, so the
+/// diagnostic can point at the imports rather than at the modules.
+type Cycle = (Vec<usize>, Vec<(u32, u32)>);
+
 fn resolve_use_edge(
     by_name: &HashMap<Segments, ModuleId>,
     from: ModuleId,
@@ -272,7 +319,11 @@ fn detect_cycles(table: &ModuleTable, edges: &[Edge], interner: &Interner) -> Ve
     for e in edges {
         adj[e.from.index()].push((e.to, e.range));
     }
-    let name_bytes: Vec<Vec<u8>> = table.name.iter().map(|s| join_dotted(interner, s).into_bytes()).collect();
+    let name_bytes: Vec<Vec<u8>> = table
+        .name
+        .iter()
+        .map(|s| join_dotted(interner, s).into_bytes())
+        .collect();
     for adj_list in &mut adj {
         adj_list.sort_by(|a, b| name_bytes[a.0.index()].cmp(&name_bytes[b.0.index()]));
     }
@@ -283,10 +334,14 @@ fn detect_cycles(table: &ModuleTable, edges: &[Edge], interner: &Interner) -> Ve
     let mut out = Vec::new();
     let max_iters = edges.len() + 1;
     for _ in 0..max_iters {
-        let Some(found) = find_one_cycle(&adj, &order) else { break };
+        let Some(found) = find_one_cycle(&adj, &order) else {
+            break;
+        };
         let (path, path_edges) = found;
         // Rotate so the lexicographically least module starts the cycle.
-        let min_pos = (0..path.len()).min_by_key(|&i| &name_bytes[path[i]]).unwrap_or(0);
+        let min_pos = (0..path.len())
+            .min_by_key(|&i| &name_bytes[path[i]])
+            .unwrap_or(0);
         let mut names = String::new();
         for k in 0..=path.len() {
             if k > 0 {
@@ -298,7 +353,13 @@ fn detect_cycles(table: &ModuleTable, edges: &[Edge], interner: &Interner) -> Ve
         // Edge that closes the cycle back to the starting (least) module.
         let closing_idx = (min_pos + path.len() - 1) % path.len();
         let closing_edge = path_edges[closing_idx];
-        out.push(Diagnostic::new(table.file[path[closing_idx]], closing_edge.0, closing_edge.1, DiagCode::ImportCycle, format!("import cycle: {names}")));
+        out.push(Diagnostic::new(
+            table.file[path[closing_idx]],
+            closing_edge.0,
+            closing_edge.1,
+            DiagCode::ImportCycle,
+            format!("import cycle: {names}"),
+        ));
         // Remove that edge so the next iteration searches the rest of the graph.
         let tail = path[closing_idx];
         let head = path[min_pos];
@@ -311,10 +372,7 @@ fn detect_cycles(table: &ModuleTable, edges: &[Edge], interner: &Interner) -> Ve
 /// by target name) looking for the first back edge; returns the cycle as
 /// a list of module indices (in discovery order, not yet rotated) plus,
 /// parallel to it, the edge range used to reach each successor.
-fn find_one_cycle(
-    adj: &[Vec<(ModuleId, (u32, u32))>],
-    order: &[usize],
-) -> Option<(Vec<usize>, Vec<(u32, u32)>)> {
+fn find_one_cycle(adj: &[Vec<(ModuleId, (u32, u32))>], order: &[usize]) -> Option<Cycle> {
     let n = adj.len();
     let mut visited = vec![false; n];
     for &start in order {
@@ -324,7 +382,14 @@ fn find_one_cycle(
         let mut on_stack = vec![false; n];
         let mut stack: Vec<usize> = Vec::new();
         let mut edge_in: Vec<(u32, u32)> = Vec::new();
-        if let Some(result) = dfs(start, adj, &mut visited, &mut on_stack, &mut stack, &mut edge_in) {
+        if let Some(result) = dfs(
+            start,
+            adj,
+            &mut visited,
+            &mut on_stack,
+            &mut stack,
+            &mut edge_in,
+        ) {
             return Some(result);
         }
     }
@@ -338,7 +403,7 @@ fn dfs(
     on_stack: &mut [bool],
     stack: &mut Vec<usize>,
     edge_in: &mut Vec<(u32, u32)>,
-) -> Option<(Vec<usize>, Vec<(u32, u32)>)> {
+) -> Option<Cycle> {
     visited[u] = true;
     on_stack[u] = true;
     stack.push(u);
@@ -392,8 +457,7 @@ mod tests {
         let mut interner = Interner::new();
         let facts = facts(&mut interner, "module wrong;\n");
         let name = module_segments(&mut interner, &[], &[b"right"]).unwrap();
-        let (_, edges, diags) =
-            build_module_graph(&interner, vec![(FileId(0), name, facts)]);
+        let (_, edges, diags) = build_module_graph(&interner, vec![(FileId(0), name, facts)]);
         assert!(edges.is_empty());
         assert_eq!(diags.len(), 1);
         assert_eq!(diags[0].code, DiagCode::HeaderPathMismatch);
@@ -417,9 +481,14 @@ mod tests {
         let f_b = facts(&mut interner, "module b;\nuse main;\n");
         let n_main = module_segments(&mut interner, &[], &[b"main"]).unwrap();
         let n_b = module_segments(&mut interner, &[], &[b"b"]).unwrap();
-        let (_, _, diags) =
-            build_module_graph(&interner, vec![(FileId(0), n_main, f_main), (FileId(1), n_b, f_b)]);
-        let cycle: Vec<_> = diags.iter().filter(|d| d.code == DiagCode::ImportCycle).collect();
+        let (_, _, diags) = build_module_graph(
+            &interner,
+            vec![(FileId(0), n_main, f_main), (FileId(1), n_b, f_b)],
+        );
+        let cycle: Vec<_> = diags
+            .iter()
+            .filter(|d| d.code == DiagCode::ImportCycle)
+            .collect();
         assert_eq!(cycle.len(), 1);
         assert!(cycle[0].message.contains("b -> main -> b"));
     }
@@ -435,9 +504,16 @@ mod tests {
         let n_c = module_segments(&mut interner, &[], &[b"c"]).unwrap();
         let (_, _, diags) = build_module_graph(
             &interner,
-            vec![(FileId(0), n_main, f_main), (FileId(1), n_b, f_b), (FileId(2), n_c, f_c)],
+            vec![
+                (FileId(0), n_main, f_main),
+                (FileId(1), n_b, f_b),
+                (FileId(2), n_c, f_c),
+            ],
         );
-        let cycle: Vec<_> = diags.iter().filter(|d| d.code == DiagCode::ImportCycle).collect();
+        let cycle: Vec<_> = diags
+            .iter()
+            .filter(|d| d.code == DiagCode::ImportCycle)
+            .collect();
         assert_eq!(cycle.len(), 1);
         assert!(cycle[0].message.contains("b -> c -> main -> b"));
     }
@@ -455,7 +531,12 @@ mod tests {
         let n_d = module_segments(&mut interner, &[], &[b"d"]).unwrap();
         let (_, _, diags) = build_module_graph(
             &interner,
-            vec![(FileId(0), n_main, f_main), (FileId(1), n_a, f_a), (FileId(2), n_b, f_b), (FileId(3), n_d, f_d)],
+            vec![
+                (FileId(0), n_main, f_main),
+                (FileId(1), n_a, f_a),
+                (FileId(2), n_b, f_b),
+                (FileId(3), n_d, f_d),
+            ],
         );
         assert!(diags.is_empty());
     }

@@ -36,10 +36,18 @@ struct Kids<'a> {
 
 impl<'a> Kids<'a> {
     fn new(tree: &'a Tree, n: usize) -> Self {
-        Kids { tree, next: n + 1, end: tree.subtree_end(n) }
+        Kids {
+            tree,
+            next: n + 1,
+            end: tree.subtree_end(n),
+        }
     }
     fn peek(&self) -> Option<usize> {
-        if self.next < self.end { Some(self.next) } else { None }
+        if self.next < self.end {
+            Some(self.next)
+        } else {
+            None
+        }
     }
     fn bump(&mut self) {
         if self.next < self.end {
@@ -114,7 +122,9 @@ fn default_sep(prev: T, next: T) -> Sep {
             }
         }
         _ => match prev {
-            T::LParen | T::LBracket | T::At | T::Amp | T::Dot | T::DotDotLt | T::DotDotEq => Sep::None,
+            T::LParen | T::LBracket | T::At | T::Amp | T::Dot | T::DotDotLt | T::DotDotEq => {
+                Sep::None
+            }
             _ => Sep::Space,
         },
     }
@@ -157,10 +167,10 @@ impl<'a> Emitter<'a> {
     /// a statement separator's newline would make every group unfittable.
     fn group_open(&mut self) {
         self.trivia();
-        if let Some(s) = self.sep.take() {
-            if self.prev.is_some() {
-                self.emit_sep(s);
-            }
+        if let Some(s) = self.sep.take()
+            && self.prev.is_some()
+        {
+            self.emit_sep(s);
         }
         self.push(Op::Open);
     }
@@ -201,7 +211,10 @@ impl<'a> Emitter<'a> {
 
     fn newlines_in(&self, i: usize) -> usize {
         let (a, b) = self.toks.range(i);
-        self.src[a as usize..b as usize].iter().filter(|&&c| c == b'\n').count()
+        self.src[a as usize..b as usize]
+            .iter()
+            .filter(|&&c| c == b'\n')
+            .count()
     }
 
     /// Emits the comments between the cursor and the next significant
@@ -359,9 +372,13 @@ impl<'a> Emitter<'a> {
             K::Arm => self.arm(n),
             K::Closure => self.pipes(n),
             K::Handler => self.handler(n),
-            K::OrExpr | K::AndExpr | K::CmpExpr | K::BitExpr | K::AddExpr | K::MulExpr | K::CastExpr => {
-                self.binary(n)
-            }
+            K::OrExpr
+            | K::AndExpr
+            | K::CmpExpr
+            | K::BitExpr
+            | K::AddExpr
+            | K::MulExpr
+            | K::CastExpr => self.binary(n),
             K::UnaryExpr | K::PatLit => self.tight_prefix(n),
             K::FieldExpr => self.chain_entry(n),
             K::CallExpr | K::Bracket => self.chain_entry(n),
@@ -380,12 +397,12 @@ impl<'a> Emitter<'a> {
             if ti >= end {
                 break;
             }
-            if let Some(c) = kids.peek() {
-                if (tree.first_token[c] as usize) <= ti {
-                    self.child(c);
-                    kids.bump();
-                    continue;
-                }
+            if let Some(c) = kids.peek()
+                && (tree.first_token[c] as usize) <= ti
+            {
+                self.child(c);
+                kids.bump();
+                continue;
             }
             if self.tok().is_none() {
                 break;
@@ -401,7 +418,9 @@ impl<'a> Emitter<'a> {
     fn wrapped(&mut self, n: usize) {
         self.group_open();
         let mut kids = Kids::new(self.tree, n);
-        let first = kids.peek().map_or(usize::MAX, |c| self.tree.first_token[c] as usize);
+        let first = kids
+            .peek()
+            .map_or(usize::MAX, |c| self.tree.first_token[c] as usize);
         self.tokens_until(first);
         self.push(Op::Indent);
         self.shaped_from(n, &mut kids, false);
@@ -443,29 +462,29 @@ impl<'a> Emitter<'a> {
             if ti >= end {
                 break;
             }
-            if let Some(c) = kids.peek() {
-                if (tree.first_token[c] as usize) <= ti {
-                    if close.is_some() {
-                        if !first_item {
-                            if always {
-                                self.set(Sep::Hard);
-                            }
-                            self.blank_ok = true;
+            if let Some(c) = kids.peek()
+                && (tree.first_token[c] as usize) <= ti
+            {
+                if close.is_some() {
+                    if !first_item {
+                        if always {
+                            self.set(Sep::Hard);
                         }
-                        first_item = false;
-                    } else if tree.kinds[c] == K::Contract {
-                        // a `pre`/`post`/`invariant` clause always owns its
-                        // line, so the `{` under it always owns one too
-                        if !contracted {
-                            self.push(Op::Indent);
-                            contracted = true;
-                        }
-                        self.set(Sep::Hard);
+                        self.blank_ok = true;
                     }
-                    self.child(c);
-                    kids.bump();
-                    continue;
+                    first_item = false;
+                } else if tree.kinds[c] == K::Contract {
+                    // a `pre`/`post`/`invariant` clause always owns its
+                    // line, so the `{` under it always owns one too
+                    if !contracted {
+                        self.push(Op::Indent);
+                        contracted = true;
+                    }
+                    self.set(Sep::Hard);
                 }
+                self.child(c);
+                kids.bump();
+                continue;
             }
             let k = self.toks.kinds[ti];
             match k {
@@ -561,7 +580,9 @@ impl<'a> Emitter<'a> {
         if tree.kinds[c] != K::Closure {
             return false;
         }
-        let Some(body) = tree.children(c).last() else { return false };
+        let Some(body) = tree.children(c).last() else {
+            return false;
+        };
         if tree.kinds[body] != K::Block {
             return false;
         }
@@ -582,7 +603,8 @@ impl<'a> Emitter<'a> {
         }
         let mut rest = *kids;
         rest.bump();
-        rest.peek().is_none_or(|next| tree.first_token[next] as usize > j)
+        rest.peek()
+            .is_none_or(|next| tree.first_token[next] as usize > j)
     }
 
     // ---- declarations ----
@@ -633,26 +655,30 @@ impl<'a> Emitter<'a> {
             if ti >= end {
                 break;
             }
-            if let Some(c) = kids.peek() {
-                if (tree.first_token[c] as usize) <= ti {
-                    match tree.kinds[c] {
-                        K::Raises | K::Contract => {
-                            if !tail_open {
-                                self.push(Op::Open);
-                                tail_open = true;
-                            }
-                            if !indented {
-                                self.push(Op::Indent);
-                                indented = true;
-                            }
-                            self.set(if tree.kinds[c] == K::Raises { Sep::Line } else { Sep::Hard });
+            if let Some(c) = kids.peek()
+                && (tree.first_token[c] as usize) <= ti
+            {
+                match tree.kinds[c] {
+                    K::Raises | K::Contract => {
+                        if !tail_open {
+                            self.push(Op::Open);
+                            tail_open = true;
                         }
-                        _ => {}
+                        if !indented {
+                            self.push(Op::Indent);
+                            indented = true;
+                        }
+                        self.set(if tree.kinds[c] == K::Raises {
+                            Sep::Line
+                        } else {
+                            Sep::Hard
+                        });
                     }
-                    self.child(c);
-                    kids.bump();
-                    continue;
+                    _ => {}
                 }
+                self.child(c);
+                kids.bump();
+                continue;
             }
             if self.tok().is_none() {
                 break;
@@ -689,17 +715,17 @@ impl<'a> Emitter<'a> {
             if ti >= end {
                 break;
             }
-            if let Some(c) = kids.peek() {
-                if (tree.first_token[c] as usize) <= ti {
-                    self.child(c);
-                    kids.bump();
-                    if !indented {
-                        self.push(Op::Indent);
-                        indented = true;
-                    }
-                    first = false;
-                    continue;
+            if let Some(c) = kids.peek()
+                && (tree.first_token[c] as usize) <= ti
+            {
+                self.child(c);
+                kids.bump();
+                if !indented {
+                    self.push(Op::Indent);
+                    indented = true;
                 }
+                first = false;
+                continue;
             }
             if !first {
                 self.set(Sep::Line);
@@ -726,12 +752,12 @@ impl<'a> Emitter<'a> {
             if ti >= end {
                 break;
             }
-            if let Some(c) = kids.peek() {
-                if (tree.first_token[c] as usize) <= ti {
-                    self.child(c);
-                    kids.bump();
-                    continue;
-                }
+            if let Some(c) = kids.peek()
+                && (tree.first_token[c] as usize) <= ti
+            {
+                self.child(c);
+                kids.bump();
+                continue;
             }
             let k = self.tok();
             if k == Some(T::Minus) {
@@ -753,7 +779,9 @@ impl<'a> Emitter<'a> {
             if !matches!(k, K::CallExpr | K::FieldExpr | K::TryExpr | K::Bracket) {
                 break;
             }
-            let Some(c0) = self.tree.children(n).next() else { break };
+            let Some(c0) = self.tree.children(n).next() else {
+                break;
+            };
             if k == K::FieldExpr && self.tree.kinds[c0] == K::CallExpr {
                 count += 1;
             }
@@ -845,12 +873,12 @@ impl<'a> Emitter<'a> {
             if ti >= end {
                 break;
             }
-            if let Some(c) = kids.peek() {
-                if (tree.first_token[c] as usize) <= ti {
-                    self.child(c);
-                    kids.bump();
-                    continue;
-                }
+            if let Some(c) = kids.peek()
+                && (tree.first_token[c] as usize) <= ti
+            {
+                self.child(c);
+                kids.bump();
+                continue;
             }
             let k = self.toks.kinds[ti];
             if k == T::Pipe && !done {

@@ -31,14 +31,17 @@ use fors_index::fingerprint::hash_bytes;
 use fors_index::ids::DefId;
 use fors_index::interner::{Interner, Symbol};
 
+use crate::Fir;
 use crate::constval::ConstValue;
 use crate::defpath::{DeclKey, DeclKeyId, DeclKeyTable, NO_DECL_KEY};
 use crate::sig::{
-    Assoc, Conv, GParam, GParamKind, Member, MemberKind, MemberListId, PayloadKind, SigKind, TraitRefListId,
-    NO_BOUNDS, NO_FN_SIG, NO_SLOT, NO_TRAIT_REF,
+    Assoc, Conv, GParam, GParamKind, Member, MemberKind, MemberListId, NO_BOUNDS, NO_FN_SIG,
+    NO_SLOT, NO_TRAIT_REF, PayloadKind, SigKind, TraitRefListId,
 };
-use crate::ty::{ArgsId, BrandId, BrandRow, ConstId, FnTyId, PrimKind, ProjKeyId, Quals, TraitRefId, TyId, TyTag, NO_TY};
-use crate::Fir;
+use crate::ty::{
+    ArgsId, BrandId, BrandRow, ConstId, FnTyId, NO_TY, PrimKind, ProjKeyId, Quals, TraitRefId,
+    TyId, TyTag,
+};
 
 const MAGIC: &[u8; 4] = b"FIR1";
 
@@ -100,7 +103,9 @@ pub struct FingerprintPolicy {
 
 impl FingerprintPolicy {
     fn to_byte(self) -> u8 {
-        (self.include_const_value as u8) | ((self.exclude_gparam_names as u8) << 1) | ((self.sort_bound_lists as u8) << 2)
+        (self.include_const_value as u8)
+            | ((self.exclude_gparam_names as u8) << 1)
+            | ((self.sort_bound_lists as u8) << 2)
     }
 
     fn from_byte(v: u8) -> FingerprintPolicy {
@@ -137,9 +142,9 @@ impl FingerprintPolicy {
 // roundtrip`, `encoding_is_independent_of_pool_warmth_and_interner_order`),
 // which is the signal that `false` is not a choice.
 pub const FINGERPRINT_POLICY: FingerprintPolicy = FingerprintPolicy {
-    include_const_value: true,   // §14 Q4: over-invalidate rather than risk a stale dependent
-    exclude_gparam_names: true,  // §14 Q5: R38(a) is positional, so a name is not observable
-    sort_bound_lists: true,      // §14 Q6: `T: Eq + Ord` is the same bound set as `T: Ord + Eq`
+    include_const_value: true, // §14 Q4: over-invalidate rather than risk a stale dependent
+    exclude_gparam_names: true, // §14 Q5: R38(a) is positional, so a name is not observable
+    sort_bound_lists: true,    // §14 Q6: `T: Eq + Ord` is the same bound set as `T: Ord + Eq`
 };
 
 pub fn decl_fingerprint(fir: &Fir, names: &Interner, def: DefId) -> u128 {
@@ -242,7 +247,13 @@ struct Enc<'a> {
 }
 
 impl<'a> Enc<'a> {
-    fn new(fir: &'a Fir, names: &'a Interner, policy: FingerprintPolicy, self_key: DeclKeyId, parent_key: DeclKeyId) -> Enc<'a> {
+    fn new(
+        fir: &'a Fir,
+        names: &'a Interner,
+        policy: FingerprintPolicy,
+        self_key: DeclKeyId,
+        parent_key: DeclKeyId,
+    ) -> Enc<'a> {
         Enc {
             fir,
             names,
@@ -481,7 +492,13 @@ impl<'a> Enc<'a> {
     /// A trait reference encoded self-containedly (its own local type stream),
     /// used only as a sort key. Position-independent by construction.
     fn canon_trait_ref(&self, tr: TraitRefId) -> Vec<u8> {
-        let mut sub = Enc::new(self.fir, self.names, self.policy, self.self_key, self.parent_key);
+        let mut sub = Enc::new(
+            self.fir,
+            self.names,
+            self.policy,
+            self.self_key,
+            self.parent_key,
+        );
         let tail = sub.trait_ref_bytes(tr);
         let mut out = Vec::new();
         uleb(&mut out, sub.next as u64);
@@ -491,7 +508,13 @@ impl<'a> Enc<'a> {
     }
 
     fn canon_ty(&self, t: TyId) -> Vec<u8> {
-        let mut sub = Enc::new(self.fir, self.names, self.policy, self.self_key, self.parent_key);
+        let mut sub = Enc::new(
+            self.fir,
+            self.names,
+            self.policy,
+            self.self_key,
+            self.parent_key,
+        );
         sub.emit_ty(t);
         let mut out = Vec::new();
         uleb(&mut out, sub.next as u64);
@@ -502,7 +525,10 @@ impl<'a> Enc<'a> {
     /// `n` bounds, canonically ordered (§14 Q6).
     fn bound_list_bytes(&mut self, list: TraitRefListId) -> Vec<u8> {
         let bounds = self.fir.sigs.bounds.get(list).to_vec();
-        let mut keyed: Vec<(Vec<u8>, TraitRefId)> = bounds.iter().map(|&tr| (self.canon_trait_ref(tr), tr)).collect();
+        let mut keyed: Vec<(Vec<u8>, TraitRefId)> = bounds
+            .iter()
+            .map(|&tr| (self.canon_trait_ref(tr), tr))
+            .collect();
         if self.policy.sort_bound_lists {
             keyed.sort_by(|x, y| x.0.cmp(&y.0));
         }
@@ -706,7 +732,11 @@ impl<'a> Enc<'a> {
             }
             SigKind::Impl => {
                 let st = self.fir.sigs.self_ty(def);
-                let r = if st == NO_TY { u32::MAX } else { self.emit_ty(st) };
+                let r = if st == NO_TY {
+                    u32::MAX
+                } else {
+                    self.emit_ty(st)
+                };
                 uleb(&mut self.body, r as u64);
                 let tr = self.fir.sigs.trait_ref(def);
                 if tr == NO_TRAIT_REF {
@@ -722,7 +752,11 @@ impl<'a> Enc<'a> {
             }
             SigKind::Const => {
                 let ty = self.fir.sigs.const_ty(def);
-                let r = if ty == NO_TY { u32::MAX } else { self.emit_ty(ty) };
+                let r = if ty == NO_TY {
+                    u32::MAX
+                } else {
+                    self.emit_ty(ty)
+                };
                 uleb(&mut self.body, r as u64);
                 let cv = self.fir.sigs.const_val(def);
                 // §14 Q4.
@@ -742,7 +776,11 @@ impl<'a> Enc<'a> {
 /// The canonical bytes of one declaration's signature under `policy`.
 pub fn encode_sig(fir: &Fir, names: &Interner, def: DefId, policy: FingerprintPolicy) -> Vec<u8> {
     let self_key = fir.defs.key_of(def);
-    let parent_key = if self_key == NO_DECL_KEY { NO_DECL_KEY } else { fir.keys.parent_of(self_key) };
+    let parent_key = if self_key == NO_DECL_KEY {
+        NO_DECL_KEY
+    } else {
+        fir.keys.parent_of(self_key)
+    };
     let mut e = Enc::new(fir, names, policy, self_key, parent_key);
     e.encode(def);
     let mut out = Vec::with_capacity(e.tys.len() + e.body.len() + 8);
@@ -889,7 +927,13 @@ fn read_decl_key_at(d: &mut Dec, fir: &mut Fir, names: &mut Interner, depth: u32
     };
     let disamb = d.uleb()? as u32;
     let module = fir.keys.paths.intern(&segs);
-    Ok(fir.keys.intern(DeclKey { parent, module, kind, name, disamb }))
+    Ok(fir.keys.intern(DeclKey {
+        parent,
+        module,
+        kind,
+        name,
+        disamb,
+    }))
 }
 
 fn read_def(d: &mut Dec, fir: &mut Fir, names: &mut Interner) -> R<DefId> {
@@ -920,7 +964,10 @@ struct DecCx {
 
 impl DecCx {
     fn ty(&self, r: u64) -> R<TyId> {
-        self.tys.get(r as usize).copied().ok_or(DecodeError::BadRef(r as u32))
+        self.tys
+            .get(r as usize)
+            .copied()
+            .ok_or(DecodeError::BadRef(r as u32))
     }
 }
 
@@ -928,7 +975,11 @@ fn read_owner(d: &mut Dec, fir: &mut Fir, names: &mut Interner, cx: &DecCx) -> R
     match d.byte()? {
         0 => {
             let depth = d.uleb()?;
-            Ok(if depth == 0 { cx.self_def } else { cx.parent_def })
+            Ok(if depth == 0 {
+                cx.self_def
+            } else {
+                cx.parent_def
+            })
         }
         1 => read_def(d, fir, names),
         other => Err(DecodeError::BadTag(other)),
@@ -938,7 +989,9 @@ fn read_owner(d: &mut Dec, fir: &mut Fir, names: &mut Interner, cx: &DecCx) -> R
 fn read_ty_entry(d: &mut Dec, fir: &mut Fir, names: &mut Interner, cx: &DecCx) -> R<TyId> {
     let tag = d.byte()?;
     let quals = Quals(d.byte()?);
-    if quals.0 & !(crate::ty::Q_ISO | crate::ty::Q_IMM | crate::ty::Q_SECRET) != 0 || !quals.is_consistent() {
+    if quals.0 & !(crate::ty::Q_ISO | crate::ty::Q_IMM | crate::ty::Q_SECRET) != 0
+        || !quals.is_consistent()
+    {
         return Err(DecodeError::BadShape);
     }
     let base = match tag {
@@ -981,8 +1034,14 @@ fn read_ty_entry(d: &mut Dec, fir: &mut Fir, names: &mut Interner, cx: &DecCx) -
                 params.push((conv, cx.ty(d.uleb()?)?));
             }
             let result = cx.ty(d.uleb()?)?;
-            let raises = if flags & FN_RAISES != 0 { cx.ty(d.uleb()?)? } else { NO_TY };
-            let f = fir.tys.intern_fn_ty(&params, result, raises, flags & FN_CLOSURE != 0);
+            let raises = if flags & FN_RAISES != 0 {
+                cx.ty(d.uleb()?)?
+            } else {
+                NO_TY
+            };
+            let f = fir
+                .tys
+                .intern_fn_ty(&params, result, raises, flags & FN_CLOSURE != 0);
             fir.tys.fn_ty(f)
         }
         E_DYN => {
@@ -1028,7 +1087,11 @@ fn read_ty_entry(d: &mut Dec, fir: &mut Fir, names: &mut Interner, cx: &DecCx) -
         }
         other => return Err(DecodeError::BadTag(other)),
     };
-    Ok(if quals.is_none() { base } else { fir.tys.qualified(base, quals) })
+    Ok(if quals.is_none() {
+        base
+    } else {
+        fir.tys.qualified(base, quals)
+    })
 }
 
 fn read_bounds(d: &mut Dec, fir: &mut Fir, names: &mut Interner, cx: &DecCx) -> R<TraitRefListId> {
@@ -1066,7 +1129,12 @@ fn read_fields(d: &mut Dec, fir: &mut Fir, names: &mut Interner, cx: &DecCx) -> 
 /// Re-interns one encoded signature into `fir`, bottom-up, re-establishing
 /// hash-consing (§5.4). `self_key` is the declaration being read — the anchor
 /// the relative `Param` markers resolve against.
-pub fn decode_sig(bytes: &[u8], fir: &mut Fir, names: &mut Interner, self_key: DeclKeyId) -> R<DefId> {
+pub fn decode_sig(
+    bytes: &[u8],
+    fir: &mut Fir,
+    names: &mut Interner,
+    self_key: DeclKeyId,
+) -> R<DefId> {
     let mut d = Dec { b: bytes, i: 0 };
     for &m in MAGIC {
         if d.byte()? != m {
@@ -1078,8 +1146,16 @@ pub fn decode_sig(bytes: &[u8], fir: &mut Fir, names: &mut Interner, self_key: D
 
     let self_def = fir.def_for_key(self_key);
     let parent_key = fir.keys.parent_of(self_key);
-    let parent_def = if parent_key == NO_DECL_KEY { self_def } else { fir.def_for_key(parent_key) };
-    let mut cx = DecCx { tys: Vec::with_capacity(n_entries), self_def, parent_def };
+    let parent_def = if parent_key == NO_DECL_KEY {
+        self_def
+    } else {
+        fir.def_for_key(parent_key)
+    };
+    let mut cx = DecCx {
+        tys: Vec::with_capacity(n_entries),
+        self_def,
+        parent_def,
+    };
     for _ in 0..n_entries {
         let t = read_ty_entry(&mut d, fir, names, &cx)?;
         cx.tys.push(t);
@@ -1095,9 +1171,13 @@ pub fn decode_sig(bytes: &[u8], fir: &mut Fir, names: &mut Interner, self_key: D
         let kind_tag = d.byte()?;
         let kind = match kind_tag {
             0 => GParamKind::Type,
-            1 => GParamKind::Const { ty: cx.ty(d.uleb()?)? },
+            1 => GParamKind::Const {
+                ty: cx.ty(d.uleb()?)?,
+            },
             2 => GParamKind::Brand,
-            3 => GParamKind::Callable { fn_ty: cx.ty(d.uleb()?)? },
+            3 => GParamKind::Callable {
+                fn_ty: cx.ty(d.uleb()?)?,
+            },
             other => return Err(DecodeError::BadTag(other)),
         };
         // §14 Q5: excluded from the encoding, so not recoverable. A positional
@@ -1148,7 +1228,15 @@ pub fn decode_sig(bytes: &[u8], fir: &mut Fir, names: &mut Interner, self_key: D
             let contract_hash = d.u128()?;
             // The CST node range is build-local and deliberately not in these
             // bytes: a decoded signature is read, never re-checked.
-            let f = fir.sigs.fn_sigs.push(&params, result, raises, scoped, receiver, (0, 0), contract_hash);
+            let f = fir.sigs.fn_sigs.push(
+                &params,
+                result,
+                raises,
+                scoped,
+                receiver,
+                (0, 0),
+                contract_hash,
+            );
             fir.sigs.set_fn_sig(self_def, f);
         }
         SigKind::Struct => {
@@ -1190,7 +1278,11 @@ pub fn decode_sig(bytes: &[u8], fir: &mut Fir, names: &mut Interner, self_key: D
                 let name_bytes = d.bytes()?.to_vec();
                 let name = names.intern(&name_bytes);
                 let bounds = read_bounds(&mut d, fir, names, &cx)?;
-                assocs.push(Assoc { name, bounds, rhs: NO_TY });
+                assocs.push(Assoc {
+                    name,
+                    bounds,
+                    rhs: NO_TY,
+                });
             }
             let a = fir.sigs.assocs.push(&assocs);
             fir.sigs.set_assoc(self_def, a);
@@ -1199,7 +1291,11 @@ pub fn decode_sig(bytes: &[u8], fir: &mut Fir, names: &mut Interner, self_key: D
         }
         SigKind::Impl => {
             let r = d.uleb()?;
-            let self_ty = if r == u32::MAX as u64 { NO_TY } else { cx.ty(r)? };
+            let self_ty = if r == u32::MAX as u64 {
+                NO_TY
+            } else {
+                cx.ty(r)?
+            };
             fir.sigs.set_self_ty(self_def, self_ty);
             match d.byte()? {
                 0 => {}
@@ -1222,7 +1318,11 @@ pub fn decode_sig(bytes: &[u8], fir: &mut Fir, names: &mut Interner, self_key: D
                 let name_bytes = d.bytes()?.to_vec();
                 let name = names.intern(&name_bytes);
                 let rhs = cx.ty(d.uleb()?)?;
-                assocs.push(Assoc { name, bounds: NO_BOUNDS, rhs });
+                assocs.push(Assoc {
+                    name,
+                    bounds: NO_BOUNDS,
+                    rhs,
+                });
             }
             let a = fir.sigs.assocs.push(&assocs);
             fir.sigs.set_assoc(self_def, a);
@@ -1231,7 +1331,11 @@ pub fn decode_sig(bytes: &[u8], fir: &mut Fir, names: &mut Interner, self_key: D
         }
         SigKind::Const => {
             let r = d.uleb()?;
-            let ty = if r == u32::MAX as u64 { NO_TY } else { cx.ty(r)? };
+            let ty = if r == u32::MAX as u64 {
+                NO_TY
+            } else {
+                cx.ty(r)?
+            };
             let val = match d.byte()? {
                 0 => crate::ty::NO_CONST,
                 1 => {
@@ -1266,7 +1370,10 @@ mod tests {
     #[test]
     fn decl_kind_bytes_round_trip() {
         for (i, &k) in DECL_KINDS.iter().enumerate() {
-            assert_eq!(k as usize, i, "DECL_KINDS is out of step with DeclKind's order");
+            assert_eq!(
+                k as usize, i,
+                "DECL_KINDS is out of step with DeclKind's order"
+            );
             assert_eq!(decl_kind_from_u8(i as u8), Some(k));
         }
         assert_eq!(decl_kind_from_u8(DECL_KINDS.len() as u8), None);
@@ -1274,7 +1381,17 @@ mod tests {
 
     #[test]
     fn uleb_round_trips() {
-        for v in [0u64, 1, 127, 128, 300, 16383, 16384, u32::MAX as u64, u64::MAX >> 1] {
+        for v in [
+            0u64,
+            1,
+            127,
+            128,
+            300,
+            16383,
+            16384,
+            u32::MAX as u64,
+            u64::MAX >> 1,
+        ] {
             let mut out = Vec::new();
             uleb(&mut out, v);
             let mut d = Dec { b: &out, i: 0 };

@@ -12,7 +12,10 @@ use fors_syntax::Tree;
 /// such a trailing child.
 pub fn own_span(tree: &Tree, node: usize) -> (u32, u32) {
     let (first, end) = tree.token_range(node);
-    let child_end = tree.children(node).next().map_or(end, |c| tree.token_range(c).0);
+    let child_end = tree
+        .children(node)
+        .next()
+        .map_or(end, |c| tree.token_range(c).0);
     (first, child_end)
 }
 

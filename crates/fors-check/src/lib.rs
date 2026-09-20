@@ -31,7 +31,10 @@ pub struct CheckOutput {
 /// check` calls `check_build`, which emits nothing yet"). `resolved` is
 /// [`fors_resolve::resolve`]'s output; `interner` is the same build-wide
 /// interner threaded through resolution, unmodified here.
-pub fn check_build(_resolved: &fors_resolve::ResolveOutput, _interner: &fors_index::Interner) -> CheckOutput {
+pub fn check_build(
+    _resolved: &fors_resolve::ResolveOutput,
+    _interner: &fors_index::Interner,
+) -> CheckOutput {
     CheckOutput::default()
 }
 
@@ -48,7 +51,12 @@ mod tests {
         let src = b"module m;\n";
         let parsed = parse_file(src);
         let name = vec![interner.intern(b"m")];
-        let inputs = [FileInput { tree: &parsed.tree, tokens: &parsed.tokens, source: src, name }];
+        let inputs = [FileInput {
+            tree: &parsed.tree,
+            tokens: &parsed.tokens,
+            source: src,
+            name,
+        }];
         let resolved = fors_resolve::resolve(&mut interner, &inputs, None);
         let out = check_build(&resolved, &interner);
         assert!(out.diagnostics.is_empty());

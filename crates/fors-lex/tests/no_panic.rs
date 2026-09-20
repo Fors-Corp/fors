@@ -15,7 +15,10 @@ impl Lcg {
 
     fn next_u64(&mut self) -> u64 {
         // constants from Numerical Recipes
-        self.0 = self.0.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
+        self.0 = self
+            .0
+            .wrapping_mul(6364136223846793005)
+            .wrapping_add(1442695040888963407);
         self.0
     }
 
@@ -45,7 +48,7 @@ fn walk_fors_files(dir: &Path, out: &mut Vec<PathBuf>) {
 
 #[test]
 fn never_panics_on_random_bytes() {
-    let mut rng = Lcg::new(0xF0125_D00D);
+    let mut rng = Lcg::new(0x000F_0125_D00D);
     for i in 0..2000u32 {
         // vary length from 0 to ~300 bytes, biased toward the ASCII range
         // that actually exercises lexer states, plus occasional raw bytes
@@ -56,7 +59,7 @@ fn never_panics_on_random_bytes() {
             // ~1 in 8 bytes is fully arbitrary (including non-ASCII); the
             // rest is nudged into the printable ASCII range so we still hit
             // real lexer branches, not just the stray-byte path every time.
-            if b % 8 == 0 {
+            if b.is_multiple_of(8) {
                 buf.push(b);
             } else {
                 buf.push(0x20 + (b % 95));
@@ -70,7 +73,7 @@ fn never_panics_on_random_bytes() {
         let _ = diags.len();
         if i == 0 {
             // touch the first case so this loop can't be optimized away oddly
-            assert!(tokens.len() >= 1);
+            assert!(!tokens.is_empty());
         }
     }
 }
@@ -82,7 +85,12 @@ fn never_panics_on_corpus_prefixes() {
     walk_fors_files(&dir, &mut files);
     files.sort();
     files.truncate(3);
-    assert_eq!(files.len(), 3, "expected at least 3 corpus files under {:?}", dir);
+    assert_eq!(
+        files.len(),
+        3,
+        "expected at least 3 corpus files under {:?}",
+        dir
+    );
 
     for f in &files {
         let src = fs::read(f).expect("read corpus file");

@@ -37,7 +37,11 @@ fn check_lossless(src: &[u8], label: &str) {
     for w in tokens.starts.windows(2) {
         assert!(w[0] <= w[1], "token starts went backwards in {label}");
     }
-    assert_eq!(tokens.source_len() as usize, src.len(), "sentinel mismatch in {label}");
+    assert_eq!(
+        tokens.source_len() as usize,
+        src.len(),
+        "sentinel mismatch in {label}"
+    );
 }
 
 #[test]

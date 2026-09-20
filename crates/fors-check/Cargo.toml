@@ -10,3 +10,6 @@ fors-syntax = { path = "../fors-syntax" }
 fors-index = { path = "../fors-index" }
 fors-resolve = { path = "../fors-resolve" }
 fors-fir = { path = "../fors-fir" }
+
+[lints]
+workspace = true

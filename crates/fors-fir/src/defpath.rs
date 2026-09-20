@@ -57,7 +57,10 @@ impl ModulePathTable {
     pub fn intern(&mut self, segments: &[Symbol]) -> ModulePathId {
         let raw: Vec<u32> = segments.iter().map(|s| s.0).collect();
         let key = ConsTable::key_slice(SALT_PATH, &raw);
-        if let Some(id) = self.cons.lookup(key, |v| self.segments(ModulePathId(v)) == segments) {
+        if let Some(id) = self
+            .cons
+            .lookup(key, |v| self.segments(ModulePathId(v)) == segments)
+        {
             return ModulePathId(id);
         }
         let id = ModulePathId(self.start.len() as u32);
@@ -113,7 +116,10 @@ pub struct DeclKeyTable {
 
 impl DeclKeyTable {
     pub fn new() -> DeclKeyTable {
-        DeclKeyTable { paths: ModulePathTable::new(), ..Default::default() }
+        DeclKeyTable {
+            paths: ModulePathTable::new(),
+            ..Default::default()
+        }
     }
 
     pub fn intern(&mut self, key: DeclKey) -> DeclKeyId {
@@ -265,7 +271,12 @@ mod tests {
     use super::*;
     use fors_index::interner::Interner;
 
-    fn key(names: &mut Interner, paths: &mut ModulePathTable, module: &[&str], name: &str) -> DeclKey {
+    fn key(
+        names: &mut Interner,
+        paths: &mut ModulePathTable,
+        module: &[&str],
+        name: &str,
+    ) -> DeclKey {
         let segs: Vec<Symbol> = module.iter().map(|s| names.intern(s.as_bytes())).collect();
         DeclKey {
             parent: NO_DECL_KEY,
@@ -311,7 +322,9 @@ mod tests {
 
     #[test]
     fn head_key_order_is_by_variant_then_payload() {
-        assert!(HeadKey::Prim(crate::ty::PrimKind::I8).as_u64() < HeadKey::Nominal(DefId(0)).as_u64());
+        assert!(
+            HeadKey::Prim(crate::ty::PrimKind::I8).as_u64() < HeadKey::Nominal(DefId(0)).as_u64()
+        );
         assert!(HeadKey::Nominal(DefId(1)).as_u64() < HeadKey::Nominal(DefId(2)).as_u64());
         assert!(HeadKey::Nominal(DefId(u32::MAX - 1)).as_u64() < HeadKey::Tuple(0).as_u64());
     }

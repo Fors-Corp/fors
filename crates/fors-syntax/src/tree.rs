@@ -54,7 +54,11 @@ impl Tree {
 
     /// Direct children of node `i`, as their starting indices.
     pub fn children(&self, i: usize) -> ChildIter<'_> {
-        ChildIter { tree: self, next: i + 1, end: self.subtree_end(i) }
+        ChildIter {
+            tree: self,
+            next: i + 1,
+            end: self.subtree_end(i),
+        }
     }
 }
 
@@ -144,7 +148,8 @@ impl TreeBuilder {
         self.first_token.push(first_token);
         self.end_token.push(first_token);
         self.end_idx.push(idx + 1);
-        self.start_of.push(if start_of == NONE { idx } else { start_of });
+        self.start_of
+            .push(if start_of == NONE { idx } else { start_of });
         self.wrapper.push(NONE);
         self.stack.push(idx);
         idx

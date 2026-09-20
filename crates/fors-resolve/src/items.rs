@@ -7,7 +7,10 @@
 
 use std::collections::HashMap;
 
-use fors_index::{DeclId, DeclKind, DeclTable, FileId, Interner, ModuleId, ModuleTable, Segments, Symbol, Visibility};
+use fors_index::{
+    DeclId, DeclKind, DeclTable, FileId, Interner, ModuleId, ModuleTable, Segments, Symbol,
+    Visibility,
+};
 use fors_lex::{TokenKind, Tokens};
 use fors_syntax::{NodeKind, Tree};
 
@@ -83,7 +86,12 @@ pub enum Export<'a> {
 impl ModuleScope {
     fn row(&self, i: usize) -> Row<'_> {
         let (s, l) = (self.var_start[i] as usize, self.var_len[i] as usize);
-        Row { entity: self.entity[i], kind: self.kind[i], origin: self.origin[i], variants: self.variant_names.get(s..s + l).unwrap_or(&[]) }
+        Row {
+            entity: self.entity[i],
+            kind: self.kind[i],
+            origin: self.origin[i],
+            variants: self.variant_names.get(s..s + l).unwrap_or(&[]),
+        }
     }
 
     pub fn in_std(&self) -> bool {
@@ -105,7 +113,16 @@ impl ModuleScope {
         }
     }
 
-    fn push(&mut self, name: Symbol, entity: Entity, kind: RowKind, origin: Origin, vis: Visibility, sig_hash: u128, variants: &[Symbol]) {
+    fn push(
+        &mut self,
+        name: Symbol,
+        entity: Entity,
+        kind: RowKind,
+        origin: Origin,
+        vis: Visibility,
+        sig_hash: u128,
+        variants: &[Symbol],
+    ) {
         let i = self.name.len() as u32;
         self.name.push(name);
         self.entity.push(entity);
@@ -135,8 +152,19 @@ impl ModuleScope {
                 out.push(format!("{name} private"));
                 continue;
             }
-            let vars: Vec<String> = self.row(i).variants.iter().map(|&v| String::from_utf8_lossy(interner.resolve(v)).into_owned()).collect();
-            out.push(format!("{name} pub {:?} {:?} sig={:032x} variants={}", self.kind[i], self.entity[i], self.sig_hash[i], vars.join(",")));
+            let vars: Vec<String> = self
+                .row(i)
+                .variants
+                .iter()
+                .map(|&v| String::from_utf8_lossy(interner.resolve(v)).into_owned())
+                .collect();
+            out.push(format!(
+                "{name} pub {:?} {:?} sig={:032x} variants={}",
+                self.kind[i],
+                self.entity[i],
+                self.sig_hash[i],
+                vars.join(",")
+            ));
         }
         out.sort();
         out
@@ -186,7 +214,9 @@ impl Universe {
     }
 
     pub fn exports(&self) -> Exports<'_> {
-        Exports { scopes: &self.scopes }
+        Exports {
+            scopes: &self.scopes,
+        }
     }
 
     pub fn prelude(&self) -> &Prelude {
@@ -235,7 +265,10 @@ pub fn binder_name(
     let mut prev_was_set = false;
     while i < end {
         if is_sig(tokens, i) {
-            if tokens.kinds[i] == TokenKind::Ident && tokens.text(i, source) == b"set" && !prev_was_set {
+            if tokens.kinds[i] == TokenKind::Ident
+                && tokens.text(i, source) == b"set"
+                && !prev_was_set
+            {
                 prev_was_set = true;
                 i += 1;
                 continue;
@@ -268,15 +301,20 @@ fn collect_variants(
         if tree.kinds[child] != NodeKind::EVariant {
             continue;
         }
-        let Some((name, _range)) = binder_name(tree, tokens, source, interner, child) else { continue };
+        let Some((name, _range)) = binder_name(tree, tokens, source, interner, child) else {
+            continue;
+        };
         if out.contains(&name) {
             let r = byte_range(tree, tokens, child);
-            diags.push((file, Diagnostic::new(
-                r.0,
-                r.1,
-                Code::N(27),
-                "duplicate variant name in one enum".to_string(),
-            )));
+            diags.push((
+                file,
+                Diagnostic::new(
+                    r.0,
+                    r.1,
+                    Code::N(27),
+                    "duplicate variant name in one enum".to_string(),
+                ),
+            ));
         } else {
             out.push(name);
         }
@@ -285,7 +323,15 @@ fn collect_variants(
 }
 
 /// Field names of one `StructDecl`/struct-form `EVariant` (Rule 27).
-fn check_field_dups(tree: &Tree, tokens: &Tokens, source: &[u8], interner: &mut Interner, node: usize, file: usize, diags: &mut Vec<(usize, Diagnostic)>) {
+fn check_field_dups(
+    tree: &Tree,
+    tokens: &Tokens,
+    source: &[u8],
+    interner: &mut Interner,
+    node: usize,
+    file: usize,
+    diags: &mut Vec<(usize, Diagnostic)>,
+) {
     let mut seen: Vec<Symbol> = Vec::new();
     for child in tree.children(node) {
         if tree.kinds[child] != NodeKind::Field {
@@ -293,10 +339,15 @@ fn check_field_dups(tree: &Tree, tokens: &Tokens, source: &[u8], interner: &mut 
         }
         // Rule 11: `pub` on a field inside an `evariant` is always an error;
         // callers of this function on an `EVariant`'s fields pass that in.
-        let Some((name, _)) = binder_name(tree, tokens, source, interner, child) else { continue };
+        let Some((name, _)) = binder_name(tree, tokens, source, interner, child) else {
+            continue;
+        };
         if seen.contains(&name) {
             let r = byte_range(tree, tokens, child);
-            diags.push((file, Diagnostic::new(r.0, r.1, Code::N(27), "duplicate field name".to_string())));
+            diags.push((
+                file,
+                Diagnostic::new(r.0, r.1, Code::N(27), "duplicate field name".to_string()),
+            ));
         } else {
             seen.push(name);
         }
@@ -319,7 +370,13 @@ fn use_decl_is_pub(tree: &Tree, tokens: &Tokens, node: usize) -> bool {
 /// R3-6 -- owner decision 2026-09-19, round 3, D2). The `"as"` and the
 /// alias identifier are tokens `UseItem` owns directly, after its one
 /// `Path` child.
-fn use_item_alias(tree: &Tree, tokens: &Tokens, source: &[u8], interner: &mut Interner, node: usize) -> Option<Symbol> {
+fn use_item_alias(
+    tree: &Tree,
+    tokens: &Tokens,
+    source: &[u8],
+    interner: &mut Interner,
+    node: usize,
+) -> Option<Symbol> {
     let (first, end) = tree.token_range(node);
     let mut saw_as = false;
     for i in first as usize..end as usize {
@@ -327,7 +384,11 @@ fn use_item_alias(tree: &Tree, tokens: &Tokens, source: &[u8], interner: &mut In
             continue;
         }
         if saw_as {
-            return if tokens.kinds[i] == TokenKind::Ident { Some(interner.intern(tokens.text(i, source))) } else { None };
+            return if tokens.kinds[i] == TokenKind::Ident {
+                Some(interner.intern(tokens.text(i, source)))
+            } else {
+                None
+            };
         }
         if tokens.kinds[i] == TokenKind::KwAs {
             saw_as = true;
@@ -355,7 +416,10 @@ fn find_type_apps(tree: &Tree, node: usize, out: &mut Vec<usize>) {
 }
 
 fn sig_type_apps(tree: &Tree, fn_node: usize, out: &mut Vec<usize>) {
-    if let Some(sig) = tree.children(fn_node).find(|&c| tree.kinds[c] == NodeKind::FnSig) {
+    if let Some(sig) = tree
+        .children(fn_node)
+        .find(|&c| tree.kinds[c] == NodeKind::FnSig)
+    {
         for c in tree.children(sig) {
             if tree.kinds[c] != NodeKind::Contract {
                 find_type_apps(tree, c, out);
@@ -373,9 +437,17 @@ fn own_has_pub(f: &FileCtx, node: usize) -> bool {
 /// of its own module. Syntactic, per the rule's own text — each
 /// signature `TypeApp`'s first segment is looked up in this module's
 /// (complete) item rows and its visibility inspected.
-fn check_signature_leaks(interner: &mut Interner, f: &FileCtx, m: usize, scope: &ModuleScope, diags: &mut Vec<(usize, Diagnostic)>) {
+fn check_signature_leaks(
+    interner: &mut Interner,
+    f: &FileCtx,
+    m: usize,
+    scope: &ModuleScope,
+    diags: &mut Vec<(usize, Diagnostic)>,
+) {
     let is_pub_item = |scope: &ModuleScope, name: Symbol| {
-        scope.index.get(&name).is_some_and(|&r| scope.origin[r as usize] == Origin::Item && scope.vis[r as usize] == Visibility::Public)
+        scope.index.get(&name).is_some_and(|&r| {
+            scope.origin[r as usize] == Origin::Item && scope.vis[r as usize] == Visibility::Public
+        })
     };
     for i in 0..f.decls.len() {
         if f.decls.parent[i] != fors_index::decl::NO_PARENT {
@@ -393,7 +465,9 @@ fn check_signature_leaks(interner: &mut Interner, f: &FileCtx, m: usize, scope: 
                 for c in f.tree.children(node) {
                     match f.tree.kinds[c] {
                         NodeKind::Generics => find_type_apps(f.tree, c, &mut sig_types),
-                        NodeKind::Field if own_has_pub(f, c) => find_type_apps(f.tree, c, &mut sig_types),
+                        NodeKind::Field if own_has_pub(f, c) => {
+                            find_type_apps(f.tree, c, &mut sig_types)
+                        }
                         _ => {}
                     }
                 }
@@ -408,7 +482,9 @@ fn check_signature_leaks(interner: &mut Interner, f: &FileCtx, m: usize, scope: 
             DeclKind::Trait => {
                 for c in f.tree.children(node) {
                     match f.tree.kinds[c] {
-                        NodeKind::TraitItem | NodeKind::FnDecl => sig_type_apps(f.tree, c, &mut sig_types),
+                        NodeKind::TraitItem | NodeKind::FnDecl => {
+                            sig_type_apps(f.tree, c, &mut sig_types)
+                        }
                         NodeKind::Attribute => {}
                         _ => find_type_apps(f.tree, c, &mut sig_types),
                     }
@@ -417,7 +493,11 @@ fn check_signature_leaks(interner: &mut Interner, f: &FileCtx, m: usize, scope: 
             DeclKind::Const => {
                 // The type is the first non-attribute child; the rest is
                 // the initialiser, which is not signature.
-                if let Some(t) = f.tree.children(node).find(|&c| f.tree.kinds[c] != NodeKind::Attribute) {
+                if let Some(t) = f
+                    .tree
+                    .children(node)
+                    .find(|&c| f.tree.kinds[c] != NodeKind::Attribute)
+                {
                     find_type_apps(f.tree, t, &mut sig_types);
                 }
             }
@@ -427,12 +507,27 @@ fn check_signature_leaks(interner: &mut Interner, f: &FileCtx, m: usize, scope: 
                 let headers: Vec<usize> = f
                     .tree
                     .children(node)
-                    .filter(|&c| !matches!(f.tree.kinds[c], NodeKind::Generics | NodeKind::FnDecl | NodeKind::TraitItem | NodeKind::Attribute | NodeKind::AssocTypeDef | NodeKind::AssocTypeDecl | NodeKind::Error))
+                    .filter(|&c| {
+                        !matches!(
+                            f.tree.kinds[c],
+                            NodeKind::Generics
+                                | NodeKind::FnDecl
+                                | NodeKind::TraitItem
+                                | NodeKind::Attribute
+                                | NodeKind::AssocTypeDef
+                                | NodeKind::AssocTypeDecl
+                                | NodeKind::Error
+                        )
+                    })
                     .collect();
                 let ty = headers.last().copied();
-                let ty_pub = ty.filter(|&t| f.tree.kinds[t] == NodeKind::TypeApp).is_some_and(|t| {
-                    segments_with_ranges(f.tree, f.tokens, f.source, interner, t).first().is_some_and(|&(n, _)| is_pub_item(scope, n))
-                });
+                let ty_pub = ty
+                    .filter(|&t| f.tree.kinds[t] == NodeKind::TypeApp)
+                    .is_some_and(|t| {
+                        segments_with_ranges(f.tree, f.tokens, f.source, interner, t)
+                            .first()
+                            .is_some_and(|&(n, _)| is_pub_item(scope, n))
+                    });
                 if !ty_pub {
                     continue;
                 }
@@ -441,7 +536,15 @@ fn check_signature_leaks(interner: &mut Interner, f: &FileCtx, m: usize, scope: 
                 // is signature. A prelude or imported trait is `pub`.
                 let head_pub = |t: usize, interner: &mut Interner| {
                     f.tree.kinds[t] == NodeKind::TypeApp
-                        && segments_with_ranges(f.tree, f.tokens, f.source, interner, t).first().is_some_and(|&(n, _)| is_pub_item(scope, n) || scope.index.get(&n).is_none_or(|&r| scope.origin[r as usize] != Origin::Item))
+                        && segments_with_ranges(f.tree, f.tokens, f.source, interner, t)
+                            .first()
+                            .is_some_and(|&(n, _)| {
+                                is_pub_item(scope, n)
+                                    || scope
+                                        .index
+                                        .get(&n)
+                                        .is_none_or(|&r| scope.origin[r as usize] != Origin::Item)
+                            })
                 };
                 if headers.len() == 2 && head_pub(headers[0], interner) {
                     for c in f.tree.children(node) {
@@ -460,8 +563,12 @@ fn check_signature_leaks(interner: &mut Interner, f: &FileCtx, m: usize, scope: 
         }
         for tnode in sig_types {
             let segs = segments_with_ranges(f.tree, f.tokens, f.source, interner, tnode);
-            let Some(&(name, range)) = segs.first() else { continue };
-            let Some(&r) = scope.index.get(&name) else { continue };
+            let Some(&(name, range)) = segs.first() else {
+                continue;
+            };
+            let Some(&r) = scope.index.get(&name) else {
+                continue;
+            };
             let r = r as usize;
             if scope.origin[r] == Origin::Item && scope.vis[r] == Visibility::Private {
                 let leaked = String::from_utf8_lossy(interner.resolve(name)).into_owned();
@@ -479,7 +586,12 @@ fn check_signature_leaks(interner: &mut Interner, f: &FileCtx, m: usize, scope: 
 /// unwinds — so the order stays a total, deterministic sequence even
 /// then. Iteration itself starts from the lexicographically least module
 /// name so two builds of the same files always link in the same order.
-fn dependency_order(n: usize, edges: &[(ModuleId, ModuleId)], modules: &ModuleTable, interner: &Interner) -> Vec<usize> {
+fn dependency_order(
+    n: usize,
+    edges: &[(ModuleId, ModuleId)],
+    modules: &ModuleTable,
+    interner: &Interner,
+) -> Vec<usize> {
     let mut adj: Vec<Vec<usize>> = vec![Vec::new(); n];
     for &(from, to) in edges {
         adj[from.index()].push(to.index());
@@ -488,7 +600,11 @@ fn dependency_order(n: usize, edges: &[(ModuleId, ModuleId)], modules: &ModuleTa
         l.sort_unstable();
         l.dedup();
     }
-    let name_bytes: Vec<Vec<u8>> = modules.name.iter().map(|s| fors_index::module::join_dotted(interner, s).into_bytes()).collect();
+    let name_bytes: Vec<Vec<u8>> = modules
+        .name
+        .iter()
+        .map(|s| fors_index::module::join_dotted(interner, s).into_bytes())
+        .collect();
     let mut order_idx: Vec<usize> = (0..n).collect();
     order_idx.sort_by(|&a, &b| name_bytes[a].cmp(&name_bytes[b]));
 
@@ -541,15 +657,22 @@ pub fn build_universe_in_package(
 ) -> (Universe, Vec<(usize, Diagnostic)>) {
     let n = files.len();
     let mut diags = Vec::new();
-    let mut universe = Universe { scopes: (0..n).map(|_| ModuleScope::default()).collect(), prelude: build_prelude(interner), has_std: false };
+    let mut universe = Universe {
+        scopes: (0..n).map(|_| ModuleScope::default()).collect(),
+        prelude: build_prelude(interner),
+        has_std: false,
+    };
     let std_sym = interner.intern(b"std");
     universe.has_std = modules.name.iter().any(|n| n.first() == Some(&std_sym));
 
     // Pass 1: per-file, order-independent — own items, member dup checks.
     for (m, f) in files.iter().enumerate() {
-        let Universe { scopes, prelude, .. } = &mut universe;
+        let Universe {
+            scopes, prelude, ..
+        } = &mut universe;
         let scope = &mut scopes[m];
-        scope.in_std = package_is_std || modules.name.get(m).and_then(|s| s.first()) == Some(&std_sym);
+        scope.in_std =
+            package_is_std || modules.name.get(m).and_then(|s| s.first()) == Some(&std_sym);
         for i in 0..f.decls.len() {
             if f.decls.parent[i] != fors_index::decl::NO_PARENT {
                 continue;
@@ -557,7 +680,9 @@ pub fn build_universe_in_package(
             let kind = f.decls.kind[i];
             let node = f.decls.node[i] as usize;
             match kind {
-                DeclKind::Struct => check_field_dups(f.tree, f.tokens, f.source, interner, node, m, &mut diags),
+                DeclKind::Struct => {
+                    check_field_dups(f.tree, f.tokens, f.source, interner, node, m, &mut diags)
+                }
                 DeclKind::Enum => {
                     for child in f.tree.children(node) {
                         if f.tree.kinds[child] == NodeKind::EVariant {
@@ -569,7 +694,8 @@ pub fn build_universe_in_package(
                                 }
                                 let (fs, fe) = own_span(f.tree, fld);
                                 for t in fs as usize..fe as usize {
-                                    if is_sig(f.tokens, t) && f.tokens.kinds[t] == TokenKind::KwPub {
+                                    if is_sig(f.tokens, t) && f.tokens.kinds[t] == TokenKind::KwPub
+                                    {
                                         let r = f.tokens.range(t);
                                         diags.push((m, Diagnostic::new(
                                             r.0,
@@ -580,7 +706,9 @@ pub fn build_universe_in_package(
                                     }
                                 }
                             }
-                            check_field_dups(f.tree, f.tokens, f.source, interner, child, m, &mut diags);
+                            check_field_dups(
+                                f.tree, f.tokens, f.source, interner, child, m, &mut diags,
+                            );
                         }
                     }
                 }
@@ -594,33 +722,47 @@ pub fn build_universe_in_package(
                         // (which stops at the first child) — scan the
                         // whole node's own range instead.
                         let (fs, fe) = f.tree.token_range(node);
-                        (fs as usize..fe as usize).any(|t| is_sig(f.tokens, t) && f.tokens.kinds[t] == TokenKind::KwFor)
+                        (fs as usize..fe as usize)
+                            .any(|t| is_sig(f.tokens, t) && f.tokens.kinds[t] == TokenKind::KwFor)
                     };
                     // Rule 27 (round 4): methods and associated types
                     // share ONE table per trait and per impl; the later
                     // member, in source order, is the duplicate.
                     let mut members: Vec<(u32, Symbol, (u32, u32), bool)> = Vec::new();
                     for row in 0..f.decls.len() {
-                        if f.decls.parent[row] == i as u32 {
-                            if let Some(name) = f.decls.name[row] {
-                                members.push((f.decls.range_start[row], name, (f.decls.range_start[row], f.decls.range_end[row]), false));
-                            }
+                        if f.decls.parent[row] == i as u32
+                            && let Some(name) = f.decls.name[row]
+                        {
+                            members.push((
+                                f.decls.range_start[row],
+                                name,
+                                (f.decls.range_start[row], f.decls.range_end[row]),
+                                false,
+                            ));
                         }
                     }
                     for c in f.tree.children(node) {
-                        if matches!(f.tree.kinds[c], NodeKind::AssocTypeDecl | NodeKind::AssocTypeDef) {
-                            if let Some((name, _)) = binder_name(f.tree, f.tokens, f.source, interner, c) {
-                                let r = byte_range(f.tree, f.tokens, c);
-                                members.push((r.0, name, r, true));
-                            }
+                        if matches!(
+                            f.tree.kinds[c],
+                            NodeKind::AssocTypeDecl | NodeKind::AssocTypeDef
+                        ) && let Some((name, _)) =
+                            binder_name(f.tree, f.tokens, f.source, interner, c)
+                        {
+                            let r = byte_range(f.tree, f.tokens, c);
+                            members.push((r.0, name, r, true));
                         }
                     }
                     members.sort_by_key(|&(start, ..)| start);
                     let mut seen: Vec<Symbol> = Vec::new();
                     for &(_, name, r, is_type) in &members {
                         if seen.contains(&name) {
-                            let msg = if is_type { "duplicate associated-type name in one impl/trait (methods and associated types share one table)" } else { "duplicate method name in one impl/trait" };
-                            diags.push((m, Diagnostic::new(r.0, r.1, Code::N(27), msg.to_string())));
+                            let msg = if is_type {
+                                "duplicate associated-type name in one impl/trait (methods and associated types share one table)"
+                            } else {
+                                "duplicate method name in one impl/trait"
+                            };
+                            diags
+                                .push((m, Diagnostic::new(r.0, r.1, Code::N(27), msg.to_string())));
                         } else {
                             seen.push(name);
                         }
@@ -637,11 +779,21 @@ pub fn build_universe_in_package(
                 }
                 _ => {}
             }
-            let Some(name) = f.decls.name[i] else { continue };
+            let Some(name) = f.decls.name[i] else {
+                continue;
+            };
             let range = (f.decls.range_start[i], f.decls.range_end[i]);
             let shown = String::from_utf8_lossy(interner.resolve(name)).into_owned();
             if prelude.get(scope, name).is_some() && !scope.in_std {
-                diags.push((m, Diagnostic::new(range.0, range.1, Code::N(13), format!("item `{shown}` has a prelude name"))));
+                diags.push((
+                    m,
+                    Diagnostic::new(
+                        range.0,
+                        range.1,
+                        Code::N(13),
+                        format!("item `{shown}` has a prelude name"),
+                    ),
+                ));
                 continue;
             }
             // Round 6 (ch10 Rule 32, ch08 Rule 13's same-entity case):
@@ -652,24 +804,71 @@ pub fn build_universe_in_package(
             // rather than reported as a collision. Outside `std` the check
             // above is unchanged.
             if prelude.get(scope, name).is_some() && scope.index.contains_key(&name) {
-                diags.push((m, Diagnostic::new(range.0, range.1, Code::N(13), format!("`{shown}` is already declared by an earlier item of this module"))));
+                diags.push((
+                    m,
+                    Diagnostic::new(
+                        range.0,
+                        range.1,
+                        Code::N(13),
+                        format!("`{shown}` is already declared by an earlier item of this module"),
+                    ),
+                ));
                 continue;
             }
             if scope.index.contains_key(&name) {
-                diags.push((m, Diagnostic::new(range.0, range.1, Code::N(13), format!("`{shown}` is already declared by an earlier item of this module"))));
+                diags.push((
+                    m,
+                    Diagnostic::new(
+                        range.0,
+                        range.1,
+                        Code::N(13),
+                        format!("`{shown}` is already declared by an earlier item of this module"),
+                    ),
+                ));
                 continue;
             }
-            let variants = if kind == DeclKind::Enum { collect_variants(f.tree, f.tokens, f.source, interner, node, m, &mut diags) } else { Vec::new() };
-            let entity = Entity::Item { file: FileId(m as u32), decl: DeclId(i as u32) };
-            scope.push(name, entity, RowKind::Item(kind), Origin::Item, f.decls.vis[i], f.decls.sig_hash[i], &variants);
+            let variants = if kind == DeclKind::Enum {
+                collect_variants(f.tree, f.tokens, f.source, interner, node, m, &mut diags)
+            } else {
+                Vec::new()
+            };
+            let entity = Entity::Item {
+                file: FileId(m as u32),
+                decl: DeclId(i as u32),
+            };
+            scope.push(
+                name,
+                entity,
+                RowKind::Item(kind),
+                Origin::Item,
+                f.decls.vis[i],
+                f.decls.sig_hash[i],
+                &variants,
+            );
         }
         if !f.tree.is_empty() {
             for use_decl in f.tree.children(0) {
-                if f.tree.kinds[use_decl] == NodeKind::UseDecl && use_decl_is_pub(f.tree, f.tokens, use_decl) {
-                    for use_item in f.tree.children(use_decl).filter(|&c| f.tree.kinds[c] == NodeKind::UseItem) {
-                        let Some(path_node) = f.tree.children(use_item).find(|&c| f.tree.kinds[c] == NodeKind::Path) else { continue };
+                if f.tree.kinds[use_decl] == NodeKind::UseDecl
+                    && use_decl_is_pub(f.tree, f.tokens, use_decl)
+                {
+                    for use_item in f
+                        .tree
+                        .children(use_decl)
+                        .filter(|&c| f.tree.kinds[c] == NodeKind::UseItem)
+                    {
+                        let Some(path_node) = f
+                            .tree
+                            .children(use_item)
+                            .find(|&c| f.tree.kinds[c] == NodeKind::Path)
+                        else {
+                            continue;
+                        };
                         let alias = use_item_alias(f.tree, f.tokens, f.source, interner, use_item);
-                        let last = alias.or_else(|| segments_with_ranges(f.tree, f.tokens, f.source, interner, path_node).last().map(|&(s, _)| s));
+                        let last = alias.or_else(|| {
+                            segments_with_ranges(f.tree, f.tokens, f.source, interner, path_node)
+                                .last()
+                                .map(|&(s, _)| s)
+                        });
                         if let Some(last) = last {
                             scope.pub_use_names.push(last);
                         }
@@ -696,12 +895,30 @@ pub fn build_universe_in_package(
                 if f.tree.kinds[use_item] != NodeKind::UseItem {
                     continue; // an `Error` child: the parser reported it
                 }
-                let Some(path_node) = f.tree.children(use_item).find(|&c| f.tree.kinds[c] == NodeKind::Path) else { continue };
-                let segs_ranges = segments_with_ranges(f.tree, f.tokens, f.source, interner, path_node);
+                let Some(path_node) = f
+                    .tree
+                    .children(use_item)
+                    .find(|&c| f.tree.kinds[c] == NodeKind::Path)
+                else {
+                    continue;
+                };
+                let segs_ranges =
+                    segments_with_ranges(f.tree, f.tokens, f.source, interner, path_node);
                 let segs: Segments = segs_ranges.iter().map(|(s, _)| *s).collect();
                 let whole_range = byte_range(f.tree, f.tokens, path_node);
                 let alias = use_item_alias(f.tree, f.tokens, f.source, interner, use_item);
-                resolve_use_path(interner, modules, &mut universe, edges, m, &segs, alias, whole_range, is_pub, &mut diags);
+                resolve_use_path(
+                    interner,
+                    modules,
+                    &mut universe,
+                    edges,
+                    m,
+                    &segs,
+                    alias,
+                    whole_range,
+                    is_pub,
+                    &mut diags,
+                );
             }
         }
     }
@@ -721,7 +938,12 @@ fn reaches(edges: &[(ModuleId, ModuleId)], src: usize, dst: usize) -> bool {
         if !seen.insert(u) {
             continue;
         }
-        stack.extend(edges.iter().filter(|(f, _)| f.index() == u).map(|(_, t)| t.index()));
+        stack.extend(
+            edges
+                .iter()
+                .filter(|(f, _)| f.index() == u)
+                .map(|(_, t)| t.index()),
+        );
     }
     false
 }
@@ -746,8 +968,15 @@ fn resolve_use_path(
     // not sn; sn (and every other path segment) is used only to resolve
     // the path itself, never as the bound name once an alias is given.
     let bound_name = alias.unwrap_or(sn);
-    let bind = |universe: &mut Universe, entity: Entity, kind: RowKind, sig: u128, variants: &[Symbol], diags: &mut Vec<(usize, Diagnostic)>| {
-        bind_use_name(universe, from, entity, kind, sig, variants, bound_name, range, is_pub, diags);
+    let bind = |universe: &mut Universe,
+                entity: Entity,
+                kind: RowKind,
+                sig: u128,
+                variants: &[Symbol],
+                diags: &mut Vec<(usize, Diagnostic)>| {
+        bind_use_name(
+            universe, from, entity, kind, sig, variants, bound_name, range, is_pub, diags,
+        );
     };
 
     // Ch08 Rule 17, owner decision 2026-09-19 round 5 (D3): package `std`
@@ -762,14 +991,30 @@ fn resolve_use_path(
         match segs.len() {
             1 => {
                 // `use std;` -- a package is not a module (Rule 4(c)).
-                diags.push((from, Diagnostic::new(range.0, range.1, Code::N(4), "unresolved import `std`: `std` is a package name, not a module".to_string())));
+                diags.push((
+                    from,
+                    Diagnostic::new(
+                        range.0,
+                        range.1,
+                        Code::N(4),
+                        "unresolved import `std`: `std` is a package name, not a module"
+                            .to_string(),
+                    ),
+                ));
                 bind(universe, Entity::Poisoned, RowKind::Poisoned, 0, &[], diags);
             }
             2 if known => {
                 // The module itself: binds the last segment as a module
                 // name; every member access through it is deferred to the
                 // checker, there being no `std` items to look up.
-                bind(universe, Entity::PreludeModule(sn, None), RowKind::Module, 0, &[], diags);
+                bind(
+                    universe,
+                    Entity::PreludeModule(sn, None),
+                    RowKind::Module,
+                    0,
+                    &[],
+                    diags,
+                );
             }
             2 => {
                 let name = String::from_utf8_lossy(interner.resolve(sn)).into_owned();
@@ -789,7 +1034,11 @@ fn resolve_use_path(
     }
 
     let whole = modules.find(segs);
-    let prefix_mod = if prefix.is_empty() { None } else { modules.find(prefix) };
+    let prefix_mod = if prefix.is_empty() {
+        None
+    } else {
+        modules.find(prefix)
+    };
     let sn_str = String::from_utf8_lossy(interner.resolve(sn)).into_owned();
 
     if let Some(mid) = whole {
@@ -798,7 +1047,11 @@ fn resolve_use_path(
         // `a/b.fors` (Rule 24) is not by itself a tie.
         let tie = prefix_mod.is_some_and(|p| {
             let ps = &universe.scopes[p.index()];
-            ps.pub_use_names.contains(&sn) || ps.index.get(&sn).is_some_and(|&r| ps.vis[r as usize] == Visibility::Public)
+            ps.pub_use_names.contains(&sn)
+                || ps
+                    .index
+                    .get(&sn)
+                    .is_some_and(|&r| ps.vis[r as usize] == Visibility::Public)
         });
         if tie {
             let name = fors_index::module::join_dotted(interner, segs);
@@ -810,13 +1063,31 @@ fn resolve_use_path(
         if mid.index() == from {
             return; // Rule 8, already reported by `fors_index`.
         }
-        bind(universe, Entity::Module(mid), RowKind::Module, 0, &[], diags);
+        bind(
+            universe,
+            Entity::Module(mid),
+            RowKind::Module,
+            0,
+            &[],
+            diags,
+        );
         return;
     }
 
     let Some(pm) = prefix_mod else {
         let name = fors_index::module::join_dotted(interner, segs);
-        diags.push((from, Diagnostic::new(range.0, range.1, Code::N(4), format!("unresolved import `{name}`: no such module, and `{}` is not a module", fors_index::module::join_dotted(interner, prefix)))));
+        diags.push((
+            from,
+            Diagnostic::new(
+                range.0,
+                range.1,
+                Code::N(4),
+                format!(
+                    "unresolved import `{name}`: no such module, and `{}` is not a module",
+                    fors_index::module::join_dotted(interner, prefix)
+                ),
+            ),
+        ));
         bind(universe, Entity::Poisoned, RowKind::Poisoned, 0, &[], diags);
         return;
     };
@@ -827,11 +1098,25 @@ fn resolve_use_path(
     let absent = universe.scopes[pm.index()].export(sn).is_none();
     let found = match universe.scopes[pm.index()].export(sn) {
         Some(Export::Public(row)) => {
-            let i = universe.scopes[pm.index()].index.get(&sn).map_or(0, |&i| i as usize);
-            Ok((row.entity, row.kind, universe.scopes[pm.index()].sig_hash[i], row.variants.to_vec()))
+            let i = universe.scopes[pm.index()]
+                .index
+                .get(&sn)
+                .map_or(0, |&i| i as usize);
+            Ok((
+                row.entity,
+                row.kind,
+                universe.scopes[pm.index()].sig_hash[i],
+                row.variants.to_vec(),
+            ))
         }
-        Some(Export::Private) => Err((Code::N(4), format!("`{sn_str}` is not `pub` in module `{mname}`"))),
-        None => Err((Code::N(4), format!("module `{mname}` has no `pub` name `{sn_str}`"))),
+        Some(Export::Private) => Err((
+            Code::N(4),
+            format!("`{sn_str}` is not `pub` in module `{mname}`"),
+        )),
+        None => Err((
+            Code::N(4),
+            format!("module `{mname}` has no `pub` name `{sn_str}`"),
+        )),
     };
     match found {
         Ok((entity, kind, sig, variants)) => bind(universe, entity, kind, sig, &variants, diags),
@@ -863,7 +1148,9 @@ fn bind_use_name(
     is_pub: bool,
     diags: &mut Vec<(usize, Diagnostic)>,
 ) {
-    let Universe { scopes, prelude, .. } = universe;
+    let Universe {
+        scopes, prelude, ..
+    } = universe;
     let scope = &mut scopes[from];
     let poisoned = entity == Entity::Poisoned;
     if let Some(pe) = prelude.get(scope, bound_name) {
@@ -873,26 +1160,63 @@ fn bind_use_name(
             _ => false,
         };
         if !same && !poisoned {
-            diags.push((from, Diagnostic::new(range.0, range.1, Code::N(13), "import binds a prelude name to a different entity".to_string())));
+            diags.push((
+                from,
+                Diagnostic::new(
+                    range.0,
+                    range.1,
+                    Code::N(13),
+                    "import binds a prelude name to a different entity".to_string(),
+                ),
+            ));
         }
         return;
     }
-    let vis = if is_pub { Visibility::Public } else { Visibility::Private };
+    let vis = if is_pub {
+        Visibility::Public
+    } else {
+        Visibility::Private
+    };
     match scope.index.get(&bound_name).map(|&i| i as usize) {
         Some(i) if scope.origin[i] == Origin::Item => {
             if !poisoned {
-                diags.push((from, Diagnostic::new(range.0, range.1, Code::N(13), "import binds the name of an item of this module".to_string())));
+                diags.push((
+                    from,
+                    Diagnostic::new(
+                        range.0,
+                        range.1,
+                        Code::N(13),
+                        "import binds the name of an item of this module".to_string(),
+                    ),
+                ));
             }
         }
         Some(i) => {
             if scope.entity[i] == Entity::Poisoned || poisoned {
                 // One of the two already failed: that is the root cause.
             } else if scope.entity[i] != entity {
-                diags.push((from, Diagnostic::new(range.0, range.1, Code::N(15), "this import and an earlier one bind the same name to different entities".to_string())));
+                diags.push((
+                    from,
+                    Diagnostic::new(
+                        range.0,
+                        range.1,
+                        Code::N(15),
+                        "this import and an earlier one bind the same name to different entities"
+                            .to_string(),
+                    ),
+                ));
             } else if is_pub {
                 scope.vis[i] = Visibility::Public;
             }
         }
-        None => scope.push(bound_name, entity, kind, Origin::Use, vis, sig_hash, variants),
+        None => scope.push(
+            bound_name,
+            entity,
+            kind,
+            Origin::Use,
+            vis,
+            sig_hash,
+            variants,
+        ),
     }
 }

@@ -128,7 +128,12 @@ fn next_sig(tokens: &Tokens, i: usize, end: usize) -> Option<usize> {
 /// Builds the declaration table for one parsed file in a single pass over
 /// `tree`'s top-level children (plus, for each `impl`/`trait`, one more
 /// pass over its own children for member `fn`s).
-pub fn build_decl_table(tree: &Tree, tokens: &Tokens, source: &[u8], interner: &mut Interner) -> DeclTable {
+pub fn build_decl_table(
+    tree: &Tree,
+    tokens: &Tokens,
+    source: &[u8],
+    interner: &mut Interner,
+) -> DeclTable {
     let mut t = DeclTable::default();
     if tree.is_empty() {
         return t;
@@ -155,7 +160,8 @@ fn visit(
         NeedsClause => push_header(t, tree, i, DeclKind::Needs),
         InputsClause => push_header(t, tree, i, DeclKind::Inputs),
         UseDecl => push_header(t, tree, i, DeclKind::Use),
-        FnDecl | ExternFnDecl | StructDecl | EnumDecl | TraitDecl | ImplDecl | ConstDecl | TraitItem => {
+        FnDecl | ExternFnDecl | StructDecl | EnumDecl | TraitDecl | ImplDecl | ConstDecl
+        | TraitItem => {
             let kind = match tree.kinds[i] {
                 FnDecl | TraitItem => DeclKind::Fn,
                 ExternFnDecl => DeclKind::ExternFn,
@@ -196,7 +202,12 @@ fn push_header(t: &mut DeclTable, tree: &Tree, i: usize, kind: DeclKind) {
     );
 }
 
-const KEYWORD_KINDS: [TokenKind; 4] = [TokenKind::KwStruct, TokenKind::KwEnum, TokenKind::KwTrait, TokenKind::KwConst];
+const KEYWORD_KINDS: [TokenKind; 4] = [
+    TokenKind::KwStruct,
+    TokenKind::KwEnum,
+    TokenKind::KwTrait,
+    TokenKind::KwConst,
+];
 
 #[allow(clippy::too_many_arguments)]
 fn build_decl(
@@ -211,18 +222,20 @@ fn build_decl(
 ) -> DeclId {
     let (first, end) = tree.token_range(i);
     let children: Vec<usize> = tree.children(i).collect();
-    let attr_count = children.iter().take_while(|&&c| tree.kinds[c] == NodeKind::Attribute).count();
+    let attr_count = children
+        .iter()
+        .take_while(|&&c| tree.kinds[c] == NodeKind::Attribute)
+        .count();
     let (attr_kids, rest) = children.split_at(attr_count);
 
     let mut attrs = Vec::with_capacity(attr_kids.len());
     for &a in attr_kids {
         let (as_, ae) = tree.token_range(a);
-        if let Some(at) = first_sig(tokens, as_ as usize, ae as usize) {
-            if let Some(name_tok) = next_sig(tokens, at, ae as usize) {
-                if tokens.kinds[name_tok] == TokenKind::Ident {
-                    attrs.push(interner.intern(tokens.text(name_tok, source)));
-                }
-            }
+        if let Some(at) = first_sig(tokens, as_ as usize, ae as usize)
+            && let Some(name_tok) = next_sig(tokens, at, ae as usize)
+            && tokens.kinds[name_tok] == TokenKind::Ident
+        {
+            attrs.push(interner.intern(tokens.text(name_tok, source)));
         }
     }
 
@@ -256,24 +269,29 @@ fn build_decl(
                 let (fs_first, fs_end) = tree.token_range(fs);
                 let fn_tok = first_sig(tokens, fs_first as usize, fs_end as usize)?;
                 let name_tok = next_sig(tokens, fn_tok, fs_end as usize)?;
-                (tokens.kinds[name_tok] == TokenKind::Ident).then(|| interner.intern(tokens.text(name_tok, source)))
+                (tokens.kinds[name_tok] == TokenKind::Ident)
+                    .then(|| interner.intern(tokens.text(name_tok, source)))
             }),
-        DeclKind::Struct | DeclKind::Enum | DeclKind::Trait | DeclKind::Const => keyword_at.and_then(|k| {
-            let name_tok = next_sig(tokens, k, gap_end as usize)?;
-            (tokens.kinds[name_tok] == TokenKind::Ident).then(|| interner.intern(tokens.text(name_tok, source)))
-        }),
+        DeclKind::Struct | DeclKind::Enum | DeclKind::Trait | DeclKind::Const => keyword_at
+            .and_then(|k| {
+                let name_tok = next_sig(tokens, k, gap_end as usize)?;
+                (tokens.kinds[name_tok] == TokenKind::Ident)
+                    .then(|| interner.intern(tokens.text(name_tok, source)))
+            }),
         DeclKind::Impl => None,
         _ => None,
     };
 
     let (sig_range, body_range) = match kind {
-        DeclKind::Fn | DeclKind::ExternFn => match rest.iter().find(|&&c| tree.kinds[c] == NodeKind::Block) {
-            Some(&block) => {
-                let block_range = tree.token_range(block);
-                ((first, block_range.0), Some(block_range))
+        DeclKind::Fn | DeclKind::ExternFn => {
+            match rest.iter().find(|&&c| tree.kinds[c] == NodeKind::Block) {
+                Some(&block) => {
+                    let block_range = tree.token_range(block);
+                    ((first, block_range.0), Some(block_range))
+                }
+                None => ((first, end), None),
             }
-            None => ((first, end), None),
-        },
+        }
         DeclKind::Const => match rest.len() {
             0 | 1 => ((first, end), None),
             _ => {
@@ -281,31 +299,58 @@ fn build_decl(
                 ((first, split), Some((split, end)))
             }
         },
-        DeclKind::Struct | DeclKind::Enum | DeclKind::Trait | DeclKind::Impl => ((first, end), None),
-        DeclKind::Use | DeclKind::ModuleHeader | DeclKind::Needs | DeclKind::Inputs | DeclKind::Contracts => {
+        DeclKind::Struct | DeclKind::Enum | DeclKind::Trait | DeclKind::Impl => {
             ((first, end), None)
         }
+        DeclKind::Use
+        | DeclKind::ModuleHeader
+        | DeclKind::Needs
+        | DeclKind::Inputs
+        | DeclKind::Contracts => ((first, end), None),
     };
     let hashes = if matches!(kind, DeclKind::Impl | DeclKind::Trait) {
         // Signature = header + associated-type items + member signatures;
         // member bodies are holes (each member carries its own body hash).
         let mut holes = Vec::new();
         for &m in rest {
-            if matches!(tree.kinds[m], NodeKind::FnDecl | NodeKind::TraitItem) {
-                if let Some(b) = tree.children(m).find(|&c| tree.kinds[c] == NodeKind::Block) {
-                    holes.push(tree.token_range(b));
-                }
+            if matches!(tree.kinds[m], NodeKind::FnDecl | NodeKind::TraitItem)
+                && let Some(b) = tree.children(m).find(|&c| tree.kinds[c] == NodeKind::Block)
+            {
+                holes.push(tree.token_range(b));
             }
         }
-        (crate::fingerprint::hash_tokens_excluding(tokens, source, sig_range.0, sig_range.1, &holes), crate::fingerprint::NO_BODY)
+        (
+            crate::fingerprint::hash_tokens_excluding(
+                tokens,
+                source,
+                sig_range.0,
+                sig_range.1,
+                &holes,
+            ),
+            crate::fingerprint::NO_BODY,
+        )
     } else {
         decl_fingerprint(tokens, source, sig_range, body_range)
     };
 
     let modifiers = if has_pub { MOD_PUB } else { 0 } | if has_soa { MOD_SOA } else { 0 };
-    let vis = if has_pub { Visibility::Public } else { Visibility::Private };
+    let vis = if has_pub {
+        Visibility::Public
+    } else {
+        Visibility::Private
+    };
 
-    t.push(kind, name, vis, modifiers, i as u32, (first, end), hashes, parent, &attrs)
+    t.push(
+        kind,
+        name,
+        vis,
+        modifiers,
+        i as u32,
+        (first, end),
+        hashes,
+        parent,
+        &attrs,
+    )
 }
 
 #[cfg(test)]
@@ -347,7 +392,8 @@ mod tests {
 
     #[test]
     fn impl_nests_member_fns() {
-        let src = "struct S { x: i32 }\nimpl S { pub fn get(let self: S) -> i32 { return self.x; } }\n";
+        let src =
+            "struct S { x: i32 }\nimpl S { pub fn get(let self: S) -> i32 { return self.x; } }\n";
         let (t, interner) = index(src);
         let impl_idx = t.kind.iter().position(|&k| k == DeclKind::Impl).unwrap();
         let fn_idx = t.kind.iter().position(|&k| k == DeclKind::Fn).unwrap();
@@ -370,8 +416,16 @@ mod tests {
         let body = "impl It for S { type Item = i64; fn next(inout self: S) -> Option[i64] { return some(1); } }\n";
         let msig = "impl It for S { type Item = i64; fn next(inout self: S) -> Option[i32] { return none; } }\n";
         let ws = "impl It for S {\n  type Item = i64; // c\n  fn next(inout self: S) -> Option[i64] { return none; } }\n";
-        assert_ne!(impl_sig(base), impl_sig(rhs), "type A = T; must change the impl's signature fingerprint");
-        assert_eq!(impl_sig(base), impl_sig(body), "a method body must not change the impl's signature fingerprint");
+        assert_ne!(
+            impl_sig(base),
+            impl_sig(rhs),
+            "type A = T; must change the impl's signature fingerprint"
+        );
+        assert_eq!(
+            impl_sig(base),
+            impl_sig(body),
+            "a method body must not change the impl's signature fingerprint"
+        );
         assert_ne!(impl_sig(base), impl_sig(msig));
         assert_eq!(impl_sig(base), impl_sig(ws));
     }
@@ -395,7 +449,10 @@ mod tests {
         let (t, interner) = index("@inline\nfn f() {}\n");
         let (s, e) = (t.attr_start[0] as usize, t.attr_end[0] as usize);
         assert_eq!(e - s, 1);
-        assert_eq!(String::from_utf8_lossy(interner.resolve(t.attr_names[s])), "inline");
+        assert_eq!(
+            String::from_utf8_lossy(interner.resolve(t.attr_names[s])),
+            "inline"
+        );
     }
 
     #[test]

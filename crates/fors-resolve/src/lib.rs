@@ -66,7 +66,10 @@ impl ResolveOutput {
     /// Module `file`'s export table as sorted text: the whole of what any
     /// other module's resolution can depend on.
     pub fn export_signature(&self, file: usize, interner: &Interner) -> Vec<String> {
-        self.universe.scope(FileId(file as u32)).map(|s| s.export_signature(interner)).unwrap_or_default()
+        self.universe
+            .scope(FileId(file as u32))
+            .map(|s| s.export_signature(interner))
+            .unwrap_or_default()
     }
 
     // MARC: design §4.4 writes this as `direct_edges_of(ModuleId) ->
@@ -107,28 +110,58 @@ fn index_diag_rule(code: fors_index::DiagCode) -> u16 {
 /// root's directory name). The name matters only for package `std`, whose
 /// modules may implement prelude types (Rule 21) — inside `std` the module path
 /// carries no `std` segment, so the path alone cannot tell.
-pub fn resolve_in_package(interner: &mut Interner, inputs: &[FileInput], root: Option<usize>, package: Option<&[u8]>) -> ResolveOutput {
+pub fn resolve_in_package(
+    interner: &mut Interner,
+    inputs: &[FileInput],
+    root: Option<usize>,
+    package: Option<&[u8]>,
+) -> ResolveOutput {
     let is_std = package == Some(b"std".as_slice());
     resolve_impl(interner, inputs, root, is_std)
 }
 
-pub fn resolve(interner: &mut Interner, inputs: &[FileInput], root: Option<usize>) -> ResolveOutput {
+pub fn resolve(
+    interner: &mut Interner,
+    inputs: &[FileInput],
+    root: Option<usize>,
+) -> ResolveOutput {
     resolve_impl(interner, inputs, root, false)
 }
 
-fn resolve_impl(interner: &mut Interner, inputs: &[FileInput], root: Option<usize>, package_is_std: bool) -> ResolveOutput {
+fn resolve_impl(
+    interner: &mut Interner,
+    inputs: &[FileInput],
+    root: Option<usize>,
+    package_is_std: bool,
+) -> ResolveOutput {
     let n = inputs.len();
-    let decls: Vec<DeclTable> = inputs.iter().map(|f| fors_index::build_decl_table(f.tree, f.tokens, f.source, interner)).collect();
-    let facts: Vec<fors_index::FileFacts> = inputs.iter().map(|f| fors_index::extract_module_facts(f.tree, f.tokens, f.source, interner)).collect();
+    let decls: Vec<DeclTable> = inputs
+        .iter()
+        .map(|f| fors_index::build_decl_table(f.tree, f.tokens, f.source, interner))
+        .collect();
+    let facts: Vec<fors_index::FileFacts> = inputs
+        .iter()
+        .map(|f| fors_index::extract_module_facts(f.tree, f.tokens, f.source, interner))
+        .collect();
 
-    let graph_input: Vec<(FileId, Segments, fors_index::FileFacts)> =
-        facts.into_iter().enumerate().map(|(i, fa)| (FileId(i as u32), inputs[i].name.clone(), fa)).collect();
+    let graph_input: Vec<(FileId, Segments, fors_index::FileFacts)> = facts
+        .into_iter()
+        .enumerate()
+        .map(|(i, fa)| (FileId(i as u32), inputs[i].name.clone(), fa))
+        .collect();
     let (modules, edges, mod_diags) = fors_index::build_module_graph(interner, graph_input);
 
     let mut per_file: Vec<Vec<Diagnostic>> = (0..n).map(|_| Vec::new()).collect();
     for d in &mod_diags {
-        let Some(slot) = per_file.get_mut(d.file.index()) else { continue };
-        slot.push(Diagnostic::new(d.start, d.end, Code::N(index_diag_rule(d.code)), d.message.clone()));
+        let Some(slot) = per_file.get_mut(d.file.index()) else {
+            continue;
+        };
+        slot.push(Diagnostic::new(
+            d.start,
+            d.end,
+            Code::N(index_diag_rule(d.code)),
+            d.message.clone(),
+        ));
     }
 
     for (i, inp) in inputs.iter().enumerate() {
@@ -137,9 +170,15 @@ fn resolve_impl(interner: &mut Interner, inputs: &[FileInput], root: Option<usiz
     let file_ctxs: Vec<items::FileCtx> = inputs
         .iter()
         .zip(decls.iter())
-        .map(|(inp, d)| items::FileCtx { tree: inp.tree, tokens: inp.tokens, source: inp.source, decls: d })
+        .map(|(inp, d)| items::FileCtx {
+            tree: inp.tree,
+            tokens: inp.tokens,
+            source: inp.source,
+            decls: d,
+        })
         .collect();
-    let (universe, item_diags) = items::build_universe_in_package(interner, &modules, &edges, &file_ctxs, package_is_std);
+    let (universe, item_diags) =
+        items::build_universe_in_package(interner, &modules, &edges, &file_ctxs, package_is_std);
     for (i, d) in item_diags {
         per_file[i].push(d);
     }
@@ -149,7 +188,16 @@ fn resolve_impl(interner: &mut Interner, inputs: &[FileInput], root: Option<usiz
     // spelling alone.
     if let Some(r) = root.filter(|&r| r < n) {
         let scope = universe.scope(FileId(r as u32));
-        authority::check_main_bound(interner, inputs[r].tree, inputs[r].tokens, inputs[r].source, &decls[r], scope, &modules, &mut per_file[r]);
+        authority::check_main_bound(
+            interner,
+            inputs[r].tree,
+            inputs[r].tokens,
+            inputs[r].source,
+            &decls[r],
+            scope,
+            &modules,
+            &mut per_file[r],
+        );
     }
 
     let mut name_uses: Vec<NameUseTable> = (0..n).map(|_| NameUseTable::default()).collect();
@@ -157,7 +205,16 @@ fn resolve_impl(interner: &mut Interner, inputs: &[FileInput], root: Option<usiz
         if inp.tree.is_empty() {
             continue;
         }
-        resolve_file_bodies(interner, &modules, &universe, FileId(i as u32), inp, &decls[i], &mut per_file[i], &mut name_uses[i]);
+        resolve_file_bodies(
+            interner,
+            &modules,
+            &universe,
+            FileId(i as u32),
+            inp,
+            &decls[i],
+            &mut per_file[i],
+            &mut name_uses[i],
+        );
     }
     for uses in &mut name_uses {
         uses.finish();
@@ -167,9 +224,18 @@ fn resolve_impl(interner: &mut Interner, inputs: &[FileInput], root: Option<usiz
         .into_iter()
         .zip(decls)
         .zip(name_uses)
-        .map(|((diagnostics, decls), name_uses)| FileResult { decls, diagnostics, name_uses })
+        .map(|((diagnostics, decls), name_uses)| FileResult {
+            decls,
+            diagnostics,
+            name_uses,
+        })
         .collect();
-    ResolveOutput { modules, files, universe, edges }
+    ResolveOutput {
+        modules,
+        files,
+        universe,
+        edges,
+    }
 }
 
 fn resolve_file_bodies(
@@ -183,8 +249,22 @@ fn resolve_file_bodies(
     uses: &mut NameUseTable,
 ) {
     use fors_syntax::NodeKind;
-    let Some(module_scope) = universe.scope(file) else { return };
-    let mut ctx = scope::BodyCtx::new(inp.tree, inp.tokens, inp.source, interner, modules, universe.exports(), universe.prelude(), file, module_scope, diags, uses);
+    let Some(module_scope) = universe.scope(file) else {
+        return;
+    };
+    let mut ctx = scope::BodyCtx::new(
+        inp.tree,
+        inp.tokens,
+        inp.source,
+        interner,
+        modules,
+        universe.exports(),
+        universe.prelude(),
+        file,
+        module_scope,
+        diags,
+        uses,
+    );
 
     for i in 0..decls.len() {
         if decls.parent[i] != fors_index::decl::NO_PARENT {
@@ -207,7 +287,10 @@ fn resolve_file_bodies(
             fors_index::DeclKind::Struct => {
                 ctx.push_frame_pub();
                 let children: Vec<usize> = inp.tree.children(node).collect();
-                if let Some(&g) = children.iter().find(|&&c| inp.tree.kinds[c] == NodeKind::Generics) {
+                if let Some(&g) = children
+                    .iter()
+                    .find(|&&c| inp.tree.kinds[c] == NodeKind::Generics)
+                {
                     ctx.resolve_generics(g);
                     ctx.walk_bounds(g);
                 }
@@ -222,7 +305,10 @@ fn resolve_file_bodies(
             fors_index::DeclKind::Enum => {
                 ctx.push_frame_pub();
                 let children: Vec<usize> = inp.tree.children(node).collect();
-                if let Some(&g) = children.iter().find(|&&c| inp.tree.kinds[c] == NodeKind::Generics) {
+                if let Some(&g) = children
+                    .iter()
+                    .find(|&&c| inp.tree.kinds[c] == NodeKind::Generics)
+                {
                     ctx.resolve_generics(g);
                     ctx.walk_bounds(g);
                 }
@@ -239,7 +325,10 @@ fn resolve_file_bodies(
             fors_index::DeclKind::Trait | fors_index::DeclKind::Impl => {
                 ctx.push_frame_pub();
                 let children: Vec<usize> = inp.tree.children(node).collect();
-                let generics_node = children.iter().copied().find(|&c| inp.tree.kinds[c] == NodeKind::Generics);
+                let generics_node = children
+                    .iter()
+                    .copied()
+                    .find(|&c| inp.tree.kinds[c] == NodeKind::Generics);
                 if let Some(g) = generics_node {
                     ctx.resolve_generics(g);
                     ctx.walk_bounds(g);
@@ -249,7 +338,18 @@ fn resolve_file_bodies(
                 let header_types: Vec<usize> = children
                     .iter()
                     .copied()
-                    .filter(|&c| Some(c) != generics_node && !matches!(inp.tree.kinds[c], NodeKind::FnDecl | NodeKind::TraitItem | NodeKind::Attribute | NodeKind::Error | NodeKind::AssocTypeDecl | NodeKind::AssocTypeDef))
+                    .filter(|&c| {
+                        Some(c) != generics_node
+                            && !matches!(
+                                inp.tree.kinds[c],
+                                NodeKind::FnDecl
+                                    | NodeKind::TraitItem
+                                    | NodeKind::Attribute
+                                    | NodeKind::Error
+                                    | NodeKind::AssocTypeDecl
+                                    | NodeKind::AssocTypeDef
+                            )
+                    })
                     .collect();
                 let mut header_targets: Vec<Option<ResolvedTarget>> = Vec::new();
                 for &c in &header_types {
@@ -266,7 +366,10 @@ fn resolve_file_bodies(
                 // Rule 26 (round 4): an associated-type bound / right-hand
                 // side sees the impl's or trait's parameters and `Self`.
                 for &c in &children {
-                    if matches!(inp.tree.kinds[c], NodeKind::AssocTypeDecl | NodeKind::AssocTypeDef) {
+                    if matches!(
+                        inp.tree.kinds[c],
+                        NodeKind::AssocTypeDecl | NodeKind::AssocTypeDef
+                    ) {
                         for t in inp.tree.children(c) {
                             ctx.walk(t);
                         }
@@ -308,15 +411,24 @@ fn check_impl_orphan(
 ) {
     fn home(t: Option<ResolvedTarget>) -> Home {
         match t {
-            Some(ResolvedTarget::Entity(Entity::Item { file, .. } | Entity::Variant { file, .. })) => Home::Module(file),
-            Some(ResolvedTarget::Entity(Entity::PreludeType(_) | Entity::PreludeValue(_))) => Home::Std,
+            Some(ResolvedTarget::Entity(
+                Entity::Item { file, .. } | Entity::Variant { file, .. },
+            )) => Home::Module(file),
+            Some(ResolvedTarget::Entity(Entity::PreludeType(_) | Entity::PreludeValue(_))) => {
+                Home::Std
+            }
             Some(ResolvedTarget::Local { .. }) | None => Home::Nowhere,
             Some(_) => Home::Unknown,
         }
     }
     let (fs, fe) = ctx.tree.token_range(node);
-    let body_start = ctx.tree.children(node).find(|&c| matches!(ctx.tree.kinds[c], fors_syntax::NodeKind::FnDecl)).map_or(fe, |c| ctx.tree.token_range(c).0);
-    let has_for = (fs as usize..body_start as usize).any(|t| ctx.tokens.kinds.get(t) == Some(&fors_lex::TokenKind::KwFor));
+    let body_start = ctx
+        .tree
+        .children(node)
+        .find(|&c| matches!(ctx.tree.kinds[c], fors_syntax::NodeKind::FnDecl))
+        .map_or(fe, |c| ctx.tree.token_range(c).0);
+    let has_for = (fs as usize..body_start as usize)
+        .any(|t| ctx.tokens.kinds.get(t) == Some(&fors_lex::TokenKind::KwFor));
 
     let homes: Vec<Home> = if has_for && header_types.len() >= 2 {
         vec![home(header_targets[0]), home(header_targets[1])]
@@ -329,13 +441,21 @@ fn check_impl_orphan(
         return;
     }
     let in_std = ctx.module.in_std();
-    if homes.iter().any(|&h| h == Home::Module(file) || (h == Home::Std && in_std)) {
+    if homes
+        .iter()
+        .any(|&h| h == Home::Module(file) || (h == Home::Std && in_std))
+    {
         return;
     }
     let mut permitted: Vec<String> = Vec::new();
     for h in &homes {
         let name = match *h {
-            Home::Module(f) => ctx.modules.name.get(f.index()).map(|n| fors_index::module::join_dotted(ctx.interner, n)).unwrap_or_default(),
+            Home::Module(f) => ctx
+                .modules
+                .name
+                .get(f.index())
+                .map(|n| fors_index::module::join_dotted(ctx.interner, n))
+                .unwrap_or_default(),
             Home::Std => "package `std`".to_string(),
             _ => continue,
         };
@@ -346,12 +466,21 @@ fn check_impl_orphan(
     let msg = if permitted.is_empty() {
         "`impl` of a type that has no defining module".to_string()
     } else {
-        format!("`impl` must appear in the module defining its trait or its type: {}", permitted.join(" or "))
+        format!(
+            "`impl` must appear in the module defining its trait or its type: {}",
+            permitted.join(" or ")
+        )
     };
-    let (s, e) = header_types.first().map_or_else(|| paths::byte_range(ctx.tree, ctx.tokens, node), |&h| {
-        let last = header_types.last().copied().unwrap_or(h);
-        (paths::byte_range(ctx.tree, ctx.tokens, h).0, paths::byte_range(ctx.tree, ctx.tokens, last).1)
-    });
+    let (s, e) = header_types.first().map_or_else(
+        || paths::byte_range(ctx.tree, ctx.tokens, node),
+        |&h| {
+            let last = header_types.last().copied().unwrap_or(h);
+            (
+                paths::byte_range(ctx.tree, ctx.tokens, h).0,
+                paths::byte_range(ctx.tree, ctx.tokens, last).1,
+            )
+        },
+    );
     ctx.push_diag(Diagnostic::new(s, e, Code::N(21), msg));
 }
 
@@ -359,15 +488,33 @@ fn resolve_fn_sig_and_body(ctx: &mut scope::BodyCtx, fn_node: usize) {
     use fors_syntax::NodeKind;
     let tree = ctx.tree;
     let children: Vec<usize> = tree.children(fn_node).collect();
-    let Some(sig_node) = children.iter().copied().find(|&c| tree.kinds[c] == NodeKind::FnSig) else { return };
-    let block_node = children.iter().copied().find(|&c| tree.kinds[c] == NodeKind::Block);
+    let Some(sig_node) = children
+        .iter()
+        .copied()
+        .find(|&c| tree.kinds[c] == NodeKind::FnSig)
+    else {
+        return;
+    };
+    let block_node = children
+        .iter()
+        .copied()
+        .find(|&c| tree.kinds[c] == NodeKind::Block);
 
     let sig_children: Vec<usize> = tree.children(sig_node).collect();
-    let generics_node = sig_children.iter().copied().find(|&c| tree.kinds[c] == NodeKind::Generics);
+    let generics_node = sig_children
+        .iter()
+        .copied()
+        .find(|&c| tree.kinds[c] == NodeKind::Generics);
     if let Some(g) = generics_node {
         ctx.resolve_generics(g);
     }
-    let Some(params_node) = sig_children.iter().copied().find(|&c| tree.kinds[c] == NodeKind::Params) else { return };
+    let Some(params_node) = sig_children
+        .iter()
+        .copied()
+        .find(|&c| tree.kinds[c] == NodeKind::Params)
+    else {
+        return;
+    };
     // `resolve_params` already walks each parameter's own type before
     // declaring it (round 3, D3), so it is not repeated here.
     let params = ctx.resolve_params(params_node);

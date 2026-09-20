@@ -26,7 +26,12 @@ pub enum Json {
 
 impl Json {
     pub fn obj(fields: Vec<(&str, Json)>) -> Json {
-        Json::Obj(fields.into_iter().map(|(k, v)| (k.to_string(), v)).collect())
+        Json::Obj(
+            fields
+                .into_iter()
+                .map(|(k, v)| (k.to_string(), v))
+                .collect(),
+        )
     }
 
     pub fn str(s: impl Into<String>) -> Json {
@@ -104,11 +109,16 @@ impl Json {
             }
         }
     }
+}
 
-    pub fn to_string(&self) -> String {
+/// `write` is the real serialiser; `Display` is what gives every `Json` a
+/// `to_string()` through the standard `ToString` blanket impl, rather than an
+/// inherent method that would shadow it.
+impl std::fmt::Display for Json {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         let mut s = String::new();
         self.write(&mut s);
-        s
+        f.write_str(&s)
     }
 }
 
@@ -132,7 +142,11 @@ fn write_string(s: &str, out: &mut String) {
 /// JSON, for a number that is not finite, for nesting past `MAX_DEPTH`,
 /// and for trailing garbage after the value; never a panic.
 pub fn parse(bytes: &[u8]) -> Option<Json> {
-    let mut p = Parser { b: bytes, i: 0, depth: 0 };
+    let mut p = Parser {
+        b: bytes,
+        i: 0,
+        depth: 0,
+    };
     p.ws();
     let v = p.value()?;
     p.ws();
@@ -203,7 +217,11 @@ impl<'a> Parser<'a> {
                         continue;
                     }
                     self.depth -= 1;
-                    return if self.eat(b']') { Some(Json::Arr(v)) } else { None };
+                    return if self.eat(b']') {
+                        Some(Json::Arr(v))
+                    } else {
+                        None
+                    };
                 }
             }
             b'{' => {
@@ -232,7 +250,11 @@ impl<'a> Parser<'a> {
                         continue;
                     }
                     self.depth -= 1;
-                    return if self.eat(b'}') { Some(Json::Obj(v)) } else { None };
+                    return if self.eat(b'}') {
+                        Some(Json::Obj(v))
+                    } else {
+                        None
+                    };
                 }
             }
             _ => self.number(),
@@ -244,13 +266,23 @@ impl<'a> Parser<'a> {
         if self.peek() == Some(b'-') {
             self.i += 1;
         }
-        while matches!(self.peek(), Some(b'0'..=b'9' | b'.' | b'e' | b'E' | b'+' | b'-')) {
+        while matches!(
+            self.peek(),
+            Some(b'0'..=b'9' | b'.' | b'e' | b'E' | b'+' | b'-')
+        ) {
             self.i += 1;
         }
-        let n: f64 = std::str::from_utf8(&self.b[start..self.i]).ok()?.parse().ok()?;
+        let n: f64 = std::str::from_utf8(&self.b[start..self.i])
+            .ok()?
+            .parse()
+            .ok()?;
         // `1e999` parses as infinity; it is not a JSON number and would be
         // written back as one
-        if n.is_finite() { Some(Json::Num(n)) } else { None }
+        if n.is_finite() {
+            Some(Json::Num(n))
+        } else {
+            None
+        }
     }
 
     fn string(&mut self) -> Option<String> {
@@ -334,7 +366,10 @@ mod tests {
         let src = r#"{"a":[1,-2.5,true,null,"x\ny"],"b":{"c":"é😀"}}"#;
         let v = parse(src.as_bytes()).unwrap();
         assert_eq!(v.get("a").unwrap().as_arr().unwrap().len(), 5);
-        assert_eq!(v.get("b").unwrap().get("c").unwrap().as_str().unwrap(), "é😀");
+        assert_eq!(
+            v.get("b").unwrap().get("c").unwrap().as_str().unwrap(),
+            "é😀"
+        );
         let out = v.to_string();
         assert_eq!(parse(out.as_bytes()).unwrap(), v);
     }
@@ -356,7 +391,7 @@ mod tests {
         assert_eq!(parse(b"\"\xff\""), None); // invalid UTF-8
         let deep: Vec<u8> = std::iter::repeat_n(b'[', 100_000).collect();
         assert_eq!(parse(&deep), None); // must not overflow the stack
-        assert_eq!(parse(b"[[[[[[[[[[1]]]]]]]]]]").is_some(), true);
+        assert!(parse(b"[[[[[[[[[[1]]]]]]]]]]").is_some());
         assert_eq!(Json::Num(f64::INFINITY).to_string(), "null");
     }
 }

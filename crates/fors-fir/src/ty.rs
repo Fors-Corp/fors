@@ -457,7 +457,9 @@ impl TyStore {
             TyTag::Error => HeadKey::Error,
             TyTag::Unit => HeadKey::Unit,
             TyTag::Never => HeadKey::Never,
-            TyTag::Prim => HeadKey::Prim(PrimKind::from_u8(self.a[i] as u8).unwrap_or(PrimKind::RawPtr)),
+            TyTag::Prim => {
+                HeadKey::Prim(PrimKind::from_u8(self.a[i] as u8).unwrap_or(PrimKind::RawPtr))
+            }
             TyTag::Nominal => HeadKey::Nominal(DefId(self.a[i])),
             TyTag::Tuple => HeadKey::Tuple(self.args_len[self.b[i] as usize]),
             TyTag::Fn => HeadKey::Fn,
@@ -481,7 +483,8 @@ impl TyStore {
         }
         let id = ArgsId(self.args_start.len() as u32);
         self.args_start.push(self.args.len() as u32);
-        self.args_len.push(u16::try_from(xs.len()).expect("argument list longer than u16::MAX"));
+        self.args_len
+            .push(u16::try_from(xs.len()).expect("argument list longer than u16::MAX"));
         self.args.extend_from_slice(xs);
         self.args_cons.insert(key, id.0);
         id
@@ -489,7 +492,10 @@ impl TyStore {
 
     pub fn intern_trait_ref(&mut self, trait_def: DefId, args: ArgsId) -> TraitRefId {
         let key = ConsTable::key3(SALT_TR, trait_def.0 as u64, args.0 as u64, 0);
-        if let Some(id) = self.tr_cons.lookup(key, |v| self.trait_refs[v as usize] == (trait_def, args)) {
+        if let Some(id) = self
+            .tr_cons
+            .lookup(key, |v| self.trait_refs[v as usize] == (trait_def, args))
+        {
             return TraitRefId(id);
         }
         let id = TraitRefId(self.trait_refs.len() as u32);
@@ -500,7 +506,10 @@ impl TyStore {
 
     pub fn intern_proj_key(&mut self, tr: TraitRefId, name: Symbol) -> ProjKeyId {
         let key = ConsTable::key3(SALT_PK, tr.0 as u64, name.0 as u64, 0);
-        if let Some(id) = self.pk_cons.lookup(key, |v| self.proj_keys[v as usize] == (tr, name)) {
+        if let Some(id) = self
+            .pk_cons
+            .lookup(key, |v| self.proj_keys[v as usize] == (tr, name))
+        {
             return ProjKeyId(id);
         }
         let id = ProjKeyId(self.proj_keys.len() as u32);
@@ -509,18 +518,30 @@ impl TyStore {
         id
     }
 
-    pub fn intern_fn_ty(&mut self, params: &[(Conv, TyId)], result: TyId, raises: TyId, closure: bool) -> FnTyId {
+    pub fn intern_fn_ty(
+        &mut self,
+        params: &[(Conv, TyId)],
+        result: TyId,
+        raises: TyId,
+        closure: bool,
+    ) -> FnTyId {
         let tail = [result.0 as u64, raises.0 as u64, closure as u64];
         let key = ConsTable::key_iter(
             SALT_FN,
             params.len() * 2 + 3,
-            params.iter().flat_map(|&(c, t)| [c as u64, t.0 as u64]).chain(tail),
+            params
+                .iter()
+                .flat_map(|&(c, t)| [c as u64, t.0 as u64])
+                .chain(tail),
         );
         let same = |v: u32| {
             let id = FnTyId(v);
             let (cs, ts) = self.fn_tys.params(id);
             cs.len() == params.len()
-                && params.iter().enumerate().all(|(i, &(c, t))| cs[i] == c && ts[i] == t)
+                && params
+                    .iter()
+                    .enumerate()
+                    .all(|(i, &(c, t))| cs[i] == c && ts[i] == t)
                 && self.fn_tys.result(id) == result
                 && self.fn_tys.raises(id) == raises
                 && self.fn_tys.is_closure(id) == closure
@@ -530,7 +551,9 @@ impl TyStore {
         }
         let id = FnTyId(self.fn_tys.result.len() as u32);
         self.fn_tys.p_start.push(self.fn_tys.ty.len() as u32);
-        self.fn_tys.p_len.push(u8::try_from(params.len()).expect("more than 255 parameters"));
+        self.fn_tys
+            .p_len
+            .push(u8::try_from(params.len()).expect("more than 255 parameters"));
         for &(c, t) in params {
             self.fn_tys.conv.push(c);
             self.fn_tys.ty.push(t);
@@ -548,7 +571,10 @@ impl TyStore {
             BrandRow::Fresh { owner, ordinal } => (1u64, owner.0, ordinal),
         };
         let key = ConsTable::key3(SALT_BRAND, k, owner as u64, ordinal as u64);
-        if let Some(id) = self.brand_cons.lookup(key, |v| self.brands[v as usize] == row) {
+        if let Some(id) = self
+            .brand_cons
+            .lookup(key, |v| self.brands[v as usize] == row)
+        {
             return BrandId(id);
         }
         let id = BrandId(self.brands.len() as u32);
@@ -564,7 +590,10 @@ impl TyStore {
             ConstValue::S(s) => (2u64, s.0 as u128),
         };
         let key = ConsTable::key3(SALT_CONST, k, payload as u64, (payload >> 64) as u64);
-        if let Some(id) = self.const_cons.lookup(key, |x| self.consts[x as usize] == v) {
+        if let Some(id) = self
+            .const_cons
+            .lookup(key, |x| self.consts[x as usize] == v)
+        {
             return ConstId(id);
         }
         let id = ConstId(self.consts.len() as u32);
@@ -579,7 +608,12 @@ impl TyStore {
     /// `(tag, a, b, quals)`, probes linearly, and in the same step ORs the
     /// children's `flags` and fills `unqual`.
     pub fn intern(&mut self, tag: TyTag, a: u32, b: u32, quals: Quals) -> TyId {
-        let key = ConsTable::key3(SALT_ROW, ((tag as u64) << 8) | quals.0 as u64, a as u64, b as u64);
+        let key = ConsTable::key3(
+            SALT_ROW,
+            ((tag as u64) << 8) | quals.0 as u64,
+            a as u64,
+            b as u64,
+        );
         let same = |v: u32| {
             let i = v as usize;
             self.tag[i] == tag && self.a[i] == a && self.b[i] == b && self.quals[i] == quals.0
@@ -600,7 +634,11 @@ impl TyStore {
         debug_assert!(quals.is_consistent(), "iso and imm are mutually exclusive");
 
         let child_flags = self.child_flags(tag, a, b);
-        let unqual = if quals.is_none() { None } else { Some(self.intern(tag, a, b, Quals::NONE)) };
+        let unqual = if quals.is_none() {
+            None
+        } else {
+            Some(self.intern(tag, a, b, Quals::NONE))
+        };
 
         let id = TyId(self.tag.len() as u32);
         self.tag.push(tag);
@@ -637,12 +675,12 @@ impl TyStore {
                 }
                 f
             }
-            TyTag::Dyn => or_args(self.trait_refs[a as usize].1 .0),
+            TyTag::Dyn => or_args(self.trait_refs[a as usize].1.0),
             TyTag::Param => F_PARAM,
             TyTag::Proj => {
                 let mut f = F_PROJ | self.flags[a as usize];
                 let (tr, _) = self.proj_keys[b as usize];
-                f |= or_args(self.trait_refs[tr.index()].1 .0);
+                f |= or_args(self.trait_refs[tr.index()].1.0);
                 f
             }
             TyTag::Brand => {
@@ -672,7 +710,10 @@ impl TyStore {
     }
 
     pub fn tuple(&mut self, args: ArgsId) -> TyId {
-        debug_assert!(!self.args(args).is_empty(), "a tuple has at least one element; `()` is TY_UNIT");
+        debug_assert!(
+            !self.args(args).is_empty(),
+            "a tuple has at least one element; `()` is TY_UNIT"
+        );
         self.intern(TyTag::Tuple, 0, args.0, Quals::NONE)
     }
 
@@ -697,7 +738,13 @@ impl TyStore {
         self.intern(TyTag::Proj, head.0, key.0, Quals::NONE)
     }
 
-    pub fn proj_of(&mut self, head: TyId, trait_def: DefId, trait_args: &[TyId], name: Symbol) -> TyId {
+    pub fn proj_of(
+        &mut self,
+        head: TyId,
+        trait_def: DefId,
+        trait_args: &[TyId],
+        name: Symbol,
+    ) -> TyId {
         let a = self.intern_args(trait_args);
         let tr = self.intern_trait_ref(trait_def, a);
         let pk = self.intern_proj_key(tr, name);
@@ -797,8 +844,14 @@ mod tests {
     #[test]
     fn fresh_brands_are_flagged() {
         let mut s = TyStore::new();
-        let fresh = s.brand_ty(BrandRow::Fresh { owner: DeclKeyId(4), ordinal: 0 });
-        let parm = s.brand_ty(BrandRow::Param { owner: DefId(4), ordinal: 0 });
+        let fresh = s.brand_ty(BrandRow::Fresh {
+            owner: DeclKeyId(4),
+            ordinal: 0,
+        });
+        let parm = s.brand_ty(BrandRow::Param {
+            owner: DefId(4),
+            ordinal: 0,
+        });
         assert_eq!(s.flags(fresh) & F_FRESH, F_FRESH);
         assert_eq!(s.flags(parm) & F_FRESH, 0);
         assert_eq!(s.flags(parm) & F_BRAND, F_BRAND);

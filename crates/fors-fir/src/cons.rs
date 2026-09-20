@@ -51,7 +51,12 @@ impl ConsTable {
     /// of a power-of-two table: index selection is one `&`, never a `%`).
     pub fn with_capacity(capacity: usize) -> ConsTable {
         let cap = capacity.max(8).next_power_of_two();
-        ConsTable { keys: vec![0; cap], vals: vec![EMPTY; cap], mask: cap - 1, len: 0 }
+        ConsTable {
+            keys: vec![0; cap],
+            vals: vec![EMPTY; cap],
+            mask: cap - 1,
+            len: 0,
+        }
     }
 
     pub fn len(&self) -> usize {
@@ -179,8 +184,17 @@ mod tests {
 
     #[test]
     fn key_slice_distinguishes_length() {
-        assert_ne!(ConsTable::key_slice(0, &[5]), ConsTable::key_slice(0, &[5, 5]));
-        assert_ne!(ConsTable::key_slice(0, &[1, 2]), ConsTable::key_slice(0, &[2, 1]));
-        assert_eq!(ConsTable::key_slice(0, &[1, 2]), ConsTable::key_slice(0, &[1, 2]));
+        assert_ne!(
+            ConsTable::key_slice(0, &[5]),
+            ConsTable::key_slice(0, &[5, 5])
+        );
+        assert_ne!(
+            ConsTable::key_slice(0, &[1, 2]),
+            ConsTable::key_slice(0, &[2, 1])
+        );
+        assert_eq!(
+            ConsTable::key_slice(0, &[1, 2]),
+            ConsTable::key_slice(0, &[1, 2])
+        );
     }
 }

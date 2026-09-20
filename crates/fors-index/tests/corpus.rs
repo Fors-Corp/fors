@@ -5,16 +5,25 @@ use std::collections::BTreeSet;
 use std::fs;
 use std::path::{Path, PathBuf};
 
-use fors_index::{build_decl_table, build_module_graph, extract_module_facts, module_segments, Interner};
+use fors_index::{
+    Interner, build_decl_table, build_module_graph, extract_module_facts, module_segments,
+};
 use fors_syntax::parse_file;
 
 fn repo_root() -> PathBuf {
-    Path::new(env!("CARGO_MANIFEST_DIR")).parent().unwrap().parent().unwrap().to_path_buf()
+    Path::new(env!("CARGO_MANIFEST_DIR"))
+        .parent()
+        .unwrap()
+        .parent()
+        .unwrap()
+        .to_path_buf()
 }
 
 fn corpus_files() -> Vec<PathBuf> {
     fn walk(dir: &Path, out: &mut Vec<PathBuf>) {
-        let Ok(entries) = fs::read_dir(dir) else { return };
+        let Ok(entries) = fs::read_dir(dir) else {
+            return;
+        };
         let mut entries: Vec<_> = entries.flatten().collect();
         entries.sort_by_key(|e| e.path());
         for e in entries {
@@ -71,10 +80,20 @@ fn index_all(files: &[PathBuf]) -> Vec<(String, String, Vec<u128>, Vec<u128>)> {
             .kind
             .iter()
             .zip(&decls.name)
-            .map(|(k, n)| format!("{k:?}:{:?}", n.map(|s| String::from_utf8_lossy(interner.resolve(s)).into_owned())))
+            .map(|(k, n)| {
+                format!(
+                    "{k:?}:{:?}",
+                    n.map(|s| String::from_utf8_lossy(interner.resolve(s)).into_owned())
+                )
+            })
             .collect::<Vec<_>>()
             .join(",");
-        out.push((path.display().to_string(), summary, decls.sig_hash.clone(), decls.body_hash.clone()));
+        out.push((
+            path.display().to_string(),
+            summary,
+            decls.sig_hash.clone(),
+            decls.body_hash.clone(),
+        ));
     }
     out
 }
@@ -104,7 +123,10 @@ fn build_dir_graph(dir: &Path, order: &[&str]) -> Vec<String> {
         files.push((fors_index::FileId(i as u32), name, facts));
     }
     let (_, _, diags) = build_module_graph(&interner, files);
-    let mut msgs: Vec<String> = diags.iter().map(|d| format!("{}:{}", d.code.as_str(), d.message)).collect();
+    let mut msgs: Vec<String> = diags
+        .iter()
+        .map(|d| format!("{}:{}", d.code.as_str(), d.message))
+        .collect();
     msgs.sort();
     msgs
 }
@@ -137,7 +159,8 @@ fn self_import_corpus_file_rejected() {
     let mut interner = Interner::new();
     let facts = extract_module_facts(&p.tree, &p.tokens, &src, &mut interner);
     let name = module_segments(&mut interner, &[], &[b"selfmod"]).unwrap();
-    let (_, edges, diags) = build_module_graph(&interner, vec![(fors_index::FileId(0), name, facts)]);
+    let (_, edges, diags) =
+        build_module_graph(&interner, vec![(fors_index::FileId(0), name, facts)]);
     assert!(edges.is_empty());
     assert_eq!(diags.len(), 1);
     assert_eq!(diags[0].code, fors_index::DiagCode::SelfImport);
@@ -157,7 +180,11 @@ fn fn_hashes(src: &str) -> (u128, u128) {
     let p = parse_file(src.as_bytes());
     let mut interner = Interner::new();
     let decls = build_decl_table(&p.tree, &p.tokens, src.as_bytes(), &mut interner);
-    let i = decls.kind.iter().position(|k| *k == fors_index::DeclKind::Fn).expect("no fn decl");
+    let i = decls
+        .kind
+        .iter()
+        .position(|k| *k == fors_index::DeclKind::Fn)
+        .expect("no fn decl");
     (decls.sig_hash[i], decls.body_hash[i])
 }
 
@@ -233,8 +260,14 @@ fn corpus_declarations_stable_under_reformatting() {
             continue; // a parse-error corpus file may re-synchronise differently; skip it
         }
         for k in 0..d0.len() {
-            assert_eq!(d0.sig_hash[k], d1.sig_hash[k], "{path:?} decl {k} sig_hash changed by reformatting");
-            assert_eq!(d0.body_hash[k], d1.body_hash[k], "{path:?} decl {k} body_hash changed by reformatting");
+            assert_eq!(
+                d0.sig_hash[k], d1.sig_hash[k],
+                "{path:?} decl {k} sig_hash changed by reformatting"
+            );
+            assert_eq!(
+                d0.body_hash[k], d1.body_hash[k],
+                "{path:?} decl {k} body_hash changed by reformatting"
+            );
         }
         checked += 1;
     }
@@ -272,21 +305,38 @@ fn edges_are_exactly_the_use_edges_no_body_scan() {
         let mut files = Vec::new();
         let main_path: &[&[u8]] = &[b"main"];
         let std_path: &[&[u8]] = &[b"std", b"io"];
-        for (i, (src, path)) in [(main_src, main_path), (std_io, std_path)].into_iter().enumerate() {
+        for (i, (src, path)) in [(main_src, main_path), (std_io, std_path)]
+            .into_iter()
+            .enumerate()
+        {
             let p = parse_file(src.as_bytes());
             let facts = extract_module_facts(&p.tree, &p.tokens, src.as_bytes(), &mut interner);
             let name = module_segments(&mut interner, &[], path).unwrap();
             files.push((fors_index::FileId(i as u32), name, facts));
         }
         let (_, edges, diags) = build_module_graph(&interner, files);
-        (edges.iter().map(|(a, b)| (a.index(), b.index())).collect(), diags.iter().map(|d| d.code.as_str().to_string()).collect())
+        (
+            edges.iter().map(|(a, b)| (a.index(), b.index())).collect(),
+            diags.iter().map(|d| d.code.as_str().to_string()).collect(),
+        )
     }
     let body_only = "module main;\nneeds { env };\n\nfn f() -> usize {\n    let io: Str = \"a\";\n    return io.len;\n}\n";
     let (edges, diags) = graph(body_only);
-    assert_eq!(edges, vec![(1, 0)], "only std.io -> main: the body's `io .` and the header's `needs {{ env }}` add nothing");
-    assert!(diags.is_empty(), "no cycle can arise from a body: {diags:?}");
+    assert_eq!(
+        edges,
+        vec![(1, 0)],
+        "only std.io -> main: the body's `io .` and the header's `needs {{ env }}` add nothing"
+    );
+    assert!(
+        diags.is_empty(),
+        "no cycle can arise from a body: {diags:?}"
+    );
     let with_use = "module main;\nneeds { env };\nuse std.io;\n\nfn f() -> usize {\n    let io: Str = \"a\";\n    return io.len;\n}\n";
     let (edges, diags) = graph(with_use);
-    assert_eq!(edges, vec![(0, 1), (1, 0)], "the explicit `use` is the one way to add the edge");
+    assert_eq!(
+        edges,
+        vec![(0, 1), (1, 0)],
+        "the explicit `use` is the one way to add the edge"
+    );
     assert_eq!(diags, vec!["N0007".to_string()]);
 }

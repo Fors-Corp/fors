@@ -9,7 +9,7 @@
 //! it is already a `StrayByte`).
 
 use crate::diag::{DiagCode, Diagnostic};
-use crate::token::{is_legal_suffix, keyword_kind, TokenKind};
+use crate::token::{TokenKind, is_legal_suffix, keyword_kind};
 
 // MARC: token packing trade-off - (kind: u8, start: u32) recomputes length
 // from the next start; adding a len column costs 4 bytes per token but
@@ -141,30 +141,30 @@ fn scan_punct(bytes: &[u8], pos: usize) -> Option<(TokenKind, usize)> {
     }
 
     match b0 {
-        b'(' => return Some((LParen, pos + 1)),
-        b')' => return Some((RParen, pos + 1)),
-        b'[' => return Some((LBracket, pos + 1)),
-        b']' => return Some((RBracket, pos + 1)),
-        b'{' => return Some((LBrace, pos + 1)),
-        b'}' => return Some((RBrace, pos + 1)),
-        b',' => return Some((Comma, pos + 1)),
-        b';' => return Some((Semi, pos + 1)),
-        b':' => return Some((Colon, pos + 1)),
-        b'@' => return Some((At, pos + 1)),
-        b'?' => return Some((Question, pos + 1)),
+        b'(' => Some((LParen, pos + 1)),
+        b')' => Some((RParen, pos + 1)),
+        b'[' => Some((LBracket, pos + 1)),
+        b']' => Some((RBracket, pos + 1)),
+        b'{' => Some((LBrace, pos + 1)),
+        b'}' => Some((RBrace, pos + 1)),
+        b',' => Some((Comma, pos + 1)),
+        b';' => Some((Semi, pos + 1)),
+        b':' => Some((Colon, pos + 1)),
+        b'@' => Some((At, pos + 1)),
+        b'?' => Some((Question, pos + 1)),
         b'-' => {
             two!(b'>', Arrow);
             two!(b'=', MinusEq);
-            return Some((Minus, pos + 1));
+            Some((Minus, pos + 1))
         }
         b'=' => {
             two!(b'>', FatArrow);
             two!(b'=', EqEq);
-            return Some((Eq, pos + 1));
+            Some((Eq, pos + 1))
         }
         b'!' => {
             two!(b'=', NotEq);
-            return None; // bare `!` is deliberately not a token
+            None // bare `!` is deliberately not a token
         }
         b'<' => {
             if b1 == Some(b'<') {
@@ -174,7 +174,7 @@ fn scan_punct(bytes: &[u8], pos: usize) -> Option<(TokenKind, usize)> {
                 return Some((Shl, pos + 2));
             }
             two!(b'=', LtEq);
-            return Some((Lt, pos + 1));
+            Some((Lt, pos + 1))
         }
         b'>' => {
             if b1 == Some(b'>') {
@@ -184,37 +184,37 @@ fn scan_punct(bytes: &[u8], pos: usize) -> Option<(TokenKind, usize)> {
                 return Some((Shr, pos + 2));
             }
             two!(b'=', GtEq);
-            return Some((Gt, pos + 1));
+            Some((Gt, pos + 1))
         }
         b'+' => {
             two!(b'=', PlusEq);
-            return Some((Plus, pos + 1));
+            Some((Plus, pos + 1))
         }
         b'*' => {
             two!(b'=', StarEq);
-            return Some((Star, pos + 1));
+            Some((Star, pos + 1))
         }
         b'/' => {
             two!(b'=', SlashEq);
-            return Some((Slash, pos + 1));
+            Some((Slash, pos + 1))
         }
         b'%' => {
             two!(b'=', PercentEq);
-            return Some((Percent, pos + 1));
+            Some((Percent, pos + 1))
         }
         b'&' => {
             two!(b'=', AmpEq);
-            return Some((Amp, pos + 1));
+            Some((Amp, pos + 1))
         }
         b'|' => {
             two!(b'=', PipeEq);
-            return Some((Pipe, pos + 1));
+            Some((Pipe, pos + 1))
         }
         b'^' => {
             two!(b'=', CaretEq);
-            return Some((Caret, pos + 1));
+            Some((Caret, pos + 1))
         }
-        b'.' => return Some((Dot, pos + 1)),
+        b'.' => Some((Dot, pos + 1)),
         _ => None,
     }
 }
@@ -233,7 +233,8 @@ impl<'a> Lexer<'a> {
     }
 
     fn diag(&mut self, start: usize, end: usize, code: DiagCode) {
-        self.diags.push(Diagnostic::new(start as u32, end as u32, code));
+        self.diags
+            .push(Diagnostic::new(start as u32, end as u32, code));
     }
 
     fn lex_whitespace(&mut self, start: usize) -> usize {
@@ -355,7 +356,11 @@ impl<'a> Lexer<'a> {
             suffix_end += 1;
         }
         let suffix = &bytes[pos..suffix_end];
-        let kind = if is_float { TokenKind::Float } else { TokenKind::Int };
+        let kind = if is_float {
+            TokenKind::Float
+        } else {
+            TokenKind::Int
+        };
 
         if suffix.is_empty() {
             self.push(kind, start);
@@ -394,7 +399,8 @@ impl<'a> Lexer<'a> {
                     Some(b'x') => {
                         let h0 = bytes.get(pos + 2).copied();
                         let h1 = bytes.get(pos + 3).copied();
-                        if h0.map(is_hex_byte).unwrap_or(false) && h1.map(is_hex_byte).unwrap_or(false)
+                        if h0.map(is_hex_byte).unwrap_or(false)
+                            && h1.map(is_hex_byte).unwrap_or(false)
                         {
                             pos += 4;
                         } else {
@@ -495,23 +501,21 @@ pub fn lex(source: &[u8]) -> (Tokens, Vec<Diagnostic>) {
             _ if is_ident_start(b) => lx.lex_ident_or_keyword(start),
             _ if is_dec(b) => lx.lex_number(start),
             b'"' => lx.lex_string(start),
-            b'.' if lx.bytes.get(start + 1) == Some(&b'.') => {
-                match lx.bytes.get(start + 2) {
-                    Some(b'<') => {
-                        lx.push(TokenKind::DotDotLt, start);
-                        start + 3
-                    }
-                    Some(b'=') => {
-                        lx.push(TokenKind::DotDotEq, start);
-                        start + 3
-                    }
-                    _ => {
-                        lx.diag(start, start + 2, DiagCode::BadRangeDots);
-                        lx.push(TokenKind::Error, start);
-                        start + 2
-                    }
+            b'.' if lx.bytes.get(start + 1) == Some(&b'.') => match lx.bytes.get(start + 2) {
+                Some(b'<') => {
+                    lx.push(TokenKind::DotDotLt, start);
+                    start + 3
                 }
-            }
+                Some(b'=') => {
+                    lx.push(TokenKind::DotDotEq, start);
+                    start + 3
+                }
+                _ => {
+                    lx.diag(start, start + 2, DiagCode::BadRangeDots);
+                    lx.push(TokenKind::Error, start);
+                    start + 2
+                }
+            },
             _ => match scan_punct(lx.bytes, start) {
                 Some((kind, end)) => {
                     lx.push(kind, start);
@@ -535,7 +539,11 @@ pub fn lex(source: &[u8]) -> (Tokens, Vec<Diagnostic>) {
 
     if let Err(e) = std::str::from_utf8(source) {
         let at = e.valid_up_to();
-        if !lx.diags.iter().any(|d| d.start as usize <= at && at < d.end as usize) {
+        if !lx
+            .diags
+            .iter()
+            .any(|d| d.start as usize <= at && at < d.end as usize)
+        {
             let bad = e.error_len().unwrap_or(len - at);
             lx.diag(at, at + bad, DiagCode::InvalidUtf8);
             lx.diags.sort_by_key(|d| d.start);

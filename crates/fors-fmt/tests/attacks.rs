@@ -9,7 +9,10 @@ use fors_fmt::{MARGIN, Status, check_source, format_source, same_tokens};
 fn fmt(src: &str) -> String {
     let once = format_source(src.as_bytes());
     assert_eq!(once.status, Status::Formatted, "declined: {src}");
-    assert!(same_tokens(src.as_bytes(), &once.text), "tokens changed for: {src}");
+    assert!(
+        same_tokens(src.as_bytes(), &once.text),
+        "tokens changed for: {src}"
+    );
     let twice = format_source(&once.text);
     assert_eq!(twice.status, Status::Formatted);
     assert_eq!(
@@ -18,14 +21,20 @@ fn fmt(src: &str) -> String {
         "not idempotent for: {src}"
     );
     for line in once.text.split(|&b| b == b'\n') {
-        assert!(!line.ends_with(b" ") && !line.ends_with(b"\t") && !line.contains(&b'\r'), "trailing ws: {src}");
+        assert!(
+            !line.ends_with(b" ") && !line.ends_with(b"\t") && !line.contains(&b'\r'),
+            "trailing ws: {src}"
+        );
     }
     let c = check_source(src.as_bytes());
     let mut patched = src.as_bytes().to_vec();
     for e in c.edits.iter().rev() {
         patched.splice(e.start as usize..e.end as usize, e.new_text.iter().copied());
     }
-    assert_eq!(patched, once.text, "check edits do not reproduce the format: {src}");
+    assert_eq!(
+        patched, once.text,
+        "check edits do not reproduce the format: {src}"
+    );
     String::from_utf8(once.text).unwrap()
 }
 
@@ -34,16 +43,25 @@ fn a_comment_between_every_pair_of_tokens_in_a_signature() {
     // exposed: a block comment after the last token before the signature's
     // tail group broke landed at the start of the next line and was then
     // read as a standalone comment on the second pass (not idempotent)
-    let out = fmt("fn /*a*/ f /*b*/ [ /*c*/ T /*d*/ ] /*e*/ ( /*f*/ let /*g*/ x /*h*/ : /*i*/ T /*j*/ ) /*k*/ -> /*l*/ T /*m*/ raises /*n*/ E /*o*/ { /*p*/ return /*q*/ x /*r*/ ; /*s*/ } /*t*/\n");
+    let out = fmt(
+        "fn /*a*/ f /*b*/ [ /*c*/ T /*d*/ ] /*e*/ ( /*f*/ let /*g*/ x /*h*/ : /*i*/ T /*j*/ ) /*k*/ -> /*l*/ T /*m*/ raises /*n*/ E /*o*/ { /*p*/ return /*q*/ x /*r*/ ; /*s*/ } /*t*/\n",
+    );
     assert!(out.contains("x /*h*/ : /*i*/ T"), "{out}"); // spaced on both sides
     assert!(out.contains("/*o*/ {"), "{out}");
-    let out = fmt("fn // a\nf // b\n( // c\nlet x: i32 // d\n) // e\n-> i32 // f\n{ // g\nreturn x; // h\n} // i\n");
-    assert_eq!(out, "fn // a\nf // b\n( // c\n    let x: i32 // d\n) // e\n-> i32 // f\n{ // g\n    return x; // h\n} // i\n");
+    let out = fmt(
+        "fn // a\nf // b\n( // c\nlet x: i32 // d\n) // e\n-> i32 // f\n{ // g\nreturn x; // h\n} // i\n",
+    );
+    assert_eq!(
+        out,
+        "fn // a\nf // b\n( // c\n    let x: i32 // d\n) // e\n-> i32 // f\n{ // g\n    return x; // h\n} // i\n"
+    );
 }
 
 #[test]
 fn a_comment_inside_an_empty_block_struct_match_and_list() {
-    let out = fmt("fn f() {\n    // only a comment\n}\nstruct S { /* nothing */ }\nfn g(let x: i32) {\n    match x {\n        // no arms\n    }\n    let a = [ /* empty */ ];\n    let b = f( /* none */ );\n}\n");
+    let out = fmt(
+        "fn f() {\n    // only a comment\n}\nstruct S { /* nothing */ }\nfn g(let x: i32) {\n    match x {\n        // no arms\n    }\n    let a = [ /* empty */ ];\n    let b = f( /* none */ );\n}\n",
+    );
     assert_eq!(
         out,
         "fn f() {\n    // only a comment\n}\nstruct S { /* nothing */ }\nfn g(let x: i32) {\n    match x {\n        // no arms\n    }\n    let a = [ /* empty */ ];\n    let b = f( /* none */ );\n}\n"
@@ -59,7 +77,12 @@ fn a_doc_comment_on_a_field_and_on_a_match_arm() {
 #[test]
 fn a_line_at_exactly_100_columns_stays_and_101_breaks() {
     let body = "    let x = f(aaaaaaaa, ";
-    let mk = |n: usize| format!("fn g() {{\n{body}{});\n}}\n", "b".repeat(n - body.len() - 2));
+    let mk = |n: usize| {
+        format!(
+            "fn g() {{\n{body}{});\n}}\n",
+            "b".repeat(n - body.len() - 2)
+        )
+    };
     let at100 = mk(MARGIN);
     assert_eq!(at100.lines().nth(1).unwrap().len(), MARGIN);
     assert_eq!(fmt(&at100), at100);
@@ -70,14 +93,23 @@ fn a_line_at_exactly_100_columns_stays_and_101_breaks() {
 
 #[test]
 fn a_chain_of_twelve_adaptors_with_closures_containing_chains() {
-    let calls: Vec<String> =
-        (0..12).map(|i| format!("map(|x| x.iter().map(|y| y + {i}).filter(|z| z > {i}).count())")).collect();
-    let src = format!("fn g(let v: Vec[i32, A]) -> usize {{\n    return v.iter().{}.count();\n}}\n", calls.join("."));
+    let calls: Vec<String> = (0..12)
+        .map(|i| format!("map(|x| x.iter().map(|y| y + {i}).filter(|z| z > {i}).count())"))
+        .collect();
+    let src = format!(
+        "fn g(let v: Vec[i32, A]) -> usize {{\n    return v.iter().{}.count();\n}}\n",
+        calls.join(".")
+    );
     let out = fmt(&src);
     // one call per line, dot leading, the inner chains flat
     assert!(out.contains("    return v.iter()\n        .map(|x| x.iter().map(|y| y + 0).filter(|z| z > 0).count())\n"), "{out}");
     assert!(out.contains("\n        .count();\n"), "{out}");
-    assert_eq!(out.lines().filter(|l| l.trim_start().starts_with(".map(")).count(), 12);
+    assert_eq!(
+        out.lines()
+            .filter(|l| l.trim_start().starts_with(".map("))
+            .count(),
+        12
+    );
 }
 
 #[test]
@@ -86,12 +118,25 @@ fn deeply_nested_generics_with_constraint_entries_that_cannot_fit() {
         .map(|i| format!("T{i}: Iterator + Show + Copyable"))
         .chain((0..6).map(|i| format!("T{i}.Item: Show + Copyable + Eq")))
         .collect();
-    let ty = "Map[Vec[Map[Vec[T0, A], Vec[T1, A], A], A], Vec[Map[Vec[T2, A], Vec[T3, A], A], A], A]";
-    let src = format!("fn g[{}](let a: {ty}) -> {ty} raises SomeVeryLongErrorTypeName {{\n    return a;\n}}\n", gens.join(", "));
+    let ty =
+        "Map[Vec[Map[Vec[T0, A], Vec[T1, A], A], A], Vec[Map[Vec[T2, A], Vec[T3, A], A], A], A]";
+    let src = format!(
+        "fn g[{}](let a: {ty}) -> {ty} raises SomeVeryLongErrorTypeName {{\n    return a;\n}}\n",
+        gens.join(", ")
+    );
     let out = fmt(&src);
-    assert!(out.starts_with("fn g[\n    T0: Iterator + Show + Copyable,\n"), "{out}");
-    assert!(out.contains("    T5.Item: Show + Copyable + Eq\n](\n    let a: Map["), "{out}");
-    assert!(out.contains("\n    raises SomeVeryLongErrorTypeName\n{\n    return a;\n}\n"), "{out}");
+    assert!(
+        out.starts_with("fn g[\n    T0: Iterator + Show + Copyable,\n"),
+        "{out}"
+    );
+    assert!(
+        out.contains("    T5.Item: Show + Copyable + Eq\n](\n    let a: Map["),
+        "{out}"
+    );
+    assert!(
+        out.contains("\n    raises SomeVeryLongErrorTypeName\n{\n    return a;\n}\n"),
+        "{out}"
+    );
 }
 
 #[test]
@@ -129,20 +174,28 @@ fn crlf_line_endings_become_lf() {
 
 #[test]
 fn a_file_with_no_trailing_newline_gets_exactly_one() {
-    assert_eq!(fmt("fn g() {\n    let x = 1;\n}"), "fn g() {\n    let x = 1;\n}\n");
+    assert_eq!(
+        fmt("fn g() {\n    let x = 1;\n}"),
+        "fn g() {\n    let x = 1;\n}\n"
+    );
     assert_eq!(fmt("fn g() {}\n\n\n\n"), "fn g() {}\n");
 }
 
 #[test]
 fn a_file_that_is_only_comments_or_only_whitespace() {
-    assert_eq!(fmt("// just a comment\n\n\n// and another\n/* block */\n"), "// just a comment\n\n// and another\n/* block */\n");
+    assert_eq!(
+        fmt("// just a comment\n\n\n// and another\n/* block */\n"),
+        "// just a comment\n\n// and another\n/* block */\n"
+    );
     assert_eq!(fmt("\n\n   \n"), "");
     assert_eq!(fmt("/* a */"), "/* a */\n");
 }
 
 #[test]
 fn a_single_block_closure_argument_hugs_the_parens() {
-    let out = fmt("fn g() {\n    v.each(|x| { print(x); });\n    v.each(|x| { print(x); }, 1);\n    v.each(|x| { print(x); },);\n}\n");
+    let out = fmt(
+        "fn g() {\n    v.each(|x| { print(x); });\n    v.each(|x| { print(x); }, 1);\n    v.each(|x| { print(x); },);\n}\n",
+    );
     assert_eq!(
         out,
         "fn g() {\n    v.each(|x| {\n        print(x);\n    });\n    v.each(\n        |x| {\n            print(x);\n        },\n        1\n    );\n    v.each(\n        |x| {\n            print(x);\n        },\n    );\n}\n"
@@ -172,7 +225,13 @@ fn a_one_megabyte_file_formats_in_bounded_time() {
     let twice = format_source(&out.text);
     let second_ms = t.elapsed().as_millis();
     assert_eq!(twice.text, out.text);
-    eprintln!("1 MB ({} bytes, {n} units): format {format_ms} ms, check {check_ms} ms, second pass {second_ms} ms", src.len());
+    eprintln!(
+        "1 MB ({} bytes, {n} units): format {format_ms} ms, check {check_ms} ms, second pass {second_ms} ms",
+        src.len()
+    );
     // a debug build of an unoptimised linear pipeline: seconds, not minutes
-    assert!(format_ms < 30_000 && check_ms < 30_000, "format {format_ms} ms, check {check_ms} ms");
+    assert!(
+        format_ms < 30_000 && check_ms < 30_000,
+        "format {format_ms} ms, check {check_ms} ms"
+    );
 }

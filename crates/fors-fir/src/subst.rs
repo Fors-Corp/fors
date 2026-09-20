@@ -18,7 +18,7 @@ use fors_index::fingerprint::splitmix64;
 use fors_index::ids::DefId;
 
 use crate::ty::{
-    ArgsId, BrandId, BrandRow, ConstId, FnTyId, ProjKeyId, TraitRefId, TyId, TyStore, TyTag, NO_TY,
+    ArgsId, BrandId, BrandRow, ConstId, FnTyId, NO_TY, ProjKeyId, TraitRefId, TyId, TyStore, TyTag,
 };
 
 /// One owner's slice of the slot vector.
@@ -44,7 +44,11 @@ impl Binding {
     pub fn new(owners: &[(DefId, u16)]) -> Binding {
         let mut b = Binding::default();
         for &(owner, len) in owners {
-            b.owners.push(OwnerSlots { owner, start: b.slots.len() as u32, len });
+            b.owners.push(OwnerSlots {
+                owner,
+                start: b.slots.len() as u32,
+                len,
+            });
             b.slots.resize(b.slots.len() + len as usize, NO_TY);
         }
         b
@@ -199,7 +203,12 @@ pub fn subst_norm(store: &mut TyStore, ty: TyId, b: &Binding) -> Option<TyId> {
     subst_norm_with(store, ty, b, &mut NeutralOnly)
 }
 
-pub fn subst_norm_with(store: &mut TyStore, ty: TyId, b: &Binding, solver: &mut dyn ProjSolver) -> Option<TyId> {
+pub fn subst_norm_with(
+    store: &mut TyStore,
+    ty: TyId,
+    b: &Binding,
+    solver: &mut dyn ProjSolver,
+) -> Option<TyId> {
     // The one load the flags byte exists for.
     if store.is_monomorphic(ty) {
         return Some(ty);
@@ -250,7 +259,12 @@ pub fn subst_norm_cached(
     Some(out)
 }
 
-fn subst_core(store: &mut TyStore, ty: TyId, b: &Binding, solver: &mut dyn ProjSolver) -> Option<TyId> {
+fn subst_core(
+    store: &mut TyStore,
+    ty: TyId,
+    b: &Binding,
+    solver: &mut dyn ProjSolver,
+) -> Option<TyId> {
     let tag = store.tag(ty);
     let a = store.a(ty);
     let bb = store.b(ty);
@@ -261,21 +275,13 @@ fn subst_core(store: &mut TyStore, ty: TyId, b: &Binding, solver: &mut dyn ProjS
                 return Some(ty); // a rigid parameter of an enclosing declaration
             }
             let v = b.slot(owner, bb as u16);
-            if v == NO_TY {
-                None
-            } else {
-                Some(v)
-            }
+            if v == NO_TY { None } else { Some(v) }
         }
         TyTag::Brand => match store.brand(BrandId(bb)) {
             // R40: a brand parameter is bound by identity, like any other slot.
             BrandRow::Param { owner, ordinal } if b.owns(owner) => {
                 let v = b.slot(owner, ordinal);
-                if v == NO_TY {
-                    None
-                } else {
-                    Some(v)
-                }
+                if v == NO_TY { None } else { Some(v) }
             }
             _ => Some(ty),
         },
@@ -309,7 +315,11 @@ fn subst_core(store: &mut TyStore, ty: TyId, b: &Binding, solver: &mut dyn ProjS
             }
             let result = subst_norm_with(store, result, b, solver)?;
             // R7: an absent `raises` is not `raises E` for any E, and stays absent.
-            let raises = if raises == NO_TY { NO_TY } else { subst_norm_with(store, raises, b, solver)? };
+            let raises = if raises == NO_TY {
+                NO_TY
+            } else {
+                subst_norm_with(store, raises, b, solver)?
+            };
             let f = store.intern_fn_ty(&params, result, raises, closure);
             Some(store.fn_ty(f))
         }
@@ -337,7 +347,12 @@ fn subst_core(store: &mut TyStore, ty: TyId, b: &Binding, solver: &mut dyn ProjS
     }
 }
 
-fn subst_args(store: &mut TyStore, args: ArgsId, b: &Binding, solver: &mut dyn ProjSolver) -> Option<Vec<TyId>> {
+fn subst_args(
+    store: &mut TyStore,
+    args: ArgsId,
+    b: &Binding,
+    solver: &mut dyn ProjSolver,
+) -> Option<Vec<TyId>> {
     let mut xs = store.args_vec(args);
     for x in xs.iter_mut() {
         *x = subst_norm_with(store, *x, b, solver)?;
@@ -523,7 +538,13 @@ pub fn one_way_match_with(
     }
 }
 
-fn match_args(store: &mut TyStore, p: ArgsId, t: ArgsId, b: &mut Binding, solver: &mut dyn ProjSolver) -> bool {
+fn match_args(
+    store: &mut TyStore,
+    p: ArgsId,
+    t: ArgsId,
+    b: &mut Binding,
+    solver: &mut dyn ProjSolver,
+) -> bool {
     let n = store.args(p).len();
     if store.args(t).len() != n {
         return false;
@@ -621,9 +642,15 @@ mod tests {
         let pat = s.proj_of(i, DefId(9), &[], name);
         let want = s.proj_of(u, DefId(9), &[], name);
         assert!(one_way_match(&mut s, i, u, &mut b));
-        assert!(one_way_match(&mut s, pat, want, &mut b), "I.Item with I := U must match U.Item");
+        assert!(
+            one_way_match(&mut s, pat, want, &mut b),
+            "I.Item with I := U must match U.Item"
+        );
         let other = s.proj_of(u, DefId(9), &[], Symbol(1));
-        assert!(!one_way_match(&mut s, pat, other, &mut b), "...and only U.Item");
+        assert!(
+            !one_way_match(&mut s, pat, other, &mut b),
+            "...and only U.Item"
+        );
 
         // A projection whose head is bound to a CONCRETE type needs the impl
         // index to reduce; I1's solver cannot, so the answer is `false` and
@@ -654,7 +681,11 @@ mod tests {
         let before = s.len();
         assert_eq!(subst_norm(&mut s, mono, &b), Some(mono));
         assert_eq!(subst_norm(&mut s, TY_UNIT, &b), Some(TY_UNIT));
-        assert_eq!(s.len(), before, "substituting a monomorphic type interned nothing");
+        assert_eq!(
+            s.len(),
+            before,
+            "substituting a monomorphic type interned nothing"
+        );
     }
 
     #[test]
@@ -731,8 +762,14 @@ mod tests {
 
         let rhs = s.param(IMPL, 0);
         let mut memo = SubstMemo::new();
-        assert_eq!(subst_norm_cached(&mut s, rhs, &b1, &mut NeutralOnly, &mut memo), Some(i32_ty));
-        assert_eq!(subst_norm_cached(&mut s, rhs, &b2, &mut NeutralOnly, &mut memo), Some(u8_ty));
+        assert_eq!(
+            subst_norm_cached(&mut s, rhs, &b1, &mut NeutralOnly, &mut memo),
+            Some(i32_ty)
+        );
+        assert_eq!(
+            subst_norm_cached(&mut s, rhs, &b2, &mut NeutralOnly, &mut memo),
+            Some(u8_ty)
+        );
         assert_eq!(memo.len(), 2);
     }
 

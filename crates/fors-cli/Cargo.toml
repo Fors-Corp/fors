@@ -15,3 +15,6 @@ fors-index = { path = "../fors-index" }
 fors-resolve = { path = "../fors-resolve" }
 fors-check = { path = "../fors-check" }
 fors-query = { path = "../fors-query" }
+
+[lints]
+workspace = true

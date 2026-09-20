@@ -92,7 +92,7 @@ pub enum TokenKind {
     Dot,
     At,
     Question,
-    Arrow,   // ->
+    Arrow,    // ->
     FatArrow, // =>
     Eq,
     EqEq,
@@ -109,8 +109,8 @@ pub enum TokenKind {
     Amp,
     Pipe,
     Caret,
-    Shl, // <<
-    Shr, // >>
+    Shl,      // <<
+    Shr,      // >>
     DotDotLt, // ..<
     DotDotEq, // ..=
     PlusEq,

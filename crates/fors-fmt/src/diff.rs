@@ -92,7 +92,11 @@ fn myers(a: &[u64], b: &[u64], max_d: usize) -> Option<Vec<(usize, usize)>> {
                     // fall outside it only where the branch never reads them
                     let at = |k: isize| -> isize {
                         let i = k + ddi;
-                        if i < 0 || i as usize >= vv.len() { 0 } else { vv[i as usize] }
+                        if i < 0 || i as usize >= vv.len() {
+                            0
+                        } else {
+                            vv[i as usize]
+                        }
                     };
                     let kk = px - py;
                     let prev_k = if kk == -ddi || (kk != ddi && at(kk - 1) < at(kk + 1)) {
@@ -135,7 +139,11 @@ pub fn diff(old: &[u8], new: &[u8]) -> Vec<TextEdit> {
         Some(p) => p,
         // Too different to diff cheaply: one edit for the whole buffer.
         None => {
-            return vec![TextEdit { start: 0, end: old.len() as u32, new_text: new.to_vec() }];
+            return vec![TextEdit {
+                start: 0,
+                end: old.len() as u32,
+                new_text: new.to_vec(),
+            }];
         }
     };
     let mut edits = Vec::new();
@@ -148,7 +156,11 @@ pub fn diff(old: &[u8], new: &[u8]) -> Vec<TextEdit> {
         let start = oa[ai];
         let end = oa[aj];
         let text = new[nb[bi]..nb[bj]].to_vec();
-        edits.push(TextEdit { start: start as u32, end: end as u32, new_text: text });
+        edits.push(TextEdit {
+            start: start as u32,
+            end: end as u32,
+            new_text: text,
+        });
     };
     for (x, y) in pairs {
         flush(ai, x, bi, y, &mut edits);

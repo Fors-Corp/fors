@@ -228,7 +228,12 @@ pub fn format_source(src: &[u8]) -> Formatted {
         };
     }
     let changed = out != src || matches!(lf, std::borrow::Cow::Owned(_));
-    Formatted { text: out, status: Status::Formatted, changed, parse_diagnostics: 0 }
+    Formatted {
+        text: out,
+        status: Status::Formatted,
+        changed,
+        parse_diagnostics: 0,
+    }
 }
 
 /// Whether two buffers carry exactly the same tokens: the same significant
@@ -280,7 +285,11 @@ pub fn check_source(src: &[u8]) -> Check {
     Check {
         formatted: !f.changed,
         status: f.status,
-        edits: if f.changed { diff::diff(src, &f.text) } else { Vec::new() },
+        edits: if f.changed {
+            diff::diff(src, &f.text)
+        } else {
+            Vec::new()
+        },
     }
 }
 
@@ -298,7 +307,11 @@ pub fn format_range(src: &[u8], start: u32, end: u32) -> Check {
         .into_iter()
         .filter(|e| e.start < end.max(start + 1) && e.end > start)
         .collect();
-    Check { formatted: c.formatted, status: c.status, edits }
+    Check {
+        formatted: c.formatted,
+        status: c.status,
+        edits,
+    }
 }
 
 #[cfg(test)]
@@ -318,7 +331,10 @@ mod tests {
 
     #[test]
     fn simple_fn() {
-        assert_eq!(f("fn   f( ) {let  x=1+2 ;}"), "fn f() {\n    let x = 1 + 2;\n}\n");
+        assert_eq!(
+            f("fn   f( ) {let  x=1+2 ;}"),
+            "fn f() {\n    let x = 1 + 2;\n}\n"
+        );
     }
 
     #[test]
@@ -329,8 +345,14 @@ mod tests {
 
     #[test]
     fn magic_trailing_comma_pins_a_list_open() {
-        assert_eq!(f("fn f(let a: i32, let b: i32,) {}"), "fn f(\n    let a: i32,\n    let b: i32,\n) {}\n");
-        assert_eq!(f("fn f(let a: i32, let b: i32) {}"), "fn f(let a: i32, let b: i32) {}\n");
+        assert_eq!(
+            f("fn f(let a: i32, let b: i32,) {}"),
+            "fn f(\n    let a: i32,\n    let b: i32,\n) {}\n"
+        );
+        assert_eq!(
+            f("fn f(let a: i32, let b: i32) {}"),
+            "fn f(let a: i32, let b: i32) {}\n"
+        );
     }
 
     #[test]
@@ -344,12 +366,19 @@ mod tests {
     #[test]
     fn a_short_chain_stays_on_one_line() {
         let src = "fn f() { let n = v.iter().map(d).count(); }";
-        assert!(String::from_utf8(format_source(src.as_bytes()).text).unwrap().contains("v.iter().map(d).count()"));
+        assert!(
+            String::from_utf8(format_source(src.as_bytes()).text)
+                .unwrap()
+                .contains("v.iter().map(d).count()")
+        );
     }
 
     #[test]
     fn a_blank_line_inside_a_list_breaks_it() {
-        assert_eq!(f("struct S { a: i32,\n\n b: i32 }"), "struct S {\n    a: i32,\n\n    b: i32\n}\n");
+        assert_eq!(
+            f("struct S { a: i32,\n\n b: i32 }"),
+            "struct S {\n    a: i32,\n\n    b: i32\n}\n"
+        );
     }
 
     #[test]
@@ -361,7 +390,13 @@ mod tests {
 
     #[test]
     fn a_multiline_string_keeps_its_own_lines() {
-        let out = f(concat!("fn f() { let s = ", r"\\a", "\n    ", r"\\b", "\n; }"));
+        let out = f(concat!(
+            "fn f() { let s = ",
+            r"\\a",
+            "\n    ",
+            r"\\b",
+            "\n; }"
+        ));
         assert!(out.contains(r"\\a"), "{out}");
         assert_eq!(format_source(out.as_bytes()).text, out.as_bytes());
     }
