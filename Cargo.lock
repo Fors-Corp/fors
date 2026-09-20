@@ -3,13 +3,33 @@
 version = 4
 
 [[package]]
-name = "fors-cli"
+name = "fors-check"
 version = "0.1.0"
 dependencies = [
+ "fors-fir",
  "fors-index",
  "fors-lex",
  "fors-resolve",
  "fors-syntax",
+]
+
+[[package]]
+name = "fors-cli"
+version = "0.1.0"
+dependencies = [
+ "fors-check",
+ "fors-index",
+ "fors-lex",
+ "fors-query",
+ "fors-resolve",
+ "fors-syntax",
+]
+
+[[package]]
+name = "fors-fir"
+version = "0.1.0"
+dependencies = [
+ "fors-index",
 ]
 
 [[package]]
@@ -22,6 +42,10 @@ dependencies = [
 
 [[package]]
 name = "fors-lex"
+version = "0.1.0"
+
+[[package]]
+name = "fors-query"
 version = "0.1.0"
 
 [[package]]

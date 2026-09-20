@@ -3,22 +3,12 @@
 //! rules implemented here code as `A00xx` the same way. Append, never
 //! renumber. Never a panic path.
 
-#[derive(Clone, Copy, PartialEq, Eq, Debug)]
-pub enum Code {
-    /// Chapter 8 (names), rule number equals the code.
-    N(u16),
-    /// Chapter 4 (authority), rule number equals the code.
-    A(u16),
-}
-
-impl Code {
-    pub fn as_string(self) -> String {
-        match self {
-            Code::N(k) => format!("N{k:04}"),
-            Code::A(k) => format!("A{k:04}"),
-        }
-    }
-}
+// MARC: the type-checker design (§4.4, §3 fork 15) widens the code space
+// to one enum (`N | A | T | O | F | D`) shared by every phase; that enum
+// now lives in `fors-index::diag` (the crate every checking phase already
+// depends on) and this module re-exports it, rather than keeping a second,
+// narrower definition here. `N`/`A` and their meaning are unchanged.
+pub use fors_index::diag::Code;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Diagnostic {

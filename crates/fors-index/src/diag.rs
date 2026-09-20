@@ -46,3 +46,50 @@ impl Diagnostic {
         Diagnostic { file, start, end, code, message }
     }
 }
+
+// MARC: the type-checker design (§4.4, §8) widens this crate's diagnostic
+// code space to one enum shared by every phase, so `fors-resolve`'s
+// `Code::{N, A}` can gain `T`/`O`/`F`/`D` letters without a third
+// definition. `DiagCode` (this crate's own ch08 codes) keeps its existing
+// shape — nothing here renames or removes it — and folds into `Code::N`
+// via `From`, since its discriminants already equal the ch08 rule number.
+/// One diagnostic code across every phase (ch08 N, ch04 A, ch09 T, ch01 O,
+/// ch02 F, ch03 D — letters per the type-checker design §3 fork 15, a
+/// drafting default for the non-ch08/ch09 letters per design §14 Q1). The
+/// wrapped `u16` is always the rule number in that chapter, never a
+/// separately-assigned code: append a chapter's obligations as they gain
+/// diagnostics, never renumber one already emitted.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum Code {
+    /// Chapter 8 (names).
+    N(u16),
+    /// Chapter 4 (authority).
+    A(u16),
+    /// Chapter 9 (types).
+    T(u16),
+    /// Chapter 1 (ownership/moves/brands).
+    O(u16),
+    /// Chapter 2 (errors/contracts).
+    F(u16),
+    /// Chapter 3 (numerics/arrays/CHECK positions).
+    D(u16),
+}
+
+impl Code {
+    pub fn as_string(self) -> String {
+        match self {
+            Code::N(k) => format!("N{k:04}"),
+            Code::A(k) => format!("A{k:04}"),
+            Code::T(k) => format!("T{k:04}"),
+            Code::O(k) => format!("O{k:04}"),
+            Code::F(k) => format!("F{k:04}"),
+            Code::D(k) => format!("D{k:04}"),
+        }
+    }
+}
+
+impl From<DiagCode> for Code {
+    fn from(d: DiagCode) -> Code {
+        Code::N(d as u16)
+    }
+}

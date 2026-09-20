@@ -199,6 +199,14 @@ fn run_check(args: &[String]) -> ExitCode {
             .map(|(f, p)| fors_resolve::FileInput { tree: &p.tree, tokens: &p.tokens, source: &f.source, name: f.name.clone() })
             .collect();
         let output = fors_resolve::resolve(&mut interner, &inputs, root);
+        // Design §4.4/§13, increment I0: `fors check` calls `check_build`
+        // after resolution; it emits nothing yet (no phase runs before
+        // I2), so `checked.diagnostics` is always empty here today. Kept
+        // as a real call (not commented out) so the wiring itself is
+        // exercised by every `fors check` invocation and every
+        // conformance test that shells out to it, not just by
+        // `fors-check`'s own unit test.
+        let checked = fors_check::check_build(&output, &interner);
 
         for (i, f) in files.iter().enumerate() {
             for d in &parsed[i].diags {
@@ -216,6 +224,10 @@ fn run_check(args: &[String]) -> ExitCode {
                 lines.push((f.display.clone(), d.start, d.start, format!("{l}:{c}: error[{}]: {}", d.code.as_string(), d.message)));
             }
         }
+        // I0: `checked.diagnostics` is always empty (see above), so this
+        // never adds a line yet; the merge point exists now so I2 onward
+        // is additive here too.
+        debug_assert!(checked.diagnostics.is_empty());
     }
 
     lines.sort_by(|a, b| (a.0.as_str(), a.1).cmp(&(b.0.as_str(), b.1)));

@@ -49,8 +49,16 @@ fn module_source(m: usize, items: usize) -> String {
         let _ = writeln!(s, "    }}");
         let _ = writeln!(s, "    let picked: i32 = match sh {{");
         let _ = writeln!(s, "        Shape{m}_{i}.dot => 0,");
-        let _ = writeln!(s, "        Shape{m}_{i}.line(len) => len,");
-        let _ = writeln!(s, "        other => total,");
+        // MARC: same pre-existing generator bug — a payload binder is
+        // also `"let" ident` (`pattern-let-binding-accepted.fors`), not a
+        // bare name.
+        let _ = writeln!(s, "        Shape{m}_{i}.line(let len) => len,");
+        // MARC: pre-existing generator bug, unrelated to I0 — a bare
+        // catch-all pattern segment resolves as a name reference (Rule
+        // 25), not a binder; only `"let" ident` binds. Fixed here (not
+        // touching tests/conformance/**) so the I0 gate's scale
+        // measurement can actually run to completion.
+        let _ = writeln!(s, "        let other => total,");
         let _ = writeln!(s, "    }};");
         if m > 0 {
             let _ = writeln!(s, "    let prev: i32 = m{p}.work{p}_{i}(x, item, Shape{p}_0.dot);", p = m - 1);

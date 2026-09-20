@@ -23,7 +23,7 @@ pub mod target;
 pub use diag::{Code, Diagnostic};
 pub use target::{Entity, NameUseTable, ResolvedTarget};
 
-use fors_index::{DeclTable, FileId, Interner, ModuleTable, Segments};
+use fors_index::{DeclTable, FileId, Interner, ModuleId, ModuleTable, Segments};
 use fors_lex::Tokens;
 use fors_syntax::Tree;
 
@@ -50,6 +50,16 @@ pub struct ResolveOutput {
     /// Per-module scopes and export tables, for the checker's member
     /// lookups and the query engine's dependency tracking.
     pub universe: items::Universe,
+    // MARC: design §4.4 — ch09 Rule 43's method-lookup candidate-trait
+    // search walks the module graph (round 5 D3: exactly the explicit
+    // `use` edges, no body scan), which `resolve()` already computes
+    // (`fors_index::build_module_graph`) but previously discarded once
+    // `universe` was built. Kept here instead of recomputed so the
+    // checker never re-derives it from `modules`/`files`.
+    /// The module graph's edges (`from` uses `to`), sorted by
+    /// `(from, to)` and deduplicated — the same edge list
+    /// [`fors_index::build_module_graph`] produced.
+    pub edges: Vec<(ModuleId, ModuleId)>,
 }
 
 impl ResolveOutput {
@@ -57,6 +67,23 @@ impl ResolveOutput {
     /// other module's resolution can depend on.
     pub fn export_signature(&self, file: usize, interner: &Interner) -> Vec<String> {
         self.universe.scope(FileId(file as u32)).map(|s| s.export_signature(interner)).unwrap_or_default()
+    }
+
+    // MARC: design §4.4 writes this as `direct_edges_of(ModuleId) ->
+    // &[ModuleId]`. `edges` is stored as `(from, to)` pairs (as the design
+    // also literally specifies for the field itself), so a same-allocation
+    // `&[ModuleId]` of just the targets does not exist to borrow; returning
+    // `Vec<ModuleId>` is the direct fix and keeps the call site's meaning
+    // (`from`'s direct `use` targets, sorted, deduplicated) identical. A
+    // columnar `(from_col, to_col)` layout would restore the exact
+    // signature at the cost of a second sorted-by-from copy of `edges`
+    // that only this one query reads; revisit if it is ever hot.
+    /// `from`'s direct `use` targets, sorted and deduplicated (binary
+    /// search over [`Self::edges`], which is sorted by `(from, to)`).
+    pub fn direct_edges_of(&self, from: ModuleId) -> Vec<ModuleId> {
+        let start = self.edges.partition_point(|&(f, _)| f < from);
+        let end = start + self.edges[start..].partition_point(|&(f, _)| f == from);
+        self.edges[start..end].iter().map(|&(_, to)| to).collect()
     }
 }
 
@@ -118,6 +145,9 @@ pub fn resolve(interner: &mut Interner, inputs: &[FileInput], root: Option<usize
         }
         resolve_file_bodies(interner, &modules, &universe, FileId(i as u32), inp, &decls[i], &mut per_file[i], &mut name_uses[i]);
     }
+    for uses in &mut name_uses {
+        uses.finish();
+    }
 
     let files = per_file
         .into_iter()
@@ -125,7 +155,7 @@ pub fn resolve(interner: &mut Interner, inputs: &[FileInput], root: Option<usize
         .zip(name_uses)
         .map(|((diagnostics, decls), name_uses)| FileResult { decls, diagnostics, name_uses })
         .collect();
-    ResolveOutput { modules, files, universe }
+    ResolveOutput { modules, files, universe, edges }
 }
 
 fn resolve_file_bodies(

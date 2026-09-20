@@ -49,6 +49,17 @@ impl Interner {
         sym
     }
 
+    /// Looks up `bytes` without interning it: `None` means no member name
+    /// anywhere in the build spells `bytes`, which (once the signature
+    /// phase has interned every field, method, associated-type and
+    /// variant name — design §1 point 6) is enough to reject a member
+    /// access by that name in one lookup, before any per-declaration
+    /// search. Never assigns a `Symbol`, so it cannot change `len()` or
+    /// any other `Symbol`'s value.
+    pub fn get(&self, bytes: &[u8]) -> Option<Symbol> {
+        self.lookup.get(bytes).copied()
+    }
+
     pub fn resolve(&self, sym: Symbol) -> &[u8] {
         &self.strings[sym.0 as usize]
     }

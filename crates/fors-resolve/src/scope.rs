@@ -12,7 +12,7 @@ use fors_syntax::{NodeKind, Tree};
 use crate::diag::{Code, Diagnostic};
 use crate::items::{binder_name, Export, Exports, ModuleScope, Prelude};
 use crate::paths::{byte_range, own_span, segments_with_ranges};
-use crate::target::{Entity, NameUseTable, ResolvedTarget};
+use crate::target::{DeferReason, Entity, NameUseTable, ResolvedTarget};
 
 pub struct BodyCtx<'a> {
     pub tree: &'a Tree,
@@ -147,8 +147,15 @@ impl<'a> BodyCtx<'a> {
         }
     }
 
-    fn record(&mut self, node: usize, target: ResolvedTarget) {
-        self.uses.push(node as u32, target);
+    /// Records `target` at `node`, having consumed `consumed` of a dotted
+    /// path's segments (design §4.4's `NameUseTable::consumed`, ch09 Rule
+    /// 43). `consumed` is exact for [`Self::resolve_path`]'s own walk
+    /// (it is the loop's own segment index); every other caller here
+    /// records a single-segment position, so it is always 1 there except
+    /// where 0 is exactly right (an unresolved head, or a tail deferred
+    /// wholesale to the checker).
+    fn record(&mut self, node: usize, target: ResolvedTarget, consumed: u8) {
+        self.uses.push(node as u32, target, consumed);
     }
 
     /// Ch08 Rule 16: resolves a dotted path node (`NameExpr`, `TypeApp`,
@@ -173,13 +180,13 @@ impl<'a> BodyCtx<'a> {
                 "unresolved name".to_string()
             };
             self.diags.push(Diagnostic::new(range0.0, range0.1, Code::N(14), msg));
-            self.record(node, ResolvedTarget::Deferred);
+            self.record(node, ResolvedTarget::Deferred { reason: DeferReason::Diagnosed }, 0);
             return;
         };
         let (mut head, mut variants) = match found {
             Found::Local(n) => {
                 // Further segments of a local are the checker's (Rule 22).
-                self.record(node, ResolvedTarget::Local { node: n });
+                self.record(node, ResolvedTarget::Local { node: n }, 1);
                 return;
             }
             Found::Entity(e, v) => (e, v),
@@ -191,7 +198,7 @@ impl<'a> BodyCtx<'a> {
                     let Some(&(sn, sr)) = segs.get(idx) else {
                         let r = byte_range(self.tree, self.tokens, node);
                         self.diags.push(Diagnostic::new(r.0, r.1, Code::N(16), "the path ends on a module; a module is not a value or a type".to_string()));
-                        self.record(node, ResolvedTarget::Deferred);
+                        self.record(node, ResolvedTarget::Deferred { reason: DeferReason::Diagnosed }, idx as u8);
                         return;
                     };
                     match self.exports.get(mid, sn) {
@@ -208,7 +215,7 @@ impl<'a> BodyCtx<'a> {
                                 (Code::N(16), format!("module `{mname}` has no `pub` module-scope name at this segment"))
                             };
                             self.diags.push(Diagnostic::new(sr.0, sr.1, code, msg));
-                            self.record(node, ResolvedTarget::Deferred);
+                            self.record(node, ResolvedTarget::Deferred { reason: DeferReason::Diagnosed }, idx as u8);
                             return;
                         }
                     }
@@ -217,17 +224,17 @@ impl<'a> BodyCtx<'a> {
                 // `std` is not part of this build: the rest is left to
                 // the checker rather than guessed.
                 Entity::PreludeModule(_, None) if idx < segs.len() => {
-                    self.record(node, ResolvedTarget::Deferred);
+                    self.record(node, ResolvedTarget::Deferred { reason: DeferReason::StdAbsent }, idx as u8);
                     return;
                 }
                 Entity::PreludeModule(..) => {
                     let r = byte_range(self.tree, self.tokens, node);
                     self.diags.push(Diagnostic::new(r.0, r.1, Code::N(16), "the path ends on a module; a module is not a value or a type".to_string()));
-                    self.record(node, ResolvedTarget::Deferred);
+                    self.record(node, ResolvedTarget::Deferred { reason: DeferReason::Diagnosed }, idx as u8);
                     return;
                 }
                 Entity::Poisoned => {
-                    self.record(node, ResolvedTarget::Deferred);
+                    self.record(node, ResolvedTarget::Deferred { reason: DeferReason::Diagnosed }, idx as u8);
                     return;
                 }
                 Entity::Item { file, decl } => {
@@ -238,11 +245,12 @@ impl<'a> BodyCtx<'a> {
                         Some(i) => Entity::Variant { file, decl, index: i as u32 },
                         None => head,
                     };
-                    self.record(node, ResolvedTarget::Entity(target));
+                    let consumed = idx + variant.is_some() as usize;
+                    self.record(node, ResolvedTarget::Entity(target), consumed as u8);
                     return;
                 }
                 _ => {
-                    self.record(node, ResolvedTarget::Entity(head));
+                    self.record(node, ResolvedTarget::Entity(head), idx as u8);
                     return;
                 }
             }
@@ -265,7 +273,7 @@ impl<'a> BodyCtx<'a> {
             ScopedType => {
                 if let Some((name, range)) = scoped_ident(self.tree, self.tokens, self.source, self.interner, node) {
                     if self.fn_params.contains(&name) {
-                        self.record(node, ResolvedTarget::Local { node: node as u32 });
+                        self.record(node, ResolvedTarget::Local { node: node as u32 }, 1);
                     } else {
                         self.diags.push(Diagnostic::new(range.0, range.1, Code::N(20), "`scoped(...)` must name a parameter of this function".to_string()));
                     }
@@ -420,9 +428,9 @@ impl<'a> BodyCtx<'a> {
                             // other: a path that ends on a module is an
                             // error, not a constant to compare against.
                             self.diags.push(Diagnostic::new(range.0, range.1, Code::N(16), "the path ends on a module; a module is not a value or a type".to_string()));
-                            self.record(node, ResolvedTarget::Deferred);
+                            self.record(node, ResolvedTarget::Deferred { reason: DeferReason::Diagnosed }, 1);
                         }
-                        Some(Found::Entity(e, _)) => self.record(node, ResolvedTarget::Entity(e)),
+                        Some(Found::Entity(e, _)) => self.record(node, ResolvedTarget::Entity(e), 1),
                         Some(Found::Local(_)) => {
                             // Rule 25: a bare pattern name that resolves to
                             // a local binding, parameter or generic
@@ -435,11 +443,11 @@ impl<'a> BodyCtx<'a> {
                                 Code::N(25),
                                 "a pattern names a local binding, parameter or generic parameter; write \"let n\" to bind a fresh name instead".to_string(),
                             ));
-                            self.record(node, ResolvedTarget::Deferred);
+                            self.record(node, ResolvedTarget::Deferred { reason: DeferReason::Diagnosed }, 1);
                         }
                         None => {
                             self.diags.push(Diagnostic::new(range.0, range.1, Code::N(14), "unresolved name (to bind, write \"let n\")".to_string()));
-                            self.record(node, ResolvedTarget::Deferred);
+                            self.record(node, ResolvedTarget::Deferred { reason: DeferReason::Diagnosed }, 0);
                         }
                     }
                 } else {
@@ -450,7 +458,10 @@ impl<'a> BodyCtx<'a> {
                 }
             }
             PatDot => {
-                self.record(node, ResolvedTarget::Deferred);
+                // A dot-literal pattern (`.some`) names a variant by
+                // shape alone: genuinely deferred to the checker (Rule
+                // 22), never diagnosed here.
+                self.record(node, ResolvedTarget::Deferred { reason: DeferReason::Member }, 0);
                 for c in self.tree.children(node) {
                     self.walk_pattern(c);
                 }
@@ -495,7 +506,7 @@ impl<'a> BodyCtx<'a> {
                     };
                     if ok {
                         if let Some(Found::Local(n)) = self.lookup(name) {
-                            self.record(g, ResolvedTarget::Local { node: n });
+                            self.record(g, ResolvedTarget::Local { node: n }, 1);
                         }
                     } else {
                         self.diags.push(Diagnostic::new(

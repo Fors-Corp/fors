@@ -29,7 +29,15 @@ const FNV_OFFSET_HI: u64 = 0x84e0_2225_cbf1_9d29;
 const FNV_PRIME_HI: u64 = 0x9E37_79B1_85EB_CA87;
 const SEPARATOR: u8 = 0xFF;
 
-fn splitmix64(mut x: u64) -> u64 {
+// MARC: the type-checker design (§4.4) wants `splitmix64` public and a
+// byte-string entry point (`hash_bytes`) so `fors-fir`'s cons table
+// (open-addressed hash-consing over `(tag, a, b, quals)` keys, §5.1) can
+// reuse this crate's exact avalanche step instead of a second copy, and so
+// a canonical signature encoding (`fors-fir::encode::sig_hash`) can fold
+// arbitrary byte strings the same way declaration fingerprints already do
+// — one hash function for the whole compiler (design §14 Q2 keeps FNV-128
+// + SplitMix64 rather than the PLAN's BLAKE3).
+pub fn splitmix64(mut x: u64) -> u64 {
     x ^= x >> 30;
     x = x.wrapping_mul(0xBF58_476D_1CE4_E5B9);
     x ^= x >> 27;
@@ -96,6 +104,25 @@ pub fn hash_tokens_excluding(tokens: &Tokens, source: &[u8], first: u32, end: u3
         }
         lo = fnv_step(lo, FNV_PRIME_LO, SEPARATOR);
         hi = fnv_step(hi, FNV_PRIME_HI, SEPARATOR);
+    }
+    lo = splitmix64(lo);
+    hi = splitmix64(hi ^ lo);
+    ((hi as u128) << 64) | lo as u128
+}
+
+/// Folds an arbitrary byte string into the same two-lane FNV-128 +
+/// SplitMix64 fingerprint as [`hash_tokens`], with no token/kind/separator
+/// structure imposed on it: the caller (`fors-fir::encode`) is responsible
+/// for its own unambiguous framing (length-prefixing or its own
+/// separators) if it hashes more than one logical field. Used for the
+/// canonical FIR signature hash (`sig_hash`, design §5.4), not for
+/// declaration fingerprints (that stays [`hash_tokens`]/[`decl_fingerprint`]).
+pub fn hash_bytes(bytes: &[u8]) -> u128 {
+    let mut lo = FNV_OFFSET_LO;
+    let mut hi = FNV_OFFSET_HI;
+    for &b in bytes {
+        lo = fnv_step(lo, FNV_PRIME_LO, b);
+        hi = fnv_step(hi, FNV_PRIME_HI, b);
     }
     lo = splitmix64(lo);
     hi = splitmix64(hi ^ lo);

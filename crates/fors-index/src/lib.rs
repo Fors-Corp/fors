@@ -19,8 +19,8 @@ pub mod interner;
 pub mod module;
 
 pub use decl::{build_decl_table, DeclKind, DeclTable, Visibility};
-pub use diag::{DiagCode, Diagnostic};
-pub use fingerprint::{decl_fingerprint, hash_tokens, NO_BODY};
+pub use diag::{Code, DiagCode, Diagnostic};
+pub use fingerprint::{decl_fingerprint, hash_bytes, hash_tokens, splitmix64, NO_BODY};
 pub use ids::{DeclId, DefId, FileId, ModuleId, ScopeId};
 pub use interner::{Interner, Symbol};
 pub use module::{build_module_graph, extract_module_facts, module_segments, FileFacts, ModuleTable, Segments};

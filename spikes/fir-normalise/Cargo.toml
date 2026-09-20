@@ -1,0 +1,23 @@
+[workspace]
+
+[package]
+name = "fir-normalise-spike"
+version = "0.1.0"
+edition = "2021"
+publish = false
+
+# MARC: no path dependency on ../../crates/fors-fir on purpose. This spike must
+# run BEFORE any checker code exists (design §13, I1's gate), and its whole job
+# is to be free to CHANGE the memo keys — so it carries its own ~200-line copy
+# of the type representation (tag/a/b/flags columns, interned args, trait refs,
+# projection keys) rather than depending on the crate whose design it is
+# auditing. Copying was also simply faster than shaping fors-fir around a
+# consumer that will be deleted.
+[dependencies]
+
+[[bin]]
+name = "spike"
+path = "src/main.rs"
+
+[profile.release]
+opt-level = 2
