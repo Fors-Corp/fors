@@ -196,7 +196,13 @@ impl Universe {
 
 fn build_prelude(interner: &mut Interner) -> Prelude {
     let mut out = HashMap::new();
-    for n in prelude::PRELUDE_TYPES.iter().chain(&prelude::PRELUDE_TYPES2).chain(&prelude::PRELUDE_TYPES3).chain(&prelude::PRELUDE_TYPES4) {
+    for n in prelude::PRELUDE_TYPES
+        .iter()
+        .chain(&prelude::PRELUDE_TYPES2)
+        .chain(&prelude::PRELUDE_TYPES3)
+        .chain(&prelude::PRELUDE_TYPES4)
+        .chain(&prelude::PRELUDE_TYPES5)
+    {
         let s = interner.intern(n);
         out.insert(s, Entity::PreludeType(s));
     }
@@ -518,6 +524,20 @@ pub fn build_universe(
     edges: &[(ModuleId, ModuleId)],
     files: &[FileCtx],
 ) -> (Universe, Vec<(usize, Diagnostic)>) {
+    build_universe_in_package(interner, modules, edges, files, false)
+}
+
+/// As [`build_universe`], for a build whose package is known to be `std`:
+/// inside package `std` a module path carries no `std` segment, so only the
+/// package name can tell that an `impl` of a prelude type is at home here
+/// (ch08 Rule 21).
+pub fn build_universe_in_package(
+    interner: &mut Interner,
+    modules: &ModuleTable,
+    edges: &[(ModuleId, ModuleId)],
+    files: &[FileCtx],
+    package_is_std: bool,
+) -> (Universe, Vec<(usize, Diagnostic)>) {
     let n = files.len();
     let mut diags = Vec::new();
     let mut universe = Universe { scopes: (0..n).map(|_| ModuleScope::default()).collect(), prelude: build_prelude(interner), has_std: false };
@@ -528,7 +548,7 @@ pub fn build_universe(
     for (m, f) in files.iter().enumerate() {
         let Universe { scopes, prelude, .. } = &mut universe;
         let scope = &mut scopes[m];
-        scope.in_std = modules.name.get(m).and_then(|s| s.first()) == Some(&std_sym);
+        scope.in_std = package_is_std || modules.name.get(m).and_then(|s| s.first()) == Some(&std_sym);
         for i in 0..f.decls.len() {
             if f.decls.parent[i] != fors_index::decl::NO_PARENT {
                 continue;

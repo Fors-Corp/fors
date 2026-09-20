@@ -34,8 +34,10 @@ fn parse_directives(src: &str) -> Case {
         } else if let Some(v) = rest.strip_prefix("rule:") {
             let v = v.trim();
             // "08.R7" or "07.Grammar" etc; we only care about "NN.Rk".
+            // Ch10 numbers its rules "10.S2" (its codes are S00nn), so the
+            // prefix letter is per chapter, not always `R`.
             if let Some((ch, r)) = v.split_once('.') {
-                if let Some(k) = r.strip_prefix('R') {
+                if let Some(k) = r.strip_prefix('R').or_else(|| r.strip_prefix('S')) {
                     let k = k.split(['a', 'b']).next().unwrap_or(k); // "2a" -> "2"
                     if let (Ok(c), Ok(n)) = (ch.parse::<u8>(), k.parse::<u16>()) {
                         rule_chapter = c;
@@ -280,6 +282,48 @@ fn ch09_types_corpus_resolver_view() {
         }
     }
     assert!(failures.is_empty(), "ch09 corpus (resolver view) failures:\n{}", failures.join("\n"));
+}
+
+/// Ch10's corpus, resolver view. The std surface is typed, not resolved, so
+/// almost every test here is the checker's: the resolver's whole obligation
+/// is to be SILENT on them, because the names they use (`Buffer`, `Vec`,
+/// `Map`, the `std.*` modules, `mem.Heap` as a `main` parameter) must all
+/// resolve. A test whose `detail` names an N/A code is the exception and must
+/// produce exactly that one diagnostic. This test is what proves the ch10
+/// handoff (prelude additions, the `mem.Heap` root type, package `std`) is
+/// actually wired in, so it fails loudly if any of it is reverted.
+#[test]
+fn ch10_std_corpus_resolver_view() {
+    let dir = repo_root().join("tests/conformance/10-std");
+    let targets = corpus_targets(&dir);
+    assert!(targets.len() >= 40, "10-std corpus not found or truncated: {}", targets.len());
+    let mut failures = Vec::new();
+    for target in &targets {
+        let src = directive_source(target);
+        let case = parse_directives(&src);
+        assert_eq!(case.rule_chapter, 10, "{}: every 10-std test cites 10.Sk", case.name);
+        let detail = src.lines().find_map(|l| l.strip_prefix("//! detail:")).unwrap_or("").trim().to_string();
+        let expected: Option<Code> = match detail.as_bytes().first() {
+            Some(b'N') => detail.get(1..5).and_then(|d| d.parse().ok()).map(Code::N),
+            Some(b'A') => detail.get(1..5).and_then(|d| d.parse().ok()).map(Code::A),
+            _ => None,
+        };
+        let diags = resolve_target(target);
+        let got: Vec<String> = diags.iter().map(|d| d.code.as_string()).collect();
+        match expected {
+            Some(code) => {
+                if diags.len() != 1 || diags[0].code != code {
+                    failures.push(format!("{}: expected exactly one {}, got {got:?}", case.name, code.as_string()));
+                }
+            }
+            None => {
+                if !diags.is_empty() {
+                    failures.push(format!("{}: expected the resolver to be clean (the test is the checker's), got {got:?}", case.name));
+                }
+            }
+        }
+    }
+    assert!(failures.is_empty(), "ch10 corpus (resolver view) failures:\n{}", failures.join("\n"));
 }
 
 #[test]

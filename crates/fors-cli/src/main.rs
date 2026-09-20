@@ -198,7 +198,13 @@ fn run_check(args: &[String]) -> ExitCode {
             .zip(parsed.iter())
             .map(|(f, p)| fors_resolve::FileInput { tree: &p.tree, tokens: &p.tokens, source: &f.source, name: f.name.clone() })
             .collect();
-        let output = fors_resolve::resolve(&mut interner, &inputs, root);
+        // The package name comes from the manifest (ch08 Rule 1), which has no
+        // chapter yet, so infer it from the source root's directory name. It
+        // matters only for `std` itself: inside package `std` the module paths
+        // carry no `std` segment, so nothing else could tell that an `impl` of
+        // a prelude type is at home (ch08 Rule 21, ch10 Rule 1).
+        let package = std::path::Path::new(path).file_name().map(|n| n.as_encoded_bytes().to_vec());
+        let output = fors_resolve::resolve_in_package(&mut interner, &inputs, root, package.as_deref());
         // Design §4.4/§13, increment I0: `fors check` calls `check_build`
         // after resolution; it emits nothing yet (no phase runs before
         // I2), so `checked.diagnostics` is always empty here today. Kept

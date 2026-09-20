@@ -71,7 +71,7 @@ const CAPABILITIES: [&[&[u8]]; 14] = [
 
 /// Ch04 Rule 21's closed root-capability list: `main` parameter type ->
 /// the capability it requires in root `needs`.
-const MAIN_PARAM_TYPES: [(&[&[u8]], &[&[u8]]); 11] = [
+const MAIN_PARAM_TYPES: [(&[&[u8]], &[&[u8]]); 12] = [
     (&[b"io", b"Stdout"], &[b"io", b"stdout"]),
     (&[b"io", b"Stderr"], &[b"io", b"stderr"]),
     (&[b"io", b"Stdin"], &[b"io", b"stdin"]),
@@ -83,6 +83,10 @@ const MAIN_PARAM_TYPES: [(&[&[u8]], &[&[u8]]); 11] = [
     (&[b"env", b"Env"], &[b"env"]),
     (&[b"env", b"Args"], &[b"env"]),
     (&[b"gpu", b"Device"], &[b"gpu"]),
+    // Ch10 Rule 13: the process heap is authority-free. Allocation is not a
+    // capability, so this row pairs with NO `needs` entry and the pairing
+    // check below skips an empty capability list.
+    (&[b"mem", b"Heap"], &[]),
 ];
 
 fn is_sig(tokens: &Tokens, i: usize) -> bool {
@@ -209,7 +213,7 @@ fn check_main_impl(
     for param in root_tree.children(params_node) {
         let Some(ty) = root_tree.children(param).next() else { continue };
         if root_tree.kinds[ty] != NodeKind::TypeApp {
-            diags.push(Diagnostic::new(range.0, range.1, Code::A(8), "`main` parameter type is not one of the eleven root-capability types".to_string()));
+            diags.push(Diagnostic::new(range.0, range.1, Code::A(8), "`main` parameter type is not one of the twelve root-capability types".to_string()));
             continue;
         }
         let has_targs = root_tree.children(ty).next().is_some();
@@ -226,7 +230,7 @@ fn check_main_impl(
                     // code, so Rule 8 stays silent on this parameter.
                     HeadBinding::Unbound => continue,
                     HeadBinding::Other => {
-                        diags.push(Diagnostic::new(range.0, range.1, Code::A(8), "`main` parameter type is not one of the eleven root-capability types: its module is not the std module (a user module or item of the same name cannot supply a root capability, Rule 7)".to_string()));
+                        diags.push(Diagnostic::new(range.0, range.1, Code::A(8), "`main` parameter type is not one of the twelve root-capability types: its module is not the std module (a user module or item of the same name cannot supply a root capability, Rule 7)".to_string()));
                         continue;
                     }
                 }
@@ -247,6 +251,9 @@ fn check_main_impl(
                 } else {
                     mapped_cap
                 };
+                if cap.is_empty() {
+                    continue; // `mem.Heap`: a root type that pairs with no capability.
+                }
                 let has_cap = needs.iter().any(|n| eq_words(n, cap));
                 if !has_cap {
                     // Rule 8 sends this case to Rule 1 ("MUST be declared in
@@ -255,7 +262,7 @@ fn check_main_impl(
                 }
             }
             _ => {
-                diags.push(Diagnostic::new(range.0, range.1, Code::A(8), "`main` parameter type is not one of the eleven root-capability types".to_string()));
+                diags.push(Diagnostic::new(range.0, range.1, Code::A(8), "`main` parameter type is not one of the twelve root-capability types".to_string()));
             }
         }
     }

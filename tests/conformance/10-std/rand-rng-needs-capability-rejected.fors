@@ -1,7 +1,7 @@
 //! name: rand_rng_needs_capability_rejected
 //! rule: 10.S38
 //! expect: check-error
-//! detail: ch04 R8 -- a main parameter of type rand.Rng requires `rng` in the root module's needs
+//! detail: A0001 -- ch04 R8: a main parameter of type rand.Rng requires `rng` in the root module's needs
 
 module app;
 needs { };

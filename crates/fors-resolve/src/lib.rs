@@ -102,7 +102,21 @@ fn index_diag_rule(code: fors_index::DiagCode) -> u16 {
 /// ([`fors_index::build_module_graph`], [`items::build_universe`]), then
 /// resolves each file's bodies (ch08 R14-R20, R25-R26) and the ch04 rules
 /// this phase owns (needs vocabulary, `main`).
+/// Resolve a package whose name is known (ch08 Rule 1: the manifest names the
+/// package; until the manifest chapter exists the CLI infers it from the source
+/// root's directory name). The name matters only for package `std`, whose
+/// modules may implement prelude types (Rule 21) — inside `std` the module path
+/// carries no `std` segment, so the path alone cannot tell.
+pub fn resolve_in_package(interner: &mut Interner, inputs: &[FileInput], root: Option<usize>, package: Option<&[u8]>) -> ResolveOutput {
+    let is_std = package == Some(b"std".as_slice());
+    resolve_impl(interner, inputs, root, is_std)
+}
+
 pub fn resolve(interner: &mut Interner, inputs: &[FileInput], root: Option<usize>) -> ResolveOutput {
+    resolve_impl(interner, inputs, root, false)
+}
+
+fn resolve_impl(interner: &mut Interner, inputs: &[FileInput], root: Option<usize>, package_is_std: bool) -> ResolveOutput {
     let n = inputs.len();
     let decls: Vec<DeclTable> = inputs.iter().map(|f| fors_index::build_decl_table(f.tree, f.tokens, f.source, interner)).collect();
     let facts: Vec<fors_index::FileFacts> = inputs.iter().map(|f| fors_index::extract_module_facts(f.tree, f.tokens, f.source, interner)).collect();
@@ -125,7 +139,7 @@ pub fn resolve(interner: &mut Interner, inputs: &[FileInput], root: Option<usize
         .zip(decls.iter())
         .map(|(inp, d)| items::FileCtx { tree: inp.tree, tokens: inp.tokens, source: inp.source, decls: d })
         .collect();
-    let (universe, item_diags) = items::build_universe(interner, &modules, &edges, &file_ctxs);
+    let (universe, item_diags) = items::build_universe_in_package(interner, &modules, &edges, &file_ctxs, package_is_std);
     for (i, d) in item_diags {
         per_file[i].push(d);
     }

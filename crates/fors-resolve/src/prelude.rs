@@ -35,8 +35,26 @@ pub fn std_modules_list() -> String {
     names.join(" ")
 }
 
+/// Ch10 Rule 2's additions: the std types the prelude names, all defined in
+/// `std.mem` and its submodules. They close ch08 open question 1's type half
+/// (`Buffer`, `Vec`, `Map` and friends were used unqualified with no import).
+pub const PRELUDE_TYPES5: [&[u8]; 8] = [
+    b"Allocator",
+    b"AllocError",
+    b"PageAllocator",
+    b"Buffer",
+    b"Vec",
+    b"Map",
+    b"String",
+    b"Utf8Error",
+];
+
 pub fn is_prelude_type(name: &[u8]) -> bool {
-    PRELUDE_TYPES.contains(&name) || PRELUDE_TYPES2.contains(&name) || PRELUDE_TYPES3.contains(&name) || PRELUDE_TYPES4.contains(&name)
+    PRELUDE_TYPES.contains(&name)
+        || PRELUDE_TYPES2.contains(&name)
+        || PRELUDE_TYPES3.contains(&name)
+        || PRELUDE_TYPES4.contains(&name)
+        || PRELUDE_TYPES5.contains(&name)
 }
 
 pub fn is_prelude_value(name: &[u8]) -> bool {
