@@ -15,6 +15,19 @@ exact in doubles). Print the sum as an integer (no decimal point, no exponent).
 """
 reference = "c"
 threads = [1, 2, 4, 6, 8]
+# bound: STREAM triad's arithmetic intensity is fixed and tiny (2 flops per 24 bytes moved =
+# 0.083 FLOP/byte, independent of N) regardless of machine; classification per
+# docs/spec/06-measurement.md Tier A table and its own description above (R16: gated on
+# fraction of measured roofline, never a single efficiency ratio).
+bound = "bandwidth"
+# deterministic: each thread first-touches and writes only its own contiguous index block of
+# a[]; the final sum is a single serial pass over the whole array (fixed index order) done
+# after join, in every implemented language (c, c-fma, rust, go, swift, zig, java, node, deno, python where
+# present), and verified empirically by `run.py determinism`, which runs EVERY declared thread
+# count at the check size and requires byte-identical stdout (python uses processes + shared memory, same block-disjoint
+# pattern). Values are integers exactly representable in double (spec guarantees this), so the
+# serial sum is exact regardless of how the array was partitioned while being written.
+deterministic = true
 
 [sizes]
 check = ["100000", "3"]
