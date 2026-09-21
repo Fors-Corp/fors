@@ -2,7 +2,7 @@
 // not reached, each with the increment (design §13) that owns it.
 // `pending_09_is_shrinking` asserts the bound never rises; every
 // increment deletes rows, never adds them.
-const PENDING_09_MAX: usize = 62;
+const PENDING_09_MAX: usize = 58;
 const PENDING_09: &[(&str, &str)] = &[
     ("adaptor-annotated-binding-mismatch-rejected", "I3"),
     ("adaptor-generic-fn-item-uninstantiated-rejected", "I5"),
@@ -17,7 +17,6 @@ const PENDING_09: &[(&str, &str)] = &[
     ("brand-identity-mismatch-rejected", "I3"),
     ("brand-param-as-value-type-rejected", "I8"),
     ("callable-bound-cannot-bind-result-rejected", "I5"),
-    ("callable-field-method-form-rejected", "I4"),
     ("cannot-infer-rejected", "I5"),
     ("closure-before-its-iterator-rejected", "I3"),
     ("closure-before-its-type-source-rejected", "I3"),
@@ -46,7 +45,6 @@ const PENDING_09: &[(&str, &str)] = &[
     ("neutral-projection-drop-without-bound-rejected", "I5"),
     ("neutral-projection-to-dyn-rejected", "I3"),
     ("never-not-inferred-rejected", "I5"),
-    ("no-auto-deref-own-rejected", "I4"),
     ("none-in-synth-rejected", "I5"),
     ("param-only-under-projection-rejected", "I5"),
     ("pattern-bare-fn-name-rejected", "I7"),
@@ -61,9 +59,7 @@ const PENDING_09: &[(&str, &str)] = &[
     ("rigid-discard-without-droppable-rejected", "I5"),
     ("rigid-drop-without-droppable-rejected", "I5"),
     ("rigid-expression-statement-without-droppable-rejected", "I5"),
-    ("trait-method-without-edge-rejected", "I4"),
     ("two-brands-one-param-rejected", "I3"),
-    ("two-traits-same-method-rejected", "I4"),
     ("unbounded-op-on-param-rejected", "I5"),
     ("unreachable-arm-rejected", "I7"),
 ];

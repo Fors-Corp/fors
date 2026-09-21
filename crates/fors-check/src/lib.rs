@@ -26,6 +26,7 @@ pub mod expr;
 pub mod facts;
 pub mod lower;
 pub mod member;
+pub mod methods;
 pub mod rules;
 pub mod show;
 pub mod tape;
@@ -187,6 +188,9 @@ pub fn check_build(
     // impl index and the linearity memo are built once (design §7.1).
     let (counters, check_sites, deps, facts) = {
         let mut w = wf::Wf::new(&mut fir, interner, &prelude, &def_table, &shapes, &mut sink);
+        // R43's candidate-trait search walks the module graph: hand over
+        // the edge list `resolve()` kept for exactly this.
+        w.mod_edges = resolved.edges.clone();
         w.spoke = vec![false; w.fir.sigs.len()];
         w.impls = std::mem::take(&mut low.impls);
         w.run(&low, &files);

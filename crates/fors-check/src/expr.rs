@@ -129,6 +129,13 @@ impl Wf<'_> {
         if self.fn_shape_eq(s, want) {
             return want; // (b)
         }
+        if self.fir.tys.unqual(s) == self.fir.tys.unqual(want) {
+            // Same bare type, different qualifiers (`iso`/`imm`/`secret`):
+            // the qualifier discipline is ch01/ch05's (I8b/I10's), not a
+            // judgement this increment owns. Silent and absorbing, never
+            // a guess in either direction.
+            return TY_ERROR;
+        }
         if self.fir.tys.tag(self.fir.tys.unqual(want)) == TyTag::Dyn {
             return match self.to_dyn(s, want) {
                 Ok(()) => want,
