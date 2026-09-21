@@ -1,0 +1,374 @@
+{
+  "$schema": "https://raw.githubusercontent.com/martinring/tmlanguage/master/tmlanguage.json",
+  "name": "Fors",
+  "scopeName": "source.fors",
+  "fileTypes": [
+    "fors"
+  ],
+  "patterns": [
+    {
+      "include": "#comment-doc"
+    },
+    {
+      "include": "#comment-line"
+    },
+    {
+      "include": "#block-comment"
+    },
+    {
+      "include": "#multiline-string"
+    },
+    {
+      "include": "#string"
+    },
+    {
+      "include": "#number-hex"
+    },
+    {
+      "include": "#number-oct"
+    },
+    {
+      "include": "#number-bin"
+    },
+    {
+      "include": "#number-dec"
+    },
+    {
+      "include": "#fn-declaration"
+    },
+    {
+      "include": "#type-declaration"
+    },
+    {
+      "include": "#assoc-type-declaration"
+    },
+    {
+      "include": "#const-declaration"
+    },
+    {
+      "include": "#soa-contextual"
+    },
+    {
+      "include": "#attribute"
+    },
+    {
+      "include": "#type-ref-after-arrow"
+    },
+    {
+      "include": "#type-ref-after-raises"
+    },
+    {
+      "include": "#type-ref-after-qualifier"
+    },
+    {
+      "include": "#set-contextual"
+    },
+    {
+      "include": "#keywords-declaration-type"
+    },
+    {
+      "include": "#keywords-declaration-other"
+    },
+    {
+      "include": "#keywords-control-flow"
+    },
+    {
+      "include": "#keywords-control-resource"
+    },
+    {
+      "include": "#keywords-control-concurrency"
+    },
+    {
+      "include": "#keywords-convention"
+    },
+    {
+      "include": "#keywords-operator-word"
+    },
+    {
+      "include": "#keywords-boolean"
+    },
+    {
+      "include": "#keywords-qualifier"
+    },
+    {
+      "include": "#keyword-asm"
+    },
+    {
+      "include": "#keywords-reserved-unused"
+    },
+    {
+      "include": "#primitive-type"
+    },
+    {
+      "include": "#self-type"
+    },
+    {
+      "include": "#underscore"
+    },
+    {
+      "include": "#operators"
+    },
+    {
+      "include": "#punctuation-brackets"
+    },
+    {
+      "include": "#punctuation-separator"
+    },
+    {
+      "include": "#punctuation-terminator"
+    },
+    {
+      "include": "#punctuation-accessor"
+    },
+    {
+      "include": "#punctuation-question"
+    },
+    {
+      "include": "#identifier"
+    }
+  ],
+  "repository": {
+    "comment-doc": {
+      "match": "//!.*",
+      "name": "comment.line.documentation.fors"
+    },
+    "comment-line": {
+      "match": "//.*",
+      "name": "comment.line.double-slash.fors"
+    },
+    "block-comment": {
+      "name": "comment.block.fors",
+      "begin": "/\\*",
+      "end": "\\*/",
+      "patterns": [
+        {
+          "include": "#block-comment"
+        }
+      ]
+    },
+    "string-escape": {
+      "match": "\\\\(?:[nrt0\\\\\\\"]|x[0-9A-Fa-f]{2}|u\\{[0-9A-Fa-f]+\\})",
+      "name": "constant.character.escape.fors"
+    },
+    "string": {
+      "name": "string.quoted.double.fors",
+      "begin": "\\\"",
+      "end": "\\\"|$",
+      "patterns": [
+        {
+          "include": "#string-escape"
+        }
+      ]
+    },
+    "multiline-string": {
+      "match": "\\\\\\\\.*",
+      "name": "string.unquoted.multiline.fors"
+    },
+    "number-hex": {
+      "match": "\\b0[xX][0-9A-Fa-f](?:_?[0-9A-Fa-f])*(?:i8|i16|i32|i64|u8|u16|u32|u64|isize|usize)?\\b",
+      "name": "constant.numeric.hex.fors"
+    },
+    "number-oct": {
+      "match": "\\b0[oO][0-7](?:_?[0-7])*(?:i8|i16|i32|i64|u8|u16|u32|u64|isize|usize)?\\b",
+      "name": "constant.numeric.octal.fors"
+    },
+    "number-bin": {
+      "match": "\\b0[bB][01](?:_?[01])*(?:i8|i16|i32|i64|u8|u16|u32|u64|isize|usize)?\\b",
+      "name": "constant.numeric.binary.fors"
+    },
+    "number-dec": {
+      "match": "\\b[0-9](?:_?[0-9])*(?:\\.(?=[0-9])[0-9](?:_?[0-9])*)?(?:[eE](?=[+-]?[0-9])[+-]?[0-9](?:_?[0-9])*)?(?:i8|i16|i32|i64|u8|u16|u32|u64|isize|usize|f32|f64)?\\b",
+      "name": "constant.numeric.decimal.fors"
+    },
+    "fn-declaration": {
+      "match": "\\b(fn)\\s+([A-Za-z_][A-Za-z0-9_]*)",
+      "captures": {
+        "1": {
+          "name": "storage.type.fors"
+        },
+        "2": {
+          "name": "entity.name.function.fors"
+        }
+      }
+    },
+    "type-declaration": {
+      "match": "\\b(struct|enum|trait)\\s+([A-Za-z_][A-Za-z0-9_]*)",
+      "captures": {
+        "1": {
+          "name": "storage.type.fors"
+        },
+        "2": {
+          "name": "entity.name.type.fors"
+        }
+      }
+    },
+    "assoc-type-declaration": {
+      "match": "\\b(type)\\s+([A-Za-z_][A-Za-z0-9_]*)",
+      "captures": {
+        "1": {
+          "name": "storage.type.fors"
+        },
+        "2": {
+          "name": "entity.name.type.fors"
+        }
+      }
+    },
+    "const-declaration": {
+      "match": "\\b(const)\\s+([A-Za-z_][A-Za-z0-9_]*)",
+      "captures": {
+        "1": {
+          "name": "keyword.other.fors"
+        },
+        "2": {
+          "name": "variable.other.constant.fors"
+        }
+      }
+    },
+    "soa-contextual": {
+      "match": "\\bsoa\\b(?=\\s+struct\\b)",
+      "name": "storage.modifier.fors"
+    },
+    "attribute": {
+      "match": "(@)([A-Za-z_][A-Za-z0-9_]*)",
+      "captures": {
+        "1": {
+          "name": "punctuation.definition.attribute.fors"
+        },
+        "2": {
+          "name": "entity.other.attribute-name.fors"
+        }
+      }
+    },
+    "keywords-declaration-type": {
+      "match": "\\b(fn|struct|enum|trait|impl|type)\\b",
+      "name": "storage.type.fors"
+    },
+    "keywords-declaration-other": {
+      "match": "\\b(module|use|pub|const|extern)\\b",
+      "name": "keyword.other.fors"
+    },
+    "keywords-control-flow": {
+      "match": "\\b(if|else|match|for|in|while|break|continue|return)\\b",
+      "name": "keyword.control.fors"
+    },
+    "keywords-control-resource": {
+      "match": "\\b(raise|raises|with|defer|errdefer|consume|discard)\\b",
+      "name": "keyword.control.trap.fors"
+    },
+    "keywords-control-concurrency": {
+      "match": "\\b(parallel|simd|spawn|comptime)\\b",
+      "name": "keyword.control.concurrency.fors"
+    },
+    "keywords-convention": {
+      "match": "\\b(let|var|inout|sink)\\b",
+      "name": "storage.modifier.convention.fors"
+    },
+    "keywords-operator-word": {
+      "match": "\\b(as|and|or|not|move)\\b",
+      "name": "keyword.operator.word.fors"
+    },
+    "keywords-boolean": {
+      "match": "\\b(true|false)\\b",
+      "name": "constant.language.boolean.fors"
+    },
+    "keywords-qualifier": {
+      "match": "\\b(iso|imm|secret|dyn)\\b",
+      "name": "storage.modifier.qualifier.fors"
+    },
+    "keyword-asm": {
+      "match": "\\b(asm)\\b",
+      "name": "keyword.other.asm.fors"
+    },
+    "keywords-reserved-unused": {
+      "match": "\\b(import|recover|spmd|kernel)\\b",
+      "name": "keyword.other.reserved.fors"
+    },
+    "set-contextual": {
+      "match": "(?<=[(,])\\s*\\b(set)\\b(?=\\s+(?:[A-Za-z_][A-Za-z0-9_]*|_)\\b)",
+      "captures": {
+        "1": {
+          "name": "storage.modifier.convention.fors"
+        }
+      }
+    },
+    "self-type": {
+      "match": "\\bSelf\\b",
+      "name": "variable.language.self-type.fors"
+    },
+    "underscore": {
+      "match": "(?<![A-Za-z0-9_])_(?![A-Za-z0-9_])",
+      "name": "variable.language.wildcard.fors"
+    },
+    "type-ref-after-arrow": {
+      "match": "(->)\\s*(?:\\b(iso|imm|secret|dyn)\\b\\s*)?([A-Za-z_][A-Za-z0-9_]*(?:\\.[A-Za-z_][A-Za-z0-9_]*)*)?",
+      "captures": {
+        "1": {
+          "name": "keyword.operator.arrow.fors"
+        },
+        "2": {
+          "name": "storage.modifier.qualifier.fors"
+        },
+        "3": {
+          "name": "entity.name.type.fors"
+        }
+      }
+    },
+    "type-ref-after-raises": {
+      "match": "\\b(raises)\\b\\s*(?:\\b(iso|imm|secret|dyn)\\b\\s*)?([A-Za-z_][A-Za-z0-9_]*(?:\\.[A-Za-z_][A-Za-z0-9_]*)*)?",
+      "captures": {
+        "1": {
+          "name": "keyword.control.trap.fors"
+        },
+        "2": {
+          "name": "storage.modifier.qualifier.fors"
+        },
+        "3": {
+          "name": "entity.name.type.fors"
+        }
+      }
+    },
+    "type-ref-after-qualifier": {
+      "match": "\\b(iso|imm|secret|dyn)\\b\\s*([A-Za-z_][A-Za-z0-9_]*(?:\\.[A-Za-z_][A-Za-z0-9_]*)*)?",
+      "captures": {
+        "1": {
+          "name": "storage.modifier.qualifier.fors"
+        },
+        "2": {
+          "name": "entity.name.type.fors"
+        }
+      }
+    },
+    "primitive-type": {
+      "match": "\\b(i8|i16|i32|i64|u8|u16|u32|u64|isize|usize|f32|f64|vector|mask|rawptr)\\b",
+      "name": "support.type.primitive.fors"
+    },
+    "operators": {
+      "match": "(?:<<=|>>=|\\.\\.<|\\.\\.=|->|=>|==|!=|<=|>=|<<|>>|\\+=|-=|\\*=|/=|%=|&=|\\|=|\\^=|\\+|-|\\*|/|%|&|\\||\\^|=|<|>)",
+      "name": "keyword.operator.fors"
+    },
+    "punctuation-brackets": {
+      "match": "[()\\[\\]{}]",
+      "name": "punctuation.section.fors"
+    },
+    "punctuation-separator": {
+      "match": "[,:]",
+      "name": "punctuation.separator.fors"
+    },
+    "punctuation-terminator": {
+      "match": ";",
+      "name": "punctuation.terminator.fors"
+    },
+    "punctuation-accessor": {
+      "match": "\\.",
+      "name": "punctuation.accessor.fors"
+    },
+    "punctuation-question": {
+      "match": "\\?",
+      "name": "keyword.operator.propagate.fors"
+    },
+    "identifier": {
+      "match": "[A-Za-z_][A-Za-z0-9_]*",
+      "name": "variable.other.fors"
+    }
+  }
+}
