@@ -1,0 +1,25 @@
+[package]
+name = "fors-lower"
+version.workspace = true
+license.workspace = true
+edition = "2024"
+publish = false
+
+# F1 (design docs/design/fmir-interpreter.md §2, §4.2): checked bodies to
+# FMIR. Reads `BodyFacts` (D1-D4) plus the CST/resolver inputs `check_build`
+# itself takes. Deliberately NOT the interpreter crate: lowering must not
+# execute anything (design §2, "Why three").
+[dependencies]
+fors-fmir = { path = "../fors-fmir" }
+fors-fir = { path = "../fors-fir" }
+fors-check = { path = "../fors-check" }
+fors-syntax = { path = "../fors-syntax" }
+fors-resolve = { path = "../fors-resolve" }
+fors-index = { path = "../fors-index" }
+fors-lex = { path = "../fors-lex" }
+
+[dev-dependencies]
+fors-interp = { path = "../fors-interp" }
+
+[lints]
+workspace = true

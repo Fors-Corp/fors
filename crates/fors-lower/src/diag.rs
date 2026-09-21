@@ -1,0 +1,76 @@
+//! Clean lowering diagnostics: what F1 cannot lower, and why.
+//!
+//! Every rejection names the function and the reason. There is no "cannot
+//! happen" case: the walk is total over the CST, and anything outside the
+//! F1 scope lands here.
+
+use fors_index::ids::DefId;
+
+/// Why one function body was not lowered.
+#[derive(Clone, PartialEq, Eq, Debug)]
+pub enum LowerError {
+    /// The body had a type error: lowering only reads checked-clean facts.
+    /// Carries the first checker diagnostic code for the body, if known.
+    CheckErrors,
+    /// A generic declaration or a generic/tainted call: I5 owns it.
+    Generic(String),
+    /// `defer`/`errdefer`: I8b owns the decision (design [HOLE-11]).
+    Defer,
+    /// A projection (`I.Item`, qualified associated type): I6 owns it.
+    Projection,
+    /// A closure literal or `fn` value: captures are I9's (R19c/R19d).
+    Closure,
+    /// `match`: I7 owns patterns and exhaustiveness.
+    Match,
+    /// `?`, `else |e|`, `raise`, `Contract`, `raises`: I10 owns failure.
+    Failure,
+    /// `for`/`while` loops: F1 covers straight-line code plus `if`; loops
+    /// lower in a later increment (design F1's `plain-for-accumulator` gate
+    /// moves with them).
+    Loop,
+    /// A reference to a `const`/`comptime` item: F9 owns comptime.
+    Comptime(String),
+    /// Anything else outside the F1 expression/statement subset. Carries
+    /// the CST kind name so the diagnostic is actionable.
+    Unsupported(String),
+    /// A name the facts never bound (lowering bug or resolver gap) — still
+    /// a diagnostic, never a panic.
+    Unresolved(String),
+}
+
+impl std::fmt::Display for LowerError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            LowerError::CheckErrors => write!(
+                f,
+                "body has type errors; F1 lowers checked-clean bodies only"
+            ),
+            LowerError::Generic(w) => write!(f, "generics are not lowered in F1 ({w})"),
+            LowerError::Defer => write!(
+                f,
+                "`defer`/`errdefer` need I8b's decision data; not lowered in F1"
+            ),
+            LowerError::Projection => write!(f, "projections need I6; not lowered in F1"),
+            LowerError::Closure => write!(f, "closures need capture decisions; not lowered in F1"),
+            LowerError::Match => write!(f, "`match` needs I7; not lowered in F1"),
+            LowerError::Failure => write!(
+                f,
+                "failure edges (`?`/`raise`/contracts) need I10; not lowered in F1"
+            ),
+            LowerError::Loop => write!(f, "loops are not lowered in F1"),
+            LowerError::Comptime(w) => write!(f, "comptime item references need F9 ({w})"),
+            LowerError::Unsupported(k) => write!(f, "`{k}` is outside the F1 subset"),
+            LowerError::Unresolved(n) => write!(f, "could not resolve `{n}` from BodyFacts"),
+        }
+    }
+}
+
+impl std::error::Error for LowerError {}
+
+/// One skipped function: which one, and why.
+#[derive(Clone, PartialEq, Eq, Debug)]
+pub struct LowerDiag {
+    pub def: DefId,
+    pub name: String,
+    pub error: LowerError,
+}
