@@ -11,7 +11,7 @@ Status: pre-alpha. The frontend parses and name-resolves; nothing is code-genera
 | `docs/PLAN.md` | The authoritative plan: decisions, architecture, roadmap, measurable targets |
 | `docs/spec/` | Normative specification, one owning chapter per fact (`README.md` is the index) |
 | `tests/conformance/` | Conformance corpus: `.fors` files with `//! expect:` directives |
-| `crates/` | Bootstrap compiler: `fors-lex`, `fors-syntax`, `fors-index`, `fors-resolve`, `fors-cli` |
+| `crates/` | Bootstrap compiler: `fors-lex`, `fors-syntax`, `fors-index`, `fors-resolve`, `fors-check`, `fors-fir`, `fors-fmir`, `fors-asm`, `fors-cli`, and more |
 | `tools/ref/` | Independent reference parser and reduction reference; the Rust parser must agree with it |
 | `bench/` | Benchmark harness: the referee for every performance claim (see `bench/README.md`) |
 | `spikes/` | Feasibility spikes with GO / NO-GO reports |
@@ -36,3 +36,8 @@ No performance claim is made anywhere in this repository without a results file 
 - Standard library and runtime, once they exist: Apache-2.0 OR MIT, at your option
   ([LICENSE](LICENSE), [LICENSE-MIT](LICENSE-MIT)).
 - The specification in `docs/spec/`: CC-BY-4.0 ([docs/spec/LICENSE](docs/spec/LICENSE)).
+
+## Contributing
+
+See [CONTRIBUTING.md](CONTRIBUTING.md). Security reports: [SECURITY.md](SECURITY.md).
+Participation is governed by the [code of conduct](CODE_OF_CONDUCT.md).

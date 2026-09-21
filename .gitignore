@@ -11,3 +11,6 @@ __pycache__/
 # Tooling smoke output: contaminated timings from a busy machine, never a result
 # (ch06 rule 1). Regenerate with `calibrate.py --smoke`.
 /bench/results/smoke/
+
+# Local assistant tooling config
+/.claude/

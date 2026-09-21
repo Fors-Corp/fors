@@ -1,5 +1,0 @@
-{
-  "env": {
-    "GATEGUARD_EXEMPT_GLOBS": "bench/**,docs/**"
-  }
-}

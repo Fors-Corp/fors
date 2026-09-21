@@ -6,6 +6,8 @@ members = ["crates/*"]
 # LANGUAGE version is a separate stream and lives in `docs/spec/VERSION`.
 [workspace.package]
 version = "0.1.1"
+license = "Apache-2.0"
+repository = "https://github.com/Fors-Corp/fors"
 
 [profile.release]
 debug = "line-tables-only"
