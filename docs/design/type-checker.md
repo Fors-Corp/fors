@@ -991,7 +991,14 @@ statement.
 | ch01 R14 | `secret` composes orthogonally | `lower::quals` | yes |
 | ch01 R15-R15e, R16, R18 | brands, `with` fresh brand, kind misuse, `Ref`/`Arena` brand equality, `Own` brand | `lower::brand`, `body::with_stmt`, `subst::one_way_match` Brand (O0015, O0015d, O0016) | yes (equality-based ones); non-escape of arena values (15a) via the tape: M3 |
 | ch01 R19, R19a, R19b | scoped results, extents | `lower::scoped` (signature form only); extents FMIR | signature form only |
+| ch01 R19c, R19d | scope inheritance through a call; a capturing closure's sources | `flow::sources` ((a)/(a′)'s two signature conditions, `ty::contains` in `fors-fir` for "contains `D`", (c)'s two binding-less extents, (d)'s union), `call::scoped_result`, `expr::closure_synth` (capture set) (O0019) | I8b |
 | ch01 R21-R21d | `Shared` field check, `atomic` placement | `wf::shared_impl` (O0021) | yes (fieldwise, marker) |
+| ch01 R22, R22a, R22b | `Linear`'s declared form; `lin(T)`; a concrete `Array`/`vector`/`atomic` of a linear element | `wf::linear_impl` (T0024: defining module, no bound on a parameter), `ty::lin` in `fors-fir` (memoised per (head, substituted arguments)), `lower::type_app` (T0011) | I8b |
+| ch01 R22c | `Droppable` has no impls; dropping a rigid value needs a bound | `wf::marker_traits` (T0024, amends row 24), `ty::droppable`, `flow::drop_rigid` (T0057, amends row 57) | I8b |
+| ch01 R22d-R22g | what discharges an obligation and what does not | `flow::linear` over I8's tape (`UseKind::Move`, `Cause::ImplicitReceiver`) + `pat::binds_every_linear` for (ii); `expr::subsume` for R22f (T0010, amends row 10); `wf::copyable_impl` for R22e (T0023, amends row 23) (O0022) | I8b |
+| ch01 R22h, R22i | the scope-exit check and its diagnostic's content | `flow::scope_exit` (the live set I8 already carries, restricted to the scopes being left — no third lattice element, R8's round-6 note), `flow::render_linear_leak` (O0022) | I8b |
+| ch01 R23-R23c, R23e, R23f | placement in the directly containing block; the static exit set each body runs on; what a body may not contain; loops, `main`, `comptime`; traps run none | `body::defer_stmt` (body against `()`, T0031), `flow::exits`, `flow::defer_wf` (O0023: R23b's "no error exit follows", R23c's `return`/`raise`/`?`/outward `break`) | I8b |
+| ch01 R23d | captures, deferred consumption, the place→strongest-access summary applied at each exit | `flow::defer_summary`, `flow::linear` ((b)'s discharge, (d) via R4a(b)) (O0023; (a) reports O0004's use-after-move with the `defer`'s site) | I8b |
 | ch02 R1-R3, R5 | `raises` declared; call to raising fn followed by `?`/`else`; `?` on non-raises; `ErrorFrom` one hop; handler after a call only, diverges or yields | `expr::try_expr`, `expr::handler`, `body::raise_stmt` (F0001-F0005) | yes |
 | ch02 R9 | contracts part of the declaration | `encode` (token hash of clauses), `body::contract_clause` (bool) | yes |
 | ch02 R13 | `extern "c"` no `raises` | `lower::extern_fn` (F0013) | yes |
@@ -1118,8 +1125,10 @@ assert `Code::O(rule)` plus the clause letter in the message; the R46 test
 asserts the rendered string. `ch09_types_corpus_resolver_view` is retired
 when `PENDING_09` is empty. `PENDING_08` empties at I4 (`private_field_
 cross_module_rejected`); `PENDING_04` shrinks to rules 7 and 13 at I10.
-ch01 (31), ch02 (9), ch03 (13) `check-error` files come on as their rules
-are reached, each in its own harness with its chapter letter.
+ch01, ch02 (9), ch03 (13) `check-error` files come on as their rules are
+reached, each in its own harness with its chapter letter. ch01's count is
+**69**, not the 31 recorded when this document was written: round 6 added
+39 `check-error` and 25 `check-ok` files, all of them I8b's.
 
 **Property and differential tests that run before FMIR exists:**
 
@@ -1315,8 +1324,193 @@ marker tests.
 GATE: the 9 ch01-coded ch09 tests plus `implicit-receiver-move-accepted`,
 `sink-receiver-copyable-not-moved-accepted`; the R46 string assertion;
 `implicit_and_explicit_receiver_move_produce_identical_tapes`; `PENDING_09`
-empty — **186/186**. From ch01: the 6 `01.R2` marker tests and the two
-`01.R1` tests.
+empty over the **186** pre-round-6 ch09 tests. From ch01: the 6 `01.R2`
+marker tests and the two `01.R1` tests. Round 6 added 58 more files to
+`09-types` (244 now) and 64 check tests to `01-ownership`; they stay
+`Pending(I8b)` here, and `ch09_types_corpus_resolver_view` is retired at
+I8b, not here.
+
+**I8b — round-6 flow (opus; ~900 lines).** Round 6 (ch01 O1-O3) post-dates
+§8 and every increment above it; this increment is its owner. It sits after
+I7 and I8 and before I9. *Why here.* The FMIR review's "after I7 because
+R22d(ii) needs exhaustiveness" is right about the position and loose about
+the rule: what R22d(ii) needs is I7's `pat.rs` — whether an arm binds every
+linear component is ch09 R50's "omitted fields match anything" plus R51 —
+while exhaustiveness (R53) contributes only the guarantee that the arm set
+IS the path set at a `match`, which R22h's "every point where control
+leaves a scope" reads. The binding dependency is I8: R22h explicitly reads
+"the live set Rule 6 already carries" and ch01 R8's round-6 note FORBIDS a
+second analysis, a "maybe live" state or a drop flag, so this is an
+extension of `flow.rs` and the tape, not a new pass — and R4/R5's
+definite-init dataflow stays M3 (§8), contrary to [HOLE-11]'s
+recommendation, which asked for a lattice the spec refuses.
+
+Builds:
+
+- `ty::lin` and `ty::droppable` in `fors-fir` (ch01 R22a-R22c, ~120 lines):
+  a structural descent over a normalised type, memoised per (head,
+  substituted arguments), true at (a) a head with an `impl Linear`, (b) any
+  field, payload or tuple component, (c) a rigid parameter or neutral
+  projection that is not `Droppable`. It never descends into `Own`, `Ref`,
+  `Arena`, `Slice`, `rawptr`, `fn` or `dyn`, which is what makes ch09 R14's
+  finiteness argument bound it; `Own[T, A]` is linear by (a) without
+  descending. Two-valued and decided from the declaration, never per
+  instantiation (ch09 R59), so no diagnostic here depends on a substitution.
+- The declaration and type side: `wf::linear_impl` (R22's defining module,
+  struct-or-enum self type, no bound on any parameter), `wf::marker_traits`
+  extended to reject every `impl Droppable` (R22c), `wf::copyable_impl`
+  extended with `lin(T)` (R22e), `lower::type_app` rejecting a concrete
+  `Array`/`vector`/`atomic` of a linear element (R22b), `expr::subsume`
+  rejecting a linear, rigid or neutral-projection operand at a `dyn`
+  coercion (R22f, ch09 R10(c)).
+- The obligation over I8's tape (R22d-R22i): the discharges are exactly
+  R22d(i)'s whole-place moves (the tape's `Move`, including
+  `Cause::ImplicitReceiver`), (ii)'s destructuring, (iii)'s deferred
+  consumption; `discard`/`consume`, a `let`/`inout` pass, a capture
+  (R22g — a closure never holds an obligation, `lin` of a closure type is
+  false) and a trap are not. `flow::render_linear_leak` carries R22i's
+  required fields: name or "the result of `f()` at L:C", the type as ch09
+  R20 displays it, the scope, the exit's kind and location, and the
+  consumers computed from the head's defining module (every `sink self`
+  method plus every `sink`-parameter function of that head, `@unsafe`
+  excluded).
+- The `defer`/`errdefer` region model (R23-R23f): a body is a statement of
+  the block that directly contains it, typed once against `()`, its
+  ownership effects summarised once as place→strongest-access
+  (`let` < `inout` < move) and applied at each exit where it runs;
+  `flow::exits` builds the static exit set per block (`}`, tail value,
+  `return`, `raise`, a `?`'s error edge, `break`/`continue` leaving the
+  block) and R23b's error-exit subset, whose emptiness after an `errdefer`
+  is the O0023 rejection. Order **on one exit edge**, and this is the order
+  `fors-lower` must reproduce: (1) the returned or raised operand is
+  evaluated and moved into the result (R23a); (2) the pending bodies of the
+  scopes being left, innermost scope first, each scope's in ONE reverse
+  `stmt_order` sequence interleaving `Defer` and `ErrDefer`, `ErrDefer`
+  present only on an error exit (R23a, R23b); (3) the drops of the
+  remaining non-linear bindings of those scopes — after the bodies, because
+  R23d(a) needs every place a body mentions live at that exit and R23d(f)
+  keeps a `with` binding and the enclosing function's parameters alive
+  until its block's bodies have run; (4) R22h's check on what is left
+  (R22h: "AFTER the pending bodies have been accounted for"). A trap is not
+  an exit: it runs none of (2) or (3) and therefore discharges nothing
+  (R23f, R22d, ch02 R7).
+- Obligations across `?` (the round-6 migration's first entry): the error
+  edge of every `?` is a scope exit (ch02 R16), so a linear value created
+  before a `?` is owed there; `defer p.deinit(&a);` discharges on every
+  exit and `errdefer p.deinit(&a);` on the error exits only, leaving
+  `return move p;` legal on the normal ones (R23d(b)).
+- Closure capture and scope inheritance (R19c, R19d): a capturing closure's
+  sources are its captures; at a call, `flow::sources` applies (a)'s two
+  conditions on a bare parameter `P` (no `inout`/`set` parameter and no
+  `raises` type mentioning `P`) and (a′)'s the same with "contains `D`" for
+  a `Copyable` argument or a closure into a `fn`-typed parameter, the
+  result keeping the argument's sources iff the DECLARED result type
+  mentions `P` / contains `D` before substitution; (b) rejects a
+  non-`Copyable` scoped argument to a concrete-typed `sink`; (c) gives the
+  two binding-less extents; (d) unions sources from several arguments, and
+  whether such a value may be RETURNED stays R19's question. `ty::contains`
+  is R22a's descent with a different leaf test and the same per-head memo,
+  so it costs what `lin` costs.
+
+**Interface to FMIR lowering.** I8b extends `BodyFacts` ([HOLE-4]'s
+`facts.rs`) with three side tables, which are exactly the three data
+`fmir-interpreter.md` §4.1 lists with no producer, under its names:
+
+- **D7 — defer/errdefer decisions.** `defer_regions`: per scope, the ordered
+  `(kind, body block, stmt_order)` rows; per exit, the multiset that runs;
+  per body, R23d's place→strongest-access summary. `fors-lower` builds
+  `DeferPool`/`DeferRow` (§3.8 there) from this by construction, and F4's
+  verifier check — every exit edge carries exactly the right multiset —
+  is an assertion against D7, not a re-derivation.
+- **D8 — linear obligations and discharges.** `linear_obligations`: per
+  scope, the obligation places; per exit edge, one `Discharge` per
+  obligation naming what consumed it; `lin(T)` per `TyId`. F6 consumes it;
+  a scope exit whose obligation has no discharge is the interpreter's
+  `linear-leak` and a compiler bug, never a trap (§3.5 there).
+- **D9 — scoped sources.** `scoped_sources`: per value, the source
+  `PlaceId` set of R19c(d). R19a's extents remain M3 (§8); D9 is the source
+  sets only, which is what R19c and R19d decide.
+
+GATE, by rule group, all files on disk today. R22h/R22i (9):
+`linear-local-dropped-at-{block-end,return,question,break}-rejected`,
+`linear-temporary-expression-statement-rejected`,
+`linear-let-underscore-rejected`, `linear-var-overwritten-rejected`,
+`linear-sink-parameter-unconsumed-rejected`,
+`user-linear-type-diagnostic-names-consumer-rejected` (its `detail` pins
+value, type, exit and `Res.close`). R22d-R22g (18):
+`linear-consumed-by-{sink-call,return,implicit-receiver-move}-accepted`,
+`linear-consumed-by-struct-literal-then-aggregate-rejected`,
+`linear-aggregate-destructured-accepted`,
+`linear-match-{underscore,omitted-field}-rejected`,
+`linear-option-matched-accepted`, `linear-consume-rejected`,
+`linear-discard-rejected`, `linear-in-loop-reinit-accepted`,
+`linear-in-loop-consumed-once-rejected`,
+`linear-field-partial-move-rejected`,
+`linear-captured-by-closure-still-owed-rejected`,
+`linear-spawn-move-accepted`,
+`linear-with-block-{exit-rejected,defer-accepted}`,
+`linear-trap-does-not-consume-rejected`. R22-R22c, R22e, R22f, declarations
+and types (19): `01-ownership/linear-impl-with-bound-rejected` and, in
+`09-types`, `linear-{array,vector,atomic}-element-rejected`,
+`linear-copyable-impl-rejected`, `linear-to-dyn-rejected`,
+`droppable-impl-rejected`, `linear-impl-with-bound-rejected`,
+`linear-bound-adds-no-operation-rejected`,
+`linear-match-literal-component-rejected`,
+`linear-match-{underscore,omitted-field}-rejected`,
+`linear-option-matched-accepted`,
+`rigid-drop-without-droppable-rejected`,
+`rigid-discard-without-droppable-rejected`,
+`rigid-expression-statement-without-droppable-rejected`,
+`rigid-drop-with-droppable-accepted`,
+`copyable-implies-droppable-accepted`,
+`iterator-bound-implies-droppable-accepted`. R23-R23f, check side (20):
+`defer-consumes-linear-on-all-exits-accepted`,
+`errdefer-consumes-on-error-exit-accepted`,
+`errdefer-normal-exit-unconsumed-rejected`,
+`defer-place-moved-before-exit-rejected`,
+`defer-inout-use-after-defer-accepted`,
+`defer-in-loop-moves-outer-rejected`,
+`defer-in-loop-per-iteration-accepted`,
+`defer-{return,raise,question}-inside-rejected`,
+`defer-break-outer-loop-rejected`, `defer-inner-loop-break-accepted`,
+`defer-handler-inside-accepted`,
+`defer-with-block-allocator-live-accepted`,
+`defer-in-closure-body-accepted`, `defer-nested-body-accepted`,
+`errdefer-and-defer-interleaved-reverse-order-accepted`,
+`errdefer-without-error-exit-rejected`,
+`errdefer-after-fallible-call-rejected`,
+`linear-enum-payload-one-arm-unconsumed-rejected` (R22h at the arm's `}`).
+R19c/R19d (16): `scoped-through-generic-sink-result-scoped-rejected`,
+`scoped-through-generic-sink-consumed-accepted`,
+`scoped-through-generic-inout-param-rejected`,
+`scoped-through-generic-raises-rejected`,
+`scoped-through-generic-sink-returned-under-scoped-accepted`,
+`scoped-into-concrete-sink-rejected`,
+`scoped-copy-into-field-via-let-param-rejected`,
+`scoped-rvalue-extent-is-the-{statement,for}-accepted`,
+`zip-two-scoped-sources-rejected`,
+`zip-two-scoped-sources-local-accepted`, `zip-scoped-and-owned-accepted`,
+`adaptor-chain-for-mutates-source-rejected`,
+`closure-returned-with-local-capture-rejected`,
+`closure-capture-{keeps-local-in-chain-accepted,in-chain-returned-rejected}`.
+Also: `PENDING_09` empty over all **244** ch09 files and
+`ch09_types_corpus_resolver_view` retired; every round-6 `-rejected` file
+now yields exactly one diagnostic where `fors check` was previously
+required to stay silent (the harness expectation flips in this increment
+and nowhere else); `lin_is_memoised_and_terminates` over ch09 R14's
+recursive shapes; `linear_merge_has_no_third_state` asserting the merge
+lattice is still two-valued (ch01 R8's round-6 note) and
+`no_linear_error_depends_on_instantiation` (ch09 R59), the metamorphic pair
+for this increment. NOT in this gate, and not blocked by it: the seven
+behaviour tests `01-ownership/defer-{reverse-order,runs-on-return,
+per-iteration,nested-scope-order,result-evaluated-first}-run-ok`,
+`01-ownership/errdefer-skipped-on-return-run-ok`,
+`02-failure/{main-raises-after-defer-run-error,trap-runs-no-defer}` and
+`10-std/defer-not-run-on-trap`, which are FMIR F4's; I8b only asserts it
+emits nothing on them. `10-std`'s `linear-buffer-element-rejected`,
+`linear-array-field-in-buffer-rejected`,
+`linear-in-user-struct-inherits-rejected` and `discard-linear-rejected`
+need std bodies and come on with F7.
 
 **I9 — `fors-query` and the M1 exit (opus for `db.rs`, sonnet for the
 query wrappers; ~1.5k lines).** The engine; the node set of §9.1 with
@@ -1466,7 +1660,7 @@ the prelude's `ErrorFrom` shape (§14 Q10).
 
 ---
 
-## 17. Amendments from the I1 normalisation spike (2026-09-20)
+## 17. Amendments (I1 spike 2026-09-20; FMIR design review 2026-09-21)
 
 `spikes/fir-normalise/` ran before any checker code, as §13 I1 required. It
 changed one decision of this document and added two that were missing. The
@@ -1499,3 +1693,21 @@ counters it prints (`cargo run --release` in that directory) are the evidence.
 Items 2 and 3 are gates on their increments, not advice: I4 and I6 are not
 green until the spike's shapes Y and Z are re-run against the real
 `fors-fir`/`fors-check` and stay inside the stated bounds.
+
+Item 4 is not the spike's: it is the FMIR design review's.
+
+4. **Round 6 post-dates this document, and §8 and §13 never gave its rules
+   an owner.** `docs/design/fmir-interpreter.md`'s review found it
+   ([HOLE-11], with the dispositions there): §8's inherited-obligations
+   table went from ch01 R19, R19a, R19b straight to R21-R21d, so ch01
+   R19c/R19d (scope inheritance through a call, closure captures),
+   R22-R22i (linearity) and R23-R23f (`defer`/`errdefer`) had no row and no
+   increment, and §15 did not defer them either — they were never
+   considered. The consequence was downstream: FMIR's F4 and F6 consume
+   D7, D8 and D9, which that design credited to I8, and I8's scope is
+   R3/R4a/R8/R46 only. **I8b — round-6 flow** (§13) is the owner, the seven
+   rows above are in §8, and the interface paragraph in I8b names D7, D8
+   and D9 so that either document answers "who produces this" the same way.
+   Two counts in this document are stale as a result and are corrected in
+   place: the ch09 corpus is 244 files, not 186 (§13 I8, §13 I8b), and
+   ch01's `check-error` files are 69, not 31 (§11).
