@@ -1,6 +1,7 @@
 [package]
 name = "fors-asm"
 version.workspace = true
+license.workspace = true
 edition = "2024"
 publish = false
 description = "AArch64 instruction encoder for the Fors dev backend (M2): typed operands, no raw u8 soup."

@@ -18,7 +18,7 @@ Decisions already made by Marc (2026-09-19):
 - **Bootstrap compiler in Rust** (disposable; self-host only after semantics freeze).
 - **Resources:** solo + AI coding agents, multi-year. Research-calibrated expectation: credible v0.1 (CPU-only, safe, fast-building) in ~12–18 months; the full "everything" 1.0 is a 4–6+ year program. Research flagged full-scope-at-once as the top project risk — accepted by owner; mitigated by milestone gates and by making every milestone independently useful and benchmarked.
 
-Dev machine (verified): Apple M1 Pro, 6P+2E cores, 16 GB, arm64, macOS. Installed: clang 21, rustc 1.98.1, go 1.27.1, node 24.15, deno, python 3.14.5, swiftc, java **11** (stale). Missing: zig, hyperfine, cmake/ninja, pypy, julia. The working directory `/Users/marcfors/Programming Language` contains only a `graft/` index and is not yet a git repo.
+Dev machine (verified): Apple M1 Pro, 6P+2E cores, 16 GB, arm64, macOS. Installed: clang 21, rustc 1.98.1, go 1.27.1, node 24.15, deno, python 3.14.5, swiftc, java **11** (stale). Missing: zig, hyperfine, cmake/ninja, pypy, julia. 
 
 ### Honest framing of the superlatives
 "Best in existence" is not a testable statement; the plan converts each goal into **falsifiable targets on named benchmarks** (section 3) and the harness (Milestone 0) is the referee. The goals also collide (e.g. optimizing backends are slow; monomorphization is fast at runtime and slow at compile time; safety checks cost cycles). The architecture in section 4 exists to resolve those collisions rather than pretend they are absent.
