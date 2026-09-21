@@ -83,6 +83,8 @@ pub struct Wf<'a> {
     /// finished set for every body typed (design §9).
     pub cur_deps: crate::deps::DepSet,
     pub deps: Vec<(DefId, crate::deps::DepSet)>,
+    /// One `BodyFacts` per typed body, in declaration order (I3.5).
+    pub facts: Vec<(DefId, crate::facts::BodyFacts)>,
 }
 
 impl<'a> Wf<'a> {
@@ -119,6 +121,7 @@ impl<'a> Wf<'a> {
             iter_traits: Vec::new(),
             cur_deps: crate::deps::DepSet::new(),
             deps: Vec::new(),
+            facts: Vec::new(),
         }
     }
 

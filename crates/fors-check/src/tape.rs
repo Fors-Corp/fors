@@ -67,7 +67,7 @@ pub struct UseEvent {
 /// One body's tape. Struct-of-arrays for the place table; the event list is
 /// the only per-body heap growth typing does, and it is appended to, never
 /// searched, in the hot path.
-#[derive(Default)]
+#[derive(Default, Debug)]
 pub struct UseTape {
     pub events: Vec<UseEvent>,
     root: Vec<u32>,
