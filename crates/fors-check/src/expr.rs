@@ -36,7 +36,17 @@ impl Wf<'_> {
 
     /// `check(e, T)` (design §7.3's dispatcher). Returns `T` on success,
     /// [`TY_NEVER`] under R10(a) and [`TY_ERROR`] under recovery.
+    ///
+    /// I3.5: records the decided type in the body's facts table (D1). The
+    /// inner dispatch may `synth` the same node first and record that;
+    /// last write wins, so the node keeps the checked-against type.
     pub fn check(&mut self, cx: &mut BodyCx, node: usize, want: TyId) -> TyId {
+        let t = self.check_inner(cx, node, want);
+        cx.facts.record(node as u32, t);
+        t
+    }
+
+    fn check_inner(&mut self, cx: &mut BodyCx, node: usize, want: TyId) -> TyId {
         cx.nodes += 1;
         self.checks += 1;
         match cx.kind(node) {
@@ -207,6 +217,12 @@ impl Wf<'_> {
 
     /// `synth(e)` (design §7.3). Never fails.
     pub fn synth(&mut self, cx: &mut BodyCx, node: usize) -> TyId {
+        let t = self.synth_inner(cx, node);
+        cx.facts.record(node as u32, t);
+        t
+    }
+
+    fn synth_inner(&mut self, cx: &mut BodyCx, node: usize) -> TyId {
         cx.nodes += 1;
         self.synths += 1;
         match cx.kind(node) {

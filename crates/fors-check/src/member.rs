@@ -16,6 +16,7 @@ use fors_resolve::target::{Entity, ResolvedTarget};
 use fors_syntax::NodeKind;
 
 use crate::body::{BodyCx, Slot};
+use crate::facts::MemberTarget;
 use crate::lower::FileCtx;
 use crate::wf::Wf;
 
@@ -242,6 +243,9 @@ impl Wf<'_> {
                     if self.names.resolve(name) == b"len"
                         && matches!(g, gty::ARRAY | gty::SLICE | gty::VECTOR)
                     {
+                        // I3.5 (D4): the builtin resolution lowering reads.
+                        cx.facts
+                            .set_member(node as u32, MemberTarget::LenBuiltin { head: def });
                         return self.fir.tys.prim(PrimKind::Usize);
                     }
                     // Another prelude head's members are std's: silent.
@@ -284,6 +288,14 @@ impl Wf<'_> {
                     let ty = self.substituted(def, ArgsId(self.fir.tys.b(bare)), m.ty);
                     let carried = fors_fir::ty::Quals(
                         quals.0 & (fors_fir::ty::Q_IMM | fors_fir::ty::Q_SECRET),
+                    );
+                    // I3.5 (D4): `(head, field index)` for lowering.
+                    cx.facts.set_member(
+                        node as u32,
+                        MemberTarget::Field {
+                            head: def,
+                            index: i as u32,
+                        },
                     );
                     return if carried.is_none() {
                         ty

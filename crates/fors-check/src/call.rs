@@ -16,6 +16,7 @@ use fors_syntax::NodeKind;
 
 use crate::body::{BodyCx, LocalKind, Slot};
 use crate::diag::t;
+use crate::facts::FactCallee;
 use crate::tape::{Cause, UseKind};
 use crate::wf::Wf;
 
@@ -49,7 +50,19 @@ impl Wf<'_> {
 
     /// R38 for a call with zero parameters to determine, plus R36's
     /// handler and R37's named-argument rule.
+    ///
+    /// I3.5: records the decided type (D1) — the `?`-operand call in both
+    /// judgements reaches `call_expr` directly, bypassing the
+    /// `check`/`synth` wrappers, so this wrapper is the node's only
+    /// record. The classification (D2) and argument conventions (D3) are
+    /// recorded inside.
     pub fn call_expr(&mut self, cx: &mut BodyCx, node: usize, expected: Option<TyId>) -> TyId {
+        let t = self.call_expr_inner(cx, node, expected);
+        cx.facts.record(node as u32, t);
+        t
+    }
+
+    fn call_expr_inner(&mut self, cx: &mut BodyCx, node: usize, expected: Option<TyId>) -> TyId {
         let kids = cx.kids(node);
         let Some(&callee_node) = kids.first() else {
             return TY_ERROR;
@@ -67,6 +80,20 @@ impl Wf<'_> {
 
         let try_node = cx.under_try.take();
         let callee = self.classify_callee(cx, callee_node);
+        // I3.5 (D2): the classification, before the match moves it. I4
+        // refines `Undecided` into method resolutions; I5 adds arguments.
+        cx.facts.set_callee(
+            node as u32,
+            match &callee {
+                Callee::Fn(def) => FactCallee::Direct(*def),
+                Callee::Variant(en, i) => FactCallee::Variant {
+                    en: *en,
+                    index: *i as u32,
+                },
+                Callee::Value(_) => FactCallee::ValueFn,
+                Callee::Undecided => FactCallee::Undecided,
+            },
+        );
         let (params, result, raises) = match callee {
             Callee::Fn(def) => {
                 let sig = self.fir.sigs.fn_sig(def);
@@ -138,6 +165,15 @@ impl Wf<'_> {
         }
 
         for (i, &arg) in args.iter().enumerate() {
+            // I3.5 (D3, rest): the parameter convention each typed argument
+            // was checked against, in order. Extra arguments (R39, I5's)
+            // are synthesised and carry no convention.
+            if i == 0 {
+                cx.facts.set_arg_convs(
+                    node as u32,
+                    params.iter().take(args.len()).map(|&(_, c, _)| c).collect(),
+                );
+            }
             match params.get(i) {
                 Some(&(name, conv, ty)) => {
                     self.named_label(cx, arg, name, i);
