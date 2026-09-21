@@ -99,9 +99,22 @@ fn body_facts_cover_every_typed_node() {
         FactCallee::Direct(_) => {}
         other => panic!("`id(1)` must resolve Direct, got {other:?}"),
     }
-    assert_eq!(f.arg_convs.len(), 1, "one typed call, one conv row");
+    assert_eq!(
+        f.arg_convs.len(),
+        2,
+        "the call and the operator each record D3"
+    );
     assert_eq!(f.arg_convs[0].0, calls[0]);
     assert_eq!(f.arg_convs[0].1.len(), 1, "one argument, one convention");
+    // The operator desugars to its trait method but resolves none: an
+    // Undecided callee with an empty conv row marks the node visited.
+    let adds = nodes_of(&c, start, end, NodeKind::AddExpr);
+    assert_eq!(adds.len(), 1);
+    assert_eq!(f.arg_convs[1].0, adds[0]);
+    assert!(
+        f.arg_convs[1].1.is_empty(),
+        "operator takes no argument slots"
+    );
 
     // D4: the `p.x` read resolves to (P, field 0). The parser builds it
     // as one greedy-path NameExpr (ch07), so the member lands on that

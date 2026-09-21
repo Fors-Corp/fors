@@ -600,6 +600,30 @@ impl Wf<'_> {
             },
             _ => Cause::Explicit(recv_node as u32),
         };
+        // R46: `(move x).m()` means exactly what `x.m()` means. The
+        // receiver's own synthesis already recorded this place: a read of a
+        // `FieldExpr` operand, and the explicit `Move` of a `(move x)`
+        // wrapper. The receiver use below supersedes them, so events from
+        // the receiver's own subtree for this place are withdrawn first —
+        // scoped to the subtree, so an earlier call's events (which live
+        // outside it) are left alone. For any other convention the explicit
+        // move is kept (it still moves); only the redundant read goes.
+        let implicit = matches!(cause, Cause::ImplicitReceiver { .. });
+        let end = cx.f.tree.subtree_end(recv_node) as u32;
+        cx.tape.events.retain(|e| {
+            let own = e.place == p
+                && (recv_node as u32) <= e.node
+                && e.node < end
+                && matches!(e.cause, Cause::Explicit(_));
+            if !own {
+                return true;
+            }
+            match e.kind {
+                UseKind::Read | UseKind::Copy => false,
+                UseKind::Move => !implicit,
+                _ => true,
+            }
+        });
         cx.tape.push(recv_node as u32, p, kind, cause);
     }
 
@@ -743,6 +767,19 @@ impl Wf<'_> {
         } else {
             self.fir.tys.nominal(def, NO_ARGS)
         };
+        // D2/D3: a struct literal is typed as a call whose parameters are
+        // the fields in written order. It is not a function call, so the
+        // callee marks visited-but-not-a-call; each field init checks like
+        // a `let` value.
+        cx.facts.set_callee(node as u32, FactCallee::Undecided);
+        cx.facts.set_arg_convs(
+            node as u32,
+            inits
+                .iter()
+                .filter(|&&i| cx.f.tree.children(i).next().is_some())
+                .map(|_| Conv::Let)
+                .collect(),
+        );
         match expected {
             Some(w) => self.subsume(cx, node, ty, w),
             None => ty,
