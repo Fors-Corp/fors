@@ -1,0 +1,15 @@
+[package]
+name = "fors-layout"
+version.workspace = true
+license.workspace = true
+edition = "2024"
+publish = false
+
+# Leaf of the crate graph (like fors-diag): the layout rule is a pure
+# function of a target and a type shape, so this crate depends on nothing —
+# not even fors-fir — and every later layer (fors-lower, fors-interp, the
+# backends) can depend on it without a cycle.
+[dependencies]
+
+[lints]
+workspace = true
