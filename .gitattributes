@@ -1,0 +1,30 @@
+# GitHub Linguist classification.
+#
+# Fors itself is NOT yet a language Linguist knows: its threshold is ~2000
+# files per extension indexed across many unique repositories in the last
+# year, and this repository is private, so GitHub's index sees no `.fors`
+# files at all. `*.fors linguist-language=Fors` cannot work until Fors is
+# registered upstream, which is a post-v0.1, post-public question. What this
+# file does today is stop the language bar from describing the project as
+# something it is not.
+
+# Benchmark baselines are fixtures, not this project's source. Ten
+# toolchains' implementations of the same kernels otherwise make the
+# repository look like a polyglot application; they are the referee's
+# measuring sticks.
+bench/kernels/** linguist-vendored
+
+# The reference parser is a deliberate SECOND implementation whose only job
+# is to disagree with the Rust one. It is source, and it stays counted.
+
+# Generated artefacts: regenerating them must never move the language bar.
+docs/spec/PACK.md            linguist-generated
+crates/fors-asm/tests/golden/** linguist-generated
+
+# The conformance corpus is Fors source. Once Fors is registered upstream
+# these are the files that should dominate the bar, which is the point of
+# keeping them out of `linguist-vendored`.
+
+# Line endings: the corpus contains deliberate CRLF fixtures (the formatter
+# and the LSP both have tests for them), so git must not normalise anything.
+* -text
