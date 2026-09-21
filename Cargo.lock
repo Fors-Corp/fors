@@ -71,8 +71,31 @@ dependencies = [
 ]
 
 [[package]]
+name = "fors-interp"
+version = "0.1.1"
+dependencies = [
+ "fors-fir",
+ "fors-fmir",
+ "fors-index",
+]
+
+[[package]]
 name = "fors-lex"
 version = "0.1.1"
+
+[[package]]
+name = "fors-lower"
+version = "0.1.1"
+dependencies = [
+ "fors-check",
+ "fors-fir",
+ "fors-fmir",
+ "fors-index",
+ "fors-interp",
+ "fors-lex",
+ "fors-resolve",
+ "fors-syntax",
+]
 
 [[package]]
 name = "fors-lsp"

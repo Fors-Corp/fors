@@ -1,0 +1,19 @@
+[package]
+name = "fors-interp"
+version.workspace = true
+license.workspace = true
+edition = "2024"
+publish = false
+
+# F1 (design docs/design/fmir-interpreter.md §2, §5): the interpreter core.
+# Depends on `fors-fmir` (the IR), `fors-fir` (`TyId`/type store for operand
+# widths) and `fors-index` (ids) only. Deliberately NOT the checker crate,
+# NOT the CST crate: the interpreter is the oracle and takes FMIR as its
+# sole program input (design §2, ch05 R3).
+[dependencies]
+fors-fmir = { path = "../fors-fmir" }
+fors-fir = { path = "../fors-fir" }
+fors-index = { path = "../fors-index" }
+
+[lints]
+workspace = true
