@@ -25,7 +25,13 @@ use crate::tape::UseTape;
 ///
 /// I3.5 records the I3 subset: free functions, enum variants and `fn`
 /// values. I4 adds method resolution (inherent-before-trait lookup,
-/// `TraitMethod`); I5 adds the determined generic arguments.
+/// `Method { def, owner }`); I5 adds the determined generic arguments.
+/// A struct literal is not a call: it records [`FactCallee::Undecided`]
+/// with one [`Conv::Let`]-like entry per field in
+/// [`BodyFacts::arg_convs`] (post-F1 may add a dedicated variant; the
+/// shape is frozen while F1 matches on it). An operator records
+/// [`FactCallee::Undecided`] with an empty conv row: the operator
+/// desugars to its trait method, but I4 resolves no method for it.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum FactCallee {
     /// Never visited (not "undecided": see [`FactCallee::Undecided`]).
@@ -76,8 +82,12 @@ pub struct BodyFacts {
     /// D2: resolved callee per call node.
     callee: Vec<FactCallee>,
     /// D3: receiver convention per method call (I4 fills; I3.5 leaves
-    /// [`None`]). Argument conventions live in [`BodyFacts::arg_convs`]:
-    /// they are variable-length per call and do not fit the SoA.
+    /// [`None`]). In R45's qualified form the receiver is an ordinary first
+    /// argument, so a qualified call records BOTH: `recv_conv` (the
+    /// receiver parameter's own convention) and `arg_convs[0]` (the same
+    /// convention as the first argument row). Argument conventions live in
+    /// [`BodyFacts::arg_convs`]: they are variable-length per call and do
+    /// not fit the SoA.
     recv_conv: Vec<Option<Conv>>,
     /// D4: resolved member per projection/construction node.
     member: Vec<MemberTarget>,
@@ -142,11 +152,24 @@ impl BodyFacts {
         }
     }
 
-    /// Records a projection node's resolved member (D4). First write wins.
+    /// Records a projection node's resolved member (D4). First write wins:
+    /// intermediate field segments of a greedy-path callee
+    /// (`outer.inner.m()`) land here via path resolution; the method
+    /// resolution itself overwrites through [`BodyFacts::overwrite_member`].
     pub fn set_member(&mut self, node: u32, m: MemberTarget) {
         if let Some(i) = self.idx(node)
             && self.member[i] == MemberTarget::None
         {
+            self.member[i] = m;
+        }
+    }
+
+    /// Overwrites a projection node's resolved member (D4). ONLY the method
+    /// lookup's `record_method_member` may call this: on a 3+-segment
+    /// greedy-path callee the intermediate field was already recorded
+    /// first-wins, and the method is what lowering must see.
+    pub fn overwrite_member(&mut self, node: u32, m: MemberTarget) {
+        if let Some(i) = self.idx(node) {
             self.member[i] = m;
         }
     }

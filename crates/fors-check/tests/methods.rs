@@ -146,3 +146,94 @@ fn qualified_form_calls_with_receiver_as_arg() {
     assert_eq!(f.arg_convs.len(), 1);
     assert_eq!(f.arg_convs[0].1, vec![Conv::Let]);
 }
+
+/// S1: on a 3+-segment greedy-path callee (`outer.inner.m()`) D4 records
+/// the METHOD, not the intermediate field. Path resolution records the
+/// field first-wins; the method resolution overwrites it.
+#[test]
+fn nested_receiver_records_method_not_field() {
+    let c = check_source(
+        "struct Inner { n: i64 }\nstruct Outer { inner: Inner }\nimpl Inner { fn get(let self: Inner) -> i64 { return self.n; } }\nfn f(let o: Outer) -> i64 { return o.inner.get(); }",
+    );
+    assert!(codes(&c).is_empty(), "got {:?}", codes(&c));
+    let f = body_with_calls(&c, 1);
+    let calls = calls_in(&c, f);
+    assert_eq!(calls.len(), 1);
+    let (def, owner) = match f.callee_of(calls[0]) {
+        FactCallee::Method { def, owner } => (def, owner),
+        other => panic!("`o.inner.get()` must resolve to a method, got {other:?}"),
+    };
+    // The callee NameExpr node carries the method resolution in D4: the
+    // recorded head is the method's owner, not the intermediate field's
+    // struct.
+    let (start, end) = f.range();
+    let paths: Vec<u32> = (start..end.min(c.kinds.len() as u32))
+        .filter(|&n| {
+            c.kinds[n as usize] == NodeKind::NameExpr
+                && f.member_of(n) != fors_check::facts::MemberTarget::None
+        })
+        .collect();
+    assert_eq!(paths.len(), 1, "exactly the callee records D4");
+    match f.member_of(paths[0]) {
+        fors_check::facts::MemberTarget::Field { head, .. } => assert_eq!(
+            head, owner,
+            "D4 must name the method owner, not the intermediate field head"
+        ),
+        other => panic!("expected a D4 field-shaped method record, got {other:?}"),
+    }
+    let _ = def;
+}
+
+/// S3: `(move x).m()` and `x.m()` with `sink self` produce exactly one
+/// Move event with an ImplicitReceiver cause each (R46: they mean exactly
+/// the same). Node ids differ between the forms, so the comparison is on
+/// (kind, cause shape, place).
+#[test]
+fn explicit_and_implicit_receiver_moves_match() {
+    use fors_check::tape::{Cause, UseKind};
+    fn shape(f: &fors_check::facts::BodyFacts) -> Vec<(UseKind, bool, fors_check::tape::PlaceId)> {
+        let mut out: Vec<_> = f
+            .tape
+            .events
+            .iter()
+            .map(|e| {
+                (
+                    e.kind,
+                    matches!(e.cause, Cause::ImplicitReceiver { .. }),
+                    e.place,
+                )
+            })
+            .collect();
+        out.sort_by_key(|(k, c, p)| (*k as u8, *c, p.0));
+        out
+    }
+    let plain = check_source(
+        "struct B { x: i64 }\nimpl B { fn finish(sink self: B) -> i64 { let p = self.x; discard self; return p; } }\nfn f(sink b: B) -> i64 { return b.finish(); }",
+    );
+    let moved = check_source(
+        "struct B { x: i64 }\nimpl B { fn finish(sink self: B) -> i64 { let p = self.x; discard self; return p; } }\nfn f(sink b: B) -> i64 { return (move b).finish(); }",
+    );
+    assert!(codes(&plain).is_empty(), "got {:?}", codes(&plain));
+    assert!(codes(&moved).is_empty(), "got {:?}", codes(&moved));
+    let fp = body_with_calls(&plain, 1);
+    let fm = body_with_calls(&moved, 1);
+    // Exactly one implicit-receiver move in each form, on the same place.
+    let mp = fp
+        .tape
+        .events
+        .iter()
+        .filter(|e| matches!(e.cause, Cause::ImplicitReceiver { .. }))
+        .count();
+    let mm = fm
+        .tape
+        .events
+        .iter()
+        .filter(|e| matches!(e.cause, Cause::ImplicitReceiver { .. }))
+        .count();
+    assert_eq!((mp, mm), (1, 1), "one implicit move per form");
+    assert_eq!(
+        shape(fp),
+        shape(fm),
+        "tapes must match between `x.m()` and `(move x).m()`"
+    );
+}

@@ -580,7 +580,9 @@ impl Wf<'_> {
             self.prepare_signature(&mut cx, decl);
             let want = cx.result;
             self.dep(def);
+            self.cur_scope = def;
             self.check_block(&mut cx, block, want);
+            self.cur_scope = fors_fir::NO_DEF;
             let set = self.cur_deps.take();
             self.deps.push((def, set));
             self.body_nodes += cx.nodes;
@@ -1411,6 +1413,16 @@ impl Wf<'_> {
                 }
                 NodeKind::UnaryExpr if own_first(cx, n) == Some(TokenKind::KwMove) => {
                     n = cx.f.tree.children(n).next()?;
+                }
+                // A parenthesised expression is the same place (R4 `(e)` is
+                // `e`; `(a, b)` is not a place and has no single child).
+                NodeKind::TupleOrParen => {
+                    let mut kids = cx.f.tree.children(n);
+                    let first = kids.next()?;
+                    if kids.next().is_some() {
+                        return None;
+                    }
+                    n = first;
                 }
                 NodeKind::NameExpr => {
                     let target = cx.f.uses.target_of(n as u32)?;

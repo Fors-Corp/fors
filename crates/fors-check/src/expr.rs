@@ -17,6 +17,7 @@ use fors_resolve::target::{DeferReason, Entity, ResolvedTarget};
 use fors_syntax::NodeKind;
 
 use crate::body::{BodyCx, LocalKind, Slot, is_expr_kind, is_type_node, op_between, own_first};
+use crate::facts::FactCallee;
 use crate::lower::{MAX_LIST, MAX_PARAMS, parse_int_literal};
 use crate::wf::{Holds, Wf};
 
@@ -457,6 +458,10 @@ impl Wf<'_> {
             }
             prev = j;
         }
+        // D2/D3: an operator desugars to its trait method, but I4 resolves
+        // no method for it — mark the node visited with an empty conv row.
+        cx.facts.set_callee(node as u32, FactCallee::Undecided);
+        cx.facts.set_arg_convs(node as u32, Vec::new());
         if acc == TY_NEVER {
             TY_NEVER
         } else if kind == NodeKind::CmpExpr {
@@ -512,6 +517,12 @@ impl Wf<'_> {
     /// operator `sym` in the diagnostic. MARC: verification of I3
     /// (2026-09-20): unary `-` asked for `Sub`, so `-x` on an unsigned
     /// integer passed; it asks for `Neg` now.
+    ///
+    /// I4 (R57): when `s` is rigid (a type parameter or a neutral
+    /// projection) the trait MUST be among its bounds, else T0057 (the fix
+    /// is a bound, not an impl). A neutral projection's bounds are the
+    /// trait's declaration for `A` plus the constraint entries in scope
+    /// (R12's `declared_bounds`); nothing is learnt from any impl (R57).
     pub fn require_trait(
         &mut self,
         cx: &mut BodyCx,
@@ -525,14 +536,26 @@ impl Wf<'_> {
             return;
         }
         let bare = self.fir.tys.unqual(s);
-        if matches!(self.fir.tys.tag(bare), TyTag::Param | TyTag::Proj) {
-            return; // R57, I5's
-        }
         let tdef = self.prelude.traits[which];
         if tdef == fors_fir::NO_DEF {
             return;
         }
         let want = self.fir.tys.intern_trait_ref(tdef, NO_ARGS);
+        if matches!(self.fir.tys.tag(bare), TyTag::Param | TyTag::Proj) {
+            if self.holds(bare, want) == Holds::No {
+                let n = self.show(s);
+                let tn = self.head_name(tdef);
+                self.bemit(
+                    cx,
+                    node,
+                    57,
+                    57,
+                    format!("`{n}` has no bound `{tn}`, which the operator `{sym}` needs; add it to the bounds"),
+                );
+            }
+            let _ = site;
+            return;
+        }
         if self.holds(bare, want) == Holds::No {
             let n = self.show(s);
             let tn = self.head_name(tdef);

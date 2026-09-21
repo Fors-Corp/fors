@@ -21,6 +21,7 @@
 //! them.
 
 use fors_fir::sig::{Conv, SigKind};
+use fors_fir::subst::{Binding, one_way_match};
 use fors_fir::ty::{ArgsId, NO_ARGS, NO_TY, TyId, TyTag};
 use fors_index::Symbol;
 use fors_index::diag::Code;
@@ -57,8 +58,10 @@ enum Candidate {
     /// Resolved: I4 types the call.
     Hit(MethodHit),
     /// A method with parameters to determine: I5's inference owns it, so
-    /// a tier with no better answer stays silent rather than erroring.
-    Generic,
+    /// it counts as PRESENT for tier purposes (R43 stops at the first
+    /// non-empty tier) and as a candidate for ambiguity (R44), but a tier
+    /// with no better answer stays silent rather than erroring.
+    Generic { owner: DefId },
     /// Not a candidate (wrong self type, associated function in method
     /// position, foreign private after its diagnostic).
     No,
@@ -81,7 +84,11 @@ pub enum LookupError {
 
 impl Wf<'_> {
     /// Resolves `name` on `recv` (qualifiers already stripped by the
-    /// caller) for a call at `node` in method position.
+    /// caller) for a call at `node` in method position. Memoised by
+    /// (requesting module, receiver, name, position): the module matters
+    /// because R43's candidate traits come from the module graph (ch08 R7),
+    /// so the same `(TyId, Symbol)` resolves differently in different
+    /// modules.
     pub fn lookup_method(
         &mut self,
         cx: &mut BodyCx,
@@ -90,12 +97,39 @@ impl Wf<'_> {
         name: Symbol,
     ) -> Result<MethodHit, LookupError> {
         let bare = self.fir.tys.unqual(recv);
-        match self.fir.tys.tag(bare) {
+        let cur_mod = self.module_of(cx.owner);
+        let key = (cur_mod.0, bare, name, true);
+        if let Some(cached) = self.method_memo.get(&key).cloned() {
+            self.replay_method_deps(bare, &cached);
+            return cached;
+        }
+        let ans = match self.fir.tys.tag(bare) {
             TyTag::Nominal => self.lookup_on_head(cx, node, bare, name, true),
             TyTag::Param => self.lookup_on_param(cx, node, bare, name),
             // Projections are I6's; anything else has no method table this
             // increment owns. Silent.
             _ => Err(LookupError::Silent),
+        };
+        self.method_memo.insert(key, ans.clone());
+        ans
+    }
+
+    /// Replays the dependency edges a memoised lookup found, into the
+    /// current body's `DepSet` (design §9: every body records what it read).
+    /// The full consulted set (every impl/trait scanned) is recorded on the
+    /// miss; a hit replays the answer's own edges, which is what
+    /// invalidation reads.
+    fn replay_method_deps(&mut self, recv: TyId, ans: &Result<MethodHit, LookupError>) {
+        if self.fir.tys.tag(recv) == TyTag::Nominal {
+            let head = DefId(self.fir.tys.a(recv));
+            self.dep(head);
+        }
+        if let Ok(hit) = ans {
+            self.dep(hit.def);
+            self.dep(hit.owner);
+            if hit.trait_def != fors_fir::NO_DEF {
+                self.dep(hit.trait_def);
+            }
         }
     }
 
@@ -113,8 +147,7 @@ impl Wf<'_> {
         let head = DefId(self.fir.tys.a(recv));
         self.dep(head);
         let key = self.fir.tys.head_key(recv);
-        let mut tier1 = Vec::new();
-        let mut saw_generic = false;
+        let mut tier1: Vec<Candidate> = Vec::new();
         for r in self.impls.inherent(key) {
             let row = self.impls.row(r);
             self.dep(row.def);
@@ -122,23 +155,18 @@ impl Wf<'_> {
                 if mname != name {
                     continue;
                 }
-                self.consider(
-                    cx,
-                    node,
-                    mdef,
-                    row.def,
-                    recv,
-                    method_position,
-                    &mut tier1,
-                    &mut saw_generic,
-                );
+                self.consider(cx, node, mdef, row.def, recv, method_position, &mut tier1);
             }
         }
         if !tier1.is_empty() {
+            // R43 stops at the first non-empty tier: a generic same-name
+            // method makes tier 1 non-empty even when nothing in it
+            // resolves, so tier 2 is never consulted.
             return Self::answer(self, name, tier1);
         }
         let mut seen = Vec::new();
-        let mut tier2 = Vec::new();
+        let mut tier2: Vec<Candidate> = Vec::new();
+        let mut saw_generic = false;
         // The prelude traits first (stable order: `traits` array order),
         // then the scoped impl traits in impl-row order. Both are
         // deterministic across runs and hosts.
@@ -204,6 +232,9 @@ impl Wf<'_> {
 
     /// R45's qualified lookup over a nominal head: same tiers, but
     /// associated functions answer and the receiver stays an argument.
+    /// Memoised alongside [`Self::lookup_method`] with `method_position`
+    /// false, so a qualified and an unqualified lookup for the same
+    /// `(module, receiver, name)` never share an entry.
     pub fn lookup_qualified(
         &mut self,
         cx: &mut BodyCx,
@@ -211,13 +242,22 @@ impl Wf<'_> {
         recv: TyId,
         name: Symbol,
     ) -> Result<MethodHit, LookupError> {
-        match self.lookup_on_head(cx, node, recv, name, false) {
+        let bare = self.fir.tys.unqual(recv);
+        let cur_mod = self.module_of(cx.owner);
+        let key = (cur_mod.0, bare, name, false);
+        if let Some(cached) = self.method_memo.get(&key).cloned() {
+            self.replay_method_deps(bare, &cached);
+            return cached;
+        }
+        let ans = match self.lookup_on_head(cx, node, bare, name, false) {
             Ok(mut hit) => {
                 hit.receiver_is_arg = true;
                 Ok(hit)
             }
             Err(e) => Err(e),
-        }
+        };
+        self.method_memo.insert(key, ans.clone());
+        ans
     }
 
     /// R43's rigid case: the candidate traits are exactly the bounds.
@@ -238,8 +278,7 @@ impl Wf<'_> {
             return Err(LookupError::Silent);
         }
         let bounds = self.fir.sigs.generics_store.param(gid, ord).bounds;
-        let mut tier = Vec::new();
-        let mut saw_generic = false;
+        let mut tier: Vec<Candidate> = Vec::new();
         for r in self.fir.sigs.bounds.get(bounds).to_vec() {
             let trait_def = self.fir.tys.trait_ref(r).0;
             if trait_def == fors_fir::NO_DEF {
@@ -250,23 +289,14 @@ impl Wf<'_> {
                 if mname != name {
                     continue;
                 }
-                self.consider(
-                    cx,
-                    node,
-                    mdef,
-                    trait_def,
-                    recv,
-                    true,
-                    &mut tier,
-                    &mut saw_generic,
-                );
+                self.consider(cx, node, mdef, trait_def, recv, true, &mut tier);
             }
         }
         if tier.is_empty() {
             // Rigid silence: bound-trait declarations (especially the
             // prelude's opaque rows) need not list every method yet, so
             // an empty tier proves nothing. Ambiguity still reports.
-            let _ = (saw_generic, recv);
+            let _ = recv;
             return Err(LookupError::Silent);
         }
         Self::answer(self, name, tier)
@@ -288,25 +318,36 @@ impl Wf<'_> {
         owner: DefId,
         recv: TyId,
         method_position: bool,
-        tier: &mut Vec<MethodHit>,
-        saw_generic: &mut bool,
+        tier: &mut Vec<Candidate>,
     ) {
         match self.concrete_candidate(cx, node, mdef, owner, recv, method_position) {
-            Candidate::Hit(hit) => tier.push(hit),
-            Candidate::Generic => *saw_generic = true,
+            Candidate::Hit(hit) => tier.push(Candidate::Hit(hit)),
+            Candidate::Generic { owner } => tier.push(Candidate::Generic { owner }),
             Candidate::No => {}
         }
     }
 
     /// One candidate, or R44's error. Inherent-before-trait is the only
-    /// precedence; nothing is ever ranked.
-    fn answer(
-        wf: &mut Wf,
-        name: Symbol,
-        mut tier: Vec<MethodHit>,
-    ) -> Result<MethodHit, LookupError> {
-        if tier.len() == 1 {
-            let hit = tier.pop().unwrap();
+    /// precedence; nothing is ever ranked. A generic same-name method counts
+    /// as present: one hit plus any generics (or two hits) is ambiguous;
+    /// generics alone stay silent for I5.
+    fn answer(wf: &mut Wf, name: Symbol, tier: Vec<Candidate>) -> Result<MethodHit, LookupError> {
+        let mut hits = Vec::new();
+        let mut generic_owners = Vec::new();
+        for c in tier {
+            match c {
+                Candidate::Hit(hit) => hits.push(hit),
+                Candidate::Generic { owner } => generic_owners.push(owner),
+                Candidate::No => {}
+            }
+        }
+        if hits.is_empty() {
+            // Every same-name method needs I5's inference: the tier is
+            // non-empty (it blocks the next one) but has nothing to call.
+            return Err(LookupError::Silent);
+        }
+        if hits.len() == 1 && generic_owners.is_empty() {
+            let hit = hits.pop().unwrap();
             wf.dep(hit.def);
             wf.dep(hit.owner);
             if hit.trait_def != fors_fir::NO_DEF {
@@ -314,13 +355,17 @@ impl Wf<'_> {
             }
             return Ok(hit);
         }
-        let candidates = tier
+        let mut candidates: Vec<String> = hits
             .iter()
             .map(|h| {
                 let o = wf.head_name(h.owner);
                 format!("{o}.{}", wf.sym(name))
             })
             .collect();
+        for owner in generic_owners {
+            let o = wf.head_name(owner);
+            candidates.push(format!("{o}.{}", wf.sym(name)));
+        }
         Err(LookupError::Ambiguous {
             name: wf.sym(name),
             candidates,
@@ -329,7 +374,9 @@ impl Wf<'_> {
 
     /// A named method as a call candidate: non-generic (I5 owns parameters
     /// to determine), with a receiver slot whose self type matches `recv`.
-    /// A foreign private method is R49's diagnostic and no candidate.
+    /// A foreign private method is R49's diagnostic and no candidate — but
+    /// only once the method is known to be this increment's: a generic
+    /// (I5-owned) method stays silent even when it is foreign-private.
     fn concrete_candidate(
         &mut self,
         cx: &mut BodyCx,
@@ -340,13 +387,13 @@ impl Wf<'_> {
         method_position: bool,
     ) -> Candidate {
         if self.arity(mdef) > 0 {
-            return Candidate::Generic;
+            return Candidate::Generic { owner };
         }
         // A trait's `Self` is supplied by the receiver, so a trait
         // method's container never withholds it; an impl's parameters
         // are I5's inference.
         if self.container_arity(mdef) > 0 && !self.container_is_trait(mdef) {
-            return Candidate::Generic;
+            return Candidate::Generic { owner };
         }
         let sig = self.fir.sigs.fn_sig(mdef);
         if sig == fors_fir::NO_FN_SIG {
@@ -358,6 +405,24 @@ impl Wf<'_> {
             // form may call it, with every parameter an ordinary argument.
             // The "receiver" convention is the first parameter's own.
             if method_position {
+                return Candidate::No;
+            }
+            // A generic signature is I5's even in qualified form: silence
+            // before visibility, like the method path. Every parameter is
+            // an ordinary argument here (no receiver slot to skip).
+            if self.sig_mentions_any_var(sig) {
+                return Candidate::Generic { owner };
+            }
+            if !self.method_visible(cx, owner, mdef) {
+                let m = self.sym(self.method_name(owner, mdef));
+                let h = self.head_name(owner);
+                self.bemit_code(
+                    cx,
+                    node,
+                    Code::N(11),
+                    49,
+                    format!("the method `{m}` of `{h}` is not `pub`"),
+                );
                 return Candidate::No;
             }
             let n = self.fir.sigs.fn_sigs.count(sig);
@@ -384,6 +449,15 @@ impl Wf<'_> {
         if self.fir.tys.tag(recv) != TyTag::Param && !self.self_matches(owner, p.ty, recv) {
             return Candidate::No;
         }
+        // The result, raises and non-receiver parameters must be free of
+        // parameters and projections: anything mentioning them needs
+        // I5's instantiation (Self := receiver) or I6's normalization,
+        // so a tier with no better answer stays silent. This check comes
+        // before visibility: an I5-owned generic method is silent even
+        // when foreign-private.
+        if self.sig_mentions_var(sig, slot) {
+            return Candidate::Generic { owner };
+        }
         if !self.method_visible(cx, owner, mdef) {
             let m = self.sym(self.method_name(owner, mdef));
             let h = self.head_name(owner);
@@ -395,13 +469,6 @@ impl Wf<'_> {
                 format!("the method `{m}` of `{h}` is not `pub`"),
             );
             return Candidate::No;
-        }
-        // The result, raises and non-receiver parameters must be free of
-        // parameters and projections: anything mentioning them needs
-        // I5's instantiation (Self := receiver) or I6's normalization,
-        // so a tier with no better answer stays silent.
-        if self.sig_mentions_var(sig, slot) {
-            return Candidate::Generic;
         }
         Candidate::Hit(MethodHit {
             def: mdef,
@@ -428,6 +495,25 @@ impl Wf<'_> {
             if i as u8 == recv_slot {
                 continue;
             }
+            if self.ty_mentions_var(self.fir.sigs.fn_sigs.param(sig, i).ty) {
+                return true;
+            }
+        }
+        let r = self.fir.sigs.fn_sigs.result(sig);
+        if self.ty_mentions_var(r) {
+            return true;
+        }
+        let e = self.fir.sigs.fn_sigs.raises(sig);
+        e != NO_TY && self.ty_mentions_var(e)
+    }
+
+    /// Whether a signature mentions a generic parameter or a projection in
+    /// ANY parameter (no receiver slot to skip), the result or `raises`.
+    /// For R45's qualified associated functions, where the "receiver" is
+    /// an ordinary first argument.
+    fn sig_mentions_any_var(&self, sig: fors_fir::sig::FnSigId) -> bool {
+        let n = self.fir.sigs.fn_sigs.count(sig);
+        for i in 0..n {
             if self.ty_mentions_var(self.fir.sigs.fn_sigs.param(sig, i).ty) {
                 return true;
             }
@@ -490,7 +576,7 @@ impl Wf<'_> {
         name: Symbol,
         trait_def: DefId,
         method_position: bool,
-        tier: &mut Vec<MethodHit>,
+        tier: &mut Vec<Candidate>,
         saw_generic: &mut bool,
     ) {
         let want = self.fir.tys.intern_trait_ref(trait_def, NO_ARGS);
@@ -505,23 +591,18 @@ impl Wf<'_> {
             if mname != name {
                 continue;
             }
-            self.consider(
-                cx,
-                node,
-                mdef,
-                trait_def,
-                recv,
-                method_position,
-                tier,
-                saw_generic,
-            );
+            self.consider(cx, node, mdef, trait_def, recv, method_position, tier);
         }
     }
 
-    /// Whether `trait_def` has an impl for `recv`'s head in R43's module
-    /// scope that declares `name` at all: then a missed probe is an
-    /// argument-matching artifact, not an absence.
-    fn scope_declares(&self, cx: &BodyCx, recv: TyId, trait_def: DefId, name: Symbol) -> bool {
+    /// Whether `trait_def` has an impl for `recv` in R43's module scope that
+    /// declares `name` at all: then a missed probe is a trait-argument
+    /// matching artifact, not an absence. Narrowed to impls whose self type
+    /// UNIFIES with the receiver (the same one-way match `holds` uses): a
+    /// same-head/different-args impl (e.g. the sole `Tagged` impl is for
+    /// `Box2[i64]` while the receiver is `Box2[i32]`) must NOT suppress a
+    /// concrete T0043.
+    fn scope_declares(&mut self, cx: &BodyCx, recv: TyId, trait_def: DefId, name: Symbol) -> bool {
         if self.fir.tys.tag(recv) != TyTag::Nominal {
             return false;
         }
@@ -546,7 +627,16 @@ impl Wf<'_> {
                 continue;
             }
             let impl_mod = self.module_of(row.def);
-            if impl_mod == head_mod || impl_mod == cur_mod || edges.contains(&impl_mod) {
+            if impl_mod != head_mod && impl_mod != cur_mod && !edges.contains(&impl_mod) {
+                continue;
+            }
+            let arity = self
+                .fir
+                .sigs
+                .generics_store
+                .count(self.fir.sigs.generics(row.def));
+            let mut b = Binding::new(&[(row.def, arity as u16)]);
+            if one_way_match(&mut self.fir.tys, row.self_ty, recv, &mut b) {
                 return true;
             }
         }
@@ -599,14 +689,16 @@ impl Wf<'_> {
 
     /// Records a resolved method on a call's callee node (D4): the owner
     /// head and the method's index in its member list, so lowering sees
-    /// method calls where it used to see fields.
+    /// method calls where it used to see fields. Overwrites: on a 3+-
+    /// segment greedy-path callee (`outer.inner.m()`) the intermediate
+    /// field was already recorded first-wins by path resolution.
     pub fn record_method_member(&mut self, cx: &mut BodyCx, node: usize, hit: &MethodHit) {
         let ms = self.fir.sigs.members(hit.owner);
         let n = self.fir.sigs.member_store.count(ms);
         for i in 0..n {
             let m = self.fir.sigs.member_store.get(ms, i);
             if m.kind == fors_fir::sig::MemberKind::Item && m.def == hit.def {
-                cx.facts.set_member(
+                cx.facts.overwrite_member(
                     node as u32,
                     MemberTarget::Field {
                         head: hit.owner,
