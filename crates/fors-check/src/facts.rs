@@ -36,6 +36,9 @@ pub enum FactCallee {
     Variant { en: DefId, index: u32 },
     /// A value of `fn` or closure type (R7).
     ValueFn,
+    /// A resolved method call (I4, R43-R46): the method and its owner
+    /// (inherent impl or trait) for R46's diagnostic.
+    Method { def: DefId, owner: DefId },
     /// Visited, but this increment does not type the callee (a method or a
     /// generic call: I4's / I5's). Silent and absorbing.
     Undecided,
@@ -172,6 +175,15 @@ impl BodyFacts {
     /// I3.5 leaves [`None`]).
     pub fn recv_conv_of(&self, node: u32) -> Option<Conv> {
         self.idx(node).and_then(|i| self.recv_conv[i])
+    }
+
+    /// Records a call node's receiver convention (D3). First write wins.
+    pub fn set_recv_conv(&mut self, node: u32, conv: Conv) {
+        if let Some(i) = self.idx(node)
+            && self.recv_conv[i].is_none()
+        {
+            self.recv_conv[i] = Some(conv);
+        }
     }
 
     /// How many nodes have a decided type (the gate test's numerator).

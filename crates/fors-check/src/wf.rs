@@ -23,7 +23,7 @@ use fors_fir::sig::{Conv, GParamKind, MemberKind, NO_TRAIT_REF, PayloadKind, Sig
 use fors_fir::subst::{Binding, one_way_match, subst_norm};
 use fors_fir::ty::{ArgsId, FnTyId, NO_ARGS, NO_TY, TY_ERROR, TraitRefId, TyId, TyTag};
 use fors_index::decl::DeclKind;
-use fors_index::ids::{DefId, FileId};
+use fors_index::ids::{DefId, FileId, ModuleId};
 use fors_index::{Interner, Symbol};
 
 use crate::defs::DefTable;
@@ -85,6 +85,10 @@ pub struct Wf<'a> {
     pub deps: Vec<(DefId, crate::deps::DepSet)>,
     /// One `BodyFacts` per typed body, in declaration order (I3.5).
     pub facts: Vec<(DefId, crate::facts::BodyFacts)>,
+    /// The module graph's `(from, to)` edges, sorted (R43's candidate-trait
+    /// search walks them; kept from `resolve()` so the checker never
+    /// re-derives them).
+    pub mod_edges: Vec<(ModuleId, ModuleId)>,
 }
 
 impl<'a> Wf<'a> {
@@ -122,6 +126,7 @@ impl<'a> Wf<'a> {
             cur_deps: crate::deps::DepSet::new(),
             deps: Vec::new(),
             facts: Vec::new(),
+            mod_edges: Vec::new(),
         }
     }
 
@@ -502,7 +507,7 @@ impl Wf<'_> {
             .unwrap_or_else(|| "this item".to_string())
     }
 
-    fn sym(&self, s: Symbol) -> String {
+    pub(crate) fn sym(&self, s: Symbol) -> String {
         String::from_utf8_lossy(self.names.resolve(s)).into_owned()
     }
 
@@ -919,7 +924,7 @@ impl Wf<'_> {
             .collect()
     }
 
-    fn impl_method_names(&self, def: DefId) -> Vec<(Symbol, DefId)> {
+    pub(crate) fn impl_method_names(&self, def: DefId) -> Vec<(Symbol, DefId)> {
         let ms = self.fir.sigs.members(def);
         let n = self.fir.sigs.member_store.count(ms);
         (0..n)
