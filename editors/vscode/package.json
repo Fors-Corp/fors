@@ -1,0 +1,30 @@
+{
+  "name": "fors-syntax",
+  "displayName": "Fors Syntax Highlighting",
+  "description": "TextMate grammar and bracket/comment configuration for the Fors language (syntax highlighting only; no language server).",
+  "version": "0.1.0",
+  "private": true,
+  "engines": {
+    "vscode": "^1.70.0"
+  },
+  "categories": [
+    "Programming Languages"
+  ],
+  "contributes": {
+    "languages": [
+      {
+        "id": "fors",
+        "aliases": ["Fors", "fors"],
+        "extensions": [".fors"],
+        "configuration": "../language-configuration.json"
+      }
+    ],
+    "grammars": [
+      {
+        "language": "fors",
+        "scopeName": "source.fors",
+        "path": "../fors.tmLanguage.json"
+      }
+    ]
+  }
+}
