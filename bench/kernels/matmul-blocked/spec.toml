@@ -1,0 +1,19 @@
+name = "matmul-blocked"
+category = "parallel"
+description = "Cache-blocked (tiled) dense NxN double matmul C = A x B, the tuned companion to the naive i-k-j `matmul` kernel (added 2026-09-21, ch06 open question 5 / rule 3 addition: the naive kernel is untouched). Same matrices (A[i][j] = ((i*j) % 7) + 1, B[i][j] = ((i+j) % 5) + 1, flat row-major), same thread decomposition (rows of C split into contiguous blocks, one per thread), same output (sum then trace of C as integers). The single tuned axis is memory locality: the k/i/j loops are tiled with BLOCK = 64 in every language (kk, ii, jj tile loops outermost, i-k-j order preserved inside each tile; edge tiles via min(), so N need not divide BLOCK). Every value stays a small integer exactly representable in doubles, so the result is bit-identical to naive `matmul` regardless of tiling/summation order -- the two kernels' expected/*.txt must agree byte for byte."
+reference = "c"
+threads = [1, 2, 4, 6, 8]
+# bound: blocking raises the naive loop's arithmetic intensity towards the compute-bound
+# regime (the caveat recorded in matmul/spec.toml anticipated exactly this re-derivation);
+# the frozen Tier A label stays "compute" per docs/spec/06-measurement.md rule 3.
+bound = "compute"
+# deterministic: same pattern as naive matmul -- each thread writes only its own disjoint
+# row block (zeroed up front, then accumulated tile by tile), and sum/trace are a single
+# serial pass over the completed C matrix AFTER all threads join, in every implemented
+# language (c, c-fma, rust, go, swift, zig, java, node, deno, python where present), verified
+# empirically by `run.py determinism` (byte-identical stdout at every declared thread count).
+deterministic = true
+
+[sizes]
+check = ["64"]
+bench = ["1800"]

@@ -1,0 +1,14 @@
+name = "java-stream"
+display = "Java (parallel streams, ForkJoinPool)"
+# Tuned-pattern companion to the "java" (hand-rolled threads / ExecutorService) column:
+# the SAME per-kernel algorithm and work decomposition, driven by a ForkJoinPool sized
+# from the thread-count argument plus a parallel IntStream over the same block bounds.
+# Stdlib only (java.util.concurrent + java.util.stream), same probe/build/run shape as
+# langs/java.toml. A kernel gets this cell by adding <lang-dir>/MainStream.java; kernels
+# without that file are skipped by the harness's implemented() check, and report.py
+# labels the column partial-coverage (ch06 rule 9) until it covers every kernel.
+dir = "java"
+source = "MainStream.java"
+probe = ["java", "-version"]
+build = ["javac", "-d", "{out}", "{src}/MainStream.java"]
+run = ["java", "-cp", "{out}", "MainStream"]
