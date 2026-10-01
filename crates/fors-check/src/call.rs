@@ -16,7 +16,9 @@ use fors_syntax::NodeKind;
 
 use crate::body::{BodyCx, LocalKind, Slot};
 use crate::diag::t;
-use crate::tape::{Cause, UseKind};
+use crate::facts::FactCallee;
+use crate::methods::{LookupError, MethodHit};
+use crate::tape::{Cause, Seg, UseKind};
 use crate::wf::Wf;
 
 /// What a call's callee turned out to be. `Undecided` is the honest state
@@ -28,6 +30,8 @@ enum Callee {
     Variant(DefId, usize),
     /// A value of `fn` or closure type (R7).
     Value(FnTyId),
+    /// A resolved method (I4, R43-R46).
+    Method(MethodHit),
     Undecided,
 }
 
@@ -49,7 +53,19 @@ impl Wf<'_> {
 
     /// R38 for a call with zero parameters to determine, plus R36's
     /// handler and R37's named-argument rule.
+    ///
+    /// I3.5: records the decided type (D1) — the `?`-operand call in both
+    /// judgements reaches `call_expr` directly, bypassing the
+    /// `check`/`synth` wrappers, so this wrapper is the node's only
+    /// record. The classification (D2) and argument conventions (D3) are
+    /// recorded inside.
     pub fn call_expr(&mut self, cx: &mut BodyCx, node: usize, expected: Option<TyId>) -> TyId {
+        let t = self.call_expr_inner(cx, node, expected);
+        cx.facts.record(node as u32, t);
+        t
+    }
+
+    fn call_expr_inner(&mut self, cx: &mut BodyCx, node: usize, expected: Option<TyId>) -> TyId {
         let kids = cx.kids(node);
         let Some(&callee_node) = kids.first() else {
             return TY_ERROR;
@@ -67,6 +83,24 @@ impl Wf<'_> {
 
         let try_node = cx.under_try.take();
         let callee = self.classify_callee(cx, callee_node);
+        // I3.5 (D2): the classification, before the match moves it. I4
+        // refines `Undecided` into method resolutions; I5 adds arguments.
+        cx.facts.set_callee(
+            node as u32,
+            match &callee {
+                Callee::Fn(def) => FactCallee::Direct(*def),
+                Callee::Variant(en, i) => FactCallee::Variant {
+                    en: *en,
+                    index: *i as u32,
+                },
+                Callee::Value(_) => FactCallee::ValueFn,
+                Callee::Method(hit) => FactCallee::Method {
+                    def: hit.def,
+                    owner: hit.owner,
+                },
+                Callee::Undecided => FactCallee::Undecided,
+            },
+        );
         let (params, result, raises) = match callee {
             Callee::Fn(def) => {
                 let sig = self.fir.sigs.fn_sig(def);
@@ -112,7 +146,53 @@ impl Wf<'_> {
                 self.handler(cx, handler, TY_ERROR, TY_ERROR, false);
                 return TY_ERROR;
             }
+            Callee::Method(hit) => {
+                let sig = self.fir.sigs.fn_sig(hit.def);
+                if sig == fors_fir::NO_FN_SIG {
+                    (Vec::new(), TY_ERROR, NO_TY)
+                } else {
+                    // I4 (D2/D3): the resolution lowering reads, recorded
+                    // before the match below moves on to the arguments.
+                    cx.facts.set_callee(
+                        node as u32,
+                        FactCallee::Method {
+                            def: hit.def,
+                            owner: hit.owner,
+                        },
+                    );
+                    cx.facts.set_recv_conv(node as u32, hit.conv);
+                    self.record_method_member(cx, callee_node, &hit);
+                    let n = self.fir.sigs.fn_sigs.count(sig);
+                    let mut ps = Vec::with_capacity(n);
+                    for i in 0..n {
+                        if !hit.receiver_is_arg && i as u8 == hit.recv_slot {
+                            // R46: in method position the receiver is not
+                            // an argument. (R45's qualified form keeps it
+                            // as args[0], an ordinary first argument.)
+                            continue;
+                        }
+                        let p = self.fir.sigs.fn_sigs.param(sig, i);
+                        ps.push((p.name, p.conv, p.ty));
+                    }
+                    if !hit.receiver_is_arg {
+                        self.recv_use(cx, node, callee_node, &hit);
+                    }
+                    (
+                        ps,
+                        self.fir.sigs.fn_sigs.result(sig),
+                        self.fir.sigs.fn_sigs.raises(sig),
+                    )
+                }
+            }
         };
+        // I3.5 (D3, rest): the parameter convention each typed argument
+        // was checked against, in order, one row per typed call (possibly
+        // empty). Extra arguments (R39, I5's) are synthesised and carry no
+        // convention.
+        cx.facts.set_arg_convs(
+            node as u32,
+            params.iter().take(args.len()).map(|&(_, c, _)| c).collect(),
+        );
         // R36: `call?` requires the callee to raise, and somewhere for the
         // error to go: the enclosing function's `raises` type, or the `fn`
         // type a CHECK-mode closure is checked against. (Whether the two
@@ -272,12 +352,26 @@ impl Wf<'_> {
                 if crate::member::path_segments(cx, node)
                     > crate::member::path_consumed(cx, node).max(1) as usize =>
             {
-                // A method call `x.m(..)` or a qualified call `T.m(..)`:
-                // R43-R46 and R45 are I4's. The receiver is still typed, so
-                // its own errors are found and its tape events recorded.
+                // A method call `x.m(..)` (R43/R44/R46) or a qualified call
+                // `T.m(..)` (R45). The receiver prefix is still typed, so
+                // its own errors are found and its tape events recorded;
+                // the last segment resolves as a method, never a field.
                 let n = crate::member::path_segments(cx, node);
-                self.path_value(cx, node, n - 1);
-                Callee::Undecided
+                match self.path_head(cx, node) {
+                    crate::member::PathHead::Value(_) => {
+                        let recv = self.path_value(cx, node, n - 1, false);
+                        if recv == TY_ERROR || recv == NO_TY {
+                            return Callee::Undecided;
+                        }
+                        let Some(name) = self.segment_name(cx, node, n - 1) else {
+                            return Callee::Undecided;
+                        };
+                        self.method_or_silent(cx, node, recv, name)
+                    }
+                    // R45's qualified form `Type.name`: the head is a type,
+                    // not a value. The receiver arrives as args[0].
+                    _ => self.qualified_callee(cx, node, n),
+                }
             }
             NodeKind::NameExpr => match cx.f.uses.target_of(node as u32) {
                 Some(ResolvedTarget::Entity(Entity::Item { file, decl })) => {
@@ -315,14 +409,21 @@ impl Wf<'_> {
                 }
                 _ => Callee::Undecided,
             },
-            // A method call (R43-R46) or an instantiation (R47): I4/I5's.
-            // The receiver is still synthesised, so its own errors are
-            // found and its tape events recorded.
+            // A method call (R43-R46) or an instantiation (R47). The
+            // receiver is synthesised, so its own errors are found and its
+            // tape events recorded; R47's instantiation reading is I5's.
             NodeKind::FieldExpr => {
-                if let Some(operand) = cx.f.tree.children(node).next() {
-                    self.synth(cx, operand);
+                let Some(operand) = cx.f.tree.children(node).next() else {
+                    return Callee::Undecided;
+                };
+                let recv = self.synth(cx, operand);
+                if recv == TY_ERROR || recv == NO_TY {
+                    return Callee::Undecided;
                 }
-                Callee::Undecided
+                let Some(name) = self.field_name(cx, node) else {
+                    return Callee::Undecided;
+                };
+                self.method_or_silent(cx, node, recv, name)
             }
             NodeKind::Bracket => {
                 self.synth(cx, node);
@@ -336,6 +437,194 @@ impl Wf<'_> {
                 }
             }
         }
+    }
+
+    /// A method lookup that stays silent on what I4 does not own, and
+    /// reports R43/R44 at the callee node otherwise.
+    fn method_or_silent(
+        &mut self,
+        cx: &mut BodyCx,
+        node: usize,
+        recv: TyId,
+        name: Symbol,
+    ) -> Callee {
+        match self.lookup_method(cx, node, recv, name) {
+            Ok(hit) => Callee::Method(hit),
+            Err(LookupError::Silent) => Callee::Undecided,
+            Err(LookupError::None { recv, name }) => {
+                self.bemit(cx, node, 43, 43, format!("`{recv}` has no method `{name}`"));
+                Callee::Undecided
+            }
+            Err(LookupError::Ambiguous { name, candidates }) => {
+                let msg = format!(
+                    "more than one candidate for the method `{name}` ({}); write the qualified form",
+                    candidates
+                        .iter()
+                        .map(|c| format!("`{c}`"))
+                        .collect::<Vec<_>>()
+                        .join(", ")
+                );
+                self.bemit(cx, node, 44, 44, msg);
+                Callee::Undecided
+            }
+        }
+    }
+
+    /// R45's qualified `Type.name`: the head denotes a nominal type whose
+    /// method is called with the receiver as an ordinary first argument.
+    /// Anything else (a trait head, whose `Self` is R38's inference, or a
+    /// generic head, whose arguments are types) is I5's and stays silent.
+    fn qualified_callee(&mut self, cx: &mut BodyCx, node: usize, n: usize) -> Callee {
+        let Some(target) = cx.f.uses.target_of(node as u32) else {
+            return Callee::Undecided;
+        };
+        let head_def = match target {
+            ResolvedTarget::Entity(Entity::Item { file, decl }) => self.defs.def_of(file, decl),
+            _ => return Callee::Undecided,
+        };
+        if head_def == fors_fir::NO_DEF
+            || !matches!(
+                self.fir.sigs.kind(head_def),
+                SigKind::Struct | SigKind::Enum
+            )
+            || self.arity(head_def) > 0
+        {
+            return Callee::Undecided;
+        }
+        self.dep(head_def);
+        let recv = self.fir.tys.nominal(head_def, NO_ARGS);
+        let Some(name) = self.segment_name(cx, node, n - 1) else {
+            return Callee::Undecided;
+        };
+        match self.lookup_qualified(cx, node, recv, name) {
+            Ok(hit) => Callee::Method(hit),
+            Err(LookupError::Silent) => Callee::Undecided,
+            Err(LookupError::None { recv, name }) => {
+                self.bemit(cx, node, 43, 43, format!("`{recv}` has no method `{name}`"));
+                Callee::Undecided
+            }
+            Err(LookupError::Ambiguous { name, candidates }) => {
+                let msg = format!(
+                    "more than one candidate for the method `{name}` ({}); write the qualified form",
+                    candidates
+                        .iter()
+                        .map(|c| format!("`{c}`"))
+                        .collect::<Vec<_>>()
+                        .join(", ")
+                );
+                self.bemit(cx, node, 44, 44, msg);
+                Callee::Undecided
+            }
+        }
+    }
+
+    /// R46's receiver use. The convention comes from the resolved method,
+    /// never from a marker: `let` reads, `inout` borrows mutably, and
+    /// `sink` moves a place receiver implicitly — explicit `(move x)`
+    /// means exactly the same, and a `Copyable` receiver is copied.
+    /// The event carries the consuming call and method for ch01's
+    /// use-after-move diagnostic (R46's normative message is I8's).
+    fn recv_use(&mut self, cx: &mut BodyCx, node: usize, callee: usize, hit: &MethodHit) {
+        if cx.kind(callee) == NodeKind::FieldExpr {
+            let Some(operand) = cx.f.tree.children(callee).next() else {
+                return;
+            };
+            let Some(p) = self.place_of(cx, operand) else {
+                return;
+            };
+            self.push_recv(cx, node, operand, p, hit);
+            return;
+        }
+        self.recv_path_use(cx, node, callee, hit);
+    }
+
+    /// The receiver of a greedy-path call `x.m(..)`: the root local with
+    /// the field segments between the consumed head and the method.
+    /// `path_value` above typed the prefix without recording its read, so
+    /// this is the receiver's only event.
+    fn recv_path_use(&mut self, cx: &mut BodyCx, node: usize, callee: usize, hit: &MethodHit) {
+        let Some(target) = cx.f.uses.target_of(callee as u32) else {
+            return;
+        };
+        let root = match target {
+            ResolvedTarget::Local { node: intro } => intro,
+            _ => return,
+        };
+        let nsegs = crate::member::path_segments(cx, callee);
+        let consumed = crate::member::path_consumed(cx, callee).max(1) as usize;
+        if nsegs < 2 || consumed >= nsegs {
+            return;
+        }
+        let mut segs = Vec::new();
+        for k in consumed..nsegs - 1 {
+            let Some(s) = self.segment_name(cx, callee, k) else {
+                return;
+            };
+            segs.push(Seg::Field(s));
+        }
+        let p = cx.tape.intern(root, &segs);
+        self.push_recv(cx, node, callee, p, hit);
+    }
+
+    fn push_recv(
+        &mut self,
+        cx: &mut BodyCx,
+        node: usize,
+        recv_node: usize,
+        p: crate::tape::PlaceId,
+        hit: &MethodHit,
+    ) {
+        let kind = match hit.conv {
+            Conv::Let => {
+                if self.copyable(hit.recv_ty) {
+                    UseKind::Copy
+                } else {
+                    UseKind::Read
+                }
+            }
+            Conv::Inout => UseKind::MutBorrow,
+            Conv::Set => UseKind::OutBorrow,
+            Conv::Sink => {
+                if self.copyable(hit.recv_ty) {
+                    UseKind::Copy
+                } else {
+                    UseKind::Move
+                }
+            }
+        };
+        let cause = match (hit.conv, kind) {
+            (Conv::Sink, UseKind::Move) => Cause::ImplicitReceiver {
+                call: node as u32,
+                method: hit.def,
+                owner: hit.owner,
+            },
+            _ => Cause::Explicit(recv_node as u32),
+        };
+        // R46: `(move x).m()` means exactly what `x.m()` means. The
+        // receiver's own synthesis already recorded this place: a read of a
+        // `FieldExpr` operand, and the explicit `Move` of a `(move x)`
+        // wrapper. The receiver use below supersedes them, so events from
+        // the receiver's own subtree for this place are withdrawn first —
+        // scoped to the subtree, so an earlier call's events (which live
+        // outside it) are left alone. For any other convention the explicit
+        // move is kept (it still moves); only the redundant read goes.
+        let implicit = matches!(cause, Cause::ImplicitReceiver { .. });
+        let end = cx.f.tree.subtree_end(recv_node) as u32;
+        cx.tape.events.retain(|e| {
+            let own = e.place == p
+                && (recv_node as u32) <= e.node
+                && e.node < end
+                && matches!(e.cause, Cause::Explicit(_));
+            if !own {
+                return true;
+            }
+            match e.kind {
+                UseKind::Read | UseKind::Copy => false,
+                UseKind::Move => !implicit,
+                _ => true,
+            }
+        });
+        cx.tape.push(recv_node as u32, p, kind, cause);
     }
 
     /// The member index of an enum's variant given the resolver's ordinal
@@ -478,6 +767,19 @@ impl Wf<'_> {
         } else {
             self.fir.tys.nominal(def, NO_ARGS)
         };
+        // D2/D3: a struct literal is typed as a call whose parameters are
+        // the fields in written order. It is not a function call, so the
+        // callee marks visited-but-not-a-call; each field init checks like
+        // a `let` value.
+        cx.facts.set_callee(node as u32, FactCallee::Undecided);
+        cx.facts.set_arg_convs(
+            node as u32,
+            inits
+                .iter()
+                .filter(|&&i| cx.f.tree.children(i).next().is_some())
+                .map(|_| Conv::Let)
+                .collect(),
+        );
         match expected {
             Some(w) => self.subsume(cx, node, ty, w),
             None => ty,

@@ -23,12 +23,13 @@ use fors_fir::sig::{Conv, GParamKind, MemberKind, NO_TRAIT_REF, PayloadKind, Sig
 use fors_fir::subst::{Binding, one_way_match, subst_norm};
 use fors_fir::ty::{ArgsId, FnTyId, NO_ARGS, NO_TY, TY_ERROR, TraitRefId, TyId, TyTag};
 use fors_index::decl::DeclKind;
-use fors_index::ids::{DefId, FileId};
+use fors_index::ids::{DefId, FileId, ModuleId};
 use fors_index::{Interner, Symbol};
 
 use crate::defs::DefTable;
 use crate::diag::{Sink, t};
 use crate::lower::{FileCtx, Lowered};
+use crate::methods::{LookupError, MethodHit};
 
 /// Three-valued bound satisfaction: `Unknown` is the answer whenever the
 /// build cannot decide, and no rule reports on it.
@@ -83,6 +84,28 @@ pub struct Wf<'a> {
     /// finished set for every body typed (design §9).
     pub cur_deps: crate::deps::DepSet,
     pub deps: Vec<(DefId, crate::deps::DepSet)>,
+    /// One `BodyFacts` per typed body, in declaration order (I3.5).
+    pub facts: Vec<(DefId, crate::facts::BodyFacts)>,
+    /// The module graph's `(from, to)` edges, sorted (R43's candidate-trait
+    /// search walks them; kept from `resolve()` so the checker never
+    /// re-derives them).
+    pub mod_edges: Vec<(ModuleId, ModuleId)>,
+    /// R12's recursion depth (impl bounds are on strict subterms, so this
+    /// terminates; the guard turns a violated premise into silence, never
+    /// a hang).
+    holds_depth: u32,
+    /// R43's method lookup memo, keyed by (requesting module, receiver,
+    /// method name, method-position) (design §3 fork 8, §7.7). The module matters: the same
+    /// `(TyId, Symbol)` resolves differently in modules with different
+    /// direct edges (ch08 R7), so a global key would re-route calls.
+    pub method_memo: HashMap<(u32, TyId, Symbol, bool), Result<MethodHit, LookupError>>,
+    /// The declaration whose body is being typed (for R62's "constraint
+    /// entries in scope" on neutral projections). `NO_DEF` outside bodies.
+    /// A method constraining its impl's parameter (`impl[I: Iterator]
+    /// Sum[I] { fn total[I.Item: Add](...) }`) declares the bound on its
+    /// own generics, not on the head's, so `declared_bounds` must read the
+    /// current scope as well as the head's owner.
+    pub cur_scope: DefId,
 }
 
 impl<'a> Wf<'a> {
@@ -119,9 +142,13 @@ impl<'a> Wf<'a> {
             iter_traits: Vec::new(),
             cur_deps: crate::deps::DepSet::new(),
             deps: Vec::new(),
+            facts: Vec::new(),
+            mod_edges: Vec::new(),
+            holds_depth: 0,
+            method_memo: HashMap::new(),
+            cur_scope: fors_fir::NO_DEF,
         }
     }
-
     /// Records that the body being typed read `def`'s signature (ch09 R2).
     pub fn dep(&mut self, def: DefId) {
         self.cur_deps.record(def);
@@ -277,16 +304,28 @@ impl<'a> Wf<'a> {
 
     // --------------------------------------------------- bound satisfaction
 
-    /// R12, three-valued and definite-only. I2 answers the questions a
-    /// SIGNATURE can ask: a concrete self type against the impl index (exact
-    /// probe first, §17 amendment 3), a rigid parameter or a neutral
-    /// projection against its declared bounds. Anything else is `Unknown`.
+    /// R12, three-valued and definite-only. I4 answers the use-side half for
+    /// non-projection subjects: a concrete self type against the impl index
+    /// (exact probe first, §17 amendment 3) plus the matched impl's own
+    /// bounds on the subterms it bound (each a strict subterm of the
+    /// subject, so the recursion terminates), a rigid parameter or a neutral
+    /// projection against its declared bounds. Projection subjects (I6) and
+    /// anything else are `Unknown` unless decided below.
     pub fn holds(&mut self, subject: TyId, want: TraitRefId) -> Holds {
         self.holds_probes += 1;
         if subject == TY_ERROR || subject == NO_TY || want == NO_TRAIT_REF {
             return Holds::Unknown;
         }
+        if self.holds_depth > 64 {
+            return Holds::Unknown;
+        }
         let (want_def, _) = self.fir.tys.trait_ref(want);
+        // R23: an `iso`-qualified value is never `Copyable`, whatever its
+        // head says. The qualifier is stripped for lookup below, so test it
+        // before it is lost.
+        if want_def == self.prelude.traits[tr::COPYABLE] && self.fir.tys.quals(subject).is_iso() {
+            return Holds::No;
+        }
         let subject = self.fir.tys.unqual(subject);
         // `Droppable` is purely structural (R24): it holds exactly when the
         // subject is not linear.
@@ -302,6 +341,92 @@ impl<'a> Wf<'a> {
                     }
                 }
             };
+        }
+        // R23's structural `Copyable` cases (design §6): tuples, `Array`,
+        // `vector`, `mask` and `Option` of `Copyable` components, `Ref` and
+        // non-closure `fn` types. These are not impls, so the index below
+        // would miss them; they recurse on strict subterms like R12's impl
+        // bounds do. `Own`, `Arena`, `atomic`, closures and `dyn` are never
+        // `Copyable` (the impl check in `wf::copyable_impl` agrees).
+        if want_def == self.prelude.traits[tr::COPYABLE] {
+            match self.fir.tys.tag(subject) {
+                TyTag::Tuple => {
+                    let xs = self.fir.tys.args_vec(ArgsId(self.fir.tys.b(subject)));
+                    if xs.is_empty() {
+                        return Holds::Yes;
+                    }
+                    let want2 = self
+                        .fir
+                        .tys
+                        .intern_trait_ref(self.prelude.traits[tr::COPYABLE], NO_ARGS);
+                    self.holds_depth += 1;
+                    let mut ans = Holds::Yes;
+                    for x in xs {
+                        match self.holds(x, want2) {
+                            Holds::Yes => {}
+                            Holds::No => {
+                                ans = Holds::No;
+                                break;
+                            }
+                            Holds::Unknown => {
+                                ans = Holds::Unknown;
+                                break;
+                            }
+                        }
+                    }
+                    self.holds_depth -= 1;
+                    if ans != Holds::Unknown {
+                        return ans;
+                    }
+                }
+                TyTag::Nominal => {
+                    let def = DefId(self.fir.tys.a(subject));
+                    if let Some(g) = self.prelude.generic_index(def) {
+                        use fors_fir::prelude::gty;
+                        match g {
+                            gty::REF => return Holds::Yes,
+                            gty::OWN | gty::ARENA | gty::ATOMIC => return Holds::No,
+                            gty::ARRAY | gty::VECTOR | gty::MASK | gty::OPTION => {
+                                let args = self.fir.tys.args_vec(ArgsId(self.fir.tys.b(subject)));
+                                let elem = match g {
+                                    gty::MASK => None,
+                                    _ => args.first().copied(),
+                                };
+                                match elem {
+                                    Some(e) => {
+                                        let want2 = self.fir.tys.intern_trait_ref(
+                                            self.prelude.traits[tr::COPYABLE],
+                                            NO_ARGS,
+                                        );
+                                        self.holds_depth += 1;
+                                        let r = self.holds(e, want2);
+                                        self.holds_depth -= 1;
+                                        if r != Holds::Unknown {
+                                            return r;
+                                        }
+                                    }
+                                    None => {
+                                        // `mask[N]`: its lanes are `bool`-like;
+                                        // the prelude's built-ins already
+                                        // cover the scalar cases, so fall
+                                        // through to the index.
+                                    }
+                                }
+                            }
+                            _ => {}
+                        }
+                    }
+                }
+                TyTag::Fn => {
+                    let id = fors_fir::ty::FnTyId(self.fir.tys.a(subject));
+                    if self.fir.tys.fn_tys().is_closure(id) {
+                        return Holds::No;
+                    }
+                    return Holds::Yes;
+                }
+                TyTag::Dyn => return Holds::No,
+                _ => {}
+            }
         }
         match self.fir.tys.tag(subject) {
             TyTag::Param | TyTag::Proj => self.bound_list_holds(subject, want),
@@ -353,10 +478,26 @@ impl<'a> Wf<'a> {
                 }
                 // R62: the constraint entries in scope add bounds to this
                 // neutral projection. They live on the declaration that owns
-                // the projection's head.
+                // the projection's head — and, for a method constraining its
+                // impl's parameter (`impl[I: Iterator] Sum[I] { fn total[
+                // I.Item: Add](...) }`), on the body being typed and its
+                // parent.
                 let head = TyId(self.fir.tys.a(ty));
+                let mut scopes = Vec::new();
                 if self.fir.tys.tag(head) == TyTag::Param {
-                    let owner = DefId(self.fir.tys.a(head));
+                    scopes.push(DefId(self.fir.tys.a(head)));
+                }
+                if self.cur_scope != fors_fir::NO_DEF {
+                    scopes.push(self.cur_scope);
+                    if let Some(row) = self.defs.get(self.cur_scope)
+                        && row.parent != fors_fir::NO_DEF
+                    {
+                        scopes.push(row.parent);
+                    }
+                }
+                scopes.sort_unstable_by_key(|d| d.0);
+                scopes.dedup();
+                for owner in scopes {
                     let g = self.fir.sigs.generics(owner);
                     let cl = self.fir.sigs.generics_store.constraints(g);
                     for i in 0..self.fir.sigs.constraints.count(cl) {
@@ -375,7 +516,10 @@ impl<'a> Wf<'a> {
         }
     }
 
-    /// R12's impl lookup for a concrete subject, via the impl index.
+    /// R12's impl lookup for a concrete subject, via the impl index. At most
+    /// one impl matches (R19); the matched impl's own bounds are then
+    /// required on the subterms it bound, each a strict subterm of the
+    /// subject (R18), so the recursion terminates.
     fn impl_holds(&mut self, subject: TyId, want: TraitRefId, want_def: DefId) -> Holds {
         let want_args = self.fir.tys.trait_ref(want).1;
         let exact: Vec<ImplRow> = self
@@ -385,7 +529,7 @@ impl<'a> Wf<'a> {
             .map(|&r| self.impls.row(r))
             .collect();
         for row in &exact {
-            if row.trait_args == want_args {
+            if row.trait_args == want_args && self.impl_bounds_hold(row) {
                 return Holds::Yes;
             }
         }
@@ -424,12 +568,102 @@ impl<'a> Wf<'a> {
                         break;
                     }
                 }
-                if ok {
+                if ok && self.impl_bounds_hold_with(&row, &b) {
                     return Holds::Yes;
                 }
             }
         }
         Holds::No
+    }
+
+    /// Whether an exactly-matched impl's own bounds hold. An exact hit binds
+    /// nothing (both sides are concrete), so only the parameter-free case
+    /// answers at once; a generic impl never answers through the exact probe
+    /// (its `self_ty` mentions its parameters, so it cannot equal a concrete
+    /// subject) and falls through to the bucket scan below.
+    fn impl_bounds_hold(&mut self, row: &ImplRow) -> bool {
+        let arity = self
+            .fir
+            .sigs
+            .generics_store
+            .count(self.fir.sigs.generics(row.def));
+        if arity == 0 {
+            return true;
+        }
+        let b = Binding::new(&[(row.def, arity as u16)]);
+        self.impl_bounds_hold_with(row, &b)
+    }
+
+    /// R12's recursive clause: for every impl parameter bound to `X`, every
+    /// bound `Tr` of that parameter must hold for `X` after substituting the
+    /// match. `X` is a strict subterm of the original subject (R18), so the
+    /// recursion descends. `Unknown` on any goal is `false` here (definite
+    /// only): the caller asked whether the bound definitely holds.
+    fn impl_bounds_hold_with(&mut self, row: &ImplRow, b: &Binding) -> bool {
+        let g = self.fir.sigs.generics(row.def);
+        let n = self.fir.sigs.generics_store.count(g);
+        if n == 0 {
+            return true;
+        }
+        // Clone the bounds first: `holds` below mutates the stores.
+        let mut goals: Vec<(TyId, Vec<TraitRefId>)> = Vec::new();
+        for o in 0..n {
+            let bound = b.slot(row.def, o as u16);
+            if bound == NO_TY {
+                continue;
+            }
+            if bound == TY_ERROR || bound == NO_TY {
+                continue;
+            }
+            let p = self.fir.sigs.generics_store.param(g, o);
+            let bs = self.fir.sigs.bounds.get(p.bounds).to_vec();
+            if !bs.is_empty() {
+                goals.push((bound, bs));
+            }
+        }
+        if goals.is_empty() {
+            return true;
+        }
+        self.holds_depth += 1;
+        let mut ok = true;
+        for (sub, bs) in goals {
+            for want in bs {
+                let want2 = match self.subst_trait_ref(want, b) {
+                    Some(t) => t,
+                    None => {
+                        ok = false;
+                        break;
+                    }
+                };
+                if self.holds(sub, want2) != Holds::Yes {
+                    ok = false;
+                    break;
+                }
+            }
+            if !ok {
+                break;
+            }
+        }
+        self.holds_depth -= 1;
+        ok
+    }
+
+    /// A `TraitRef` with the match substitution applied (R17's remainder):
+    /// each argument through `subst_norm`; `None` while a slot is unbound.
+    fn subst_trait_ref(&mut self, tref: TraitRefId, b: &Binding) -> Option<TraitRefId> {
+        let (def, args) = self.fir.tys.trait_ref(tref);
+        if args == NO_ARGS {
+            return Some(tref);
+        }
+        let xs = self.fir.tys.args_vec(args);
+        let mut out = Vec::with_capacity(xs.len());
+        for x in xs {
+            let y = subst_norm(&mut self.fir.tys, x, b)?;
+            out.push(y);
+        }
+        self.subst_calls += 1;
+        let args2 = self.fir.tys.intern_args(&out);
+        Some(self.fir.tys.intern_trait_ref(def, args2))
     }
 }
 
@@ -499,7 +733,7 @@ impl Wf<'_> {
             .unwrap_or_else(|| "this item".to_string())
     }
 
-    fn sym(&self, s: Symbol) -> String {
+    pub(crate) fn sym(&self, s: Symbol) -> String {
         String::from_utf8_lossy(self.names.resolve(s)).into_owned()
     }
 
@@ -916,7 +1150,7 @@ impl Wf<'_> {
             .collect()
     }
 
-    fn impl_method_names(&self, def: DefId) -> Vec<(Symbol, DefId)> {
+    pub(crate) fn impl_method_names(&self, def: DefId) -> Vec<(Symbol, DefId)> {
         let ms = self.fir.sigs.members(def);
         let n = self.fir.sigs.member_store.count(ms);
         (0..n)

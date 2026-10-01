@@ -11,8 +11,11 @@
 //! per-declaration state, the statement forms and the driver), [`expr`]
 //! (the two judgements), [`call`] (R38 with zero parameters to determine),
 //! [`member`] (R42/R47/R49), [`show`] (types in diagnostics) and [`tape`]
-//! (the use tape the flow pass will consume). `pat.rs`/`exhaust.rs` (I7),
-//! `flow.rs` (I8) and `facts.rs` (I9) are still to come.
+//! (the use tape the flow pass will consume).
+//!
+//! Increment I3.5 adds [`facts`] (the `BodyFacts` side table FMIR lowering
+//! reads, plus the retained tape). `pat.rs`/`exhaust.rs` (I7) and
+//! `flow.rs` (I8) are still to come.
 
 pub mod body;
 pub mod call;
@@ -20,8 +23,10 @@ pub mod defs;
 pub mod deps;
 pub mod diag;
 pub mod expr;
+pub mod facts;
 pub mod lower;
 pub mod member;
+pub mod methods;
 pub mod rules;
 pub mod show;
 pub mod tape;
@@ -53,6 +58,10 @@ pub struct CheckOutput {
     /// Per typed body: the declarations whose signature it read (design
     /// §9). I9's query engine keys `check_body` on these.
     pub deps: Vec<(fors_index::ids::DefId, deps::DepSet)>,
+    /// Per typed body, in declaration order: the `BodyFacts` side table
+    /// (I3.5) FMIR lowering reads — decided types, callees, member
+    /// resolutions and the retained use tape.
+    pub facts: Vec<(fors_index::ids::DefId, facts::BodyFacts)>,
 }
 
 /// The counters `fors check --count` prints and the near-linearity gate
@@ -177,8 +186,11 @@ pub fn check_build(
     // 4-6. Whole-head well-formedness, the freeze, then every body. All
     // three read the same tables, so they share one context: `holds`, the
     // impl index and the linearity memo are built once (design §7.1).
-    let (counters, check_sites, deps) = {
+    let (counters, check_sites, deps, facts) = {
         let mut w = wf::Wf::new(&mut fir, interner, &prelude, &def_table, &shapes, &mut sink);
+        // R43's candidate-trait search walks the module graph: hand over
+        // the edge list `resolve()` kept for exactly this.
+        w.mod_edges = resolved.edges.clone();
         w.spoke = vec![false; w.fir.sigs.len()];
         w.impls = std::mem::take(&mut low.impls);
         w.run(&low, &files);
@@ -208,6 +220,7 @@ pub fn check_build(
             c,
             std::mem::take(&mut w.check_sites),
             std::mem::take(&mut w.deps),
+            std::mem::take(&mut w.facts),
         )
     };
     phase!("bodies");
@@ -226,6 +239,7 @@ pub fn check_build(
         },
         check_sites,
         deps,
+        facts,
     }
 }
 

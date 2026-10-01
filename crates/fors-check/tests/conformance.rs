@@ -341,11 +341,27 @@ const CROSS_CHAPTER: &[(&str, &str)] = &[
     ),
 ];
 
-/// A `std` declaration ch09 rejects. Empty: the three known R48 conflicts (`Block.align`,
-/// `Addr.v6`, `Addr.port` -- an inherent method named like a field of the same type, ch09 Rule
-/// 48) were fixed by renaming the methods (`alignment`, `from_v6`, `port_number`; see
-/// docs/spec/10-std.md), so `std` now type-checks clean under ch09 with zero listed exceptions.
-const STD_CONFLICTS: &[(&str, &str)] = &[];
+/// A `std` declaration ch09 rejects: each entry is a declaration whose
+/// single diagnostic is a forward reference to a method `std` has not
+/// written yet (a `// STUB` at the call site). The three known R48
+/// conflicts (`Block.align`, `Addr.v6`, `Addr.port`) were fixed by
+/// renaming, so every entry below is an undeclared-method stub, not a
+/// rule dispute. An entry whose call resolves must be deleted here, not
+/// left to excuse a regression (the count assertion below enforces it).
+const STD_CONFLICTS: &[(&str, &str)] = &[
+    (
+        "BufferIter::next",
+        "std/mem.fors: `self.take_at(..)` is a // STUB: no trait or impl declares `take_at`, so ch09 R43 reports T0043 until the helper exists",
+    ),
+    (
+        "SliceIter::next",
+        "std/mem/seq.fors: `self.load(..)` is a // STUB: no trait or impl declares `load`, so ch09 R43 reports T0043 until the helper exists",
+    ),
+    (
+        "Scalars::next",
+        "std/mem/text.fors: `self.decode()` is a // STUB: no trait or impl declares `decode`, so ch09 R43 reports T0043 until the helper exists",
+    ),
+];
 
 /// The no-regression assertion the I2 gate names: outside the tests this
 /// increment turned on, the checker stays silent on every program another

@@ -17,6 +17,7 @@ use fors_resolve::target::{DeferReason, Entity, ResolvedTarget};
 use fors_syntax::NodeKind;
 
 use crate::body::{BodyCx, LocalKind, Slot, is_expr_kind, is_type_node, op_between, own_first};
+use crate::facts::FactCallee;
 use crate::lower::{MAX_LIST, MAX_PARAMS, parse_int_literal};
 use crate::wf::{Holds, Wf};
 
@@ -36,7 +37,17 @@ impl Wf<'_> {
 
     /// `check(e, T)` (design §7.3's dispatcher). Returns `T` on success,
     /// [`TY_NEVER`] under R10(a) and [`TY_ERROR`] under recovery.
+    ///
+    /// I3.5: records the decided type in the body's facts table (D1). The
+    /// inner dispatch may `synth` the same node first and record that;
+    /// last write wins, so the node keeps the checked-against type.
     pub fn check(&mut self, cx: &mut BodyCx, node: usize, want: TyId) -> TyId {
+        let t = self.check_inner(cx, node, want);
+        cx.facts.record(node as u32, t);
+        t
+    }
+
+    fn check_inner(&mut self, cx: &mut BodyCx, node: usize, want: TyId) -> TyId {
         cx.nodes += 1;
         self.checks += 1;
         match cx.kind(node) {
@@ -118,6 +129,13 @@ impl Wf<'_> {
         }
         if self.fn_shape_eq(s, want) {
             return want; // (b)
+        }
+        if self.fir.tys.unqual(s) == self.fir.tys.unqual(want) {
+            // Same bare type, different qualifiers (`iso`/`imm`/`secret`):
+            // the qualifier discipline is ch01/ch05's (I8b/I10's), not a
+            // judgement this increment owns. Silent and absorbing, never
+            // a guess in either direction.
+            return TY_ERROR;
         }
         if self.fir.tys.tag(self.fir.tys.unqual(want)) == TyTag::Dyn {
             return match self.to_dyn(s, want) {
@@ -207,6 +225,12 @@ impl Wf<'_> {
 
     /// `synth(e)` (design §7.3). Never fails.
     pub fn synth(&mut self, cx: &mut BodyCx, node: usize) -> TyId {
+        let t = self.synth_inner(cx, node);
+        cx.facts.record(node as u32, t);
+        t
+    }
+
+    fn synth_inner(&mut self, cx: &mut BodyCx, node: usize) -> TyId {
         cx.nodes += 1;
         self.synths += 1;
         match cx.kind(node) {
@@ -434,6 +458,10 @@ impl Wf<'_> {
             }
             prev = j;
         }
+        // D2/D3: an operator desugars to its trait method, but I4 resolves
+        // no method for it — mark the node visited with an empty conv row.
+        cx.facts.set_callee(node as u32, FactCallee::Undecided);
+        cx.facts.set_arg_convs(node as u32, Vec::new());
         if acc == TY_NEVER {
             TY_NEVER
         } else if kind == NodeKind::CmpExpr {
@@ -489,6 +517,12 @@ impl Wf<'_> {
     /// operator `sym` in the diagnostic. MARC: verification of I3
     /// (2026-09-20): unary `-` asked for `Sub`, so `-x` on an unsigned
     /// integer passed; it asks for `Neg` now.
+    ///
+    /// I4 (R57): when `s` is rigid (a type parameter or a neutral
+    /// projection) the trait MUST be among its bounds, else T0057 (the fix
+    /// is a bound, not an impl). A neutral projection's bounds are the
+    /// trait's declaration for `A` plus the constraint entries in scope
+    /// (R12's `declared_bounds`); nothing is learnt from any impl (R57).
     pub fn require_trait(
         &mut self,
         cx: &mut BodyCx,
@@ -502,14 +536,26 @@ impl Wf<'_> {
             return;
         }
         let bare = self.fir.tys.unqual(s);
-        if matches!(self.fir.tys.tag(bare), TyTag::Param | TyTag::Proj) {
-            return; // R57, I5's
-        }
         let tdef = self.prelude.traits[which];
         if tdef == fors_fir::NO_DEF {
             return;
         }
         let want = self.fir.tys.intern_trait_ref(tdef, NO_ARGS);
+        if matches!(self.fir.tys.tag(bare), TyTag::Param | TyTag::Proj) {
+            if self.holds(bare, want) == Holds::No {
+                let n = self.show(s);
+                let tn = self.head_name(tdef);
+                self.bemit(
+                    cx,
+                    node,
+                    57,
+                    57,
+                    format!("`{n}` has no bound `{tn}`, which the operator `{sym}` needs; add it to the bounds"),
+                );
+            }
+            let _ = site;
+            return;
+        }
         if self.holds(bare, want) == Holds::No {
             let n = self.show(s);
             let tn = self.head_name(tdef);

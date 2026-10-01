@@ -18,6 +18,7 @@ use fors_resolve::paths::own_span;
 use fors_syntax::NodeKind;
 
 use crate::diag::t;
+use crate::facts::BodyFacts;
 use crate::lower::{self, FileCtx, Lowered};
 use crate::tape::{Cause, Seg, UseKind, UseTape};
 use crate::wf::Wf;
@@ -360,6 +361,10 @@ pub struct BodyCx<'f, 'a> {
     /// set by the `?` arms of `synth`/`check` and taken by `call_expr`.
     pub under_try: Option<u32>,
     pub tape: UseTape,
+    /// I3.5: the typed side table FMIR lowering reads (design §4.2's
+    /// `facts.rs`). Filled alongside typing; never read back by the
+    /// checker.
+    pub facts: BodyFacts,
     pub sites: Vec<CheckSite>,
     /// The lowering context for the body's own type annotations, built once
     /// per declaration (R11 and R61 apply to a `let`'s annotation exactly as
@@ -401,6 +406,7 @@ impl<'f, 'a> BodyCx<'f, 'a> {
             closure_synth: Vec::new(),
             under_try: None,
             tape: UseTape::new(),
+            facts: BodyFacts::new(owner, decl, end),
             sites: Vec::new(),
             lcx,
             nodes: 0,
@@ -531,6 +537,14 @@ impl<'f, 'a> BodyCx<'f, 'a> {
             self.sites.push(CheckSite { parent, slot });
         }
     }
+
+    /// Ends the body: moves the retained tape into the facts table and
+    /// hands the whole side table to the driver (I9 keys `check_body` on
+    /// it; F1 lowers from it).
+    pub fn finish(mut self) -> BodyFacts {
+        self.facts.tape = std::mem::take(&mut self.tape);
+        self.facts
+    }
 }
 
 // --------------------------------------------------------------- driver
@@ -566,7 +580,9 @@ impl Wf<'_> {
             self.prepare_signature(&mut cx, decl);
             let want = cx.result;
             self.dep(def);
+            self.cur_scope = def;
             self.check_block(&mut cx, block, want);
+            self.cur_scope = fors_fir::NO_DEF;
             let set = self.cur_deps.take();
             self.deps.push((def, set));
             self.body_nodes += cx.nodes;
@@ -580,6 +596,7 @@ impl Wf<'_> {
                     self.check_sites.push(*s);
                 }
             }
+            self.facts.push((def, cx.finish()));
         }
     }
 
@@ -1396,6 +1413,16 @@ impl Wf<'_> {
                 }
                 NodeKind::UnaryExpr if own_first(cx, n) == Some(TokenKind::KwMove) => {
                     n = cx.f.tree.children(n).next()?;
+                }
+                // A parenthesised expression is the same place (R4 `(e)` is
+                // `e`; `(a, b)` is not a place and has no single child).
+                NodeKind::TupleOrParen => {
+                    let mut kids = cx.f.tree.children(n);
+                    let first = kids.next()?;
+                    if kids.next().is_some() {
+                        return None;
+                    }
+                    n = first;
                 }
                 NodeKind::NameExpr => {
                     let target = cx.f.uses.target_of(n as u32)?;

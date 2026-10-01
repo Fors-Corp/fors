@@ -16,6 +16,7 @@ use fors_resolve::target::{Entity, ResolvedTarget};
 use fors_syntax::NodeKind;
 
 use crate::body::{BodyCx, Slot};
+use crate::facts::MemberTarget;
 use crate::lower::FileCtx;
 use crate::wf::Wf;
 
@@ -74,13 +75,16 @@ impl Wf<'_> {
     /// for anything else, which is I4's.
     pub fn name_expr(&mut self, cx: &mut BodyCx, node: usize) -> TyId {
         let n = path_segments(cx, node);
-        self.path_value(cx, node, n)
+        self.path_value(cx, node, n, true)
     }
 
     /// The value the first `upto` segments of a path denote. A call's
     /// callee asks for `upto = segments - 1`, because its last segment is
-    /// the method or associated function (R43/R45), not a field.
-    pub fn path_value(&mut self, cx: &mut BodyCx, node: usize, upto: usize) -> TyId {
+    /// the method or associated function (R43/R45), not a field. `read`
+    /// records the prefix's read event; a method callee passes `false`
+    /// because R46 records the receiver's own event (with its convention)
+    /// instead.
+    pub fn path_value(&mut self, cx: &mut BodyCx, node: usize, upto: usize, read: bool) -> TyId {
         let consumed = path_consumed(cx, node).max(1) as usize;
         let head = self.path_head(cx, node);
         let mut ty = match head {
@@ -88,7 +92,7 @@ impl Wf<'_> {
             PathHead::NotAValue | PathHead::Silent => return TY_ERROR,
         };
         if upto <= consumed {
-            if ty != TY_ERROR && ty != NO_TY {
+            if read && ty != TY_ERROR && ty != NO_TY {
                 self.read_event(cx, node, ty);
             }
             return ty;
@@ -102,7 +106,9 @@ impl Wf<'_> {
                 return TY_ERROR;
             }
         }
-        self.read_event(cx, node, ty);
+        if read {
+            self.read_event(cx, node, ty);
+        }
         ty
     }
 
@@ -242,6 +248,9 @@ impl Wf<'_> {
                     if self.names.resolve(name) == b"len"
                         && matches!(g, gty::ARRAY | gty::SLICE | gty::VECTOR)
                     {
+                        // I3.5 (D4): the builtin resolution lowering reads.
+                        cx.facts
+                            .set_member(node as u32, MemberTarget::LenBuiltin { head: def });
                         return self.fir.tys.prim(PrimKind::Usize);
                     }
                     // Another prelude head's members are std's: silent.
@@ -284,6 +293,14 @@ impl Wf<'_> {
                     let ty = self.substituted(def, ArgsId(self.fir.tys.b(bare)), m.ty);
                     let carried = fors_fir::ty::Quals(
                         quals.0 & (fors_fir::ty::Q_IMM | fors_fir::ty::Q_SECRET),
+                    );
+                    // I3.5 (D4): `(head, field index)` for lowering.
+                    cx.facts.set_member(
+                        node as u32,
+                        MemberTarget::Field {
+                            head: def,
+                            index: i as u32,
+                        },
                     );
                     return if carried.is_none() {
                         ty
@@ -413,7 +430,7 @@ impl Wf<'_> {
             // the silent, absorbing answer either way.
             let n = path_segments(cx, operand);
             cx.quiet += 1;
-            let t = self.path_value(cx, operand, n);
+            let t = self.path_value(cx, operand, n, true);
             cx.quiet -= 1;
             t
         } else {
