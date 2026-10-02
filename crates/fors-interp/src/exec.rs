@@ -586,6 +586,90 @@ fn exec_inst(fr: usize, inst: u32, inst_row: InstRow, m: &mut Machine<'_>) -> Re
                 })?;
             define(dest, m, fr, field);
         }
+        Op::SliceRange => {
+            // F5's `Slice[T]` stand-in (see `slice_parts`). `base` is the
+            // aggregate the elements live in; the result is a descriptor,
+            // not a copy, so the slice keeps aliasing its source exactly
+            // as a real slice does.
+            let base = val_operand(m, fr, inst, inst_row.a)?;
+            let lo = val_operand(m, fr, inst, inst_row.b)?;
+            let hi = val_operand(m, fr, inst, inst_row.c)?;
+            let base_len = m
+                .cells
+                .get(base.bits as usize)
+                .map(|c| c.slots.len() as u64)
+                .ok_or_else(|| {
+                    InterpError::TypeMismatch("slice_range base is not an aggregate".into())
+                })?;
+            if lo.bits > hi.bits || hi.bits > base_len {
+                return Err(Fault::Trap(TrapKind::Bounds));
+            }
+            let id = m.cells.len() as u64;
+            m.cells.push(Cells {
+                slots: vec![
+                    Slot::val(base.bits),
+                    Slot::val(lo.bits),
+                    Slot::val(hi.bits - lo.bits),
+                ],
+            });
+            define(dest, m, fr, Slot::val(id));
+        }
+        Op::ReduceTree => {
+            // design §5.7: the interpreter executes §3.9's expansion
+            // literally, with `B` and `L` READ FROM THE INSTRUCTION, never
+            // from the host's vector width. The expansion itself is
+            // `fors_fmir::reduce`'s — this arm only resolves the operands
+            // and the `op`.
+            let (op_sym, xs, identity, b, l) = {
+                let decl = &m.func(m.frames[fr].func).decl;
+                let red = decl.insts.reduces.get(inst_row.a as usize).ok_or_else(|| {
+                    InterpError::TypeMismatch("reduce_tree names no reduce row".into())
+                })?;
+                let Callee::Intrinsic(sym) = red.op else {
+                    return Err(InterpError::TypeMismatch(
+                        "reduce_tree's op must be a named binary primitive".into(),
+                    )
+                    .into());
+                };
+                (sym.0, red.xs, red.identity, red.b, red.l)
+            };
+            let (base, start, n) = slice_parts(m, m.slot(fr, inst, xs)?)?;
+            if n == 0 {
+                // ch03 R11a: trap unless an `identity:` was supplied.
+                if identity.0 == fors_fmir::ids::ABSENT {
+                    return Err(Fault::Trap(TrapKind::EmptyReduce));
+                }
+                let e = m.slot(fr, inst, identity)?;
+                define(dest, m, fr, e);
+                return Ok(());
+            }
+            let elems: Vec<Slot> = {
+                let cell = m.cells.get(base as usize).ok_or_else(|| {
+                    InterpError::TypeMismatch("reduce_tree operand is not a slice".into())
+                })?;
+                cell.slots
+                    .get(start as usize..(start + n) as usize)
+                    .ok_or_else(|| {
+                        InterpError::TypeMismatch("reduce_tree slice is out of range".into())
+                    })?
+                    .to_vec()
+            };
+            let kind = num_kind_of(m, inst_row.ty)?;
+            let name = decl_intrinsic_name(m, fr, op_sym)?;
+            let op = crate::reduce::ReduceOp::resolve(&name, kind)
+                .ok_or_else(|| InterpError::UnknownIntrinsic(name.clone()))?;
+            // One step per `op` application, so a huge `reduce` is charged
+            // like the loop it is (design §6, E5).
+            for _ in 0..fors_fmir::reduce::op_applications(n as u32) {
+                m.charge()?;
+            }
+            let r = crate::reduce::run(&elems, b, l, op)
+                .map_err(Fault::Trap)?
+                .ok_or_else(|| {
+                    InterpError::TypeMismatch("non-empty reduce yielded no value".into())
+                })?;
+            define(dest, m, fr, r);
+        }
         Op::CallDirect => {
             let (key, args) = {
                 let decl = &m.func(m.frames[fr].func).decl;
@@ -718,6 +802,26 @@ fn find_string<'m>(m: &'m Machine<'_>, fr: usize, const_idx: u32) -> Result<&'m 
         .find(|(id, _)| *id == const_idx)
         .map(|(_, b)| b.as_slice())
         .ok_or_else(|| InterpError::MissingString(const_idx).into())
+}
+
+/// F5's `Slice[T]` stand-in, the read half: `slice_range` builds a
+/// three-cell DESCRIPTOR `{ base aggregate handle, start, len }` rather
+/// than copying elements, and this reads it back. It is the same kind of
+/// "minimal intrinsic-backed stub" F2 used for `Buffer.fixed` (design
+/// §5.8): real `Slice` bodies, with `len`, indexing and the iterator
+/// surface, are F7's, and when they land this descriptor is what they
+/// replace. Nothing but `reduce_tree` consumes it today.
+fn slice_parts(m: &Machine<'_>, desc: Slot) -> Result<(u64, u64, u64), InterpError> {
+    let cell = m
+        .cells
+        .get(desc.bits as usize)
+        .ok_or_else(|| InterpError::TypeMismatch("slice operand is not a slice".into()))?;
+    match cell.slots.as_slice() {
+        [base, start, len] => Ok((base.bits, start.bits, len.bits)),
+        _ => Err(InterpError::TypeMismatch(
+            "slice operand is not a three-cell slice descriptor".into(),
+        )),
+    }
 }
 
 fn decl_intrinsic_name(m: &Machine<'_>, fr: usize, sym: u32) -> Result<String, InterpError> {

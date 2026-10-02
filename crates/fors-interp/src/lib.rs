@@ -7,8 +7,12 @@
 //! `not`, `conv_*`), aggregates (`agg_new`, `field`), direct calls
 //! (`call_direct`), the single host door (`intrinsic`, closed table in
 //! [`exec`]), and terminators (`br`, `cond_br`, `ret`, `trap`,
-//! `unreachable`). Everything else (`index`, `try_br`, `reduce_tree`, …)
-//! answers [`InterpError`], never a panic.
+//! `unreachable`). Everything else (`index`, `try_br`, …) answers
+//! [`InterpError`], never a panic.
+//!
+//! F5 adds `slice_range` and `reduce_tree`: the tree's SHAPE is
+//! `fors-fmir::reduce`'s (design §3.9's one normative expansion) and
+//! [`reduce`] supplies only the `op` and the slot plumbing (§5.7).
 //!
 //! Disciplines asserted by test, not just by comment:
 //! - [`value`] and [`arith`] contain no `usize` (design §5.1: the crates use
@@ -25,6 +29,7 @@
 pub mod arith;
 pub mod exec;
 pub mod program;
+pub mod reduce;
 pub mod shim;
 pub mod value;
 

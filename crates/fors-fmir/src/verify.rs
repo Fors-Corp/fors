@@ -23,6 +23,7 @@ pub fn verify(decl: &DeclFmir) -> Vec<Diagnostic> {
     check_tile_ops(decl, &mut out);
     check_alias_seeds(decl, &mut out);
     check_region_captures(decl, &mut out);
+    check_reduce_shape(decl, &mut out);
     check_secret_propagation(decl, &mut out);
     check_secret_rejection(decl, &mut out);
     out
@@ -133,6 +134,50 @@ fn check_alias_seeds(decl: &DeclFmir, out: &mut Vec<Diagnostic>) {
                 DiagCode::MemoryOpMissingAliasSeed,
                 Anchor::Inst(id),
                 "memory-producing instruction has no alias seed",
+            ));
+        }
+    }
+}
+
+/// ch03 R11/R12 (as reworded by owner decision Q3, 2026-10-02): a
+/// `reduce_tree` instruction carries its shape parameters as LITERAL
+/// operands, so the shape is fixed in FMIR before parallel lowering. The
+/// verifier is where "the shape is a pure function of `(n, B, L)`" stops
+/// being a comment: `b`/`l` must be exactly ch03's named constants (neither
+/// is overridable), and the row index must exist.
+fn check_reduce_shape(decl: &DeclFmir, out: &mut Vec<Diagnostic>) {
+    for (id, row) in decl.insts.all_rows() {
+        if row.op != Op::ReduceTree {
+            continue;
+        }
+        let Some(red) = decl.insts.reduces.get(row.a as usize) else {
+            out.push(Diagnostic::new(
+                DiagCode::Malformed,
+                Anchor::Inst(id),
+                "reduce_tree names no reduce row",
+            ));
+            continue;
+        };
+        if red.b != crate::reduce::REDUCE_BLOCK || red.l != crate::reduce::REDUCE_LANES {
+            out.push(Diagnostic::new(
+                DiagCode::Malformed,
+                Anchor::Inst(id),
+                "reduce_tree must carry REDUCE_BLOCK = 256 and REDUCE_LANES = 8 \
+                 (ch03 Rule 11: neither is overridable)",
+            ));
+        }
+        if decl.vals.try_row(red.xs).is_none() {
+            out.push(Diagnostic::new(
+                DiagCode::Malformed,
+                Anchor::Inst(id),
+                "reduce_tree's operand sequence is not a value of this body",
+            ));
+        }
+        if red.identity.0 != crate::ids::ABSENT && decl.vals.try_row(red.identity).is_none() {
+            out.push(Diagnostic::new(
+                DiagCode::Malformed,
+                Anchor::Inst(id),
+                "reduce_tree's identity is not a value of this body",
             ));
         }
     }

@@ -257,16 +257,24 @@ evaluated, and moved into the result, BEFORE any body runs"* — made structural
 
 ### 3.9 `reduce`, and the one place the spec cannot be implemented literally
 
-ch03 R12: *"`reduce` MUST lower to this explicit tree in FMIR **before** parallel lowering."* **[HOLE-3] This is impossible for a
-runtime-length input, and the corpus contains one.** `reduce-n257-shape-run-ok` reduces a `Slice[f64]` whose length is a runtime
-value as far as FMIR is concerned; an "explicit tree" would have to be unrolled at a length nobody knows.
+ch03 R12 said: *"`reduce` MUST lower to this explicit tree in FMIR **before** parallel lowering."* **[HOLE-3] — CLOSED by owner
+decision Q3 on 2026-10-02 (§11.1); the rule is now worded as this section resolves it.** As originally written it was impossible
+for a runtime-length input, and the corpus contains one: `reduce-n257-shape-run-ok` reduces a `Slice[f64]` whose length is a
+runtime value as far as FMIR is concerned, and an "explicit tree" would have to be unrolled at a length nobody knows.
 
 Resolution, and I believe it is what R12 means: FMIR gets **one** instruction `reduce_tree { op: Callee, xs: ValId, identity:
 Option<ValId>, b: u32, l: u32, site: SiteId }` with `b = REDUCE_BLOCK = 256` and `l = REDUCE_LANES = 8` as **literal operands**, not
 implicit constants, plus a normative expansion given once in `fors-fmir::reduce.rs` that the interpreter executes and every backend
 must implement identically. When `n` is comptime-known, `fors-lower` additionally emits the fully unrolled tree and the verifier
 asserts the two agree — the only form in which "lower to the explicit tree" is checkable. What R12 actually buys is preserved: the
-shape is fixed **before** parallel lowering, so `--serial-elide` is bit-exact. Owner **Q3** proposes the reword.
+shape is fixed **before** parallel lowering, so `--serial-elide` is bit-exact. Owner **Q3** accepted the reword on 2026-10-02 and
+ch03 R12 now says exactly this.
+
+**As built (F5).** The shape itself lives once, in `fors-fmir::reduce` (`reduce_tree(n, B, L)`, the pairwise combine, `unrolled`,
+and the agreement assertion over `n ∈ 0..1024`); `fors-interp::reduce` supplies only the `op` and the slot plumbing, and
+`fors-lower` chooses the form from the operand's TYPE: `Array[T, N]` carries its length, so the explicit tree is emitted, while
+`Slice[T]` does not, so one `reduce_tree` instruction carries `(B, L)` as literal operands. Every corpus `reduce-n*` test is the
+second case — `Slice[f64]` has no length in FMIR whatever the surface slice bounds say.
 
 Expansion, normatively (ch03 R11, R11a, R13), 40 lines of straight-line code:
 
@@ -817,7 +825,7 @@ files under `tests/conformance/`; **GAP** means no runtime test exists.
 | 03 R10 | — | single-threaded in M1 | **GAP** (M3) |
 | 03 R11, R13 | `reduce_tree{b:256, l:8}` + §3.9 expansion | scalar emulation of 8 logical lanes | `reduce-n1`, `-n7`, `-n8`, `-n9`, `-n257-shape-run-ok` |
 | 03 R11a | `identity` operand | `n==0` → identity, or **trap `empty-reduce`** | `reduce-n0-with-identity-run-ok`, `reduce-n0-without-identity-trap`, `reduce-identity-no-effect-n3-run-ok` |
-| 03 R12 | shape fixed in FMIR before parallel lowering | see **[HOLE-3]** | `reduce-n257-shape-run-ok` |
+| 03 R12 | shape fixed in FMIR before parallel lowering | `reduce_tree` for a runtime `n`, the explicit tree for a comptime-known one (§3.9; **[HOLE-3]** closed by Q3, 2026-10-02) | `reduce-n257-shape-run-ok` |
 | 03 R15 | no auto-reduce pass exists | n/a | `plain-for-accumulator-accepted-run-ok` |
 | 03 R16-R18 | mono-vs-witness decision on each call | `call_direct` vs `call_witness` | **GAP**; see **[HOLE-5]** |
 | 04 R7, R21 | `AllocKind::Capability`, shim-only construction | `agg_new` on a root type is a verifier error | `04-authority/capability-value-from-narrowing-accepted-run-ok`, `main-signature-correct-accepted-run-ok`, `needs-declared-accepted-run-ok` |
@@ -1019,7 +1027,7 @@ gate the type checker uses — a flat ratio is the claim, not a single number.
 |---|---|---|
 | **Q1** | **Type layout — who defines it, and what is it?** ch09 delegates layout to ch05; ch05 does not define it, and `Layout.of[T]().size` is observable from a Fors program, so this is a language fact. Blocks F6, F7, D11, D12 — every allocation in `Vec`, `Own`, `Buffer`, and the mono-vs-witness rule. **[HOLE-6]** | A new normative section in ch05 with the thinnest honest content: fields in **declaration order** with natural alignment and no reordering (so `soa struct` and FFI stay predictable), `align ≤ MEM_MAX_ALIGN = 16`, enum discriminant the smallest unsigned type fitting the variant count, payload at the first suitably aligned offset. "Implementation-defined + opaque `Layout.of`" is tempting but breaks ch03 R16's *"scalar, ≤ 16 bytes"*, which is meaningless without a layout rule |
 | **Q2** | **NaN payload policy.** ch03 R13(c) fixes the order of `op` applications, not the bits; aarch64 and x86-64 differ, and ch05 R17 makes it observable. Blocks nothing today and **everything after M2**, since every recorded oracle output is invalidated by a later change. **[HOLE-10]** | **Canonical quiet NaN** on every NaN-producing op (§5.6(5)). Cheapest to implement identically on both targets, makes R17's byte comparison total, and v0.1 cannot observe a payload (ch10 R10(f)). Leaving it target-defined would put a permanent hole in the differential tester |
-| **Q3** | **Reword ch03 R12**, which as written — *"MUST lower to this explicit tree in FMIR"* — is unimplementable for a runtime-length input, and `reduce-n257-shape-run-ok` is one. **[HOLE-3]** | *"`reduce` MUST be given its final shape in FMIR, as a function of `(n, B, L)`, before parallel lowering; where `n` is comptime-known the tree MUST be explicit."* Keeps everything R12 buys (`--serial-elide` bit-exactness) and becomes true |
+| **Q3** | **Reword ch03 R12**, which as written — *"MUST lower to this explicit tree in FMIR"* — is unimplementable for a runtime-length input, and `reduce-n257-shape-run-ok` is one. **[HOLE-3]** | **DECIDED (owner, 2026-10-02, F5): ACCEPTED as recommended.** ch03 R12 now reads *"`reduce` MUST be given its final shape in FMIR, as a function of `(n, B, L)`, before parallel lowering; where `n` is comptime-known the tree MUST be explicit."* Keeps everything R12 buys (`--serial-elide` bit-exactness) and becomes true. A clarification, not a semantic change: no conformance expectation moves. **[HOLE-3] CLOSED.** |
 | **Q4** | **`i64::MIN / -1` and shift-count typing.** ch03 R2 lists "overflow, div-by-zero, shift-by-≥-width" and decides neither. Blocks F1. **[HOLE-8]**, **[HOLE-9]** | `MIN / -1` and `MIN % -1` trap **`overflow`** (the condition is representability, not a zero divisor); the shift count is `u32` by language rule, so the runtime condition is exactly `count >= width`. Two corpus tests are needed either way (§8.1 gap 2) |
 | **Q5** | **May F0 add `tests/conformance/05-ir/`?** ch05 names 22 conformance tests and none exists as a file, so every ch05 rule in §8 is corpus-unverified — but adding them changes the counts the corpus README states (921 tests, 1010 files), and the corpus is ground truth | Yes, with the README's count line updated in the same commit. It is transcription plus the verifier, not design |
 | **Q6** | **A build-wide comptime budget.** ch04 R14 charges per *evaluation*; §10.1 allows ~3 × 10⁷ steps for a whole cold build, but 200 declarations at `2^20` is 2 × 10⁸ | Add `COMPTIME_BUILD_STEP_BUDGET = 2^28` to ch04 R14 beside the two existing constants |

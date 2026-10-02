@@ -513,3 +513,288 @@ fn open_pipe_carries_stdout_through_and_exits_0() {
     };
     assert_eq!(*captured, b"ok\n");
 }
+
+// -- design §9's F5 GATE (8 tests) -----------------------------------------
+//
+// Same mechanics as the F2 gates above — parse, resolve, check, lower,
+// verify, run, then compare against the file's own `expect:`/`detail:`
+// lines. What F5 adds to the pipeline underneath them: array literals and
+// `slice_range` in `fors-lower`, the `Slice` descriptor and `reduce_tree`
+// in `fors-interp`, and the shape itself in `fors-fmir::reduce`.
+//
+// Two documented stand-ins carry these files, both in the genre F2
+// established for `Buffer.fixed` (design §5.8):
+//   * **[HOLE-7]**: no checker increment types ch03 R11's `reduce`, so the
+//     call is poisoned and `fors-lower` hard-codes the primitive's typing
+//     (`reduce_stub_ranges` names all three sites).
+//   * `Slice[T]` has no std body until F7, so `slice_range` builds a
+//     three-cell `{ base, start, len }` descriptor and `reduce_tree` is its
+//     only consumer (`fors-interp::exec::slice_parts`).
+// Nothing else about these eight files is special-cased: the values they
+// pin come out of the tree.
+
+#[test]
+fn gate_reduce_n1_shape_run_ok() {
+    gate_test("03-numerics/reduce-n1-shape-run-ok.fors");
+}
+
+#[test]
+fn gate_reduce_n7_shape_run_ok() {
+    gate_test("03-numerics/reduce-n7-shape-run-ok.fors");
+}
+
+#[test]
+fn gate_reduce_n8_shape_run_ok() {
+    gate_test("03-numerics/reduce-n8-shape-run-ok.fors");
+}
+
+#[test]
+fn gate_reduce_n9_shape_run_ok() {
+    gate_test("03-numerics/reduce-n9-shape-run-ok.fors");
+}
+
+#[test]
+fn gate_reduce_n257_shape_run_ok() {
+    gate_test("03-numerics/reduce-n257-shape-run-ok.fors");
+}
+
+#[test]
+fn gate_reduce_n0_with_identity_run_ok() {
+    gate_test("03-numerics/reduce-n0-with-identity-run-ok.fors");
+}
+
+#[test]
+fn gate_reduce_n0_without_identity_trap() {
+    gate_test("03-numerics/reduce-n0-without-identity-trap.fors");
+}
+
+#[test]
+fn gate_reduce_identity_no_effect_n3_run_ok() {
+    gate_test("03-numerics/reduce-identity-no-effect-n3-run-ok.fors");
+}
+
+// -- the other half of ch03 R12 (owner decision Q3): the EXPLICIT tree ------
+
+/// Rebuilds the s-expression a straight-line FMIR chain computes, so the
+/// emitted instructions can be compared against `fors_fmir::reduce`'s own
+/// explicit tree rather than merely counted. `field` reads of the operand
+/// aggregate are the atoms `x{i}`; every binary op is a node with its left
+/// operand first.
+fn sexpr_of_last_binary(decl: &fors_fmir::decl::DeclFmir) -> Option<String> {
+    use fors_fmir::value::ValDef;
+    let mut by_inst: Vec<Option<fors_fmir::ids::ValId>> = vec![None; decl.insts.len()];
+    for (v, row) in decl.vals.all_rows() {
+        if let ValDef::Inst(i) = ValDef::decode(row.def)
+            && (i.index()) < by_inst.len()
+        {
+            by_inst[i.index()] = Some(v);
+        }
+    }
+    let mut text: std::collections::HashMap<u32, String> = std::collections::HashMap::new();
+    let mut last = None;
+    for (id, row) in decl.insts.all_rows() {
+        let Some(v) = by_inst[id.index()] else {
+            continue;
+        };
+        let rendered = match row.op {
+            fors_fmir::op::Op::Field => format!("x{}", row.b),
+            op if op.is_trapping_arith()
+                || matches!(
+                    op,
+                    fors_fmir::op::Op::Fadd(_)
+                        | fors_fmir::op::Op::Fsub(_)
+                        | fors_fmir::op::Op::Fmul(_)
+                        | fors_fmir::op::Op::Fdiv(_)
+                        | fors_fmir::op::Op::Frem(_)
+                ) =>
+            {
+                let l = text.get(&row.a)?.clone();
+                let r = text.get(&row.b)?.clone();
+                last = Some(format!("({l} {r})"));
+                last.clone().unwrap()
+            }
+            _ => continue,
+        };
+        text.insert(v.0, rendered);
+    }
+    last
+}
+
+const REDUCE_OVER_ARRAY: &str = "\
+//! name: probe-reduce-comptime-n
+//! rule: 03.R12
+//! expect: run-ok
+//! detail: ok
+
+module m;
+needs { io.stdout };
+use std.io;
+
+fn main(inout out: io.Stdout) {
+    var data: Array[f64, 7] = [1.0, 2.0, 4.0, 8.0, 16.0, 32.0, 64.0];
+    var r: f64 = reduce(-, data);
+    if r == 83.0 {
+        out.write_line(\"ok\");
+    } else {
+        out.write_line(\"fail\");
+    }
+}
+";
+
+#[test]
+fn comptime_known_n_lowers_to_the_explicit_tree() {
+    // ch03 R12, as reworded by owner decision Q3 (2026-10-02): "where `n`
+    // is comptime-known the tree MUST be explicit". `Array[f64, 7]` carries
+    // its length in its type, so lowering emits the tree itself — no
+    // `reduce_tree` instruction at all — and the chain it emits is
+    // byte-for-byte `fors_fmir::reduce::unrolled(7, B, L)`.
+    let mut interner = Interner::new();
+    let src = REDUCE_OVER_ARRAY.as_bytes().to_vec();
+    let io_src = fs::read(repo_root().join("std/io.fors")).expect("std/io.fors reads");
+    let names: Vec<Segments> = vec![
+        module_name_of("probe", &src, &mut interner),
+        vec![interner.intern(b"std"), interner.intern(b"io")],
+    ];
+    let sources = [src, io_src];
+    let parsed: Vec<_> = sources.iter().map(|s| parse_file(s)).collect();
+    let inputs: Vec<FileInput> = parsed
+        .iter()
+        .zip(sources.iter())
+        .zip(names.iter())
+        .map(|((p, s), n)| FileInput {
+            tree: &p.tree,
+            tokens: &p.tokens,
+            source: s,
+            name: n.clone(),
+        })
+        .collect();
+    let resolved = fors_resolve::resolve_in_package(&mut interner, &inputs, Some(0), None);
+    let out = fors_check::check_build(&inputs, &resolved, &mut interner);
+    let lowered = fors_lower::lower_build(&inputs, &out, &mut interner);
+    let main = lowered
+        .fns
+        .iter()
+        .find(|f| f.name == "main")
+        .unwrap_or_else(|| panic!("main must lower: {:?}", lowered.diags));
+    assert!(
+        fors_fmir::verify::verify(&main.decl).is_empty(),
+        "the explicit tree must verify clean"
+    );
+    assert!(
+        main.decl
+            .insts
+            .all_rows()
+            .all(|(_, r)| r.op != fors_fmir::op::Op::ReduceTree),
+        "a comptime-known `n` emits no `reduce_tree` instruction"
+    );
+    let want = fors_fmir::reduce::render(
+        &fors_fmir::reduce::unrolled(
+            7,
+            fors_fmir::reduce::REDUCE_BLOCK,
+            fors_fmir::reduce::REDUCE_LANES,
+        )
+        .unwrap(),
+    );
+    assert_eq!(
+        sexpr_of_last_binary(&main.decl).as_deref(),
+        Some(want.as_str()),
+        "the emitted chain must be the normative explicit tree"
+    );
+    // And it runs to the same pinned value the `Slice` form gives.
+    check_source(
+        "reduce-over-array",
+        "probe",
+        REDUCE_OVER_ARRAY,
+        &HostEnv::default(),
+    );
+}
+
+#[test]
+fn runtime_n_emits_one_reduce_tree_with_literal_b_and_l() {
+    // The other branch: a `Slice[f64]` operand has no comptime length, so
+    // the shape travels as `reduce_tree`'s own `(B, L)` literal operands —
+    // "given its final shape in FMIR ... before parallel lowering".
+    let path = repo_root().join("tests/conformance/03-numerics/reduce-n7-shape-run-ok.fors");
+    let src = fs::read_to_string(&path).expect("corpus file reads");
+    let mut interner = Interner::new();
+    let bytes = src.as_bytes().to_vec();
+    let io_src = fs::read(repo_root().join("std/io.fors")).expect("std/io.fors reads");
+    let names: Vec<Segments> = vec![
+        module_name_of("reduce-n7", &bytes, &mut interner),
+        vec![interner.intern(b"std"), interner.intern(b"io")],
+    ];
+    let sources = [bytes, io_src];
+    let parsed: Vec<_> = sources.iter().map(|s| parse_file(s)).collect();
+    let inputs: Vec<FileInput> = parsed
+        .iter()
+        .zip(sources.iter())
+        .zip(names.iter())
+        .map(|((p, s), n)| FileInput {
+            tree: &p.tree,
+            tokens: &p.tokens,
+            source: s,
+            name: n.clone(),
+        })
+        .collect();
+    let resolved = fors_resolve::resolve_in_package(&mut interner, &inputs, Some(0), None);
+    let out = fors_check::check_build(&inputs, &resolved, &mut interner);
+    let lowered = fors_lower::lower_build(&inputs, &out, &mut interner);
+    let main = lowered.fns.iter().find(|f| f.name == "main").expect("main");
+    let reduces: Vec<_> = main
+        .decl
+        .insts
+        .all_rows()
+        .filter(|(_, r)| r.op == fors_fmir::op::Op::ReduceTree)
+        .collect();
+    assert_eq!(reduces.len(), 1, "one `reduce` call -> one `reduce_tree`");
+    let row = &main.decl.insts.reduces[reduces[0].1.a as usize];
+    assert_eq!(row.b, fors_fmir::reduce::REDUCE_BLOCK);
+    assert_eq!(row.l, fors_fmir::reduce::REDUCE_LANES);
+    assert_eq!(
+        row.identity.0,
+        fors_fmir::ids::ABSENT,
+        "no `identity:` was written"
+    );
+}
+
+// -- block layout regression (found by the F5 verifier, pre-existing) -------
+
+/// An `if` nested in a THEN-branch. Its three blocks are sealed before the
+/// enclosing else-block is entered, so block-id order is not emission
+/// order; `BlockDraft::first` is recorded at `seal` for exactly this.
+/// Before that fix the else-block's range covered the inner then-block's
+/// instructions and this program printed `inner-else`.
+const NESTED_IF_IN_THEN: &str = "\
+//! name: probe-nested-if-in-then
+//! rule: 05.R1
+//! expect: run-ok
+//! detail: ok
+
+module m;
+needs { io.stdout };
+use std.io;
+
+fn main(inout out: io.Stdout) {
+    var a: f64 = 1.0;
+    var w: f64 = 1.0;
+    if a == 1.0 {
+        if a == w {
+            out.write_line(\"ok\");
+        } else {
+            out.write_line(\"inner-else\");
+        }
+    } else {
+        out.write_line(\"outer-else\");
+    }
+}
+";
+
+#[test]
+fn probe_nested_if_in_then_branch_runs_the_inner_then() {
+    check_source(
+        "nested-if-in-then",
+        "probe",
+        NESTED_IF_IN_THEN,
+        &HostEnv::default(),
+    );
+}
