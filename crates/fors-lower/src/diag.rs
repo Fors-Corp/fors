@@ -14,8 +14,6 @@ pub enum LowerError {
     CheckErrors,
     /// A generic declaration or a generic/tainted call: I5 owns it.
     Generic(String),
-    /// `defer`/`errdefer`: I8b owns the decision (design [HOLE-11]).
-    Defer,
     /// A projection (`I.Item`, qualified associated type): I6 owns it.
     Projection,
     /// A closure literal or `fn` value: captures are I9's (R19c/R19d).
@@ -51,10 +49,6 @@ impl std::fmt::Display for LowerError {
                 "body has type errors; F1 lowers checked-clean bodies only"
             ),
             LowerError::Generic(w) => write!(f, "generics are not lowered in F1 ({w})"),
-            LowerError::Defer => write!(
-                f,
-                "`defer`/`errdefer` need I8b's decision data; not lowered in F1"
-            ),
             LowerError::Projection => write!(f, "projections need I6; not lowered in F1"),
             LowerError::Closure => write!(f, "closures need capture decisions; not lowered in F1"),
             LowerError::Match => write!(f, "`match` needs I7; not lowered in F1"),

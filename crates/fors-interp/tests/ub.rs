@@ -2,9 +2,10 @@
 //! and design §5.2's `ub:` detection list (design §3.5, §3.7, §5.1, §5.2;
 //! ch01 R15-R18, R22-R22i).
 //!
-//! F6's LOWERING half needs checker increment I8b's `D8` plus I4/I5 and D12
-//! ([HOLE-6], [HOLE-11]); design §4.2 lets the interpreter half be built and
-//! tested against hand-written FMIR first, which is what these are.
+//! design §4.2 lets the interpreter half be built and tested against
+//! hand-written FMIR first, which is what these are; F6's LOWERING half
+//! landed afterwards, on I8b's `D8`, with the source-level twins in
+//! `crates/fors-lower/tests/gate.rs` (`f6_*`).
 //!
 //! The named gates of §9's F6 paragraph are, by name:
 //! [`ub_use_after_free`], [`ub_uninit_read_through_out`],
@@ -15,12 +16,16 @@
 //! above the positive detections", because a false report exits 70 and
 //! would fail the corpus on ACCEPTED code.
 //!
-//! **HELD OUT**: the one corpus test F6's gate names,
-//! `01-ownership/arena-generation-trap`. It is a Fors source file whose
-//! `Arena`/`Ref` surface needs lowering of generic std bodies (I4's `Index`
-//! impl on `Arena`, I5's brands) — none of which exists. The MECHANISM it
-//! tests is covered end to end here by
-//! [`arena_generation_trap_on_a_stale_ref`].
+//! `01-ownership/arena-generation-trap`, the one corpus test F6's gate
+//! names, WAS held out here while only the interpreter half existed: it is
+//! a Fors source file whose `Arena`/`Ref` surface is untyped until I4's
+//! `Index` impl on a bound and I5's brands reach std's own bodies. F6's
+//! LOWERING half closed it with a design §5.8 stand-in for exactly those
+//! three call shapes (`fors_lower`'s `try_lower_arena`), and the row is
+//! wired as `gate_arena_generation_trap` in
+//! `crates/fors-lower/tests/conformance_f2.rs`.
+//! [`arena_generation_trap_on_a_stale_ref`] below stays as the
+//! fixture-level twin of the same mechanism.
 
 mod fixture;
 
