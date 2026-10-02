@@ -7,7 +7,8 @@ commit history, which predates the Conventional Commits convention.
 
 | Language | Compiler | Meaning |
 |---|---|---|
-| `lang-v0.5.2` | `compiler-v0.4.0` | current |
+| `lang-v0.5.2` | `compiler-v0.5.0` | current |
+| `lang-v0.5.2` | `compiler-v0.4.0` | checker I5 |
 | `lang-v0.5.2` | `compiler-v0.3.0` | FMIR F5 |
 | `lang-v0.5.1` | `compiler-v0.2.0` | checker I3.5–I4b, FMIR F1–F2 |
 | `lang-v0.5.0` | `compiler-v0.1.1` | type checker I2–I3 |
@@ -83,6 +84,45 @@ measurement, the grammar, names and visibility), with a conformance corpus and
 an independent reference parser.
 
 ## Compiler
+
+### compiler-v0.5.0 — 2026-10-02
+
+Type checker increment **I6** and the interpreter halves of FMIR **F4** and
+**F6**, each produced by one agent and independently verified by another;
+plus the chapter 05 conformance directory. Implements `lang-v0.5.2`; still
+no code generator.
+
+- **I6 — associated types, projections, normalisation.** `normalise.rs` is
+  design §7.5: exact impl probe, bucket scan, memoised structural descent,
+  a per-query work budget reported as T0020. Projections on concrete heads
+  collapse everywhere; neutral ones match only themselves (ch09 R20);
+  constraint entries are checked at the call (R62); generic method calls
+  are typed. Measured through the real checker: normalisation cost is
+  exactly `depth+1` and identical for 1 to 256 impls per bucket.
+- **F4 (interpreter half) — exit edges.** Each edge carries the scopes
+  left, the pending `defer`/`errdefer` bodies, the drops and the
+  obligation discharges; the verifier asserts the list against ch01
+  R23a/R23b's order instead of re-deriving it; execution follows I8b's
+  order and a trap runs nothing. Lowering waits for I8b.
+- **F6 (interpreter half) — arenas, allocators, `ub:`.** Byte-granular
+  initialisation, arena generations with a trapping ceiling, region-scoped
+  arenas, a closed nine-class `ub:` vocabulary (status 70, disjoint from
+  the trap kinds), a two-kind borrow stack, provenance keyed by frame
+  activation. Owner decision Q7: one trap line, backtrace opt-in.
+- **Corpus.** `tests/conformance/05-ir/` holds all 22 tests chapter 05
+  names (owner decision Q5): 943 tests, 1032 files. Six are real
+  source-level violations that `fors check` cannot see yet because it
+  never runs lowering or the IR verifier — recorded as `PENDING_05`.
+- **Coverage.** 212 of chapter 09's 246 conformance tests on, 34 pending;
+  672 Rust tests.
+- **Verification found and fixed before merge.** I6: three over-acceptances
+  (a silent method lookup when the only unifying impl was refused by its
+  bounds; bounds skipped for subjects containing a neutral projection; an
+  empty candidate tier accepted). F4/F6, from fifteen adversarial FMIR
+  fixtures: exit edges listing scopes outer-first passed the verifier;
+  nested arena regions retired the wrong arena; a root write never popped
+  the borrow stack; a pointer into a returned frame panicked the
+  interpreter; a `raise` from a non-entry frame was settled as `main`'s.
 
 ### compiler-v0.4.0 — 2026-10-02
 
