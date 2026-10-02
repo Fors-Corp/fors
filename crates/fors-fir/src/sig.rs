@@ -706,6 +706,10 @@ impl AssocStore {
 
 /// `soa`-marked struct (ch03's struct-of-arrays layout modifier).
 pub const SIG_SOA: u8 = 1;
+/// I10 (ch03 R18): the `fn` carries `@specialize`. Part of the canonical
+/// signature (the flags byte is encoded), so adding or removing it re-checks
+/// every body that calls it.
+pub const SIG_SPECIALIZE: u8 = 2;
 
 /// SoA indexed by `DefId`, with the four pools it indexes into.
 pub struct SigStore {
@@ -810,6 +814,19 @@ impl SigStore {
             self.flags[def.index()] |= SIG_SOA;
         } else {
             self.flags[def.index()] &= !SIG_SOA;
+        }
+    }
+
+    /// ch03 R18: whether the `fn` is declared `@specialize`.
+    pub fn is_specialize(&self, def: DefId) -> bool {
+        self.flags[def.index()] & SIG_SPECIALIZE != 0
+    }
+
+    pub fn set_specialize(&mut self, def: DefId, on: bool) {
+        if on {
+            self.flags[def.index()] |= SIG_SPECIALIZE;
+        } else {
+            self.flags[def.index()] &= !SIG_SPECIALIZE;
         }
     }
 

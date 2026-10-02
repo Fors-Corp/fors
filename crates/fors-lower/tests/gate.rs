@@ -1013,12 +1013,24 @@ fn gate_sat_shl_clamps_to_the_bounds() {
 #[test]
 fn gate_unchecked_outside_an_unsafe_declaration_is_refused() {
     // ch03 Rule 4 / ch04 Rule 10: `unchecked_<op>` MUST NOT appear outside
-    // `@unsafe(invariant: ..)`. The checker's rejection is I10's; lowering
-    // refuses to build the form rather than letting it run.
-    assert!(matches!(
-        lower_error("fn f(let x: i32) -> i32 { return x.unchecked_add(1); }\n"),
-        LowerError::Unsupported(_)
-    ));
+    // `@unsafe(invariant: ..)`. The checker rejects it (I10's D0004), and
+    // lowering still refuses to build the form on its own, so a build that
+    // skipped the checker could not let it run either.
+    let built = build("fn f(let x: i32) -> i32 { return x.unchecked_add(1); }\n");
+    assert_eq!(
+        built.check_diags,
+        ["D0004"],
+        "check diags: {:?}",
+        built.check_diags
+    );
+    assert!(
+        built
+            .lower_diags
+            .iter()
+            .any(|d| matches!(d.error, LowerError::Unsupported(_))),
+        "lower diags: {:?}",
+        built.lower_diags
+    );
 }
 
 #[test]

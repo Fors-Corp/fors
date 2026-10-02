@@ -23,6 +23,7 @@
 //! head (`Buffer.empty()`), which used to be `TY_ERROR` with no
 //! diagnostic at all.
 
+pub mod authority;
 pub mod body;
 pub mod call;
 pub mod defs;
@@ -31,11 +32,13 @@ pub mod diag;
 pub mod exhaust;
 pub mod expr;
 pub mod facts;
+pub mod failure;
 pub mod flow;
 pub mod lower;
 pub mod member;
 pub mod methods;
 pub mod normalise;
+pub mod numerics;
 pub mod pat;
 pub mod queries;
 pub mod rules;

@@ -241,6 +241,7 @@ fn build_prelude(interner: &mut Interner) -> Prelude {
         .chain(&prelude::PRELUDE_TYPES4)
         .chain(&prelude::PRELUDE_TYPES5)
         .chain(&prelude::PRELUDE_TYPES6)
+        .chain(&prelude::PRELUDE_TYPES7)
     {
         let s = interner.intern(n);
         out.insert(s, Entity::PreludeType(s));

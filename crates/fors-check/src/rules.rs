@@ -572,6 +572,255 @@ pub const EMIT_SITES: &[&str] = &[
     "lower::constraint_entries",
 ];
 
+// ------------------------------------------------ I10: chapters 2 and 3
+
+/// The ch02 (failure) rules the checker emits a code for (increment I10,
+/// half A; design §8's inherited-obligation rows, §14 Q1's `F00nn`, the
+/// rule number is the code). Same shape as [`CH09_RULES`]; `code` is the
+/// number after `F`. A rule of the chapter that is not the checker's —
+/// R4's ABI classifier, R6-R8's trap lowering, R11-R12's check deletion and
+/// release tagging, R14's C++ boundary, R15-R17's trap kinds, error exits
+/// and `main`'s runtime path — has no row, because no checker site emits
+/// for it.
+pub const CH02_RULES: [RuleEntry; 7] = [
+    imp(
+        1,
+        Some(1),
+        "raises-declared-and-every-raising-call-handled",
+        &["call::call_expr_inner", "body::raise_stmt", "expr::subsume"],
+    ),
+    imp(
+        2,
+        Some(2),
+        "postfix-try-only-on-a-raising-call",
+        &["call::call_expr_inner", "expr::synth_inner"],
+    ),
+    imp(
+        3,
+        Some(3),
+        "try-performs-one-errorfrom-lookup",
+        &["failure::try_edge", "failure::error_from_impl"],
+    ),
+    // The handler block's own value mismatch keeps ch09 R36/R26's T0026
+    // (`09-types/handler-block-type-rejected` asserts it); F0005 is the
+    // handler written after a call that does not raise.
+    imp(
+        5,
+        Some(5),
+        "handler-only-after-a-raising-call",
+        &["call::handler"],
+    ),
+    imp(
+        9,
+        Some(9),
+        "contract-has-no-secret-subexpression",
+        &["body::check_contracts", "failure::contract_secret"],
+    ),
+    imp(
+        10,
+        Some(10),
+        "proved-contract-must-be-discharged",
+        &["lower::contract_policy"],
+    ),
+    imp(
+        13,
+        Some(13),
+        "extern-c-declares-no-raises",
+        &["lower::lower_fn", "lower::extern_abi_is_c"],
+    ),
+];
+
+/// The ch03 (numerics) rules the checker emits a code for (I10, half A;
+/// `D00nn`). Rules 2, 3, 7, 10-14 (trapping, IEEE strictness, determinism,
+/// `reduce`'s shape) and 16-17 (monomorphisation) are lowering's and the
+/// interpreter's; R23's `.splat` and R24a's repeat form are typed but R23
+/// has no failure of its own, and R24a reports under R24's code.
+pub const CH03_RULES: [RuleEntry; 15] = [
+    imp(
+        1,
+        Some(1),
+        "integers-are-fixed-width-no-128-bit",
+        &["lower::rejected_width"],
+    ),
+    imp(
+        4,
+        Some(4),
+        "unchecked-op-only-in-an-unsafe-declaration",
+        &["numerics::unchecked_site"],
+    ),
+    imp(
+        5,
+        Some(5),
+        "no-implicit-numeric-conversion",
+        &["expr::subsume", "numerics::numeric_mismatch"],
+    ),
+    imp(
+        6,
+        Some(6),
+        "lossy-conversion-to-a-numeric-primitive",
+        &["numerics::numeric_call_done"],
+    ),
+    imp(
+        8,
+        Some(8),
+        "fastmath-flags-are-a-closed-set",
+        &["numerics::fastmath_flags"],
+    ),
+    imp(
+        9,
+        Some(9),
+        "comptime-value-does-not-escape-implicitly",
+        &[
+            "expr::subsume",
+            "numerics::numeric_mismatch",
+            "numerics::comptime_binding",
+        ],
+    ),
+    imp(11, Some(11), "reduce-call-form", &["numerics::reduce_call"]),
+    imp(
+        15,
+        Some(15),
+        "no-implicit-parallel-accumulator",
+        &["numerics::accumulator_in_parallel"],
+    ),
+    imp(
+        18,
+        Some(18),
+        "specialize-enforced-in-simd",
+        &["numerics::specialize_in_simd"],
+    ),
+    imp(
+        19,
+        Some(19),
+        "vector-and-mask-lane-count-is-a-power-of-two",
+        &["lower::bad_lane_count"],
+    ),
+    imp(20, Some(20), "svec-is-reserved", &["lower::svec_misuse"]),
+    imp(
+        21,
+        Some(21),
+        "array-literal-count-equals-n",
+        &["expr::check_array"],
+    ),
+    imp(
+        22,
+        Some(22),
+        "empty-array-literal-in-synth-mode",
+        &["expr::synth_array"],
+    ),
+    imp(
+        24,
+        Some(24),
+        "slice-only-by-range-index-and-repeat-form",
+        &["expr::check_array", "expr::repeat_element"],
+    ),
+    imp(
+        25,
+        Some(25),
+        "synth-literal-later-element-checked-against-first",
+        &["expr::check_array"],
+    ),
+];
+
+// ------------------------------------------------ I10: chapters 4 and 1
+
+/// The ch04 (authority) rules the CHECKER emits a code for (I10, half B;
+/// `A00nn`, the rule number is the code; a lettered clause reports under
+/// its rule's number and names the clause in the message). R1's `needs`
+/// vocabulary and R8's `main` shape are decided from names alone and stay
+/// `fors_resolve::authority`'s (A0001, A0008), so they have no row here.
+/// R2b and R3 (the manifest policy) and R17-R19 (the lockfile) need a
+/// manifest this build does not have; R14's step budget, R11 and R15 are
+/// comptime EVALUATION (FMIR F9); R4, R24-R26 are codegen's and ch05's.
+pub const CH04_RULES: [RuleEntry; 8] = [
+    imp(
+        2,
+        Some(2),
+        "r2a-sealed-operation-not-generic-not-comptime-and-declared",
+        &["authority::authority_call", "authority::asm_expr"],
+    ),
+    imp(
+        7,
+        Some(7),
+        "root-capability-type-has-no-constructor",
+        &["authority::authority_struct_lit"],
+    ),
+    imp(
+        10,
+        Some(10),
+        "unsafe-is-a-declaration-attribute-with-an-invariant",
+        &[
+            "authority::unsafe_attributes",
+            "authority::unsafe_block_form",
+            "authority::authority_struct_lit",
+        ],
+    ),
+    imp(
+        12,
+        Some(12),
+        "comptime-reaches-no-run-time-binding",
+        &["authority::comptime_reach"],
+    ),
+    imp(
+        13,
+        Some(13),
+        "comptime-file-read-listed-in-inputs",
+        &["authority::authority_call"],
+    ),
+    imp(
+        22,
+        Some(22),
+        "asm-only-in-unsafe-declaration-of-an-asm-holder",
+        &["authority::asm_expr"],
+    ),
+    imp(
+        23,
+        Some(23),
+        "syscall-class-asm-needs-syscall",
+        &["authority::asm_expr"],
+    ),
+    imp(
+        27,
+        Some(27),
+        "asm-expr-is-check-only-typed",
+        &["authority::asm_expr", "body::stmt_inner"],
+    ),
+];
+
+/// The ch01 rules increment I10 gave a checker code of their own
+/// (`O00nn`): an arena's or allocator's constructor and whole move (R15a,
+/// under R15's code, which `lower::type_app` and `member::gparam_value`
+/// already use for R15d), the arena subscript (R16), `deinit`'s brand (R18)
+/// and `Shared` (R21, and R21a under R21's code). A brand-only mismatch at a
+/// call or a binding stays ch09's T0026 (the ch09 corpus asserts it), with a
+/// message citing R15/R15d.
+pub const CH01_RULES: [RuleEntry; 4] = [
+    imp(
+        15,
+        Some(15),
+        "arena-and-allocator-have-no-constructor-and-never-move",
+        &["authority::authority_struct_lit", "authority::arena_move"],
+    ),
+    imp(
+        16,
+        Some(16),
+        "ref-used-only-against-an-arena-of-its-brand",
+        &["authority::arena_index"],
+    ),
+    imp(
+        18,
+        Some(18),
+        "deinit-through-an-allocator-of-the-owns-brand",
+        &["authority::authority_call"],
+    ),
+    imp(
+        21,
+        Some(21),
+        "atomic-only-in-shared-and-shared-is-fieldwise",
+        &["authority::atomic_fields", "authority::shared_impls"],
+    ),
+];
+
 /// Renders `CH09_RULES` as a Markdown table (rule, code, short name,
 /// status, emit sites) and writes it to
 /// `docs/spec/09-types-traceability.md`, relative to the repository root
@@ -728,13 +977,17 @@ mod tests {
         // `wf::marker_traits`, R50 at `pat::check_pat` — were already
         // `Implemented` and keep their sites.
         //
-        // R58 stays unimplemented, for one site:
-        //  - R58's `lower::brand_as_type` site is in
-        //    (`brand-param-as-value-type-rejected`, reported with ch01
-        //    R15d's own code as §8's row 58 requires), but
-        //    `expr::const_param_value` is not: no increment has given a
-        //    const parameter its value in a body (`LocalKind::ConstParam`
-        //    is still unread), and no ch09 corpus test asks for it.
+        // R58 stays unimplemented, although I10b landed the body half of
+        // both its clauses at `member::path_head`'s `gparam_value` (§8's
+        // row 58 names the site `expr::const_param_value`; the judgement
+        // lives with the rest of the path-head reading instead): a CONST
+        // parameter is now a constant of its declared type in a body —
+        // which is what made `a[0 ..< N]` type rather than absorb — and a
+        // BRAND parameter in VALUE position now reports ch01 R15d's own
+        // code beside `lower::brand_as_type`'s type position. What is left
+        // is the clause's reach: `LocalKind::ConstParam` is still unread,
+        // the value a const parameter denotes is not folded, and no ch09
+        // corpus test asks for either, so the row does not yet flip.
         assert_eq!(
             implemented,
             vec![
@@ -763,6 +1016,34 @@ mod tests {
             CH09_RULES.len(),
             "two rules share a short_name"
         );
+    }
+
+    /// I10: the ch02/ch03/ch04/ch01 tables follow design §14 Q1 — the code
+    /// IS the rule number — in rule order, every row implemented, names
+    /// unique.
+    #[test]
+    fn ch02_and_ch03_tables_are_rule_numbered() {
+        for table in [
+            &CH02_RULES[..],
+            &CH03_RULES[..],
+            &CH04_RULES[..],
+            &CH01_RULES[..],
+        ] {
+            let mut last = 0u16;
+            let mut names: Vec<&str> = Vec::new();
+            for e in table {
+                assert_eq!(e.code, Some(e.rule), "rule {} is not its own code", e.rule);
+                assert!(e.rule > last, "rule {} is out of order", e.rule);
+                assert_eq!(e.status, RuleStatus::Implemented);
+                assert!(!e.emit_sites.is_empty() && !e.short_name.is_empty());
+                last = e.rule;
+                names.push(e.short_name);
+            }
+            names.sort_unstable();
+            let n = names.len();
+            names.dedup();
+            assert_eq!(names.len(), n, "two rules share a short_name");
+        }
     }
 
     #[test]

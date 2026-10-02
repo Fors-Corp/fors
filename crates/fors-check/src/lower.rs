@@ -450,7 +450,7 @@ fn head_is_trait(f: &FileCtx, defs: &DefTable, prelude: &PreludeDefs, node: usiz
             Some(PreludeEntity::Ty(_)) | Some(PreludeEntity::Generic { .. }) => Some(false),
             // A prelude name with no declaration in this build (ch10 R2's std
             // types): neither answer is known, so R15 stays silent.
-            Some(PreludeEntity::Opaque) | None => None,
+            Some(PreludeEntity::Opaque) | Some(PreludeEntity::RejectedWidth) | None => None,
         },
         _ => None,
     }
@@ -528,6 +528,12 @@ pub struct Cx<'f, 'a> {
     impl_assoc: Vec<(Symbol, TyId)>,
     /// The impl whose parameters may head a projection inside `type A = RHS;`.
     assoc_rhs_owner: DefId,
+    /// I10b: the enclosing impl's written trait reference (`IndexMut[usize]`
+    /// in `impl IndexMut[usize] for Vec[T, A]`). R21 says `IndexMut[I]`
+    /// declares no `Output` and that `Self.Output` inside it denotes
+    /// `Index[I]`'s, so lowering `Self.Output` in such an impl needs THIS
+    /// impl's `I`. [`fors_fir::sig::NO_TRAIT_REF`] outside a trait impl.
+    impl_trait_ref: TraitRefId,
     /// ch01 R15 / ch09 R40: the fresh brands the enclosing `with arena`
     /// blocks introduce, innermost last. `with` is a statement, so this is
     /// a body-local scope `find` (the generic scope) knows nothing about.
@@ -541,6 +547,18 @@ pub struct Cx<'f, 'a> {
     /// block's own fresh brand. Outside the header the slot stays open
     /// (`type_args` leaves the type `TY_ERROR` rather than inventing one).
     header_brand: Option<TyId>,
+    /// I10 (ch03 R20): the one type node where `SVec[T]` is legal — the
+    /// top of a local's annotation inside a `simd` body. `u32::MAX`
+    /// everywhere else.
+    pub svec_local: u32,
+    /// I10 verification (ch03 R9): where a comptime-only type
+    /// (`comptime_int`, `comptime_float`) may be WRITTEN as a type — a
+    /// `const` item's declared type, and a body's own annotations (the body
+    /// checker decides a runtime binding, `numerics::comptime_binding`). In
+    /// every other declared position — a parameter, a result, a field, a
+    /// payload, a generic argument — the value would escape to runtime by
+    /// construction, so `type_app` reports D0009 there.
+    pub comptime_ok: bool,
 }
 
 impl<'f, 'a> Cx<'f, 'a> {
@@ -555,9 +573,12 @@ impl<'f, 'a> Cx<'f, 'a> {
             self_kind: SelfKind::None,
             impl_assoc: Vec::new(),
             assoc_rhs_owner: NO_DEF,
+            impl_trait_ref: fors_fir::sig::NO_TRAIT_REF,
             fresh_brands: Vec::new(),
             fresh_brands_opened: 0,
             header_brand: None,
+            svec_local: u32::MAX,
+            comptime_ok: false,
         }
     }
 
@@ -585,7 +606,7 @@ impl<'f, 'a> Cx<'f, 'a> {
         o
     }
 
-    fn fresh_brand(&self, node: u32) -> Option<TyId> {
+    pub(crate) fn fresh_brand(&self, node: u32) -> Option<TyId> {
         self.fresh_brands
             .iter()
             .rev()
@@ -599,6 +620,21 @@ impl<'f, 'a> Cx<'f, 'a> {
             .rev()
             .find(|&&(n, ..)| n == node)
             .map(|&(_, d, o, k)| (d, o, k))
+    }
+
+    /// The generic parameter a name-use's introducing node declares, as
+    /// `(owner, ordinal, kind)`. `find` with a name, for the body phase: R58
+    /// needs a CONST parameter's owner and ordinal to give it its type.
+    pub fn gparam_of(&self, node: u32) -> Option<(DefId, u16, GKind)> {
+        self.find(node)
+    }
+
+    /// The enclosing `impl`/`trait`'s `Self`: the declaration node that
+    /// introduces it and the type it denotes. R34's `Self { .. }` literal
+    /// head is the body phase's reader; `None` outside an impl or trait.
+    pub fn self_binding(&self) -> Option<(u32, TyId)> {
+        (self.self_node != u32::MAX && self.self_ty != NO_TY)
+            .then_some((self.self_node, self.self_ty))
     }
 }
 
@@ -643,6 +679,8 @@ enum Head {
     Value((u32, u32), Symbol),
     /// Already diagnosed, or deliberately deferred: silent `TY_ERROR`.
     Silent,
+    /// I10 (ch03 R1): `i128`/`u128`, a width v1 does not have.
+    RejectedWidth((u32, u32), Symbol),
 }
 
 impl Lowerer<'_> {
@@ -827,6 +865,7 @@ impl Lowerer<'_> {
                 }
                 TY_ERROR
             }
+            Head::RejectedWidth(r, s) => self.rejected_width(cx, r, s),
             Head::Value(r, s) => {
                 if pos == Pos::OpaqueArg {
                     return TY_ERROR;
@@ -864,8 +903,19 @@ impl Lowerer<'_> {
                 }
                 TY_ERROR
             }
+            Head::Nominal(def) if self.svec_misuse(cx, def, node, range) => {
+                for &c in args {
+                    if is_type_node(cx.f.kind(c)) {
+                        self.ty(cx, c, Pos::Value);
+                    }
+                }
+                TY_ERROR
+            }
             Head::Nominal(def) => match self.type_args(cx, args, def, range) {
                 Some(xs) => {
+                    if self.bad_lane_count(cx, def, &xs, range) {
+                        return TY_ERROR;
+                    }
                     if let Some(g) = self.prelude.generic_index(def) {
                         use fors_fir::prelude::gty;
                         if matches!(g, gty::ARRAY | gty::VECTOR | gty::ATOMIC) && !xs.is_empty() {
@@ -959,6 +1009,9 @@ impl Lowerer<'_> {
                     Some(PreludeEntity::Generic { def, .. }) => Head::Nominal(def),
                     Some(PreludeEntity::Trait { def, .. }) => Head::Trait(def),
                     Some(PreludeEntity::Opaque) | None => Head::Opaque,
+                    Some(PreludeEntity::RejectedWidth) => {
+                        Head::RejectedWidth(cx.f.range(node), sym)
+                    }
                 },
                 Entity::Variant { .. } | Entity::PreludeValue(_) => {
                     match self.last_own_ident(cx, node) {
@@ -1001,6 +1054,7 @@ impl Lowerer<'_> {
                 }
                 TY_ERROR
             }
+            Head::RejectedWidth(r, s) => self.rejected_width(cx, r, s),
             Head::Value(r, s) => {
                 if pos == Pos::OpaqueArg {
                     return TY_ERROR;
@@ -1050,10 +1104,30 @@ impl Lowerer<'_> {
                 TY_ERROR
             }
             Head::Nominal(def) => {
+                // I10 (ch03 R20): `SVec[T]` is reserved — legal only as a
+                // local inside a `simd` body (and only with hardware support,
+                // which this compiler never assumes away: the rule's "never a
+                // silent scalar fallback"). Anywhere else, including as a
+                // type argument, a field, a parameter or a result, it is a
+                // compile error.
+                if self.comptime_misuse(cx, def, range) {
+                    return TY_ERROR;
+                }
+                if self.svec_misuse(cx, def, node, range) {
+                    for (c, k) in cx.f.child_kinds(node) {
+                        if is_type_node(k) {
+                            self.ty(cx, c, Pos::Value);
+                        }
+                    }
+                    return TY_ERROR;
+                }
                 let kids: Vec<usize> = cx.f.tree.children(node).collect();
                 let args = self.type_args(cx, &kids, def, range);
                 match args {
                     Some(xs) => {
+                        if self.bad_lane_count(cx, def, &xs, range) {
+                            return TY_ERROR;
+                        }
                         // R11 (ch01 R22b): a CONCRETE `Array[X, N]`,
                         // `vector[X, N]` or `atomic[X]` whose element type is
                         // linear. Linearity is only known once every `impl
@@ -1246,6 +1320,30 @@ impl Lowerer<'_> {
                 owner,
                 ordinal: ord,
             }),
+            // I10 verification (ch01 R15d): "passing a non-brand type for
+            // it ... MUST be rejected". A type, a trait, `Self` or a
+            // parameter of another kind in a brand slot lowered to a SILENT
+            // `TY_ERROR`; it is the writer's error and reports under R15d's
+            // code. A value head (an `Arena`-typed binding, which the ch08
+            // corpus writes), an opaque or an already-diagnosed head stays
+            // silent, as before.
+            Head::Prim(_)
+            | Head::Nominal(_)
+            | Head::Trait(_)
+            | Head::SelfTy
+            | Head::RejectedWidth(..)
+            | Head::GParam(_, _, GKind::Type | GKind::Const | GKind::Callable) => {
+                let range = cx.f.range(node);
+                self.emit_code(
+                    cx,
+                    range,
+                    fors_index::diag::Code::O(15),
+                    58,
+                    "a brand argument must be a brand: this slot's declared kind is `brand`, and a type is not one (ch01 R15d)"
+                        .to_string(),
+                );
+                TY_ERROR
+            }
             _ => TY_ERROR,
         }
     }
@@ -1289,6 +1387,7 @@ impl Lowerer<'_> {
                     // A prelude name with no declaration in this build, or a
                     // head the resolver already diagnosed: silent.
                     Head::Opaque | Head::Silent => TY_ERROR,
+                    Head::RejectedWidth(r, s) => self.rejected_width(cx, r, s),
                     // A `const` declaration used as a const argument: its
                     // value is the const's, which I2 folds only for literals
                     // (a closed constant expression by ch04 R11-14, left open
@@ -1482,6 +1581,7 @@ impl Lowerer<'_> {
         };
         match head {
             Head::Silent | Head::Opaque => TY_ERROR,
+            Head::RejectedWidth(r, s) => self.rejected_width(cx, r, s),
             Head::Value(r, s) => {
                 let n = String::from_utf8_lossy(self.names.resolve(s)).into_owned();
                 self.emit(cx, r, 11, 11, format!("`{n}` is a binding, not a type"));
@@ -1576,9 +1676,45 @@ impl Lowerer<'_> {
                         if let Some(&(_, rhs)) = cx.impl_assoc.iter().find(|&&(n, _)| n == name) {
                             return rhs;
                         }
-                        let declared = self.shapes.declares_assoc(trait_def, name)
-                            || (trait_def == self.prelude.traits[tr::INDEXMUT]
-                                && name == self.prelude.output_name);
+                        // I10b (R21/R61): `IndexMut[I]` declares no
+                        // `Output` of its own, and inside an impl of it
+                        // `Self.Output` denotes the `Index[I]` impl's. The
+                        // carve-out below only silenced R61's diagnostic and
+                        // still answered `TY_ERROR`, so every `at_mut` body
+                        // in `std` (`Buffer`'s, `Vec`'s, `Map`'s) was checked
+                        // against an absorbing result type and its `[ ]`
+                        // ended `TY_ERROR` with nothing said. Answer the
+                        // projection instead and let R20 normalise it
+                        // through the `Index[I]` impl.
+                        if trait_def == self.prelude.traits[tr::INDEXMUT]
+                            && name == self.prelude.output_name
+                        {
+                            // R61(b) forbids a projection headed by a
+                            // concrete type, so the answer must be the
+                            // `Index` impl's own definition — R61(c)'s
+                            // "replaced at once by that impl's own
+                            // definition", read from the sibling impl.
+                            let args = if cx.impl_trait_ref == fors_fir::sig::NO_TRAIT_REF {
+                                fors_fir::ty::NO_ARGS
+                            } else {
+                                self.fir.tys.trait_ref(cx.impl_trait_ref).1
+                            };
+                            if let Some(rhs) = self.index_output(cx.self_ty, args, name) {
+                                return rhs;
+                            }
+                            self.emit(
+                                cx,
+                                range,
+                                61,
+                                21,
+                                "`Self.Output` here is `Index`'s, and no `Index` impl for this \
+                                 type with these arguments defines it: add the `impl Index[..] \
+                                 for ..` R21 requires, or write the element type itself"
+                                    .to_string(),
+                            );
+                            return TY_ERROR;
+                        }
+                        let declared = self.shapes.declares_assoc(trait_def, name);
                         if !declared {
                             let name_s =
                                 String::from_utf8_lossy(self.names.resolve(name)).into_owned();
@@ -1596,6 +1732,91 @@ impl Lowerer<'_> {
                 }
             }
         }
+    }
+
+    /// R21/R61(c): the `Output` the `Index[args]` impl for `self_ty` defines.
+    ///
+    /// `IndexMut[I]` declares no associated type of its own, so an
+    /// `impl IndexMut[As] for S` that writes `Self.Output` means the
+    /// `impl Index[As] for S` one — the prerequisite R21 requires of it. The
+    /// sibling is found by its lowered signature (self type and trait
+    /// reference); every impl head is lowered before any `fn` signature
+    /// ([`Lowerer::run`]), so the two impls may be written in either order.
+    /// `None` when there is none, which the caller REPORTS rather than
+    /// absorbing.
+    fn index_output(
+        &mut self,
+        self_ty: TyId,
+        args: fors_fir::ty::ArgsId,
+        name: Symbol,
+    ) -> Option<TyId> {
+        use fors_fir::subst::{Binding, one_way_match, subst_norm};
+        if self_ty == TY_ERROR || self_ty == NO_TY {
+            return None;
+        }
+        let index = self.prelude.traits[tr::INDEX];
+        let want = if args == fors_fir::ty::NO_ARGS {
+            Vec::new()
+        } else {
+            self.fir.tys.args(args).to_vec()
+        };
+        let defs: Vec<DefId> = self.defs.user_defs().map(|(d, _)| d).collect();
+        for def in defs {
+            if self.fir.sigs.kind(def) != SigKind::Impl {
+                continue;
+            }
+            let tref = self.fir.sigs.trait_ref(def);
+            if tref == fors_fir::sig::NO_TRAIT_REF {
+                continue;
+            }
+            let (td, ta) = self.fir.tys.trait_ref(tref);
+            if td != index {
+                continue;
+            }
+            let rhs = self.fir.sigs.assocs.rhs_of(self.fir.sigs.assoc(def), name);
+            if rhs == NO_TY || rhs == TY_ERROR {
+                continue;
+            }
+            // The sibling writes `S` and `As` over ITS OWN parameters, so the
+            // two impls never share a `TyId`: match one-way (R12's own
+            // compare), then carry the right-hand side over into this impl's
+            // vocabulary.
+            let arity = self
+                .fir
+                .sigs
+                .generics_store
+                .count(self.fir.sigs.generics(def));
+            let mut b = Binding::new(&[(def, arity as u16)]);
+            let sib_self = self.fir.sigs.self_ty(def);
+            if sib_self == NO_TY
+                || sib_self == TY_ERROR
+                || !one_way_match(&mut self.fir.tys, sib_self, self_ty, &mut b)
+            {
+                continue;
+            }
+            let sib_args = if ta == fors_fir::ty::NO_ARGS {
+                Vec::new()
+            } else {
+                self.fir.tys.args(ta).to_vec()
+            };
+            if sib_args.len() != want.len() {
+                continue;
+            }
+            let mut ok = true;
+            for (x, y) in sib_args.iter().zip(want.iter()) {
+                if !one_way_match(&mut self.fir.tys, *x, *y, &mut b) {
+                    ok = false;
+                    break;
+                }
+            }
+            if !ok {
+                continue;
+            }
+            if let Some(t) = subst_norm(&mut self.fir.tys, rhs, &b) {
+                return Some(t);
+            }
+        }
+        None
     }
 
     /// R61(c): exactly one trait among `bounds` declares `name`.
@@ -1729,6 +1950,87 @@ impl Lowerer<'_> {
         Some(self.fir.tys.intern_trait_ref(def, a))
     }
 
+    /// I10 (ch03 R1): `i128`/`u128` named as a type.
+    fn rejected_width(&mut self, cx: &Cx, r: (u32, u32), s: Symbol) -> TyId {
+        let n = String::from_utf8_lossy(self.names.resolve(s)).into_owned();
+        self.emit_code(
+            cx,
+            r,
+            fors_index::diag::Code::D(1),
+            3,
+            format!("`{n}` is not an integer type: v1's integers are fixed-width `i8`..`i64` and `u8`..`u64`, with no 128-bit width (ch03 R1)"),
+        );
+        TY_ERROR
+    }
+
+    /// I10 (ch03 R19): `vector[T, N]`'s and `mask[N]`'s lane count is a
+    /// comptime power of two. Reports and answers `true` when it is not.
+    fn bad_lane_count(&mut self, cx: &Cx, def: DefId, xs: &[TyId], range: (u32, u32)) -> bool {
+        use fors_fir::prelude::gty;
+        let lanes = match self.prelude.generic_index(def) {
+            Some(gty::VECTOR) => xs.get(1).copied(),
+            Some(gty::MASK) => xs.first().copied(),
+            _ => None,
+        };
+        let Some(n) = lanes.and_then(|t| const_int(self.fir, t)) else {
+            return false;
+        };
+        if n > 0 && n & (n - 1) == 0 {
+            return false;
+        }
+        self.emit_code(
+            cx,
+            range,
+            fors_index::diag::Code::D(19),
+            5,
+            format!("a `vector`/`mask` lane count must be a comptime power of two; {n} is not (ch03 R19)"),
+        );
+        true
+    }
+
+    /// I10 (ch03 R20): reports `SVec[T]` written anywhere but the one legal
+    /// node, and answers whether it did.
+    fn svec_misuse(&mut self, cx: &Cx, def: DefId, node: usize, range: (u32, u32)) -> bool {
+        if def != self.prelude.svec || cx.svec_local == node as u32 {
+            return false;
+        }
+        self.emit_code(
+            cx,
+            range,
+            fors_index::diag::Code::D(20),
+            5,
+            "`SVec[T]` is reserved: it is legal only as the type of a local inside a `simd` body, never as a field, a parameter, a result, an element or a generic argument (ch03 R20)".to_string(),
+        );
+        true
+    }
+
+    /// I10 verification (ch03 R9): `comptime_int`/`comptime_float` written
+    /// as the type of a parameter, a result, a field, a payload or a generic
+    /// argument. Such a value escapes to runtime by construction, with no
+    /// conversion site to write `as` at, so the TYPE is the error; a
+    /// `const` item's type and a body's own annotations are the two places
+    /// the type may be written (`Cx::comptime_ok`).
+    fn comptime_misuse(&mut self, cx: &Cx, def: DefId, range: (u32, u32)) -> bool {
+        if cx.comptime_ok
+            || (def != self.prelude.comptime_int && def != self.prelude.comptime_float)
+        {
+            return false;
+        }
+        let name = if def == self.prelude.comptime_int {
+            "comptime_int"
+        } else {
+            "comptime_float"
+        };
+        self.emit_code(
+            cx,
+            range,
+            fors_index::diag::Code::D(9),
+            31,
+            format!("`{name}` is comptime-only and cannot be the type of a parameter, a result, a field, a payload or a generic argument: a value of it would escape to runtime with no explicit conversion; declare a fixed-width type and convert with `as` (ch03 R9)"),
+        );
+        true
+    }
+
     fn emit(&mut self, cx: &Cx, range: (u32, u32), code: u16, site: u16, msg: String) {
         self.sink.emit(cx.f.file, range, t(code), site, msg);
     }
@@ -1745,6 +2047,49 @@ impl Lowerer<'_> {
     ) {
         self.sink.emit(cx.f.file, range, code, site, msg);
     }
+}
+
+/// The integer a const-argument type row carries, if any.
+pub(crate) fn const_int(fir: &Fir, t: TyId) -> Option<i128> {
+    if t == NO_TY || t == TY_ERROR || fir.tys.tag(t) != fors_fir::ty::TyTag::ConstVal {
+        return None;
+    }
+    fir.tys
+        .const_value(fors_fir::ty::ConstId(fir.tys.a(t)))
+        .as_int()
+}
+
+/// Whether an `extern` declaration's ABI string is `"c"` (ch02 R13).
+fn extern_abi_is_c(f: &FileCtx, node: usize) -> bool {
+    // The ABI string sits between the leading attributes and the `FnSig`.
+    let (a, end) = f.tree.token_range(node);
+    let b = f
+        .tree
+        .children(node)
+        .find(|&c| f.tree.kinds[c] == NodeKind::FnSig)
+        .map_or(end, |c| f.tree.token_range(c).0);
+    (a as usize..(b as usize).min(f.tokens.kinds.len())).any(|i| {
+        let k = f.tokens.kinds[i];
+        k == TokenKind::Str && str_contents(k, f.tokens.text(i, f.source)) == b"c"
+    })
+}
+
+/// Whether the file's `contracts:` clause names `policy` (ch02's
+/// `.runtime`/`.proved`/`.off`; absent means `.runtime`).
+pub(crate) fn contracts_policy_is(f: &FileCtx, policy: &[u8]) -> bool {
+    if f.tree.is_empty() {
+        return false;
+    }
+    for c in f.tree.children(0) {
+        if f.tree.kinds[c] != NodeKind::ContractsClause {
+            continue;
+        }
+        let (a, b) = f.tree.token_range(c);
+        return (a as usize..(b as usize).min(f.tokens.kinds.len())).any(|i| {
+            f.tokens.kinds[i] == TokenKind::Ident && f.tokens.text(i, f.source) == policy
+        });
+    }
+    false
 }
 
 fn is_type_node(k: NodeKind) -> bool {
@@ -1866,6 +2211,17 @@ impl Lowerer<'_> {
     /// Lowers every user declaration in `(file, tree)` order (design §7.1
     /// phase 3). A declaration's parent always precedes it, because
     /// `build_decl_table` pushes rows in tree order.
+    ///
+    /// I10b verification: the HEADS (struct, enum, trait, impl — with its
+    /// associated-type definitions — and const) are lowered before any
+    /// `fn` signature, still each kind in tree order. A signature may need
+    /// another declaration's lowered head wherever it is written: `Self.
+    /// Output` inside `impl IndexMut[I] for S` is the `impl Index[I] for
+    /// S`'s own definition (R21/R61(c)), and the spec imposes no order on
+    /// the two impls, so an `IndexMut` impl written first must find its
+    /// sibling just the same. Impl heads keep their tree order among
+    /// themselves, which is what R19's "later impl naming the earlier" and
+    /// `ImplIndex`'s row order read.
     pub fn run(&mut self, files: &[FileCtx]) -> Lowered {
         let n = self.fir.sigs.len();
         let mut out = Lowered {
@@ -1876,7 +2232,18 @@ impl Lowerer<'_> {
         };
         let mut order = 0u32;
         let user: Vec<DefId> = self.defs.user_defs().map(|(d, _)| d).collect();
-        for def in user {
+        let is_fn = |k: DeclKind| matches!(k, DeclKind::Fn | DeclKind::ExternFn);
+        let heads: Vec<DefId> = user
+            .iter()
+            .copied()
+            .filter(|d| self.defs.get(*d).is_some_and(|r| !is_fn(r.kind)))
+            .collect();
+        let fns: Vec<DefId> = user
+            .iter()
+            .copied()
+            .filter(|d| self.defs.get(*d).is_some_and(|r| is_fn(r.kind)))
+            .collect();
+        for def in heads.into_iter().chain(fns) {
             let row = *self.defs.get(def).expect("user def has a row");
             let f = &files[row.file.index()];
             self.sink.open();
@@ -1927,6 +2294,7 @@ impl Lowerer<'_> {
                 cx.self_ty = info.self_ty;
                 cx.self_kind = info.kind;
                 cx.impl_assoc = info.assoc.clone();
+                cx.impl_trait_ref = info.trait_ref;
             }
         }
         self.push_gparams(cx, def, row.node as usize);
@@ -2262,10 +2630,33 @@ impl Lowerer<'_> {
         Some((subject, id))
     }
 
+    /// ch02 R10 (I10, F0010): under the module policy `.proved` a contract
+    /// the proof engine cannot discharge MUST be a compile error, with no
+    /// silent runtime fallback. The proof engine is the future verification
+    /// chapter's; this compiler has none, so it discharges nothing and every
+    /// contract of a `.proved` module is reported, at the clause.
+    fn contract_policy(&mut self, cx: &Cx, clause: usize) {
+        if !contracts_policy_is(cx.f, b"proved") {
+            return;
+        }
+        let r = cx.f.range(clause);
+        self.emit_code(
+            cx,
+            r,
+            fors_index::diag::Code::F(10),
+            49,
+            "this contract cannot be discharged: the module's contract policy is `.proved`, and no proof engine is available to discharge it, so it is a compile error rather than a runtime check (ch02 R10); use `.runtime` to check it at run time".to_string(),
+        );
+    }
+
     fn lower_struct(&mut self, cx: &mut Cx, def: DefId, node: usize) {
         self.lower_generics(cx, def, false);
         let mut ms: Vec<Member> = Vec::new();
         for (c, k) in cx.f.child_kinds(node) {
+            if k == NodeKind::Contract {
+                self.contract_policy(cx, c);
+                continue;
+            }
             if k != NodeKind::Field {
                 continue;
             }
@@ -2529,6 +2920,7 @@ impl Lowerer<'_> {
         cx.self_ty = self_ty;
         cx.self_kind = SelfKind::Impl { trait_def };
         cx.assoc_rhs_owner = def;
+        cx.impl_trait_ref = trait_ref;
         self.fir.sigs.set_self_ty(def, self_ty);
         if trait_ref != fors_fir::sig::NO_TRAIT_REF {
             self.fir.sigs.set_trait_ref(def, trait_ref);
@@ -2720,7 +3112,21 @@ impl Lowerer<'_> {
                         Some(x) => self.ty(cx, x, Pos::Value),
                         None => TY_ERROR,
                     };
+                    // ch02 R13: "An `extern "c"` function MUST NOT declare
+                    // `raises`" — the C ABI boundary cannot carry a Fors
+                    // error (I10, F0013).
+                    if cx.f.kind(node) == NodeKind::ExternFnDecl && extern_abi_is_c(cx.f, node) {
+                        let r = cx.f.range(c);
+                        self.emit_code(
+                            cx,
+                            r,
+                            fors_index::diag::Code::F(13),
+                            60,
+                            "an `extern \"c\"` function must not declare `raises`: a Fors error cannot cross the C ABI boundary (ch02 R13)".to_string(),
+                        );
+                    }
                 }
+                NodeKind::Contract => self.contract_policy(cx, c),
                 NodeKind::ScopedType => {
                     result = self.ty(cx, c, Pos::Value);
                     // MARC: verification of I2 (2026-09-20). The designated
@@ -2738,7 +3144,7 @@ impl Lowerer<'_> {
                         .filter(|&i| i != NO_SLOT)
                         .unwrap_or(0);
                 }
-                NodeKind::Contract | NodeKind::Block | NodeKind::Attribute | NodeKind::Error => {}
+                NodeKind::Block | NodeKind::Attribute | NodeKind::Error => {}
                 _ if seen_params && is_type_node(k) => result = self.ty(cx, c, Pos::Value),
                 _ => {}
             }
@@ -2754,6 +3160,18 @@ impl Lowerer<'_> {
             );
             params.truncate(MAX_PARAMS);
         }
+        // I10 (ch02 R9): `pre`/`post`/`invariant` are "part of the
+        // declaration they annotate" — design §8's "token hash of clauses",
+        // which the canonical encoding already carries a slot for. Zero for a
+        // function with no contract, so every other signature is unchanged.
+        let mut contract_hash = 0u128;
+        for (c, k) in cx.f.child_kinds(sig_node) {
+            if k == NodeKind::Contract {
+                let (a, b) = cx.f.tree.token_range(c);
+                let h = fors_index::fingerprint::hash_tokens(cx.f.tokens, cx.f.source, a, b);
+                contract_hash = contract_hash.rotate_left(13) ^ h;
+            }
+        }
         let id = self.fir.sigs.fn_sigs.push(
             &params,
             result,
@@ -2761,18 +3179,27 @@ impl Lowerer<'_> {
             scoped,
             receiver,
             (u32::MAX, u32::MAX),
-            0,
+            contract_hash,
         );
         self.fir.sigs.set_fn_sig(def, id);
+        // I10 (ch03 R18): `@specialize` is part of the signature.
+        if crate::numerics::decl_has_attr(cx.f, node, b"specialize") {
+            self.fir.sigs.set_specialize(def, true);
+        }
     }
 
     fn lower_const(&mut self, cx: &mut Cx, def: DefId, node: usize) {
         let kids: Vec<(usize, NodeKind)> = cx.f.child_kinds(node);
+        // ch03 R9: a `const` is the one declaration whose type may be
+        // `comptime_int`/`comptime_float`.
+        let was = cx.comptime_ok;
+        cx.comptime_ok = true;
         let ty = kids
             .iter()
             .find(|&&(_, k)| is_type_node(k))
             .map(|&(c, _)| self.ty(cx, c, Pos::Value))
             .unwrap_or(TY_ERROR);
+        cx.comptime_ok = was;
         let val = kids
             .iter()
             .find_map(|&(c, k)| self.const_init_value(cx, c, k))

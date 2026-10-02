@@ -89,7 +89,36 @@ impl Wf<'_> {
         let head = self.path_head(cx, node);
         let mut ty = match head {
             PathHead::Value(t) => t,
-            PathHead::NotAValue | PathHead::Silent => return TY_ERROR,
+            PathHead::NotAValue => {
+                // I10b verification: R28 "a path ending on a type, trait or
+                // module is not a value (ch08 Rule 16)"; a tail on one that
+                // is not called is R42's "there are no method values". Both
+                // were `TY_ERROR` with nothing said.
+                let n = path_segments(cx, node);
+                if self.prelude_variant_as_value(cx, node, n) {
+                    return TY_ERROR;
+                }
+                if upto > consumed || n > consumed {
+                    self.bemit(
+                        cx,
+                        node,
+                        42,
+                        42,
+                        "a qualified name is called (R45), never used as a value; there are no method values"
+                            .to_string(),
+                    );
+                } else {
+                    self.bemit_code(
+                        cx,
+                        node,
+                        Code::N(16),
+                        28,
+                        "this names a type or trait, not a value".to_string(),
+                    );
+                }
+                return TY_ERROR;
+            }
+            PathHead::Silent => return TY_ERROR,
         };
         if upto <= consumed {
             if read && ty != TY_ERROR && ty != NO_TY {
@@ -112,6 +141,61 @@ impl Wf<'_> {
         ty
     }
 
+    /// `Option.none` / `Option.some` named as a VALUE through the prelude
+    /// head (the resolver leaves the tail to ch08 R22): R28 says a generic
+    /// unit variant in SYNTH mode is T0039, exactly like bare `none`, and
+    /// R34 says a tuple or struct-form variant is constructed, never named
+    /// bare. CHECK mode answers the unit case in `check_prelude_value`
+    /// before this is reached. `true` when a diagnostic was emitted.
+    fn prelude_variant_as_value(&mut self, cx: &mut BodyCx, node: usize, n: usize) -> bool {
+        let Some(ResolvedTarget::Entity(Entity::PreludeType(sym))) =
+            cx.f.uses.target_of(node as u32)
+        else {
+            return false;
+        };
+        let Some(fors_fir::prelude::PreludeEntity::Generic { def, .. }) = self.prelude.lookup(sym)
+        else {
+            return false;
+        };
+        if self.fir.sigs.kind(def) != SigKind::Enum
+            || n != path_consumed(cx, node).max(1) as usize + 1
+        {
+            return false;
+        }
+        let Some(name) = self.segment_name(cx, node, n - 1) else {
+            return false;
+        };
+        let ms = self.fir.sigs.members(def);
+        let found = (0..self.fir.sigs.member_store.count(ms)).find(|&i| {
+            let m = self.fir.sigs.member_store.get(ms, i);
+            m.kind == MemberKind::Variant && m.name == name
+        });
+        let Some(i) = found else {
+            return false;
+        };
+        let payload = self.fir.sigs.member_store.get(ms, i).payload;
+        let h = self.head_name(def);
+        let v = self.sym(name);
+        let (code, msg) = match payload {
+            fors_fir::sig::PayloadKind::Tuple => (
+                34,
+                format!("`{h}.{v}` takes a payload; construct it with `{h}.{v}(..)`"),
+            ),
+            fors_fir::sig::PayloadKind::Record => (
+                34,
+                format!("`{h}.{v}` is a struct-form variant; construct it with a struct literal"),
+            ),
+            fors_fir::sig::PayloadKind::None => (
+                39,
+                format!(
+                    "cannot infer `{h}`'s argument for `{v}` here; write `{h}[T].{v}` or give the binding a type"
+                ),
+            ),
+        };
+        self.bemit(cx, node, code, code, msg);
+        true
+    }
+
     fn read_event(&mut self, cx: &mut BodyCx, node: usize, ty: TyId) {
         if let Some(p) = self.place_of(cx, node) {
             let k = if self.copyable(ty) {
@@ -131,8 +215,20 @@ impl Wf<'_> {
         };
         match target {
             ResolvedTarget::Local { node: intro } => match cx.local(intro) {
-                Some((t, _)) => PathHead::Value(t),
-                None => PathHead::Silent,
+                Some((t, _)) => {
+                    // I10 (ch04 R12): nothing of the run time from comptime.
+                    self.comptime_reach(cx, node, intro);
+                    PathHead::Value(t)
+                }
+                // I10b (R58): "A const parameter is a constant of its type in
+                // the body." Nothing read `LocalKind::ConstParam` before, so
+                // SYNTH of `N` answered `TY_ERROR`: CHECK hid it (§7.10's
+                // absorbing `subsume` returns the expected type), but a SYNTH
+                // position — `a[0 ..< N]`, where R30 synthesises the
+                // non-literal bound — absorbed the whole range with nothing
+                // said. A brand parameter stays silent: ch01 R15d gives it no
+                // operations at all and R58 says so.
+                None => self.gparam_value(cx, node, intro),
             },
             ResolvedTarget::Entity(Entity::Item { file, decl }) => {
                 let def = self.defs.def_of(file, decl);
@@ -170,14 +266,66 @@ impl Wf<'_> {
             }
             ResolvedTarget::Entity(Entity::Variant { file, decl, index }) => {
                 let def = self.defs.def_of(file, decl);
-                if def == fors_fir::NO_DEF || self.arity(def) > 0 {
+                if def == fors_fir::NO_DEF {
                     return PathHead::Silent;
                 }
-                let _ = index;
                 self.dep(def);
+                // R34: a tuple variant is constructed by CALLING its path
+                // and a struct-form one by a struct literal; named bare,
+                // neither is a value.
+                let payload = self.variant_payload(def, index);
+                if payload != Some(fors_fir::sig::PayloadKind::None) {
+                    let h = self.head_name(def);
+                    let n = path_segments(cx, node);
+                    let v = self
+                        .segment_name(cx, node, n.saturating_sub(1))
+                        .map(|s| self.sym(s))
+                        .unwrap_or_default();
+                    let msg = if payload == Some(fors_fir::sig::PayloadKind::Tuple) {
+                        format!("`{h}.{v}` takes a payload; construct it with `{h}.{v}(..)`")
+                    } else {
+                        format!(
+                            "`{h}.{v}` is a struct-form variant; construct it with a struct literal"
+                        )
+                    };
+                    self.bemit(cx, node, 34, 34, msg);
+                    return PathHead::Silent;
+                }
+                if self.arity(def) > 0 {
+                    // R28: "a generic unit variant in SYNTH mode with no
+                    // explicit arguments MUST be rejected (T0039)". CHECK
+                    // mode answers in `check_prelude_value` before this.
+                    let h = self.head_name(def);
+                    self.bemit(
+                        cx,
+                        node,
+                        39,
+                        39,
+                        format!("cannot infer `{h}`'s argument here; write `{h}[T].variant` or give the binding a type"),
+                    );
+                    return PathHead::Silent;
+                }
                 let t = self.fir.tys.nominal(def, NO_ARGS);
                 PathHead::Value(t)
             }
+            // A prelude TYPE head (`Option.none`, `Option.some`,
+            // `Vec.new`): the resolver leaves the tail to ch08 R22. Not a
+            // value; a tail on it is R45's qualified form as a callee, and
+            // `path_value` reports it when it is named as a value. An
+            // OPAQUE head (ch10 R2's std names in a build without `std`:
+            // `AllocError.too_large`) has members this build cannot see, so
+            // it stays silent; a primitive with a tail is ch03's surface
+            // (`u8.max`), silent for the same reason.
+            ResolvedTarget::Entity(Entity::PreludeType(sym)) => match self.prelude.lookup(sym) {
+                Some(fors_fir::prelude::PreludeEntity::Generic { .. })
+                | Some(fors_fir::prelude::PreludeEntity::Trait { .. }) => PathHead::NotAValue,
+                Some(fors_fir::prelude::PreludeEntity::Ty(_))
+                    if path_segments(cx, node) <= path_consumed(cx, node).max(1) as usize =>
+                {
+                    PathHead::NotAValue
+                }
+                _ => PathHead::Silent,
+            },
             // R28/R38: `none` in SYNTH mode has nothing to determine
             // `Option`'s argument from. In CHECK mode `check_prelude_value`
             // answers before this is reached.
@@ -190,6 +338,54 @@ impl Wf<'_> {
                     39,
                     39,
                     "cannot infer `Option`'s argument for `none` here; write `Option[T].none` or give the binding a type".to_string(),
+                );
+                PathHead::Silent
+            }
+            _ => PathHead::Silent,
+        }
+    }
+
+    /// R58 in VALUE position, for a generic parameter whose introducing node
+    /// is `intro`: "A const parameter is a constant of its type in the body"
+    /// and "a brand parameter has no operations at all and occurs only as a
+    /// brand argument (ch01 R15d)".
+    ///
+    /// Nothing read this before, so SYNTH of `N` answered `TY_ERROR`. CHECK
+    /// hid it (§7.10's absorbing `subsume` hands back the expected type,
+    /// which is why `let k: usize = N;` already "worked") but R30
+    /// SYNTHESISES a range's non-literal bound, so `a[0 ..< N]` absorbed the
+    /// range, both its operands and the slice with nothing said.
+    fn gparam_value(&mut self, cx: &mut BodyCx, node: usize, intro: u32) -> PathHead {
+        match cx.lcx.gparam_of(intro) {
+            Some((owner, ord, crate::lower::GKind::Const)) => {
+                match self.shapes.const_prim(owner, ord as usize) {
+                    Some(k) => PathHead::Value(self.fir.tys.prim(k)),
+                    None => PathHead::Silent,
+                }
+            }
+            Some((_, _, crate::lower::GKind::Brand)) => {
+                // ch01 R15d's own code, exactly as `lower::brand_as_type`
+                // reports the type position (design §8's row 58).
+                self.bemit_code(
+                    cx,
+                    node,
+                    Code::O(15),
+                    58,
+                    "a brand parameter has no operations at all and occurs only as a brand \
+                     argument"
+                        .to_string(),
+                );
+                PathHead::Silent
+            }
+            Some((_, _, crate::lower::GKind::Type)) => {
+                // I10b verification: R28 "a path ending on a type ... is not
+                // a value (ch08 Rule 16)", with ch08's own code as R49 does.
+                self.bemit_code(
+                    cx,
+                    node,
+                    Code::N(16),
+                    28,
+                    "a type parameter is a type, not a value".to_string(),
                 );
                 PathHead::Silent
             }
@@ -248,11 +444,150 @@ impl Wf<'_> {
         let Some(operand) = cx.f.tree.children(node).next() else {
             return TY_ERROR;
         };
+        // I10b (R38(a)'s explicit form on a TYPE path, R45's qualified
+        // form): `Option[i64].none`, `Opt2[i64].n`. The operand denotes a
+        // TYPE, not a value, so it is NOT synthesised — `bracket` used to
+        // answer `TY_ERROR` for it and the whole projection absorbed, which
+        // is what made `std`'s four `Option[alloc.Block[A]].none` writes
+        // carry the documented `T0039` workaround.
+        if let Some(head) = self.instantiated_type(cx, operand) {
+            if head == TY_ERROR {
+                return TY_ERROR;
+            }
+            let Some(name) = self.field_name(cx, node) else {
+                return TY_ERROR;
+            };
+            return self.qualified_member(cx, node, head, name);
+        }
         let recv = self.synth(cx, operand);
         let Some(name) = self.field_name(cx, node) else {
             return TY_ERROR;
         };
         self.member_of(cx, node, recv, name)
+    }
+
+    /// R38(a)'s EXPLICIT form on a TYPE path: the head `Bracket` applies a
+    /// generic struct, enum or prelude generic type to the arguments written
+    /// in its brackets (`Option[i64]`, `Bag[i64]`, `alloc.Block[A]`).
+    /// `None` when `node` is not that shape, so every other bracket — an
+    /// index, R47's `fn` instantiation, R45's `Type.m[T]()` — is untouched.
+    ///
+    /// The arguments are lowered by the head's declared kinds and recorded
+    /// (D1), so a wrong kind is reported where it is written, and a wrong
+    /// COUNT is R11's error at the bracket ("exactly as many arguments as
+    /// its item declares parameters"), `Some(TY_ERROR)` after either: R47
+    /// says the bracket after such a head IS an instantiation whatever its
+    /// arguments, so there is no other reading to fall through to.
+    pub(crate) fn instantiated_type(&mut self, cx: &mut BodyCx, node: usize) -> Option<TyId> {
+        if cx.kind(node) != NodeKind::Bracket {
+            return None;
+        }
+        let kids = cx.kids(node);
+        let &operand = kids.first()?;
+        if cx.kind(operand) != NodeKind::NameExpr {
+            return None;
+        }
+        // A path with a tail the resolver did not consume is R45's
+        // `Type.m[T]()`, whose arguments belong to the FUNCTION.
+        if path_segments(cx, operand) > path_consumed(cx, operand).max(1) as usize {
+            return None;
+        }
+        let def = match cx.f.uses.target_of(operand as u32)? {
+            ResolvedTarget::Entity(Entity::Item { file, decl }) => {
+                let d = self.defs.def_of(file, decl);
+                if d == fors_fir::NO_DEF
+                    || !matches!(self.fir.sigs.kind(d), SigKind::Struct | SigKind::Enum)
+                {
+                    return None;
+                }
+                d
+            }
+            ResolvedTarget::Entity(Entity::PreludeType(sym)) => match self.prelude.lookup(sym) {
+                Some(fors_fir::prelude::PreludeEntity::Generic { def, .. }) => def,
+                _ => return None,
+            },
+            _ => return None,
+        };
+        let args = &kids[1..];
+        let want = self.arity(def);
+        if want != args.len() {
+            let h = self.head_name(def);
+            self.bemit(
+                cx,
+                node,
+                11,
+                11,
+                format!(
+                    "`{h}` declares {want} type argument(s), {} supplied",
+                    args.len()
+                ),
+            );
+            return Some(TY_ERROR);
+        }
+        let args = args.to_vec();
+        let mut xs = Vec::with_capacity(want);
+        for (o, &a) in args.iter().enumerate() {
+            let t = self.lower_generic_arg(cx, a, def, o);
+            cx.facts.record(a as u32, t);
+            if t == TY_ERROR || t == NO_TY {
+                return Some(TY_ERROR);
+            }
+            xs.push(t);
+        }
+        self.dep(def);
+        Some(self.fir.tys.nominal_of(def, &xs))
+    }
+
+    /// The member a segment names on an explicitly-instantiated TYPE head
+    /// (R45's qualified form). R34's unit variant answers with the head
+    /// itself — `Option[i64].none` IS an `Option[i64]`, and `Opt2[i64].n` an
+    /// `Opt2[i64]` — and everything else falls through to R42/R45's own
+    /// reading, which reports.
+    pub(crate) fn qualified_member(
+        &mut self,
+        cx: &mut BodyCx,
+        node: usize,
+        head: TyId,
+        name: Symbol,
+    ) -> TyId {
+        let bare = self.fir.tys.unqual(head);
+        if self.fir.tys.tag(bare) == TyTag::Nominal {
+            let def = DefId(self.fir.tys.a(bare));
+            if self.fir.sigs.kind(def) == SigKind::Enum {
+                self.dep(def);
+                let ms = self.fir.sigs.members(def);
+                for i in 0..self.fir.sigs.member_store.count(ms) {
+                    let m = self.fir.sigs.member_store.get(ms, i);
+                    if m.kind != fors_fir::sig::MemberKind::Variant || m.name != name {
+                        continue;
+                    }
+                    if m.payload == fors_fir::sig::PayloadKind::None {
+                        // No D4 row: a unit variant is CONSTRUCTED, not
+                        // projected, and lowering reads the node's type —
+                        // exactly as it does for the un-instantiated
+                        // `Opt2.n` that CHECK mode already typed.
+                        return head;
+                    }
+                    // A tuple or record variant named without constructing
+                    // it: R34's error, not a silent absorption.
+                    let v = String::from_utf8_lossy(self.names.resolve(name)).into_owned();
+                    let h = self.head_name(def);
+                    self.bemit(
+                        cx,
+                        node,
+                        34,
+                        34,
+                        format!("`{h}.{v}` takes a payload; construct it with `{h}.{v}(..)`"),
+                    );
+                    return TY_ERROR;
+                }
+                let v = String::from_utf8_lossy(self.names.resolve(name)).into_owned();
+                let h = self.head_name(def);
+                self.bemit(cx, node, 34, 34, format!("`{h}` has no variant `{v}`"));
+                return TY_ERROR;
+            }
+        }
+        self.member_of(cx, node, head, name)
     }
 
     /// R42: the field `name` of `recv`, with the head's arguments
@@ -463,8 +798,20 @@ impl Wf<'_> {
             self.synth(cx, operand)
         };
         if s == TY_ERROR || s == NO_TY {
+            // An operand that was read quietly above may be R45's
+            // instantiation (`x.sat_as[u8]()`), whose arguments are TYPES
+            // (R47): they are visited as quietly as the operand was, so a
+            // type name there is not reported as "not a value".
+            let quietly = cx.kind(operand) == NodeKind::NameExpr
+                && path_segments(cx, operand) > path_consumed(cx, operand).max(1) as usize;
+            if quietly {
+                cx.quiet += 1;
+            }
             for &a in kids.iter().skip(1) {
                 self.synth(cx, a);
+            }
+            if quietly {
+                cx.quiet -= 1;
             }
             return TY_ERROR;
         }
@@ -478,6 +825,10 @@ impl Wf<'_> {
             if let Some(g) = self.prelude.generic_index(def) {
                 use fors_fir::prelude::gty;
                 let args = self.fir.tys.args(ArgsId(self.fir.tys.b(bare))).to_vec();
+                // I10 (ch01 R16): an arena subscript by a `Ref` of its brand.
+                if g == gty::ARENA {
+                    return self.arena_index(cx, node, &args, index);
+                }
                 if matches!(g, gty::ARRAY | gty::SLICE | gty::VECTOR) {
                     let elem = args.first().copied().unwrap_or(TY_ERROR);
                     if let Some(i) = index {

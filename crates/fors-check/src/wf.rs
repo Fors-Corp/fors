@@ -305,6 +305,8 @@ impl<'a> Wf<'a> {
         self.member_clashes(low, files);
         self.linear_elements(low, files);
         self.infinite_size(low, files);
+        // I10 (ch04 R10, ch01 R21/R21a): attribute forms and `Shared`.
+        self.authority_decls(low, files);
         self.wf_scope = fors_fir::NO_DEF;
     }
 
