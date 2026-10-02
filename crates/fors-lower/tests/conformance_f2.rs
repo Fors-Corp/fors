@@ -355,19 +355,9 @@ fn build_and_run_with_std(label: &str, stem: &str, src: &[u8], host: &HostEnv) -
         "{label}: resolve diags: {resolve_diags:#?}"
     );
     let out = fors_check::check_build(&inputs, &resolved, &mut interner);
-    let check_diags: Vec<String> = out
-        .diagnostics
-        .iter()
-        .map(|d| {
-            format!(
-                "{}:{}: {}: {}",
-                names_debug(&inputs, d.file.index()),
-                d.start,
-                d.code.as_string(),
-                d.message
-            )
-        })
-        .collect();
+    // The program AND `std` must check clean, save for the listed
+    // owner-decision conflicts in `std` (`STD_OWNER_CONFLICTS`).
+    let (check_diags, _) = split_std_owner_conflicts(&inputs, &interner, &out.diagnostics);
     assert!(
         check_diags.is_empty(),
         "{label}: check diags: {check_diags:#?}"
@@ -416,6 +406,55 @@ fn build_and_run_with_std(label: &str, stem: &str, src: &[u8], host: &HostEnv) -
 
 fn names_debug(inputs: &[FileInput], i: usize) -> String {
     format!("{:?}", inputs[i].name)
+}
+
+/// The `std` diagnostics that stay until the owner decides (I8b; the same
+/// rows as `STD_CONFLICTS` in fors-check's `conformance.rs`): `Vec.push`
+/// (std.mem.vec, parameter `v`) and `Map.insert` (std.mem.hashmap,
+/// parameter `k`) drop a sunk parameter on the allocation-failure exit,
+/// which ch01 R22c forbids for a rigid `T` — as true of the real body
+/// (reserve, then store) as of the `// STUB` raise, because the failure
+/// exit exists either way; only a signature change fixes it (hand the value
+/// back in the error, a `Droppable` bound, or a reserve-first total push).
+/// Each row is `(module, dropped parameter)`. This list MUST shrink the
+/// moment the owner decides, and MUST never grow.
+const STD_OWNER_CONFLICTS: &[(&str, &str)] = &[("std.mem.vec", "v"), ("std.mem.hashmap", "k")];
+
+/// Splits a build's check diagnostics into everything that is NOT a listed
+/// owner conflict (formatted, to be asserted empty) and the listed rows
+/// that were seen — matched by the module's resolved name, the code and
+/// the parameter dropped at a `raise`, never by position, so an incidental
+/// line shift elsewhere in `std` cannot mask a real regression.
+fn split_std_owner_conflicts<'a>(
+    inputs: &[FileInput],
+    interner: &Interner,
+    diags: &[fors_check::Diagnostic],
+) -> (Vec<String>, Vec<&'a (&'a str, &'a str)>) {
+    let module_name = |i: usize| -> String {
+        inputs[i]
+            .name
+            .iter()
+            .map(|s| String::from_utf8_lossy(interner.resolve(*s)).into_owned())
+            .collect::<Vec<_>>()
+            .join(".")
+    };
+    let mut seen = Vec::new();
+    let mut rest = Vec::new();
+    for d in diags {
+        let module = module_name(d.file.index());
+        let code = d.code.as_string();
+        let hit = STD_OWNER_CONFLICTS.iter().find(|(m, p)| {
+            code == "T0057"
+                && module == *m
+                && d.message.contains(&format!("`{p}`"))
+                && d.message.contains("dropped at the `raise`")
+        });
+        match hit {
+            Some(h) => seen.push(h),
+            None => rest.push(format!("{module}:{}: {code}: {}", d.start, d.message)),
+        }
+    }
+    (rest, seen)
 }
 
 fn gate_test_std(rel: &str) {
@@ -526,23 +565,26 @@ fn std_checks_clean() {
         "std/ must resolve clean: {resolve_diags:#?}"
     );
     let out = fors_check::check_build(&inputs, &resolved, &mut interner);
-    let check_diags: Vec<String> = out
-        .diagnostics
-        .iter()
-        .map(|d| {
-            format!(
-                "{}:{}: {}: {}",
-                names_debug(&inputs, d.file.index()),
-                d.start,
-                d.code.as_string(),
-                d.message
-            )
-        })
-        .collect();
+
+    // I8b (ch01 R22 linear obligations): `std/` must check clean EXCEPT for
+    // exactly the `STD_OWNER_CONFLICTS` rows, each of which must still be
+    // reported — a row that goes quiet is deleted here and in fors-check's
+    // `STD_CONFLICTS`, never left stale.
+    let (check_diags, seen) = split_std_owner_conflicts(&inputs, &interner, &out.diagnostics);
     assert!(
         check_diags.is_empty(),
-        "std/ must check clean: {check_diags:#?}"
+        "std/ must check clean outside the listed owner-decision conflicts: {check_diags:#?}"
     );
+    for row in STD_OWNER_CONFLICTS {
+        assert!(
+            seen.contains(&row),
+            "expected the {} owner-decision conflict (parameter `{}` dropped at a `raise`) to \
+             still be reported; if it is gone, DELETE its row in STD_OWNER_CONFLICTS and the \
+             matching STD_CONFLICTS row in fors-check's conformance.rs instead of leaving it stale",
+            row.0,
+            row.1
+        );
+    }
 }
 
 /// F7 verification: the `str_byte_len`/`str_byte_at`/`str_byte_slice`

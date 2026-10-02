@@ -483,14 +483,25 @@ const CROSS_CHAPTER: &[(&str, &str)] = &[
 /// self.data[i]`, is the partial move ch01 R4a(c) forbids — I8's flow pass
 /// reported it as O0004 the moment `std` was checked under it. I8's one row
 /// (`Buffer::into_iter`, the same O0004 for `move self.data`) is gone too:
-/// `std` now writes the destructuring form R22d(ii) prescribes. The list
-/// is empty, not deleted, so a regression is caught by the count assertion
-/// rather than by this comment going stale.
+/// `std` now writes the destructuring form R22d(ii) prescribes.
+///
+/// I8b (ch01 R22 linear obligations) emptied the list again and then added
+/// back exactly two PERMANENT rows. `Option::unwrap_or`'s conflict (the
+/// `some` arm's `discard fallback;` with a bare rigid `T`) was a signature
+/// gap, not a stub body, and is fixed in `std/mem.fors`: the method moved
+/// into its own `impl[T: Droppable] Option[T]` block, amending ch10 S0027's
+/// declaration, so it no longer appears here. `Vec::push` and `Map::insert`
+/// stay: their declared signatures (ch10 S0024/S0025, `sink v: T`/`sink
+/// k: K, sink v: V ... raises AllocError`, no `Droppable` bound) drop the
+/// sunk value on the allocation-failure exit, which ch01 R22c forbids for a
+/// rigid type — and that is true of the REAL body (reserve, then store) as
+/// much as of the `// STUB` raise, because the failure exit exists either
+/// way. This is an owner decision (hand the value back in the error, add a
+/// `Droppable` bound, or a reserve-first total push/insert), not something
+/// a body rewrite can fix, so these two rows are expected to stay until the
+/// owner picks one; a row here must still be deleted the moment its call
+/// resolves or its signature changes, never left to excuse a regression.
 const STD_CONFLICTS: &[(&str, &str)] = &[
-    (
-        "Option::unwrap_or",
-        "std/mem.fors: `pub fn unwrap_or(sink self, sink fallback: T) -> T` writes `discard fallback;` on the `some` arm, which ch01 R22c forbids for a rigid `T` with no `Droppable` bound (I8b's T0057). This is a SIGNATURE question for the owner, not a STUB: either `unwrap_or` declares `T: Droppable`, or it returns `fallback` unconsumed is impossible and the method does not exist for a linear `T`",
-    ),
     (
         "Map::insert",
         "std/mem/hashmap.fors: the body is `raise alloc.AllocError.out_of_memory; // STUB`, which drops the `sink k: K` and `sink v: V` parameters on the error exit; ch01 R22c reports T0057 on the first until the real body stores them",
