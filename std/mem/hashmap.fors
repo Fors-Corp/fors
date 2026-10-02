@@ -106,12 +106,19 @@ pub struct Map[K, V, A: brand] {
 impl[K, V, A: brand] Linear for Map[K, V, A] {}
 
 impl[K: Eq + Hash, V, A: brand] Map[K, V, A] {
+    // `Option[alloc.Block[A]].none`, not bare `none`, here and in `seeded`:
+    // see `Vec.new`'s note (a T0039 checker gap on this field shape).
     pub fn new() -> Map[K, V, A] {
-        return Map { n: 0, capacity: 0, seed: 0x9e3779b97f4a7c15, store: none };
+        return Map {
+            n: 0,
+            capacity: 0,
+            seed: 0x9e3779b97f4a7c15,
+            store: Option[alloc.Block[A]].none
+        };
     }
 
     pub fn seeded(let seed: u64) -> Map[K, V, A] {
-        return Map { n: 0, capacity: 0, seed: seed, store: none };
+        return Map { n: 0, capacity: 0, seed: seed, store: Option[alloc.Block[A]].none };
     }
 
     pub fn len(let self: Self) -> usize {

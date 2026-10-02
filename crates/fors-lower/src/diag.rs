@@ -36,6 +36,11 @@ pub enum LowerError {
     /// A name the facts never bound (lowering bug or resolver gap) — still
     /// a diagnostic, never a panic.
     Unresolved(String),
+    /// F7 (ch10 R26): a string literal's decoded bytes are not valid
+    /// UTF-8. The lexer validates only the raw source bytes; `\xHH`
+    /// escapes are decoded here and MUST be checked too, or a `Str`
+    /// value could carry invalid UTF-8 straight from a literal.
+    InvalidUtf8Literal(String),
 }
 
 impl std::fmt::Display for LowerError {
@@ -61,6 +66,12 @@ impl std::fmt::Display for LowerError {
             LowerError::Comptime(w) => write!(f, "comptime item references need F9 ({w})"),
             LowerError::Unsupported(k) => write!(f, "`{k}` is outside the F1 subset"),
             LowerError::Unresolved(n) => write!(f, "could not resolve `{n}` from BodyFacts"),
+            LowerError::InvalidUtf8Literal(reason) => {
+                write!(
+                    f,
+                    "string literal is not valid UTF-8 after \\x decoding: {reason}"
+                )
+            }
         }
     }
 }

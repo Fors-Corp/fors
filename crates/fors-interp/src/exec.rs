@@ -106,7 +106,8 @@ pub enum InterpError {
     DanglingBlock(u32),
     /// An `intrinsic` callee outside the closed table.
     UnknownIntrinsic(String),
-    /// A `const_str` with no bytes in the side table.
+    /// A `const_str` with no bytes in the side table, or a `Str` handle
+    /// (an intrinsic's receiver) outside the machine's byte table.
     MissingString(u32),
     /// A value of unexpected type reached an op (lowering bug, not a trap).
     TypeMismatch(String),
@@ -191,6 +192,30 @@ const MAX_FRAMES: usize = 1024;
 /// maps the `write_line` method to `stdout_write_line`, which appends one
 /// line to the in-memory stdout. No other host effect exists in F1.
 const INTRINSIC_STDOUT_WRITE_LINE: &str = "stdout_write_line";
+/// F7's twin stand-in (same §5.8 mechanism-2 note above): `write_uint` has
+/// no trailing newline (ch10 R39's "base 10, no locale"), so it cannot
+/// reuse `stdout_write_line`'s intrinsic.
+const INTRINSIC_STDOUT_WRITE_UINT: &str = "stdout_write_uint";
+/// F7's §5.8 "byte length"/"byte at" primitives for `Str` (ch10 R26:
+/// indexing is by byte). `Str.len`/`Str.at`'s real Fors bodies
+/// (`std/mem/text.fors`) bottom out in these.
+const INTRINSIC_STR_BYTE_LEN: &str = "str_byte_len";
+const INTRINSIC_STR_BYTE_AT: &str = "str_byte_at";
+/// F7's byte-slice primitive: `Str.slice`'s materialisation of
+/// `self[start ..< end]` AFTER its own boundary check (the `not_a_boundary`
+/// raise is Fors code in `std/mem/text.fors`; this only copies bytes).
+const INTRINSIC_STR_BYTE_SLICE: &str = "str_byte_slice";
+
+/// The bytes a `Str` handle names in the machine's byte table. A handle
+/// outside the table is a lowering bug (an intrinsic reached with a
+/// non-`Str` receiver), reported as [`InterpError::MissingString`] — never
+/// an empty string or a zero length.
+fn str_bytes<'m>(m: &'m Machine<'_>, handle: Slot) -> Result<&'m [u8], Fault> {
+    m.strs
+        .get(handle.bits as usize)
+        .map(|b| b.as_slice())
+        .ok_or_else(|| InterpError::MissingString(handle.bits as u32).into())
+}
 
 /// Aggregate cells: one field-granular allocation (see the module docs for
 /// why cells, not bytes, in F1).
@@ -2023,7 +2048,7 @@ fn exec_intrinsic(
             // never reaches the captured image: it sets the sticky flag
             // `entry_exit` reads (R40(d): status 2 on return).
             let text = args.get(1).copied().unwrap_or_else(Slot::unit);
-            let mut bytes = m.strs.get(text.bits as usize).cloned().unwrap_or_default();
+            let mut bytes = str_bytes(m, text)?.to_vec();
             bytes.push(b'\n');
             let arrived = match m.host.stdout_fd {
                 Some(fd) => crate::shim::host_write(fd, &bytes).is_ok(),
@@ -2035,6 +2060,63 @@ fn exec_intrinsic(
                 m.stdout_latched = true;
             }
             define(dest, m, fr, Slot::unit());
+            Ok(())
+        }
+        INTRINSIC_STDOUT_WRITE_UINT => {
+            // `stdout_write_uint(receiver, v)`: base 10, no locale, no
+            // trailing newline (ch10 R39) — same total/latching write
+            // path as `stdout_write_line`, minus the `\n`.
+            let v = args.get(1).copied().unwrap_or_else(Slot::unit).bits;
+            let bytes = v.to_string().into_bytes();
+            let arrived = match m.host.stdout_fd {
+                Some(fd) => crate::shim::host_write(fd, &bytes).is_ok(),
+                None => true,
+            };
+            if arrived {
+                m.stdout.extend_from_slice(&bytes);
+            } else {
+                m.stdout_latched = true;
+            }
+            define(dest, m, fr, Slot::unit());
+            Ok(())
+        }
+        INTRINSIC_STR_BYTE_LEN => {
+            // `str_byte_len(self)`: the receiver's own byte count. `Str`
+            // values are handles into the machine's byte table (§5.1
+            // treats `Str` as an allocation object; F1's materialisation
+            // keeps it in the separate pool `write_line` already reads).
+            let recv = args.first().copied().unwrap_or_else(Slot::unit);
+            let n = str_bytes(m, recv)?.len();
+            define(dest, m, fr, Slot::val(n as u64));
+            Ok(())
+        }
+        INTRINSIC_STR_BYTE_AT => {
+            // `str_byte_at(self, i)`: ch10 R23/R26 — out of range is a
+            // bug, trap `bounds`, same as `index` on a `Slice`/`Array`.
+            let recv = args.first().copied().unwrap_or_else(Slot::unit);
+            let i = args.get(1).copied().unwrap_or_else(Slot::unit).bits as usize;
+            let Some(&b) = str_bytes(m, recv)?.get(i) else {
+                return Err(Fault::Trap(TrapKind::Bounds));
+            };
+            define(dest, m, fr, Slot::val(b as u64));
+            Ok(())
+        }
+        INTRINSIC_STR_BYTE_SLICE => {
+            // `str_byte_slice(self, start, end)`: a fresh handle over the
+            // byte range. `Str.slice`'s `pre start <= end and end <=
+            // self.len()` (kind `contract`) runs before this is reached;
+            // a range that still escapes it is a bug, trap `bounds`.
+            let recv = args.first().copied().unwrap_or_else(Slot::unit);
+            let start = args.get(1).copied().unwrap_or_else(Slot::unit).bits as usize;
+            let end = args.get(2).copied().unwrap_or_else(Slot::unit).bits as usize;
+            let bytes = str_bytes(m, recv)?;
+            if start > end || end > bytes.len() {
+                return Err(Fault::Trap(TrapKind::Bounds));
+            }
+            let out = bytes[start..end].to_vec();
+            let id = m.strs.len() as u64;
+            m.strs.push(out);
+            define(dest, m, fr, Slot::val(id));
             Ok(())
         }
         other => Err(InterpError::UnknownIntrinsic(other.to_string()).into()),

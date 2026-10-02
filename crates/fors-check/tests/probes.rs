@@ -2874,3 +2874,138 @@ fn reordering_independent_statements_does_not_change_the_diagnostics() {
         );
     }
 }
+
+/// F7 (found by `std_checks_clean`, the first consumer-style check of
+/// `std` under I8's rules): `lower::trait_ref` lowered every argument of a
+/// trait application as a TYPE, so a brand parameter handed to a
+/// brand-kinded trait slot — `std`'s `impl[A: brand] alloc.Allocator[A]
+/// for Bump[A]`, nineteen times over — was ch01 R15d's "brand parameter
+/// used as a type" (O0015). The slot's declared kind decides, exactly as
+/// `type_args` already did for a nominal head; a type in a brand slot is
+/// still rejected.
+#[test]
+fn f7_trait_ref_lowers_each_argument_by_its_declared_kind() {
+    const TR: &str = "trait Tr[A: brand] { fn id(let self: Self) -> i64; }\n\
+         struct Cell[A: brand] { v: i64 }\n";
+    assert!(
+        check_source(&format!(
+            "{TR}impl[A: brand] Tr[A] for Cell[A] {{ fn id(let self: Self) -> i64 {{ return self.v; }} }}"
+        ))
+        .is_empty(),
+        "a brand parameter in a brand-kinded trait slot is the declared use"
+    );
+    let got = check_source(&format!(
+        "{TR}struct Plain {{ v: i64 }}\n\
+         impl Tr[i64] for Plain {{ fn id(let self: Self) -> i64 {{ return self.v; }} }}"
+    ));
+    // ch01 R15d's "passing a non-brand type for [a brand parameter] MUST
+    // be rejected" is not yet a diagnostic anywhere: `brand_arg` leaves
+    // the slot open (`TY_ERROR`, silently) for a nominal head and, now, a
+    // trait reference alike, and the impl header stays open with it. What
+    // this fix guarantees is only that the type never reaches `param_ty`
+    // as a brand-used-as-type.
+    assert!(
+        !got.contains(&"O0015".to_string()),
+        "a type in a brand slot is not a brand-used-as-type: {got:?}"
+    );
+}
+
+/// F7 (fmir-interpreter.md §4.1's gap, member.rs::user_index): `a[i]` on a
+/// USER nominal type with exactly one matching `Index` impl now records
+/// `MemberTarget::IndexImpl` so lowering has a fact to read, rather than
+/// deciding the type and discarding which impl answered.
+#[test]
+fn f7_user_index_records_its_resolved_impl() {
+    use fors_check::facts::MemberTarget;
+
+    const SRC: &str = "\
+struct Box { v: i64 }
+impl Index[usize] for Box {
+    type Output = i64;
+    fn at(let self: Self, let i: usize) -> scoped(self) Self.Output { return self.v; }
+}
+impl IndexMut[usize] for Box {
+    fn at_mut(inout self: Self, let i: usize) -> scoped(self) Self.Output { return self.v; }
+}
+fn read_it(let b: Box) -> i64 { return b[0]; }
+fn write_it(inout b: Box) { b[0] = 2; }
+";
+    let mut interner = Interner::new();
+    let source = format!("module m;\nneeds {{ }};\n{SRC}");
+    let bytes = source.into_bytes();
+    let name: Segments = vec![interner.intern(b"m")];
+    let parsed = parse_file(&bytes);
+    assert!(
+        parsed.diags.is_empty(),
+        "probe must parse: {:?}",
+        parsed.diags
+    );
+    let inputs = [FileInput {
+        tree: &parsed.tree,
+        tokens: &parsed.tokens,
+        source: &bytes,
+        name,
+    }];
+    let resolved = fors_resolve::resolve_in_package(&mut interner, &inputs, Some(0), Some(b"m"));
+    let out = fors_check::check_build(&inputs, &resolved, &mut interner);
+    assert!(
+        out.diagnostics.is_empty(),
+        "probe must check clean: {:?}",
+        out.diagnostics
+            .iter()
+            .map(|d| d.code.as_string())
+            .collect::<Vec<_>>()
+    );
+    let defs = out.defs.as_ref().expect("defs");
+    let at_def = defs
+        .user_defs()
+        .find(|(_, r)| r.name.is_some_and(|n| interner.resolve(n) == b"at"))
+        .map(|(d, _)| d)
+        .expect("Index::at's DefId");
+    let at_mut_def = defs
+        .user_defs()
+        .find(|(_, r)| r.name.is_some_and(|n| interner.resolve(n) == b"at_mut"))
+        .map(|(d, _)| d)
+        .expect("IndexMut::at_mut's DefId");
+
+    let find_index_impl = |fn_name: &[u8]| -> MemberTarget {
+        let def = defs
+            .user_defs()
+            .find(|(_, r)| r.name.is_some_and(|n| interner.resolve(n) == fn_name))
+            .map(|(d, _)| d)
+            .unwrap_or_else(|| panic!("{} DefId", String::from_utf8_lossy(fn_name)));
+        let (_, facts) = out
+            .facts
+            .iter()
+            .find(|(d, _)| *d == def)
+            .unwrap_or_else(|| panic!("{} BodyFacts", String::from_utf8_lossy(fn_name)));
+        let (start, end) = facts.range();
+        for node in start..end {
+            if let m @ MemberTarget::IndexImpl { .. } = facts.member_of(node) {
+                return m;
+            }
+        }
+        panic!(
+            "no MemberTarget::IndexImpl recorded in {}",
+            String::from_utf8_lossy(fn_name)
+        );
+    };
+
+    assert_eq!(
+        find_index_impl(b"read_it"),
+        MemberTarget::IndexImpl {
+            at: at_def,
+            at_mut: Some(at_mut_def)
+        },
+        "a read `b[0]` records `at` and the matching `at_mut`"
+    );
+    assert_eq!(
+        find_index_impl(b"write_it"),
+        MemberTarget::IndexImpl {
+            at: at_def,
+            at_mut: Some(at_mut_def)
+        },
+        "an assignment target `b[0] = 2` goes through the same `synth`, so it \
+         records the same fact"
+    );
+}

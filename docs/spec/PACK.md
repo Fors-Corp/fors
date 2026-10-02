@@ -5,7 +5,7 @@ regenerate. Source: `docs/spec/*.md` (normative), `tests/conformance/`
 (corpus) and `std/**/*.fors` (standard library).
 
 Language version: 0.5.2 (`docs/spec/VERSION`)
-Inputs SHA-256: 93ab666cb3d450c7b2a7e660fbf2dc76e3e54f3dcea62349bd65d78b88ea432c
+Inputs SHA-256: 44bd7c8cd9cf0c2d2442a70047843622e455acbadf04e22f30f27630a641c871
 
 This pack exists because no model has seen Fors before: guessing from
 Rust/Zig/Swift/C is wrong more often than it is right. Read section 1 first.
@@ -972,6 +972,9 @@ impl[T: Copyable] Iterator for SliceIter[T] {
     type Item = T;
     fn next(inout self) -> Option[Self.Item] { ... }
 }
+impl[T: Copyable] SliceIter[T] {
+    fn load(inout self: Self, let i: usize) -> Option[T] { ... }
+}
 pub fn iter[T: Copyable](let s: Slice[T]) -> scoped(s) SliceIter[T] { ... }
 pub struct Mapped[I: Iterator, U: Droppable] { ... }
 pub struct Filtered[I: Iterator] { ... }
@@ -1032,18 +1035,27 @@ impl[A: brand] String[A] {
 impl Str {
     pub fn len(let self: Self) -> usize { ... }
     pub fn at(let self: Self, let i: usize) -> u8 { ... }
+    fn is_boundary(let self: Self, let i: usize) -> bool { ... }
     pub fn slice(let self: Self, let start: usize, let end: usize) -> scoped(self) Str raises Utf8Error pre start <= end and end <= self.len() { ... }
     pub fn eq(let self: Self, let rhs: Str) -> bool { ... }
     pub fn starts_with(let self: Self, let p: Str) -> bool { ... }
+    fn matches_at(let self: Self, let i: usize, let needle: Str) -> bool { ... }
     pub fn find(let self: Self, let needle: Str) -> Option[usize] { ... }
     pub fn from_utf8(let bytes: Slice[u8]) -> scoped(bytes) Str raises Utf8Error { ... }
     pub fn bytes_raw(let self: Self) -> scoped(self) Slice[u8] { ... }
     pub fn scalars(let self: Self) -> scoped(self) Scalars { ... }
+    fn str_byte_slice(let self: Self, let start: usize, let end: usize) -> scoped(self) Str { ... }
+    fn str_byte_len(let self: Self) -> usize { ... }
+    fn str_byte_at(let self: Self, let i: usize) -> u8 { ... }
 }
+fn str_from_validated_bytes(let bytes: Slice[u8]) -> scoped(bytes) Str { ... }
 pub struct Scalars { ... }
 impl Iterator for Scalars {
     type Item = u32;
     fn next(inout self: Self) -> Option[Self.Item] { ... }
+}
+impl Scalars {
+    fn decode(inout self: Self) -> Option[u32] { ... }
 }
 ```
 
@@ -1176,6 +1188,9 @@ pub struct BufferIter[T, N: usize] { ... }
 impl[T: Droppable, N: usize] Iterator for BufferIter[T, N] {
     type Item = T;
     fn next(inout self: Self) -> Option[Self.Item] { ... }
+}
+impl[T: Droppable, N: usize] BufferIter[T, N] {
+    fn take_at(inout self: Self, let i: usize) -> Option[T] { ... }
 }
 pub fn fill[T: Copyable](inout s: Slice[T], let v: T) { ... }
 pub fn swap[T](inout s: Slice[T], let i: usize, let j: usize) { ... }

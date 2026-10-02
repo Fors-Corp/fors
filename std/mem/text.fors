@@ -23,8 +23,10 @@ pub struct String[A: brand] { n: usize, capacity: usize, store: Option[alloc.Blo
 impl[A: brand] Linear for String[A] {}
 
 impl[A: brand] String[A] {
+    // `Option[alloc.Block[A]].none`, not bare `none`: see `Vec.new`'s note
+    // (a T0039 checker gap on this field shape, not a language rule).
     pub fn new() -> String[A] {
-        return String { n: 0, capacity: 0, store: none };
+        return String { n: 0, capacity: 0, store: Option[alloc.Block[A]].none };
     }
 
     pub fn len(let self: Self) -> usize {
@@ -75,14 +77,32 @@ impl[A: brand] String[A] {
 
 // Str is a prelude type (ch08 R17); this is its inherent surface.
 impl Str {
+    // F7: real body over the §5.8 byte-length intrinsic. `str_byte_len`
+    // is `fors-lower`'s F7 stand-in (the exact §5.8 mechanism 2 shape
+    // `write_line`/`write_uint` already use): a method spelled that name
+    // ON THIS IMPL (`Str`'s own, ch10 R2) is the length reader; a user
+    // method that merely shares the spelling keeps its body — see
+    // `fors_lower::lower::emit_method_call`.
     pub fn len(let self: Self) -> usize {
-        return self.len();
-    } // STUB, bytes
+        return self.str_byte_len();
+    }
 
-    // Traps (kind bounds) out of range: an index is a bug.
+    // Traps (kind bounds) out of range: an index is a bug. F7: real body
+    // over the §5.8 byte-at intrinsic (same stand-in shape as `len`).
     pub fn at(let self: Self, let i: usize) -> u8 {
-        return self.at(i);
-    } // STUB
+        return self.str_byte_at(i);
+    }
+
+    // R26: indexing is by byte; a boundary is a byte that does not
+    // continue a multi-byte sequence (its top two bits are not `10`), or
+    // `len()` itself (one past the end). Pure Fors over `at`/`len`, no
+    // intrinsic of its own.
+    fn is_boundary(let self: Self, let i: usize) -> bool {
+        if i == self.len() {
+            return true;
+        }
+        return (self.at(i) &0xc0) != 0x80;
+    }
 
     // Traps (kind contract) if start > end or end > len — a bug; raises
     // not_a_boundary if an endpoint falls inside a multi-byte sequence —
@@ -91,33 +111,165 @@ impl Str {
         raises Utf8Error
         pre start <= end and end <= self.len()
     {
-        raise Utf8Error.not_a_boundary; // STUB
+        if not self.is_boundary(start) or not self.is_boundary(end) {
+            raise Utf8Error.not_a_boundary;
+        }
+        return self.str_byte_slice(start, end);
     }
 
+    // F7: real body, bytewise (R26: `Str` carries no other equality).
     pub fn eq(let self: Self, let rhs: Str) -> bool {
-        return false;
-    } // STUB, bytewise
-    pub fn starts_with(let self: Self, let p: Str) -> bool {
-        return false;
-    } // STUB
-    pub fn find(let self: Self, let needle: Str) -> Option[usize] {
-        return none;
-    } // STUB
+        if self.len() != rhs.len() {
+            return false;
+        }
+        for i in 0..<self.len() {
+            if self.at(i) != rhs.at(i) {
+                return false;
+            }
+        }
+        return true;
+    }
 
-    // The ONLY validating entry, and the only way a Str is built from bytes.
+    // F7: real body, bytewise prefix test.
+    pub fn starts_with(let self: Self, let p: Str) -> bool {
+        if p.len() > self.len() {
+            return false;
+        }
+        for i in 0..<p.len() {
+            if self.at(i) != p.at(i) {
+                return false;
+            }
+        }
+        return true;
+    }
+
+    // Whether `needle` occurs at byte offset `i` of `self` (private:
+    // `find`'s own inner loop, kept out-of-line so `find` has no mutable
+    // flag to thread through a nested loop).
+    fn matches_at(let self: Self, let i: usize, let needle: Str) -> bool {
+        for j in 0..<needle.len() {
+            if self.at(i + j) != needle.at(j) {
+                return false;
+            }
+        }
+        return true;
+    }
+
+    // F7: real body, first-match byte search (an empty needle matches at
+    // 0, as every substring search convention agrees).
+    pub fn find(let self: Self, let needle: Str) -> Option[usize] {
+        if needle.len() == 0 {
+            return some(0);
+        }
+        if needle.len() > self.len() {
+            return none;
+        }
+        let last: usize = self.len() - needle.len();
+        for i in 0..< (last + 1) {
+            if self.matches_at(i, needle) {
+                return some(i);
+            }
+        }
+        return none;
+    }
+
+    // The ONLY validating entry, and the only way a Str is built from
+    // bytes. F7: real validation, written exactly to R26's rule (reject
+    // a continuation byte with no lead, a lead whose run is short, an
+    // overlong encoding, a surrogate half, and a scalar value past
+    // U+10FFFF) over ordinary `Slice[u8]` indexing — no intrinsic needed
+    // for the validation itself. The final materialisation into an
+    // opaque `Str` handle (`str_from_validated_bytes`) is F7's byte-slice
+    // stand-in, same shape as `len`/`at`; unreachable while this body also
+    // raises (`raise` is F3's `try_br` machinery, not yet landed), so it
+    // stays a stand-in until F3 lands and this function can lower.
     pub fn from_utf8(let bytes: Slice[u8]) -> scoped(bytes) Str raises Utf8Error {
-        raise Utf8Error.incomplete; // STUB
+        var i: usize = 0;
+        while i < bytes.len {
+            let b: u8 = bytes[i];
+            if (b &0x80) == 0 {
+                i = i + 1;
+            } else if (b &0xe0) == 0xc0 {
+                if bytes.len - i < 2 or (bytes[i + 1] &0xc0) != 0x80 or b < 0xc2 {
+                    raise Utf8Error.invalid_sequence;
+                }
+                i = i + 2;
+            } else if (b &0xf0) == 0xe0 {
+                if bytes.len - i < 3
+                    or (bytes[i + 1] &0xc0) != 0x80
+                    or (bytes[i + 2] &0xc0) != 0x80 {
+                    raise Utf8Error.invalid_sequence;
+                }
+                // Overlong (`b == 0xe0` needs a continuation `>= 0xa0`) and
+                // the surrogate range `U+D800..U+DFFF` (`b == 0xed` needs
+                // a continuation `< 0xa0`).
+                if (b == 0xe0 and bytes[i + 1] < 0xa0) or (b == 0xed and bytes[i + 1] >= 0xa0) {
+                    raise Utf8Error.invalid_sequence;
+                }
+                i = i + 3;
+            } else if (b &0xf8) == 0xf0 {
+                if bytes.len - i < 4
+                    or (bytes[i + 1] &0xc0) != 0x80
+                    or (bytes[i + 2] &0xc0) != 0x80
+                    or (bytes[i + 3] &0xc0) != 0x80 {
+                    raise Utf8Error.invalid_sequence;
+                }
+                // Overlong (`b == 0xf0` needs a continuation `>= 0x90`)
+                // and past `U+10FFFF` (`b > 0xf4`, or `b == 0xf4` with a
+                // continuation `>= 0x90`).
+                if (b == 0xf0 and bytes[i + 1] < 0x90)
+                    or b > 0xf4
+                    or (b == 0xf4 and bytes[i + 1] >= 0x90) {
+                    raise Utf8Error.invalid_sequence;
+                }
+                i = i + 4;
+            } else {
+                raise Utf8Error.invalid_sequence;
+            }
+        }
+        return str_from_validated_bytes(bytes);
     }
 
     @unsafe(invariant: "the view spans exactly this Str's bytes")
     pub fn bytes_raw(let self: Self) -> scoped(self) Slice[u8] {
-        return self.bytes_raw(); // STUB
+        return self.bytes_raw(); // STUB: needs a `rawptr` read primitive
+        // no increment has added yet (ch09 R57/A0015: `rawptr` has no
+        // accessor anywhere in this build); see `SliceIter.load`'s note.
     }
 
     @unsafe(invariant: "base and n span this Str's bytes; the scoped result keeps self borrowed")
     pub fn scalars(let self: Self) -> scoped(self) Scalars {
-        return self.scalars();
-    } // STUB
+        return self.scalars(); // STUB: same `rawptr` gap as `bytes_raw`.
+    }
+
+    // F7's byte-slice primitive, the third `Str` intrinsic beside `len`/
+    // `at`'s (same interception, same `Str`-impl-only scope): lowering
+    // emits `str_byte_slice`, a fresh view over `self[start ..< end]`.
+    // Private: only `slice` calls it, after the boundary check.
+    fn str_byte_slice(let self: Self, let start: usize, let end: usize) -> scoped(self) Str {
+        return self.str_byte_slice(start, end);
+    }
+
+    // `len`/`at`'s own intrinsic-backed primitives (design §5.8: "byte
+    // length, byte at, boundary test"). Lowering intercepts a method
+    // literally spelled `str_byte_len`/`str_byte_at` and emits the
+    // matching intrinsic instead of compiling this body, so the bodies
+    // below are never reached — same stand-in shape as `write_line`.
+    fn str_byte_len(let self: Self) -> usize {
+        return self.str_byte_len();
+    }
+
+    fn str_byte_at(let self: Self, let i: usize) -> u8 {
+        return self.str_byte_at(i);
+    }
+}
+
+// F7's byte-slice-materialisation stand-in (see `Str.from_utf8`'s note):
+// a free function literally spelled this name builds a `Str` from
+// already-validated bytes. Free, not a method, because no `Str` receiver
+// exists yet to call it on.
+fn str_from_validated_bytes(let bytes: Slice[u8]) -> scoped(bytes) Str {
+    return str_from_validated_bytes(bytes);
 }
 
 // A raw base and a length, NOT a Slice field: ch01 R19a forbids storing a
@@ -129,7 +281,20 @@ impl Iterator for Scalars {
     fn next(inout self: Self) -> Option[Self.Item] {
         if self.at < self.n {
             return self.decode();
-        } // STUB
+        }
         return none;
+    }
+}
+
+impl Scalars {
+    // Decodes one UTF-8 scalar value at `base[at]` and advances `at` past
+    // it. `rawptr` has no accessor anywhere in this build (ch09 R57/
+    // A0015; see `SliceIter.load`'s identical note) and this increment
+    // adds no byte-read intrinsic for it, so the body stays a
+    // self-referencing stand-in; F7's gate never reaches it (no gate test
+    // iterates `Str.scalars()`).
+    @unsafe(invariant: "base and n span this Str's bytes; at < n and base[at..] is valid UTF-8")
+    fn decode(inout self: Self) -> Option[u32] {
+        return self.decode();
     }
 }

@@ -20,8 +20,14 @@ impl[T, A: brand] Linear for Vec[T, A] {}
 impl[T, A: brand] Vec[T, A] {
     // Allocates nothing. T and A come from the CHECK position (ch09 R38c);
     // in a SYNTH position write Vec.new[i32, heap]().
+    // `Option[alloc.Block[A]].none`, not bare `none`: the checker reports
+    // T0039 for `none` in a struct-literal field whose declared type nests
+    // a brand-carrying nominal, although ch09 R34/R38c type that field
+    // from its declaration (`Option[T]` and `Option[i64]` fields pass). A
+    // checker gap outside F7's files; the spelled form is R28's own
+    // fallback and reads the same. Drop the prefix once T0039 is fixed.
     pub fn new() -> Vec[T, A] {
-        return Vec { n: 0, capacity: 0, store: none };
+        return Vec { n: 0, capacity: 0, store: Option[alloc.Block[A]].none };
     }
 
     pub fn len(let self: Self) -> usize {
