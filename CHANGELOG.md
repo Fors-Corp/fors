@@ -7,7 +7,8 @@ commit history, which predates the Conventional Commits convention.
 
 | Language | Compiler | Meaning |
 |---|---|---|
-| `lang-v0.5.2` | `compiler-v0.6.0` | current |
+| `lang-v0.5.2` | `compiler-v0.7.0` | current |
+| `lang-v0.5.2` | `compiler-v0.6.0` | checker I7 |
 | `lang-v0.5.2` | `compiler-v0.5.0` | checker I6, F4/F6 interpreter halves, ch05 corpus |
 | `lang-v0.5.2` | `compiler-v0.4.0` | checker I5 |
 | `lang-v0.5.2` | `compiler-v0.3.0` | FMIR F5 |
@@ -85,6 +86,30 @@ measurement, the grammar, names and visibility), with a conformance corpus and
 an independent reference parser.
 
 ## Compiler
+
+### compiler-v0.7.0 — 2026-10-02
+
+Type checker increment **I8**, the flow pass, produced by one agent and
+independently verified by another. Implements `lang-v0.5.2`; still no code
+generator.
+
+- **The flow pass (ch01 R2, R3, R4a, R8; ch09 R46).** One forward walk over
+  each body's use tape: a move out of a `let` parameter, use after move in
+  all five R4a shapes, and R8's two-valued merge at `if`/`match` joins, loop
+  heads and loop exits — one dead-set, no third state, no drop flag, no
+  second analysis. R46's normative sentence names the consuming call and
+  its `sink self` declaration for both the implicit and the explicit form.
+  Convention markers (`&x`, `move x`, `&out x`) are checked at the call.
+- **Coverage.** 232 of chapter 09's 246 conformance tests on, 14 pending
+  (all I8b); every pre-round-6 chapter-09 file is decided; 690 Rust tests.
+- **Verification found and fixed before merge.** The first cut forgot a
+  move made inside a branch at the join, so a use after a one-branch move
+  — and the corpus's own `merge-liveness-disagreement-rejected` — were
+  accepted; the pass was rewritten. Three latent tape defects surfaced
+  once something read the tape (`Slice[T]` is Copyable; discarding a
+  Copyable is a copy; a variant construction carries no conventions).
+- **Documented limitation.** `while true { …; break; }` reports R8 at the
+  loop exit because the pass does not sniff a literal `true` condition.
 
 ### compiler-v0.6.0 — 2026-10-02
 
