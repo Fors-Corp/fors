@@ -30,6 +30,7 @@
 
 pub mod alias;
 pub mod block;
+pub mod caps;
 pub mod constpool;
 pub mod decl;
 pub mod diag;

@@ -5,7 +5,7 @@ regenerate. Source: `docs/spec/*.md` (normative), `tests/conformance/`
 (corpus) and `std/**/*.fors` (standard library).
 
 Language version: 0.5.3 (`docs/spec/VERSION`)
-Inputs SHA-256: 5ea7600c77d034a25488d6f040ed15ec761ea8215e428b28b4286488a5a80cbf
+Inputs SHA-256: 91e18b5de1db085f0728b93dbecbe760636d3201ef129903e8aaf4d08342f8e8
 
 This pack exists because no model has seen Fors before: guessing from
 Rust/Zig/Swift/C is wrong more often than it is right. Read section 1 first.
@@ -757,7 +757,9 @@ impl Dir {
     pub fn remove(let self: Self, let name: Str) raises Error { ... }
     pub fn rename(let self: Self, let from: Str, let to: Str) raises Error { ... }
     pub fn entries(let self: Self) -> Entries raises Error { ... }
+    fn fs_door(let self: Self, let op: Str) { ... }
 }
+fn check_name(let name: Str) raises Error { ... }
 pub struct File { ... }
 impl Linear for File {}
 impl File {
@@ -1214,6 +1216,7 @@ impl Net {
     pub fn resolve_into(let self: Self, let host: Str, inout into: Slice[Addr]) -> usize raises Error { ... }
     pub fn connect(let self: Self, let a: Addr) -> Conn raises Error { ... }
     pub fn listen(let self: Self, let a: Addr) -> Listener raises Error { ... }
+    fn net_door(let self: Self, let op: Str) { ... }
 }
 pub struct Addr { ... }
 impl Addr {
@@ -1267,6 +1270,7 @@ pub struct Rng { ... }
 impl Rng {
     pub fn fill(inout self: Self, inout into: Slice[u8]) { ... }
     pub fn u64(inout self: Self) -> u64 { ... }
+    fn entropy_u64(let self: Self) -> u64 { ... }
 }
 pub struct Pcg { ... }
 impl Pcg {
@@ -1275,6 +1279,7 @@ impl Pcg {
     pub fn bounded(inout self: Self, let n: u64) -> u64 pre n > 0 { ... }
     pub fn fill(inout self: Self, inout into: Slice[u8]) { ... }
 }
+fn lcg(let state: u64, let inc: u64) -> u64 { ... }
 ```
 
 ### std.time  (`std/time.fors`)
@@ -1287,6 +1292,9 @@ impl Clock {
     pub fn now(let self: Self) -> Instant { ... }
     pub fn wall(let self: Self) -> Wall { ... }
     pub fn sleep(let self: Self, let d: Duration) { ... }
+    fn clock_mono(let self: Self) -> u64 { ... }
+    fn clock_wall(let self: Self) -> i64 { ... }
+    fn clock_sleep(let self: Self, let nanos: u64) { ... }
 }
 impl Instant {
     pub fn since(let self: Self, let earlier: Instant) -> Duration pre earlier.nanos <= self.nanos { ... }

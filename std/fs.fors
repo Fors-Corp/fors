@@ -1,5 +1,6 @@
 // std.fs — the rooted directory capability.
-// Surface: docs/spec/10-std.md Rules 41-42. Bodies are STUBS.
+// Surface: docs/spec/10-std.md Rules 41-42. F8: `Dir`'s bodies are real
+// (name validation, then the host door); the rest are STUBS.
 //
 // Every operation names a single directory ENTRY, never a path: no `/`, no
 // NUL, not `.`, not `..`, non-empty, checked BEFORE any syscall. Traversal
@@ -33,42 +34,94 @@ pub struct Meta { pub len: u64, pub kind: Kind, pub modified_unix_nanos: i64 }
 pub struct Dir { fd: i32 }
 
 impl Dir {
+    // F8: every name-taking operation validates its entry name FIRST, in
+    // Fors, with no host call (R41: "a violation raises Error.invalid_name
+    // BEFORE any syscall"), and only then reaches the host door. The M1
+    // host performs no file-system syscall at all: reaching `fs_door` is
+    // the interpreter's NAMED refusal (never a silent stub error), and the
+    // host's `fs_syscalls` counter proves a rejected name never got there.
+
     // Downward-only (ch04 R7): a subdirectory of the receiver, never a
     // sibling or an ancestor, and never through a symlink that leaves it.
     pub fn open_dir(let self: Self, let name: Str) -> Dir raises Error {
-        raise Error.invalid_name; // STUB
+        check_name(name)?;
+        self.fs_door("open_dir");
+        raise Error.other; // unreachable: the M1 door never returns
     }
 
     pub fn read_into(let self: Self, let name: Str, inout into: Slice[u8]) -> usize raises Error {
-        raise Error.not_found; // STUB
+        check_name(name)?;
+        self.fs_door("read_into");
+        raise Error.other; // unreachable: the M1 door never returns
     }
 
     pub fn write_all(let self: Self, let name: Str, let bytes: Slice[u8]) raises Error {
-        raise Error.permission; // STUB
+        check_name(name)?;
+        self.fs_door("write_all");
+        raise Error.other; // unreachable: the M1 door never returns
     }
 
     pub fn open(let self: Self, let name: Str) -> File raises Error {
-        raise Error.not_found; // STUB
+        check_name(name)?;
+        self.fs_door("open");
+        raise Error.other; // unreachable: the M1 door never returns
     }
 
     pub fn create(let self: Self, let name: Str) -> File raises Error {
-        raise Error.permission; // STUB
+        check_name(name)?;
+        self.fs_door("create");
+        raise Error.other; // unreachable: the M1 door never returns
     }
 
     pub fn metadata(let self: Self, let name: Str) -> Meta raises Error {
-        raise Error.not_found; // STUB
+        check_name(name)?;
+        self.fs_door("metadata");
+        raise Error.other; // unreachable: the M1 door never returns
     }
 
     pub fn remove(let self: Self, let name: Str) raises Error {
-        raise Error.not_found; // STUB
+        check_name(name)?;
+        self.fs_door("remove");
+        raise Error.other; // unreachable: the M1 door never returns
     }
 
     pub fn rename(let self: Self, let from: Str, let to: Str) raises Error {
-        raise Error.not_found; // STUB
+        check_name(from)?;
+        check_name(to)?;
+        self.fs_door("rename");
+        raise Error.other; // unreachable: the M1 door never returns
     }
 
     pub fn entries(let self: Self) -> Entries raises Error {
-        raise Error.permission; // STUB
+        self.fs_door("entries");
+        raise Error.other; // unreachable: the M1 door never returns
+    }
+
+    // The host door: lowering intercepts a method literally spelled this ON
+    // THIS IMPL (`std.fs.Dir`, ch04 R21) whose body is this self-recursive
+    // stand-in (same shape as `Str.str_byte_len`). `op` names the operation
+    // in the interpreter's refusal.
+    fn fs_door(let self: Self, let op: Str) {
+        self.fs_door(op);
+    }
+}
+
+// R41's entry-name rule, checked before any syscall: non-empty, no `/`
+// (47), no NUL (0), and neither `.` nor `..` (46). Pure Fors over `Str`'s
+// byte reader; it never reaches the host.
+fn check_name(let name: Str) raises Error {
+    let n: usize = name.len();
+    if n == 0 {
+        raise Error.invalid_name;
+    }
+    if n <= 2 and name.at(0) == 46 and name.at(n - 1) == 46 {
+        raise Error.invalid_name;
+    }
+    for i in 0..<n {
+        let b: u8 = name.at(i);
+        if b == 47 or b == 0 {
+            raise Error.invalid_name;
+        }
     }
 }
 

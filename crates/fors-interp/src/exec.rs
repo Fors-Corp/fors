@@ -145,6 +145,21 @@ pub enum InterpError {
     StepBudget,
     /// Call-depth guard (same rationale as `StepBudget`).
     StackOverflow,
+    /// F8: a capability response could not be served — a replay that
+    /// diverged from its record, a malformed record, or no entropy source
+    /// (design §7.2: "a mismatch on replay is a named error, never a silent
+    /// divergence").
+    Oracle(crate::host::OracleError),
+    /// F8: a host door the M1 runtime does not open (`fs.Dir`'s and
+    /// `net.Net`'s operations past name validation: design §5.8 — the corpus
+    /// needs their types, validation and error enums, never a syscall). The
+    /// payload names the operation, e.g. `std.fs.Dir.read_into`.
+    HostRefused(String),
+    /// F8 (ch04 R7, R8, design §5.9): the entry shim cannot supply `main`'s
+    /// arguments, or a root-capability value was used as something it is
+    /// not (a field read of the opaque value, a host door reached with a
+    /// receiver the shim did not create).
+    Capability(String),
 }
 
 impl std::fmt::Display for InterpError {
@@ -170,6 +185,12 @@ impl std::fmt::Display for InterpError {
             InterpError::Unrepresentable(m) => write!(f, "unrepresentable: {m}"),
             InterpError::StepBudget => write!(f, "step budget exceeded"),
             InterpError::StackOverflow => write!(f, "call stack overflow"),
+            InterpError::Oracle(e) => write!(f, "oracle: {e}"),
+            InterpError::HostRefused(op) => write!(
+                f,
+                "`{op}` needs a host syscall the M1 interpreter does not perform (design §5.8)"
+            ),
+            InterpError::Capability(m) => write!(f, "capability: {m}"),
         }
     }
 }
@@ -251,6 +272,19 @@ const INTRINSIC_AGG_UNINIT: &str = "agg_uninit";
 /// compare `{ptr, len}` contents, which is what this does.
 const INTRINSIC_STR_EQ: &str = "str_eq";
 
+/// F8's host doors (design §5.8 mechanism 2's `@clock_mono`/`@clock_wall`/
+/// `@entropy` rows, plus the `fs`/`net` doors): lowering emits these for the
+/// self-recursive stand-ins on `std.time.Clock`, `std.rand.Rng`,
+/// `std.fs.Dir` and `std.net.Net` (and only on those types). Every one
+/// checks its receiver is the entry shim's value of that type; the clock and
+/// entropy reads are served by [`crate::host::Oracle`], the only real reader.
+const INTRINSIC_CLOCK_MONO: &str = "clock_mono";
+const INTRINSIC_CLOCK_WALL: &str = "clock_wall";
+const INTRINSIC_CLOCK_SLEEP: &str = "clock_sleep";
+const INTRINSIC_ENTROPY_U64: &str = "entropy_u64";
+const INTRINSIC_FS_DOOR: &str = "fs_door";
+const INTRINSIC_NET_DOOR: &str = "net_door";
+
 /// The bytes a `Str` handle names in the machine's byte table. A handle
 /// outside the table is a lowering bug (an intrinsic reached with a
 /// non-`Str` receiver), reported as [`InterpError::MissingString`] — never
@@ -284,6 +318,10 @@ enum CellKind {
     Agg,
     /// `slice_range`'s descriptor: `{base cell handle, start, len}`.
     Slice,
+    /// F8: a root-capability value (ch04 R21) the entry shim created —
+    /// design §5.9's capability object. It has NO program-visible
+    /// components (ch04 R7: opaque, no field access), so it has no slots.
+    Capability(fors_fmir::caps::RootCap),
 }
 
 impl Cells {
@@ -326,6 +364,10 @@ fn seq_window(m: &Machine<'_>, v: Slot) -> Result<(usize, u64, u64), InterpError
             }
             Ok((base.bits as usize, start.bits, len.bits))
         }
+        CellKind::Capability(cap) => Err(InterpError::Capability(format!(
+            "a `{}` value used as a sequence: a root-capability value is opaque (ch04 R7)",
+            cap.display()
+        ))),
     }
 }
 
@@ -346,6 +388,17 @@ fn cell_slot(
     at: usize,
     what: &str,
 ) -> Result<Slot, Fault> {
+    if let Some(Cells {
+        kind: CellKind::Capability(cap),
+        ..
+    }) = m.cells.get(cell)
+    {
+        return Err(InterpError::Capability(format!(
+            "{what} {at} of a `{}` value: a root-capability value is opaque (ch04 R7)",
+            cap.display()
+        ))
+        .into());
+    }
     let s = m
         .cells
         .get(cell)
@@ -401,6 +454,9 @@ struct Machine<'a> {
     stdout: Vec<u8>,
     stdout_latched: bool,
     host: crate::shim::HostEnv,
+    /// F8: every clock read and entropy draw goes through here (design
+    /// §7.2's recorded/replayable capability responses).
+    oracle: &'a mut crate::host::Oracle,
     steps: u64,
     /// design §5.1's allocation objects. Index 0 is a placeholder so that
     /// [`crate::mem::PROV_NONE`] names no real row.
@@ -685,6 +741,32 @@ pub fn run_with_host(
     tys: &TyStore,
     host: &crate::shim::HostEnv,
 ) -> Result<Outcome, InterpError> {
+    run_with_oracle(prog, tys, host, &mut crate::host::Oracle::live())
+}
+
+/// As [`run_with_host`], with the run's capability responses served by
+/// `oracle` (F8, design §7.2): [`crate::host::Oracle::live`] reads the real
+/// host and logs every response; [`crate::host::Oracle::replay`] serves a
+/// recorded log and reads nothing real. After the run the oracle holds the
+/// log (`--oracle-record`'s file) and the host counters. A replay whose
+/// run diverged from its record is `Err(InterpError::Oracle(..))`.
+pub fn run_with_oracle(
+    prog: &Program,
+    tys: &TyStore,
+    host: &crate::shim::HostEnv,
+    oracle: &mut crate::host::Oracle,
+) -> Result<Outcome, InterpError> {
+    let out = run_machine(prog, tys, host, oracle)?;
+    oracle.finish().map_err(InterpError::Oracle)?;
+    Ok(out)
+}
+
+fn run_machine(
+    prog: &Program,
+    tys: &TyStore,
+    host: &crate::shim::HostEnv,
+    oracle: &mut crate::host::Oracle,
+) -> Result<Outcome, InterpError> {
     if prog.entry >= prog.fns.len() {
         return Err(InterpError::NoEntry(format!("entry {}", prog.entry)));
     }
@@ -698,6 +780,7 @@ pub fn run_with_host(
         stdout: Vec::new(),
         stdout_latched: false,
         host: *host,
+        oracle,
         steps: 0,
         // Row 0 of each table is the `PROV_NONE` / "no allocation"
         // placeholder, so a zeroed `Slot.prov` can never name a real object.
@@ -717,7 +800,8 @@ pub fn run_with_host(
         next_tag: 0,
         next_serial: 0,
     };
-    call(prog.entry, None, Vec::new(), &mut m)?;
+    let args = entry_args(&mut m)?;
+    call(prog.entry, None, args, &mut m)?;
     loop {
         let fr = m.frames.len() - 1;
         match step_frame(fr, &mut m)? {
@@ -785,6 +869,96 @@ pub fn run_with_host(
                 return Ok(settle(&mut m, exit, site, Some(report)));
             }
         }
+    }
+}
+
+/// The entry shim's construction of `main`'s arguments (F8, design §5.8
+/// mechanism 3, §5.9; ch04 R7, R8, R21): one fresh root-capability value per
+/// parameter, chosen by the parameter's NOMINAL type as lowering recorded it
+/// ([`fors_fmir::names::TypeNames::roots`]), planned and checked by
+/// [`crate::shim::plan_entry_args`]. This is the only code in the
+/// interpreter that fabricates such a value — no FMIR op can (`agg_new` of a
+/// root-capability type is ch04 R7's A0007 in the checker) — and a value is
+/// a [`CellKind::Capability`] cell with no program-visible slots. A `main`
+/// that takes a `rand.Rng` starts only once the host has an entropy source
+/// (ch10 R47).
+fn entry_args(m: &mut Machine<'_>) -> Result<Vec<Slot>, InterpError> {
+    let decl = &m.prog.fns[m.prog.entry].decl;
+    let mut params: Vec<(u16, fors_fir::ty::TyId)> = decl
+        .vals
+        .all_rows()
+        .filter_map(|(_, row)| match row.def() {
+            ValDef::Param(o) => Some((o, row.ty)),
+            _ => None,
+        })
+        .collect();
+    params.sort();
+    let caps: Vec<Option<fors_fmir::caps::RootCap>> = params
+        .iter()
+        .map(|&(_, ty)| {
+            let bare = if (ty.0 as usize) < m.tys.len() {
+                m.tys.unqual(ty)
+            } else {
+                ty
+            };
+            m.prog.names.root_cap(bare)
+        })
+        .collect();
+    let typed = !m.prog.names.roots.is_empty();
+    let plan = crate::shim::plan_entry_args(&caps, typed).map_err(InterpError::Capability)?;
+    let mut args = Vec::with_capacity(plan.len());
+    for a in plan {
+        match a {
+            crate::shim::EntryArg::Unit => args.push(Slot::unit()),
+            crate::shim::EntryArg::Root(cap) => {
+                if cap == fors_fmir::caps::RootCap::Rng {
+                    m.oracle.ensure_entropy().map_err(InterpError::Oracle)?;
+                }
+                let id = m.cells.len() as u64;
+                m.cells.push(Cells {
+                    slots: Vec::new(),
+                    kind: CellKind::Capability(cap),
+                });
+                args.push(Slot::val(id));
+            }
+        }
+    }
+    Ok(args)
+}
+
+/// An operand of an F8 host door. A door reached without one is a lowering
+/// bug, refused BY NAME: never `Slot::unit()`, whose bits name cell 0 —
+/// which is the entry shim's first capability cell, so a defaulted
+/// receiver would pass [`cap_receiver`] for whatever `main`'s first
+/// parameter is.
+fn host_operand(args: &[Slot], at: usize, door: &str) -> Result<Slot, Fault> {
+    args.get(at).copied().ok_or_else(|| {
+        InterpError::Capability(format!(
+            "`{door}` reached without operand {at}: a host door takes its receiver and \
+             operands from lowering, never a default"
+        ))
+        .into()
+    })
+}
+
+/// Checks that an F8 host door's receiver is the entry shim's value of
+/// root-capability type `want` (design §5.9's run-time backstop to ch04 R7).
+fn cap_receiver(
+    m: &Machine<'_>,
+    recv: Slot,
+    want: fors_fmir::caps::RootCap,
+    door: &str,
+) -> Result<(), Fault> {
+    match m.cells.get(recv.bits as usize) {
+        Some(Cells {
+            kind: CellKind::Capability(c),
+            ..
+        }) if *c == want && recv.init && recv.live => Ok(()),
+        _ => Err(InterpError::Capability(format!(
+            "`{door}` reached with a receiver that is not the entry shim's `{}` value",
+            want.display()
+        ))
+        .into()),
     }
 }
 
@@ -2479,6 +2653,59 @@ fn exec_intrinsic(
             m.cells.push(Cells::agg(vec![Slot::uninit(); n]));
             define(dest, m, fr, Slot::val(id));
             Ok(())
+        }
+        INTRINSIC_CLOCK_MONO => {
+            // `clock_mono(self)`: `time.Clock.now`'s monotonic nanoseconds,
+            // served (and logged, or replayed) by the oracle (design §7.2).
+            let recv = host_operand(&args, 0, name)?;
+            cap_receiver(m, recv, fors_fmir::caps::RootCap::Clock, name)?;
+            let v = m.oracle.clock_mono().map_err(InterpError::Oracle)?;
+            define(dest, m, fr, Slot::val(v));
+            Ok(())
+        }
+        INTRINSIC_CLOCK_WALL => {
+            // `clock_wall(self)`: UTC nanoseconds since the epoch, as `i64`.
+            let recv = host_operand(&args, 0, name)?;
+            cap_receiver(m, recv, fors_fmir::caps::RootCap::Clock, name)?;
+            let v = m.oracle.clock_wall().map_err(InterpError::Oracle)?;
+            define(dest, m, fr, Slot::val(v as u64));
+            Ok(())
+        }
+        INTRINSIC_CLOCK_SLEEP => {
+            // `clock_sleep(self, nanos)`: not a read, so not recorded.
+            let recv = host_operand(&args, 0, name)?;
+            cap_receiver(m, recv, fors_fmir::caps::RootCap::Clock, name)?;
+            let nanos = host_operand(&args, 1, name)?.bits;
+            m.oracle.sleep(nanos);
+            define(dest, m, fr, Slot::unit());
+            Ok(())
+        }
+        INTRINSIC_ENTROPY_U64 => {
+            // `entropy_u64(self)`: eight bytes of host entropy (ch10 R47),
+            // served (and logged, or replayed) by the oracle.
+            let recv = host_operand(&args, 0, name)?;
+            cap_receiver(m, recv, fors_fmir::caps::RootCap::Rng, name)?;
+            let v = m.oracle.entropy_u64().map_err(InterpError::Oracle)?;
+            define(dest, m, fr, Slot::val(v));
+            Ok(())
+        }
+        INTRINSIC_FS_DOOR | INTRINSIC_NET_DOOR => {
+            // `fs_door(self, op)` / `net_door(self, op)`: the M1 host opens
+            // no file and no socket (design §5.8), so reaching a door is a
+            // NAMED refusal — counted first, so a test can prove a rejected
+            // entry name (ch10 R41) never got here.
+            let (cap, owner) = if name == INTRINSIC_FS_DOOR {
+                m.oracle.note_fs_host_call();
+                (fors_fmir::caps::RootCap::Dir, "std.fs.Dir")
+            } else {
+                m.oracle.note_net_host_call();
+                (fors_fmir::caps::RootCap::Net, "std.net.Net")
+            };
+            let recv = host_operand(&args, 0, name)?;
+            cap_receiver(m, recv, cap, name)?;
+            let op = host_operand(&args, 1, name)?;
+            let op = String::from_utf8_lossy(str_bytes(m, op)?).into_owned();
+            Err(InterpError::HostRefused(format!("{owner}.{op}")).into())
         }
         other => Err(InterpError::UnknownIntrinsic(other.to_string()).into()),
     }

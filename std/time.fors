@@ -1,5 +1,6 @@
 // std.time — the clock. Every operation is TOTAL: `time` has no error type
-// (R7). Surface: docs/spec/10-std.md Rule 45. Bodies are STUBS.
+// (R7). Surface: docs/spec/10-std.md Rule 45. F8: real bodies over the
+// host clock doors below.
 //
 // `now` is MONOTONIC: never decreases within a process, unaffected by
 // wall-clock adjustment, origin unspecified — so an Instant is meaningful
@@ -16,13 +17,34 @@ pub struct Wall { pub unix_nanos: i64 }
 pub struct Duration { pub nanos: u64 }
 
 impl Clock {
+    // F8: real bodies over the host clock (design §5.8 mechanism 2). The
+    // reading is MONOTONIC and, in this runtime, strictly increasing
+    // between two reads of one process, so `since` of a reversed pair is
+    // always the contract trap R45 names.
     pub fn now(let self: Self) -> Instant {
-        return Instant { nanos: 0 };
-    } // STUB, monotonic
+        return Instant { nanos: self.clock_mono() };
+    }
     pub fn wall(let self: Self) -> Wall {
-        return Wall { unix_nanos: 0 };
-    } // STUB
-    pub fn sleep(let self: Self, let d: Duration) {} // STUB
+        return Wall { unix_nanos: self.clock_wall() };
+    }
+    pub fn sleep(let self: Self, let d: Duration) {
+        self.clock_sleep(d.nanos);
+    }
+
+    // The host doors. Lowering intercepts a method literally spelled one of
+    // these ON THIS IMPL (`std.time.Clock`, ch04 R21) whose body is this
+    // self-recursive stand-in, and emits the matching intrinsic instead —
+    // the same shape as `Str.str_byte_len` (`std/mem/text.fors`). Every
+    // clock read is recorded and replayable (`--oracle-record`/`-replay`).
+    fn clock_mono(let self: Self) -> u64 {
+        return self.clock_mono();
+    }
+    fn clock_wall(let self: Self) -> i64 {
+        return self.clock_wall();
+    }
+    fn clock_sleep(let self: Self, let nanos: u64) {
+        self.clock_sleep(nanos);
+    }
 }
 
 impl Instant {

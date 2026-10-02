@@ -322,27 +322,74 @@ pub fn lower_build(
     for root in roots {
         type_names_for(&env, &mut build.tys, interner, root, &mut build.names);
     }
+    // F8: the root-capability identity of every `main` parameter type, for
+    // the entry shim (ch04 R8: "the runtime supplies each argument by that
+    // nominal type").
+    for f in build.fns.iter().filter(|f| f.name == "main") {
+        for (t, cap) in record_main_roots(&env, &build.tys, interner, f) {
+            build.names.insert_root(t, cap);
+        }
+    }
     build
 }
 
-/// ch04 R21's closed root-capability list, as `(module path, type)`: a value
-/// of one renders as `..` under ch02 R17 (its fields are the runtime's, not
-/// the program's). The same twelve `fors-check`'s `authority.rs` keeps
-/// (crate-private there, so restated here; both cite ch04 R21's closed list).
-const ROOT_CAPABILITY_TYPES: [(&str, &str); 12] = [
-    ("std.io", "Stdout"),
-    ("std.io", "Stderr"),
-    ("std.io", "Stdin"),
-    ("std.fs", "Dir"),
-    ("std.net", "Net"),
-    ("std.proc", "Exec"),
-    ("std.time", "Clock"),
-    ("std.rand", "Rng"),
-    ("std.env", "Env"),
-    ("std.env", "Args"),
-    ("std.gpu", "Device"),
-    ("std.mem", "Heap"),
-];
+/// ch04 R21's closed root-capability list is [`fors_fmir::caps::RootCap`]:
+/// a value of one renders as `..` under ch02 R17 (its fields are the
+/// runtime's, not the program's), and F8's entry shim constructs one per
+/// `main` parameter by it. The same twelve `fors-check`'s `authority.rs`
+/// keeps (crate-private there; both cite ch04 R21's closed list).
+///
+/// The root-capability type `head` declares, decided by the DECLARING
+/// file's module path (ch04 R8: "nominally", by what resolution reached,
+/// never by spelling — a user `module io;` with its own `Stdout` is not one).
+fn root_cap_of_head(
+    inputs: &[FileInput<'_>],
+    defs: &DefTable,
+    interner: &Interner,
+    head: DefId,
+) -> Option<fors_fmir::caps::RootCap> {
+    let row = defs.get(head)?;
+    let file = inputs.get(row.file.0 as usize)?;
+    let name = row.name?;
+    let module = file
+        .name
+        .iter()
+        .map(|s| String::from_utf8_lossy(interner.resolve(*s)).into_owned())
+        .collect::<Vec<_>>()
+        .join(".");
+    fors_fmir::caps::RootCap::from_path(&module, &String::from_utf8_lossy(interner.resolve(name)))
+}
+
+/// F8 (ch04 R8, design §5.9): the root-capability identity of every
+/// parameter of a lowered `main`, keyed by the parameter value's own
+/// UNQUALIFIED `TyId` — exactly what the interpreter's entry shim reads off
+/// the `ValDef::Param` rows. A parameter whose type is not one gets no row;
+/// the shim refuses that program by name rather than inventing a value.
+fn record_main_roots(
+    env: &Env<'_>,
+    tys: &TyStore,
+    interner: &Interner,
+    f: &LoweredFn,
+) -> Vec<(TyId, fors_fmir::caps::RootCap)> {
+    let mut out = Vec::new();
+    for (_, row) in f.decl.vals.all_rows() {
+        if !matches!(row.def(), fors_fmir::value::ValDef::Param(_)) {
+            continue;
+        }
+        let t = row.ty;
+        if t == NO_TY || t == TY_ERROR || t.0 as usize >= tys.len() {
+            continue;
+        }
+        let bare = tys.unqual(t);
+        if tys.tag(bare) != TyTag::Nominal {
+            continue;
+        }
+        if let Some(cap) = root_cap_of_head(env.inputs, env.defs, interner, DefId(tys.a(bare))) {
+            out.push((bare, cap));
+        }
+    }
+    out
+}
 
 /// F3 (ch02 R17): writes the [`fors_fmir::names::TypeName`] row of every
 /// NOMINAL type reachable from `root` through enum payloads, struct fields
@@ -406,10 +453,7 @@ fn type_names_for(
                     .map(|s| text(*s))
                     .collect::<Vec<_>>()
                     .join(".");
-                if ROOT_CAPABILITY_TYPES
-                    .iter()
-                    .any(|&(m, n)| m == module && n == name)
-                {
+                if fors_fmir::caps::RootCap::from_path(&module, &name).is_some() {
                     continue;
                 }
                 let is_allocator = allocator_trait.is_some_and(|tr| {
@@ -1187,6 +1231,9 @@ struct FnLower<'a> {
     facts: &'a BodyFacts,
     /// See [`Env::facts_all`].
     facts_all: &'a [(DefId, BodyFacts)],
+    /// The build's files: F8 reads a method OWNER's declaring module
+    /// through it (`fors_fmir::caps::RootCap` identity is by module path).
+    inputs: &'a [FileInput<'a>],
     tree: &'a Tree,
     tokens: &'a Tokens,
     source: &'a [u8],
@@ -1382,6 +1429,7 @@ impl<'a> FnLower<'a> {
             defs,
             facts,
             facts_all: env.facts_all,
+            inputs: env.inputs,
             tree: file.tree,
             tokens: file.tokens,
             source: file.source,
@@ -5463,6 +5511,19 @@ impl<'a> FnLower<'a> {
             LowerError::Unsupported("a by-reference argument with no place".into())
         })?;
         if self.kind(place) != NodeKind::NameExpr {
+            // F8 (`fs-name-dotdot-invalid-run-ok`'s `&buf.data[0 ..< 64]`):
+            // a projected place of AGGREGATE type — a slice of a field, a
+            // field that is itself an aggregate — lowers as its value, whose
+            // cell the callee shares by handle (the same reasoning as the
+            // aggregate-local case below: a `Slice` descriptor names its
+            // base's own cell, so the callee's writes land in the caller's
+            // array). A SCALAR projected place still needs a sub-range
+            // borrow stack, and `&out` of one a callee-created cell: both
+            // stay named refusals.
+            let pty = self.ty_of(place);
+            if !set && pty != NO_TY && pty != TY_ERROR && pty != TY_UNIT && !self.by_pointer(pty)? {
+                return self.lower_expr(place);
+            }
             return Err(LowerError::Unsupported(
                 "a by-reference argument to a projected place (its borrow stack is sub-range, \
                  F7/M2)"
@@ -5833,6 +5894,29 @@ impl<'a> FnLower<'a> {
     /// primitive's declaration shape; it would recurse forever if it ran,
     /// which is why lowering replaces the call with the intrinsic. A method
     /// with a body of its own never matches, whatever its name.
+    /// F8: the root-capability type (ch04 R21) whose inherent impl
+    /// declares method `def`, if any.
+    fn owner_root_cap(&self, def: DefId) -> Option<fors_fmir::caps::RootCap> {
+        let parent = self.defs.get(def).map(|r| r.parent)?;
+        if parent == fors_fir::NO_DEF {
+            return None;
+        }
+        let st = self.fir.sigs.self_ty(parent);
+        if st == NO_TY || st.0 as usize >= self.tys.len() {
+            return None;
+        }
+        let bare = self.tys.unqual(st);
+        if self.tys.tag(bare) != TyTag::Nominal {
+            return None;
+        }
+        root_cap_of_head(
+            self.inputs,
+            self.defs,
+            self.interner,
+            DefId(self.tys.a(bare)),
+        )
+    }
+
     fn is_self_recursive_stub(&self, def: DefId) -> bool {
         let Some((_, facts)) = self.facts_all.iter().find(|(d, _)| *d == def) else {
             return false;
@@ -6037,7 +6121,30 @@ impl<'a> FnLower<'a> {
             .filter(|t| *t != NO_TY)
             .and_then(|t| self.prim_of(t))
             == Some(PrimKind::Str);
+        // F8's host doors (design §5.8 mechanism 2, §5.9): a method of one
+        // of ch04 R21's root-capability types whose body is the
+        // self-recursive stand-in and whose spelling is one of these is the
+        // matching host intrinsic. Scoped to the OWNER's nominal identity
+        // (`std.time.Clock`, ...) AND the stand-in shape, so neither a user
+        // type that spells the method nor a std method with a real body is
+        // swallowed. The real-clock/entropy reads behind them live in
+        // `fors-interp`'s host module and nowhere else.
+        let host_door = {
+            use fors_fmir::caps::RootCap;
+            let owner_cap = self.owner_root_cap(def);
+            match (owner_cap, self.interner.resolve(method)) {
+                (Some(RootCap::Clock), b"clock_mono") => Some("clock_mono"),
+                (Some(RootCap::Clock), b"clock_wall") => Some("clock_wall"),
+                (Some(RootCap::Clock), b"clock_sleep") => Some("clock_sleep"),
+                (Some(RootCap::Rng), b"entropy_u64") => Some("entropy_u64"),
+                (Some(RootCap::Dir), b"fs_door") => Some("fs_door"),
+                (Some(RootCap::Net), b"net_door") => Some("net_door"),
+                _ => None,
+            }
+            .filter(|_| self.is_self_recursive_stub(def))
+        };
         let intrinsic_name = match self.interner.resolve(method) {
+            _ if host_door.is_some() => host_door,
             b"write_line" => Some("stdout_write_line"),
             b"write_uint" => Some("stdout_write_uint"),
             // F7's §5.8 byte-length/byte-at/byte-slice stand-ins for `Str`
