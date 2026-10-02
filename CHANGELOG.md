@@ -7,7 +7,8 @@ commit history, which predates the Conventional Commits convention.
 
 | Language | Compiler | Meaning |
 |---|---|---|
-| `lang-v0.5.2` | `compiler-v0.8.0` | current |
+| `lang-v0.5.3` | `compiler-v0.9.0` | current |
+| `lang-v0.5.2` | `compiler-v0.8.0` | FMIR F7 in part |
 | `lang-v0.5.2` | `compiler-v0.7.0` | checker I8, the flow pass |
 | `lang-v0.5.2` | `compiler-v0.6.0` | checker I7 |
 | `lang-v0.5.2` | `compiler-v0.5.0` | checker I6, F4/F6 interpreter halves, ch05 corpus |
@@ -18,6 +19,14 @@ commit history, which predates the Conventional Commits convention.
 | `lang-v0.5.0` | `compiler-v0.1.0` | first tagged front end |
 
 ## Language
+
+### lang-v0.5.3 — 2026-10-02
+
+Clarification (PATCH). Chapter 10 S0027: `Option.unwrap_or` is declared in
+a `T: Droppable` block — its `some` arm drops `fallback`, which chapter 01
+Rule 22c forbids for a rigid `T`; the same round-6 move the chapter already
+made for `clear` and `deinit`. No rule's meaning changes. (Surfaced by the
+type checker's increment I8b, the first to check `std` under Rule 22.)
 
 ### lang-v0.5.2 — 2026-10-02
 
@@ -87,6 +96,58 @@ measurement, the grammar, names and visibility), with a conformance corpus and
 an independent reference parser.
 
 ## Compiler
+
+### compiler-v0.9.0 — 2026-10-02
+
+Type checker increment **I8b**, the round-6 flow, produced by one agent and
+independently verified by another, then checked against `std` under its
+own rules on the branch. Implements `lang-v0.5.3`; still no code generator.
+
+- **Linear obligations (ch01 R22–R22i).** `lin(T)` lives in `fors-fir`
+  (`ty::lin`, `droppable`, `open_leaves`, `lin_components`): a memoised
+  structural descent over a normalised type with its arguments
+  substituted, true at a head with an `impl Linear` or `Own`, at any
+  component, and at a rigid parameter or neutral projection that is not
+  `Droppable`; it never enters `Own`/`Ref`/`Arena`/`Slice`/`Range`/mask.
+  The flow pass owes each linear binding at its scope and settles it at
+  every static exit (block end, `return`, `raise`, the error edge of `?`,
+  `break`, `continue`) by R22d's discharge set — a whole-place move,
+  destructuring that binds every linear component, or a deferred body —
+  and reports R22i's five-field message (name or "the result of `f()` at
+  L:C", the type as R20 shows it, the exit, its location, the consumers
+  computed from the head's defining module).
+- **`defer`/`errdefer` regions (R23–R23f)** and R19d's closure source sets.
+- **D7/D8/D9 for lowering.** `BodyFacts` publishes `defer_regions`,
+  `linear_obligations` (one `Discharge` per owed obligation per exit edge,
+  decided from the reaching path) and `scoped_sources`; D7 is
+  cross-checked against `fors_fmir::exit::expected_pending` over eight
+  corpus files, and `ExitEdge` documents the R23a textual cut lowering
+  must reproduce.
+- **`std` under the new rules.** The five container releases
+  (`Vec.deinit`/`deinit_empty`, `String.deinit`, `Map.deinit`/
+  `deinit_empty`) have real bodies that destructure `self` and free the
+  block; `Option.unwrap_or` moved to a `T: Droppable` block (`lang-v0.5.3`);
+  the five allocator `free` stubs are documented stand-ins until the
+  deallocation primitive exists. **Two diagnostics stay, listed and
+  visible:** `Vec.push` and `Map.insert` lose the sunk value on their
+  allocation-failure exit, which R22c forbids for a rigid `T` — the
+  declared signatures (ch10 S0024/S0025) are unimplementable for a linear
+  `T` and wait for the owner.
+- **Coverage.** 240 of chapter 09's 246 conformance tests on, 6 pending
+  (one owner decision on R38(c) in CHECK position; five `adaptor-*` files
+  whose `Iterator.map`/`take` live only in `std`, mechanisms proved by
+  local-trait probes); `PENDING_SPEAKS` is empty; 732 Rust tests.
+- **Verification found and fixed before merge.** From a 71-program
+  mutation set: a linear binding born inside an outer `let`'s initialiser
+  (an arm binding, a closure-body local) was never checked at its own
+  scope's exit; a linear temporary in a non-consuming call position was
+  dropped silently (R22h); `sink self` was exempt even when `self` has a
+  linear component; D8's discharges were path-insensitive; D7's
+  `stmt_order` was a node index.
+- **Readings recorded, not changed.** R23b is read as "a visible
+  error-exit context and the `errdefer` body consumes something" (three
+  corpus files contradict its letter); R22c's rigid clause applies at
+  depth 0 only, forced by a chapter-09 `check-ok` file.
 
 ### compiler-v0.8.0 — 2026-10-02
 
