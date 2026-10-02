@@ -7,7 +7,8 @@ commit history, which predates the Conventional Commits convention.
 
 | Language | Compiler | Meaning |
 |---|---|---|
-| `lang-v0.5.3` | `compiler-v0.16.0` | current |
+| `lang-v0.5.3` | `compiler-v0.17.0` | current |
+| `lang-v0.5.3` | `compiler-v0.16.0` | checker I10, the other chapters' obligations |
 | `lang-v0.5.3` | `compiler-v0.15.0` | checker I10b, the silent-TY_ERROR sweep gate |
 | `lang-v0.5.3` | `compiler-v0.14.0` | FMIR F4/F6, defer and arena lowering |
 | `lang-v0.5.3` | `compiler-v0.13.0` | FMIR F-mono, monomorphisation and pattern lowering |
@@ -103,6 +104,42 @@ measurement, the grammar, names and visibility), with a conformance corpus and
 an independent reference parser.
 
 ## Compiler
+
+### compiler-v0.17.0 — 2026-10-03
+
+Type checker increment **I10c**, produced by one agent and independently
+verified by another. Implements `lang-v0.5.3`; still no code generator.
+
+- **The prelude-opaque names bind to `std`.** When package `std` is in
+  the build, `Vec`, `Map`, `Buffer`, `String`, `Allocator`,
+  `PageAllocator`, `AllocError` and `Utf8Error` resolve to std's real
+  declarations (ch10 R2, ch08 R17) — in the resolver, bound from each
+  name's declaring module before `use` linking, so `use std.mem.Vec;`
+  beside the prelude name is the same item and never a collision.
+  Without `std` the names stay opaque exactly as before. Expressions
+  over these types are now typed instead of silently absorbed, and the
+  Iterator-adaptor corpus checks for a real reason.
+- **Four checker judgements the opacity had hidden**, fixed where they
+  live: a bare all-brand head in a `with` header takes the block's
+  brand; `defer expr;` is checked as the expression statement it
+  abbreviates (a false T0026 on `deinit` is gone); an `Iterator` bound
+  is satisfied by either the language-known row or `std.mem.seq`'s
+  (ch10 R32, one trait not two); an annotation that itself failed to
+  lower no longer draws a second diagnostic at the call.
+- **Coverage.** The silent-`TY_ERROR` allow-list shrank from 166 to 43
+  rows (123 retired, 14 re-filed under their true reason); a new sweep
+  asserts every std-touching check-ok/run-ok target has at least one
+  node typed against a std declaration; the ch09 harness gains a std
+  mode and two more `PENDING_09` rows are on (6 → 4). 940 Rust tests (20 held out with a stated reason).
+- **Verification found and fixed before merge.** `use std.mem.Vec;`
+  drew a false N0013 (the binding ran after use linking); repaired with
+  a corpus regression guard. Measured and left for the `Iterator` owner:
+  binding `Iterator` itself to std's row would turn on three more
+  pending files but breaks `Self.Item` projection identity.
+- **For the owner.** ch10 S7/S30 say every std error type is `Copyable`
+  but `std` declares no such impls for `AllocError`/`Utf8Error`; one
+  10-std check-error file yields no diagnostic and no gate covers it;
+  three 08-names check-ok files already drew diagnostics with `std`.
 
 ### compiler-v0.16.0 — 2026-10-02
 
