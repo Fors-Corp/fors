@@ -559,11 +559,41 @@ impl Wf<'_> {
         }
         let out = self.fir.sigs.assoc(r.def);
         let rhs = self.fir.sigs.assocs.rhs_of(out, self.prelude.output_name);
+        // F7 (fmir-interpreter.md §4.1's gap): record which `Index` impl
+        // this `a[i]` resolved to — and, when exactly one `IndexMut` impl
+        // also matches this head, its `at_mut` too — so lowering has a
+        // fact to read for `a[i]`/`a[i] = v` on a user nominal type
+        // (`Buffer`, `Vec`, ...). Same unambiguous-impl scope as the rest
+        // of this function; `index_several`'s several-impl case is I4's.
+        let at = self.index_method_def(r.def, b"at");
+        let at_mut = {
+            let idx_mut_trait = self.prelude.traits[fors_fir::prelude::tr::INDEXMUT];
+            let mut_rows = self.impls.bucket(idx_mut_trait, head);
+            if mut_rows.len() == 1 {
+                let rm = self.impls.row(mut_rows[0]);
+                self.index_method_def(rm.def, b"at_mut")
+            } else {
+                None
+            }
+        };
+        if let Some(at) = at {
+            cx.facts
+                .set_member(_node as u32, MemberTarget::IndexImpl { at, at_mut });
+        }
         if rhs == NO_TY {
             TY_ERROR
         } else {
             self.subst_impl(rhs, &b)
         }
+    }
+
+    /// The `DefId` of the method named `name` directly inside impl `def`
+    /// (`Index::at`'s or `IndexMut::at_mut`'s own implementation).
+    fn index_method_def(&self, def: DefId, name: &[u8]) -> Option<DefId> {
+        self.impl_method_names(def)
+            .into_iter()
+            .find(|&(sym, _)| self.names.resolve(sym) == name)
+            .map(|(_, d)| d)
     }
 
     /// The impl's own parameters, determined from its self type against

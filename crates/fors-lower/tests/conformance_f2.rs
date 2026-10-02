@@ -272,6 +272,385 @@ fn gate_test(rel: &str) {
     check_corpus_file(rel, &HostEnv::default());
 }
 
+/// F7's probe: every `std/*.fors` module, named the way `ch08 R17`'s
+/// synthetic table does, so `has_std` goes true and prelude names (`Buffer`,
+/// `Vec`, `Str`, `Option`, ...) resolve against the real bodies instead of
+/// the signature-only stand-in.
+fn std_module_sources() -> Vec<(Vec<Vec<u8>>, Vec<u8>)> {
+    let root = repo_root().join("std");
+    let files: &[(&str, &[&str])] = &[
+        ("io.fors", &["std", "io"]),
+        ("mem.fors", &["std", "mem"]),
+        ("mem/alloc.fors", &["std", "mem", "alloc"]),
+        ("mem/vec.fors", &["std", "mem", "vec"]),
+        ("mem/seq.fors", &["std", "mem", "seq"]),
+        ("mem/text.fors", &["std", "mem", "text"]),
+        ("mem/hashmap.fors", &["std", "mem", "hashmap"]),
+        ("fs.fors", &["std", "fs"]),
+        ("net.fors", &["std", "net"]),
+        ("proc.fors", &["std", "proc"]),
+        ("rand.fors", &["std", "rand"]),
+        ("time.fors", &["std", "time"]),
+        ("env.fors", &["std", "env"]),
+        ("ffi.fors", &["std", "ffi"]),
+        ("gpu.fors", &["std", "gpu"]),
+    ];
+    files
+        .iter()
+        .map(|(rel, segs)| {
+            let src = fs::read(root.join(rel)).expect("std module reads");
+            let segs: Vec<Vec<u8>> = segs.iter().map(|s| s.as_bytes().to_vec()).collect();
+            (segs, src)
+        })
+        .collect()
+}
+
+/// Like [`build_and_run`], but builds the whole `std/` package alongside
+/// `src` (F7: real bodies need the real sources in the build, not the
+/// synthetic prelude stand-in).
+fn build_and_run_with_std(label: &str, stem: &str, src: &[u8], host: &HostEnv) -> Run {
+    let mut interner = Interner::new();
+    let mut sources: Vec<Vec<u8>> = vec![src.to_vec()];
+    let mut names: Vec<Segments> = vec![module_name_of(stem, src, &mut interner)];
+    for (segs, s) in std_module_sources() {
+        names.push(
+            segs.iter()
+                .map(|b| interner.intern(b))
+                .collect::<Segments>(),
+        );
+        sources.push(s);
+    }
+    let parsed: Vec<_> = sources.iter().map(|s| parse_file(s)).collect();
+    let inputs: Vec<FileInput> = parsed
+        .iter()
+        .zip(sources.iter())
+        .zip(names.iter())
+        .map(|((p, s), n)| FileInput {
+            tree: &p.tree,
+            tokens: &p.tokens,
+            source: s,
+            name: n.clone(),
+        })
+        .collect();
+    for p in &parsed {
+        assert!(p.diags.is_empty(), "{label}: parse diags: {:?}", p.diags);
+    }
+    let resolved = fors_resolve::resolve_in_package(&mut interner, &inputs, Some(0), None);
+    let resolve_diags: Vec<String> = resolved
+        .files
+        .iter()
+        .enumerate()
+        .flat_map(|(i, f)| f.diagnostics.iter().map(move |d| (i, d)))
+        .map(|(i, d)| {
+            format!(
+                "{}: {}: {}",
+                names_debug(&inputs, i),
+                d.code.as_string(),
+                d.message
+            )
+        })
+        .collect();
+    assert!(
+        resolve_diags.is_empty(),
+        "{label}: resolve diags: {resolve_diags:#?}"
+    );
+    let out = fors_check::check_build(&inputs, &resolved, &mut interner);
+    let check_diags: Vec<String> = out
+        .diagnostics
+        .iter()
+        .map(|d| {
+            format!(
+                "{}:{}: {}: {}",
+                names_debug(&inputs, d.file.index()),
+                d.start,
+                d.code.as_string(),
+                d.message
+            )
+        })
+        .collect();
+    assert!(
+        check_diags.is_empty(),
+        "{label}: check diags: {check_diags:#?}"
+    );
+    let lowered = fors_lower::lower_build(&inputs, &out, &mut interner);
+    for f in &lowered.fns {
+        let diags = fors_fmir::verify::verify(&f.decl);
+        assert!(
+            diags.is_empty(),
+            "{label}: lowered {} must verify clean: {diags:?}",
+            f.name
+        );
+    }
+    assert!(
+        lowered.fns.iter().any(|f| f.name == "main"),
+        "{label}: lower diags: {:?}",
+        lowered.diags
+    );
+    let contract_checks = lowered
+        .fns
+        .iter()
+        .flat_map(|f| f.decl.insts.all_rows())
+        .filter(|(_, row)| row.op.is_contract_check())
+        .count();
+    let fns: Vec<_> = lowered
+        .fns
+        .into_iter()
+        .map(|f| fors_interp::ProgFn {
+            name: f.name,
+            decl: f.decl,
+            strings: f.strings,
+            intrinsics: f.intrinsics,
+        })
+        .collect();
+    let prog = Program::entry_by_name(fns, "main", Config::v0_1()).expect("a main");
+    let outcome = run_with_host(&prog, &out.fir.tys, host).expect("a verified program runs");
+    let observed = match entry_exit(&outcome) {
+        ExitStatus::Trap(k) => Observed::Trap(k),
+        ExitStatus::Status(code) => Observed::Status(code, outcome.stdout),
+    };
+    Run {
+        observed,
+        contract_checks,
+    }
+}
+
+fn names_debug(inputs: &[FileInput], i: usize) -> String {
+    format!("{:?}", inputs[i].name)
+}
+
+fn gate_test_std(rel: &str) {
+    let path = repo_root().join("tests/conformance").join(rel);
+    let src = fs::read_to_string(&path).expect("corpus file reads");
+    let stem = path.file_stem().unwrap().to_string_lossy().into_owned();
+    let d = parse_directive(&src);
+    let run = build_and_run_with_std(rel, &stem, src.as_bytes(), &HostEnv::default());
+    match d.expect.as_str() {
+        "trap" => {
+            let Observed::Trap(k) = run.observed else {
+                panic!("{rel}: expected trap, got {:?}", run.observed);
+            };
+            assert_eq!(k.as_str(), d.detail, "{rel}: trap kind mismatch");
+        }
+        "run-ok" => {
+            let Observed::Status(code, ref stdout) = run.observed else {
+                panic!("{rel}: expected run-ok, got {:?}", run.observed);
+            };
+            assert_eq!(code, 0, "{rel}: exit status");
+            // README §7.2a: `run-ok`'s stdout bytes equal `detail` EXACTLY
+            // (`(no output)` = empty) — no implicit trailing newline. F2's
+            // own `check_source` appends one because every F2 test prints
+            // with `write_line`; an F7 test may use `write_uint` (no
+            // newline), so this runner compares literally instead.
+            let expected: &[u8] = if d.detail == "(no output)" {
+                b""
+            } else {
+                d.detail.as_bytes()
+            };
+            assert_eq!(&stdout[..], expected, "{rel}: stdout");
+        }
+        "run-error" => {
+            let Observed::Status(code, _) = run.observed else {
+                panic!("{rel}: expected run-error, got {:?}", run.observed);
+            };
+            let want: i32 = d
+                .detail
+                .strip_prefix("status:")
+                .expect("run-error detail pins a status")
+                .trim()
+                .parse()
+                .expect("status is an int");
+            assert_eq!(code, want, "{rel}: exit status");
+        }
+        other => panic!("{rel}: unhandled expect kind {other:?}"),
+    }
+}
+
+/// F7 (a): "`std` must check clean ... and add a workspace test that
+/// asserts it (`fors check` over `std/` yields no diagnostic) so it
+/// cannot regress silently." `cargo run -p fors-cli -- check std` is NOT
+/// this test: it names every module WITHOUT a `std` prefix and checks it
+/// as package `std`, which makes `has_std` false (no module is literally
+/// named `std.*`) and sends every `use std.mem.alloc;`-shaped import in
+/// `std`'s OWN sources through ch08 R17's synthetic-table fallback,
+/// silently `Poisoned` rather than resolved — so a real cross-submodule
+/// break (verified against this file's earlier state, which this test
+/// would have caught) is invisible to it. This test instead builds `std`
+/// exactly as a consuming program does (`std`-prefixed module names, real
+/// cross-module resolution; see `build_and_run_with_std`), which is what
+/// `has_std` actually requires to go true.
+#[test]
+fn std_checks_clean() {
+    let mut interner = Interner::new();
+    let mut sources: Vec<Vec<u8>> = Vec::new();
+    let mut names: Vec<Segments> = Vec::new();
+    for (segs, s) in std_module_sources() {
+        names.push(
+            segs.iter()
+                .map(|b| interner.intern(b))
+                .collect::<Segments>(),
+        );
+        sources.push(s);
+    }
+    let parsed: Vec<_> = sources.iter().map(|s| parse_file(s)).collect();
+    for p in &parsed {
+        assert!(p.diags.is_empty(), "std/ must parse clean: {:?}", p.diags);
+    }
+    let inputs: Vec<FileInput> = parsed
+        .iter()
+        .zip(sources.iter())
+        .zip(names.iter())
+        .map(|((p, s), n)| FileInput {
+            tree: &p.tree,
+            tokens: &p.tokens,
+            source: s,
+            name: n.clone(),
+        })
+        .collect();
+    let resolved = fors_resolve::resolve_in_package(&mut interner, &inputs, None, None);
+    let resolve_diags: Vec<String> = resolved
+        .files
+        .iter()
+        .enumerate()
+        .flat_map(|(i, f)| f.diagnostics.iter().map(move |d| (i, d)))
+        .map(|(i, d)| {
+            format!(
+                "{}: {}: {}",
+                names_debug(&inputs, i),
+                d.code.as_string(),
+                d.message
+            )
+        })
+        .collect();
+    assert!(
+        resolve_diags.is_empty(),
+        "std/ must resolve clean: {resolve_diags:#?}"
+    );
+    let out = fors_check::check_build(&inputs, &resolved, &mut interner);
+    let check_diags: Vec<String> = out
+        .diagnostics
+        .iter()
+        .map(|d| {
+            format!(
+                "{}:{}: {}: {}",
+                names_debug(&inputs, d.file.index()),
+                d.start,
+                d.code.as_string(),
+                d.message
+            )
+        })
+        .collect();
+    assert!(
+        check_diags.is_empty(),
+        "std/ must check clean: {check_diags:#?}"
+    );
+}
+
+/// F7 verification: the `str_byte_len`/`str_byte_at`/`str_byte_slice`
+/// stand-ins are intercepted for `Str`'s OWN impl only. A user method that
+/// merely shares the spelling runs its own body — before the fix it was
+/// hijacked into the intrinsic, which then read a non-`Str` receiver as
+/// handle `1` and printed `0`.
+#[test]
+fn user_method_named_like_a_str_intrinsic_keeps_its_body() {
+    const SRC: &[u8] = b"\
+module app;
+needs { io.stdout };
+use std.io;
+
+struct B { v: u64 }
+
+impl B {
+    fn str_byte_len(let self: Self) -> usize {
+        return 7;
+    }
+}
+
+fn main(inout out: io.Stdout) {
+    let b: B = B { v: 1 };
+    out.write_uint(b.str_byte_len() as u64);
+}
+";
+    let run = build_and_run_with_std(
+        "user_method_named_like_a_str_intrinsic",
+        "user_method_named_like_a_str_intrinsic",
+        SRC,
+        &HostEnv::default(),
+    );
+    let Observed::Status(code, ref stdout) = run.observed else {
+        panic!("expected run-ok, got {:?}", run.observed);
+    };
+    assert_eq!(code, 0);
+    assert_eq!(&stdout[..], b"7", "the user's own body, not the intrinsic");
+}
+
+// -- design §9's F7 GATE (6 tests) -----------------------------------------
+
+#[test]
+fn gate_str_index_is_bytes_run_ok() {
+    gate_test_std("10-std/str-index-is-bytes-run-ok.fors");
+}
+
+#[test]
+#[ignore = "HELD OUT: `s.slice(0, 2) else |e| { ... }` needs the Handler/\
+            try_br machinery (F3), which `fors-lower` rejects outright \
+            today (NodeKind::Handler/TryExpr/RaiseStmt => LowerError::\
+            Failure) — F3 waits on I10 per the task brief. `Str.slice`'s \
+            own body (std/mem/text.fors) is real and would lower once \
+            `raise` does; the test itself needs the `else` handler too."]
+fn gate_str_slice_non_boundary_raises_run_ok() {
+    gate_test_std("10-std/str-slice-non-boundary-raises-run-ok.fors");
+}
+
+#[test]
+#[ignore = "HELD OUT: `Buffer.empty()` (std/mem.fors) must produce a \
+            Buffer[T, N] for an UNBOUNDED T, which needs an \
+            uninitialised-aggregate construction primitive no Fors \
+            syntax or FMIR op exposes today (no `T::default`, no \
+            `@memset` call surface, no `rawptr` accessor to target one \
+            manually — the same rawptr-read gap `SliceIter.load`/\
+            `Scalars.decode` document). Separately, `fors-lower`'s \
+            general `Bracket` path only lowers a RANGE index \
+            (`lower_slice_range` rejects a bare scalar index with \
+            `LowerError::Unsupported(\"indexing\")`), so `buf[10] = 1` \
+            has no general lowering to read (d)'s new `BodyFacts::\
+            IndexImpl` fact from yet, for ANY receiver, not only a user \
+            nominal one. Both are pre-existing lowering-engine gaps \
+            bigger than F7's named scope; (d) itself is done and \
+            probed (`crates/fors-check/tests/probes.rs::\
+            f7_user_index_records_its_resolved_impl`)."]
+fn gate_buffer_index_past_len_trap() {
+    gate_test_std("10-std/buffer-index-past-len-trap.fors");
+}
+
+#[test]
+#[ignore = "HELD OUT: needs the `else |e| { ... }` handler (F3's try_br, \
+            not lowered today — see `gate_str_slice_non_boundary_raises_\
+            run_ok`'s note) AND `for`/`while` loops in a std body \
+            (`SliceIter.next` iterates; any `for`/`while` statement \
+            anywhere in a function's subtree is `LowerError::Loop` in \
+            `fors-lower` today, a pre-existing, undocumented-in-F7 gap \
+            bigger than this increment: NONE of F1's own 19-test gate \
+            exercises a loop body either, despite the design doc listing \
+            `plain-for-accumulator-accepted-run-ok`, which has no #[test] \
+            wiring it up)."]
+fn gate_try_for_each_error_propagates_run_ok() {
+    gate_test_std("10-std/try-for-each-error-propagates-run-ok.fors");
+}
+
+#[test]
+#[ignore = "HELD OUT, for three independent reasons named in the task \
+            brief and confirmed empirically: `a.create(1)?`/`v.push(...)\
+            ?` need `?`/try_br (F3, not lowered); `fill[A, L](...)` and \
+            `Vec[Own[i64, A], A]` are generic (fors-lower refuses a call \
+            to, or a body with, an unresolved generic — see `gate_\
+            buffer_index_past_len_trap`'s note on the same monomorphisation \
+            gap); and the allocator obligation machinery is F6's lowering \
+            half, which the task brief explicitly permits holding out \
+            pending I8b."]
+fn gate_vec_deinit_empty_nonempty_trap() {
+    gate_test_std("10-std/vec-deinit-empty-nonempty-trap.fors");
+}
+
 /// `tests/conformance/README.md`: "A `status: 2` test is run with the
 /// standard OUTPUT descriptor closed". A real pipe whose read end is
 /// closed before `main` runs; the shim's `SIG_IGN` is what makes the

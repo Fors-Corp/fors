@@ -99,6 +99,14 @@ fn write_backtrace(w: &mut impl Write, frames: &[BacktraceFrame]) -> std::io::Re
 mod tests {
     use super::*;
 
+    /// `FORS_BACKTRACE` is process-global and `cargo test` runs this
+    /// module's tests on parallel threads: every test that sets, removes
+    /// or depends on the variable's absence holds this lock for its whole
+    /// body, or one test's `remove_var` lands between another's `set_var`
+    /// and its read (F7 verification: that race failed about one run in
+    /// five).
+    static ENV_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
     fn frames() -> Vec<BacktraceFrame> {
         vec![BacktraceFrame {
             func: "main".into(),
@@ -127,12 +135,13 @@ mod tests {
     /// rather than two tests racing over it.
     #[test]
     fn a_backtrace_appears_only_under_fors_backtrace_1() {
+        let _env = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let previous = std::env::var(BACKTRACE_ENV).ok();
 
         // SAFETY (both `set_var`/`remove_var` calls): this test owns the
-        // variable for its duration and restores it; no other test in this
-        // crate reads it, and `cargo test` threads do not share it with a
-        // concurrent reader because this is the only reader.
+        // variable for its duration under `ENV_LOCK` and restores it; the
+        // only other test touching it (`a_ub_report_goes_through_the_
+        // same_site`) takes the same lock, so no concurrent reader exists.
         unsafe { std::env::remove_var(BACKTRACE_ENV) };
         let mut off = Vec::new();
         report_trap(&mut off, TrapKind::Bounds, "a.fors", 3, 4, &frames()).unwrap();
@@ -160,7 +169,9 @@ mod tests {
 
     #[test]
     fn a_ub_report_goes_through_the_same_site() {
+        let _env = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let previous = std::env::var(BACKTRACE_ENV).ok();
+        // SAFETY: same ownership-under-`ENV_LOCK` argument as the test above.
         unsafe { std::env::remove_var(BACKTRACE_ENV) };
         let r = UbReport::new(crate::ub::UbClass::LinearLeak, 4, (9, 2), "`v` is owed");
         let mut out = Vec::new();

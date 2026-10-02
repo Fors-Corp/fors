@@ -24,6 +24,12 @@ pub use std.mem.alloc.AllocError,
 pub use std.mem.vec.Vec, std.mem.vec.try_collect_into;
 pub use std.mem.hashmap.Map, std.mem.hashmap.Hash;
 pub use std.mem.text.String, std.mem.text.Utf8Error, std.mem.text.Scalars;
+// `map`/`filter`/`take`/`skip`/`zip`/`enumerate`/`count`/`fold`/`for_each`/
+// `all`/`any`/`find`/`try_fold`/`try_for_each` are PROVIDED METHODS of the
+// `Iterator` trait (R32-R35), reached by `.method()` syntax through the
+// trait itself, never as free functions of this module — re-exporting them
+// here was stale and (once real `std.mem.seq` sources are linked into a
+// build) is a resolve error: this module has no such `pub` items.
 pub use std.mem.seq.SliceIter,
     std.mem.seq.iter,
     std.mem.seq.Mapped,
@@ -31,21 +37,7 @@ pub use std.mem.seq.SliceIter,
     std.mem.seq.Taken,
     std.mem.seq.Skipped,
     std.mem.seq.Zipped,
-    std.mem.seq.Enumerated,
-    std.mem.seq.map,
-    std.mem.seq.filter,
-    std.mem.seq.take,
-    std.mem.seq.skip,
-    std.mem.seq.zip,
-    std.mem.seq.enumerate,
-    std.mem.seq.count,
-    std.mem.seq.fold,
-    std.mem.seq.for_each,
-    std.mem.seq.all,
-    std.mem.seq.any,
-    std.mem.seq.find,
-    std.mem.seq.try_fold,
-    std.mem.seq.try_for_each;
+    std.mem.seq.Enumerated;
 
 // The named constant of R13, fixed at 16 until measured (ch06).
 pub const MEM_MAX_ALIGN: usize = 16;
@@ -310,12 +302,15 @@ impl[T, N: usize] Buffer[T, N] {
         return self.data[0..<self.len];
     }
 
+    // The destructuring form ch01 R22d(ii) prescribes: a `match` whose arm
+    // binds every component takes the whole value apart, where the field
+    // expression `move self.data` would be the partial move R4a(c) forbids.
     pub fn into_iter(sink self: Self) -> BufferIter[T, N] {
-        return BufferIter {
-            at: 0,
-            len: self.len,
-            data: move self.data
-        }; // STUB: a partial move, ch01 R4a(c)
+        match self {
+            Buffer { len: let len, data: let data } => {
+                return BufferIter { at: 0, len: len, data: move data };
+            }
+        }
     }
 }
 
@@ -353,9 +348,25 @@ impl[T: Droppable, N: usize] Iterator for BufferIter[T, N] {
     fn next(inout self: Self) -> Option[Self.Item] {
         if self.at < self.len {
             self.at = self.at + 1;
-            return self.take_at(self.at - 1); // STUB: move out of data[at]
+            return self.take_at(self.at - 1);
         }
         return none;
+    }
+}
+
+impl[T: Droppable, N: usize] BufferIter[T, N] {
+    // Moves the element at `i` out of `data`. In the surface language that
+    // is `move self.data[i]`, a partial move out of an aggregate, which
+    // ch01 R4a(c) forbids outright (the same ban that makes an array of
+    // linear elements ill-formed, R22b) — so, like `SliceIter.load` and
+    // `Scalars.decode`, this is a declared, real signature with a
+    // self-referencing stand-in body until `rawptr` has a read primitive
+    // (ch09 R57) to move the element out from under the array. `next`'s
+    // invariant stays: every `i` it passes is `< len`, exactly once, in
+    // ascending order, so no index is ever read twice.
+    @unsafe(invariant: "i < len, and data[i] has not been taken")
+    fn take_at(inout self: Self, let i: usize) -> Option[T] {
+        return self.take_at(i);
     }
 }
 

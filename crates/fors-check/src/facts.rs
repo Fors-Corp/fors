@@ -63,6 +63,16 @@ pub enum MemberTarget {
     Field { head: DefId, index: u32 },
     /// The `len` builtin on `Array`/`Slice`/`vector` (R42).
     LenBuiltin { head: DefId },
+    /// F7 (fmir-interpreter.md §4.1's gap): the resolved `Index`/
+    /// `IndexMut` impl for `a[i]` on a USER nominal type — `member.rs`'s
+    /// `user_index` decided this (R29's unambiguous-impl case only, same
+    /// scope as `Field`/`LenBuiltin`) but never recorded it, so lowering
+    /// had no fact to read for `a[i]`/`a[i] = v` on e.g. `Buffer`/`Vec`.
+    /// `at` is `Index::at`'s method `DefId`; `at_mut` is `IndexMut::
+    /// at_mut`'s, when exactly one `IndexMut` impl also matches (absent
+    /// otherwise — a write through that index is then unresolved, as
+    /// before this fact existed).
+    IndexImpl { at: DefId, at_mut: Option<DefId> },
 }
 
 /// One body's typed side table, indexed by `node - start` exactly like

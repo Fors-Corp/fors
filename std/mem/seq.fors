@@ -149,9 +149,24 @@ impl[T: Copyable] Iterator for SliceIter[T] {
     fn next(inout self) -> Option[Self.Item] {
         if self.at < self.n {
             self.at = self.at + 1;
-            return self.load(self.at - 1); // STUB
+            return self.load(self.at - 1);
         }
         return none;
+    }
+}
+
+impl[T: Copyable] SliceIter[T] {
+    // Reads `*(base + i)` as a `T` (`i < n` by `next`'s own guard).
+    // `rawptr` has no accessor anywhere in this build (by design: it is
+    // the FFI-opaque, address-tracked primitive of ch09 R57/A0015) and
+    // this increment adds no intrinsic, so — like `alloc.own_raw`/
+    // `disown_raw` above it — the body stays a self-referencing stand-in
+    // until a later increment gives `rawptr` a read primitive; F7's own
+    // gate does not exercise it (`try_for_each`'s test is held out on
+    // `try_br`, the one caller that would run this).
+    @unsafe(invariant: "base and n span valid T storage for this iterator's life; i < n")
+    fn load(inout self: Self, let i: usize) -> Option[T] {
+        return self.load(i);
     }
 }
 

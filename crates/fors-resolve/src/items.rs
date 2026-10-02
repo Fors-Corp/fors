@@ -728,9 +728,19 @@ pub fn build_universe_in_package(
                         // The `for` token sits between the impl's two
                         // header-type children, so it is not in `own_span`
                         // (which stops at the first child) — scan the
-                        // whole node's own range instead.
+                        // node's HEADER range instead: up to the first
+                        // member's own start, never into a method body,
+                        // where an ordinary `for` LOOP statement would
+                        // otherwise be misread as the header's `for`.
                         let (fs, fe) = f.tree.token_range(node);
-                        (fs as usize..fe as usize)
+                        let body_start = (0..f.decls.len())
+                            .filter(|&row| f.decls.parent[row] == i as u32)
+                            .map(|row| f.decls.range_start[row])
+                            .min()
+                            .unwrap_or(fe)
+                            .min(fe);
+                        (fs..body_start)
+                            .map(|t| t as usize)
                             .any(|t| is_sig(f.tokens, t) && f.tokens.kinds[t] == TokenKind::KwFor)
                     };
                     // Rule 27 (round 4): methods and associated types
@@ -1167,7 +1177,10 @@ fn bind_use_name(
             (Entity::PreludeModule(a, _), Entity::PreludeModule(b, _)) => a == b,
             _ => false,
         };
-        if !same && !poisoned {
+        if same || poisoned {
+            return;
+        }
+        if !scope.in_std {
             diags.push((
                 from,
                 Diagnostic::new(
@@ -1177,8 +1190,18 @@ fn bind_use_name(
                     "import binds a prelude name to a different entity".to_string(),
                 ),
             ));
+            return;
         }
-        return;
+        // Round 6 (ch10 R32, ch08 R13's same-entity case), the `use`-import
+        // twin of the carve-out item declarations already get below: inside
+        // package `std`, re-exporting a real item under one of ch10 R2's
+        // eight prelude names is that name's home naming its own
+        // definition, not a collision — `std.mem`'s `pub use
+        // std.mem.alloc.AllocError` and the prelude `AllocError` denote one
+        // item, exactly as a direct `std.mem.alloc` declaration already
+        // does. Fall through to the normal binding below so this scope's
+        // lookups (and the checker) see the real entity, not the opaque
+        // `PreludeType`/`PreludeModule` marker.
     }
     let vis = if is_pub {
         Visibility::Public

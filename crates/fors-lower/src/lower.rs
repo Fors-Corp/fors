@@ -1687,6 +1687,12 @@ impl<'a> FnLower<'a> {
                         Err(LowerError::Unsupported("len builtin".into()))
                     }
                     MemberTarget::None => Err(LowerError::Unresolved("member".into())),
+                    // F7's `a[i]` fact (member.rs::user_index) is set only
+                    // on a `Bracket` node, never on a two-segment field
+                    // path — this arm cannot be reached today.
+                    MemberTarget::IndexImpl { .. } => Err(LowerError::Unresolved(
+                        "index impl in a field projection".into(),
+                    )),
                 }
             }
             _ => Err(LowerError::Unsupported("long projection".into())),
@@ -1957,12 +1963,41 @@ impl<'a> FnLower<'a> {
         convs: Vec<Conv>,
         ty: TyId,
     ) -> Result<ValId, LowerError> {
-        // The §5.8 stand-in: any method spelled `write_line` is the line
-        // writer, whatever its owner.
-        if self.interner.resolve(method) == b"write_line" {
-            let sym = self.interner.intern(b"stdout_write_line");
+        // The §5.8 stand-in: any method spelled one of these names is the
+        // matching writer, whatever its owner — `write_line` is F1's;
+        // `write_uint` is F7's (needed by `str-index-is-bytes-run-ok`,
+        // which prints a length with no trailing newline, so it cannot
+        // reuse `write_line`'s intrinsic). Both wait on a real Fors
+        // `io.Stdout` body over `@fd_write`, not F7's to build.
+        //
+        // F7's `Str` primitives are scoped tighter: only a method of
+        // `Str`'s OWN inherent impl (`std/mem/text.fors`, the one module
+        // ch10 R2 lets define it) is the byte reader. A user method that
+        // merely shares the spelling (F7 verification: `impl B { fn
+        // str_byte_len(..) }`) keeps its own body, as it must.
+        let owner_is_str = self
+            .defs
+            .get(def)
+            .map(|r| r.parent)
+            .filter(|p| *p != fors_fir::NO_DEF)
+            .map(|p| self.fir.sigs.self_ty(p))
+            .filter(|t| *t != NO_TY)
+            .and_then(|t| self.prim_of(t))
+            == Some(PrimKind::Str);
+        let intrinsic_name = match self.interner.resolve(method) {
+            b"write_line" => Some("stdout_write_line"),
+            b"write_uint" => Some("stdout_write_uint"),
+            // F7's §5.8 byte-length/byte-at/byte-slice stand-ins for `Str`
+            // (see `std/mem/text.fors`'s `Str.len`/`at`/`slice`).
+            b"str_byte_len" if owner_is_str => Some("str_byte_len"),
+            b"str_byte_at" if owner_is_str => Some("str_byte_at"),
+            b"str_byte_slice" if owner_is_str => Some("str_byte_slice"),
+            _ => None,
+        };
+        if let Some(name) = intrinsic_name {
+            let sym = self.interner.intern(name.as_bytes());
             if !self.intrinsics.iter().any(|(id, _)| *id == sym.0) {
-                self.intrinsics.push((sym.0, "stdout_write_line".into()));
+                self.intrinsics.push((sym.0, name.into()));
             }
             Ok(self.emit_call(Callee::Intrinsic(sym), args, convs, ty))
         } else {
@@ -2213,6 +2248,16 @@ fn unescape_str(text: &[u8]) -> Result<Vec<u8>, LowerError> {
         }
         i += 1;
     }
+    // ch10 R26: `Str` is ALWAYS valid UTF-8. The lexer validates only the
+    // raw source bytes (`fors-syntax`'s own scan over the literal's own
+    // text); `\xHH` decodes to an arbitrary byte and is never itself
+    // checked, so a literal like `"\xc0\x80"` would otherwise materialise
+    // an invalid-UTF-8 `Str` straight from a `const_str` value. Validate
+    // the fully-decoded bytes once, here, after every escape (including
+    // `\xHH`) has been applied.
+    if let Err(e) = std::str::from_utf8(&out) {
+        return Err(LowerError::InvalidUtf8Literal(e.to_string()));
+    }
     Ok(out)
 }
 
@@ -2366,5 +2411,95 @@ mod policy_reader_tests {
             policy_of(b"module app.calc;\ncontracts: .off;\nfn main() { }\n"),
             Policy::Off
         );
+    }
+}
+
+#[cfg(test)]
+mod utf8_literal_tests {
+    //! F7 (ch10 R26): `unescape_str` decodes `\xHH` and MUST then validate
+    //! the whole result as UTF-8 — the lexer validated only the raw source
+    //! bytes of the literal, never what a `\xHH` escape decodes to.
+
+    use super::{LowerError, unescape_str};
+
+    fn lit(inner: &[u8]) -> Vec<u8> {
+        let mut v = vec![b'"'];
+        v.extend_from_slice(inner);
+        v.push(b'"');
+        v
+    }
+
+    #[test]
+    fn two_byte_sequence_accepted() {
+        // U+00E9 (é), the exact sequence `str-slice-non-boundary-raises-run-
+        // ok.fors` writes as `\xc3\xa9`.
+        assert_eq!(
+            unescape_str(&lit(b"a\\xc3\\xa9b")).unwrap(),
+            "aéb".as_bytes()
+        );
+    }
+
+    #[test]
+    fn three_byte_sequence_accepted() {
+        // U+4E2D (中) = E4 B8 AD.
+        assert_eq!(
+            unescape_str(&lit(b"\\xe4\\xb8\\xad")).unwrap(),
+            "中".as_bytes()
+        );
+    }
+
+    #[test]
+    fn four_byte_sequence_accepted() {
+        // U+1F600 (😀) = F0 9F 98 80.
+        assert_eq!(
+            unescape_str(&lit(b"\\xf0\\x9f\\x98\\x80")).unwrap(),
+            "😀".as_bytes()
+        );
+    }
+
+    #[test]
+    fn lone_continuation_byte_rejected() {
+        // `0x80` on its own has no lead byte.
+        assert!(matches!(
+            unescape_str(&lit(b"\\x80abc")),
+            Err(LowerError::InvalidUtf8Literal(_))
+        ));
+    }
+
+    #[test]
+    fn incomplete_two_byte_sequence_rejected() {
+        // `0xc3` is a two-byte lead with nothing to continue it.
+        assert!(matches!(
+            unescape_str(&lit(b"a\\xc3")),
+            Err(LowerError::InvalidUtf8Literal(_))
+        ));
+    }
+
+    #[test]
+    fn overlong_encoding_rejected() {
+        // `\xc0\x80` is an overlong (4-byte-too-many) encoding of NUL.
+        assert!(matches!(
+            unescape_str(&lit(b"\\xc0\\x80")),
+            Err(LowerError::InvalidUtf8Literal(_))
+        ));
+    }
+
+    #[test]
+    fn surrogate_half_rejected() {
+        // `\xed\xa0\x80` encodes U+D800, a surrogate half: never a scalar
+        // value.
+        assert!(matches!(
+            unescape_str(&lit(b"\\xed\\xa0\\x80")),
+            Err(LowerError::InvalidUtf8Literal(_))
+        ));
+    }
+
+    #[test]
+    fn past_max_scalar_value_rejected() {
+        // `\xf4\x90\x80\x80` encodes U+110000, past U+10FFFF.
+        assert!(matches!(
+            unescape_str(&lit(b"\\xf4\\x90\\x80\\x80")),
+            Err(LowerError::InvalidUtf8Literal(_))
+        ));
     }
 }

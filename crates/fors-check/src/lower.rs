@@ -1704,7 +1704,21 @@ impl Lowerer<'_> {
             );
             return None;
         }
-        let xs: Vec<TyId> = args.iter().map(|&c| self.ty(cx, c, Pos::Value)).collect();
+        // Each argument by the slot's DECLARED kind, as `type_args` does for a
+        // nominal head: a brand slot takes a brand (`impl[A: brand]
+        // Allocator[A] for Bump[A]`), and lowering it as a type would be the
+        // very "brand parameter used as a type" ch01 R15d rejects (O0015).
+        let shapes = self.shapes;
+        let kinds: &[GKind] = shapes.gkinds(def);
+        let xs: Vec<TyId> = args
+            .iter()
+            .enumerate()
+            .map(|(i, &c)| match kinds.get(i) {
+                Some(GKind::Const) => self.const_arg(cx, c, def, i),
+                Some(GKind::Brand) => self.brand_arg(cx, c),
+                _ => self.ty(cx, c, Pos::Value),
+            })
+            .collect();
         if xs.contains(&TY_ERROR) {
             return None;
         }

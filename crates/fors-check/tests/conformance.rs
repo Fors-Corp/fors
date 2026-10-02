@@ -460,32 +460,25 @@ const CROSS_CHAPTER: &[(&str, &str)] = &[
 ];
 
 /// A `std` declaration ch09 rejects: each entry is a declaration `std`
-/// itself marks `// STUB` — three forward references to a method `std`
-/// has not written yet, and (since I8 reads the use tape) one partial
-/// move `std` annotates with the very clause that rejects it. The three
-/// known R48 conflicts (`Block.align`, `Addr.v6`, `Addr.port`) were fixed
-/// by renaming, so no entry below is a rule dispute. An entry whose call
-/// resolves, or whose move stops being a partial one, must be deleted
-/// here, not left to excuse a regression (the count assertion below
-/// enforces it).
-const STD_CONFLICTS: &[(&str, &str)] = &[
-    (
-        "BufferIter::next",
-        "std/mem.fors: `self.take_at(..)` is a // STUB: no trait or impl declares `take_at`, so ch09 R43 reports T0043 until the helper exists",
-    ),
-    (
-        "SliceIter::next",
-        "std/mem/seq.fors: `self.load(..)` is a // STUB: no trait or impl declares `load`, so ch09 R43 reports T0043 until the helper exists",
-    ),
-    (
-        "Scalars::next",
-        "std/mem/text.fors: `self.decode()` is a // STUB: no trait or impl declares `decode`, so ch09 R43 reports T0043 until the helper exists",
-    ),
-    (
-        "Buffer::into_iter",
-        "std/mem.fors: `data: move self.data` is a // STUB the source itself annotates `a partial move, ch01 R4a(c)`; I8's flow pass now reads the tape and reports O0004 until `std` writes the destructuring form",
-    ),
-];
+/// itself marks `// STUB`. The three known R48 conflicts (`Block.align`,
+/// `Addr.v6`, `Addr.port`) were fixed by renaming, so no entry here is a
+/// rule dispute. An entry whose call resolves, or whose move stops being a
+/// partial one, must be deleted here, not left to excuse a regression (the
+/// count assertion below enforces it).
+///
+/// F7 emptied the list. The three undeclared-method stubs (`BufferIter::
+/// next`'s `take_at`, `SliceIter::next`'s `load`, `Scalars::next`'s
+/// `decode`) are now declared, real SIGNATURES with a self-referencing
+/// stand-in body (the shape of `std.mem.alloc.own_raw`/`disown_raw`): the
+/// two readers need a `rawptr` READ primitive no increment has added yet
+/// (ch09 R57), and `take_at`'s only surface-language body, `move
+/// self.data[i]`, is the partial move ch01 R4a(c) forbids — I8's flow pass
+/// reported it as O0004 the moment `std` was checked under it. I8's one row
+/// (`Buffer::into_iter`, the same O0004 for `move self.data`) is gone too:
+/// `std` now writes the destructuring form R22d(ii) prescribes. The list
+/// is empty, not deleted, so a regression is caught by the count assertion
+/// rather than by this comment going stale.
+const STD_CONFLICTS: &[(&str, &str)] = &[];
 
 /// The no-regression assertion the I2 gate names: outside the tests this
 /// increment turned on, the checker stays silent on every program another

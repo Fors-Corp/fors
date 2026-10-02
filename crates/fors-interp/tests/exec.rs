@@ -288,6 +288,94 @@ fn stdout_write_line_appends_lines() {
     assert_eq!(out.stdout, b"ok\nfail\n");
 }
 
+/// One `intrinsic` call with a result: `callee(args...) -> ty`.
+fn call_intrinsic(b: &mut B, sym: Symbol, args: &[ValId], ty: TyId) -> ValId {
+    let convs = vec![fors_fir::sig::Conv::Let; args.len()];
+    let range = b.decl.insts.push_operands(args, &convs);
+    let call = b.decl.insts.push_call(CallRow {
+        callee: Callee::Intrinsic(sym),
+        args: range,
+    });
+    b.emit(Op::Intrinsic, call, NO_OPERAND, NO_OPERAND, ty)
+}
+
+/// F7 (ch10 R26): `str_byte_slice(s, start, end)` is a fresh `Str` handle
+/// over exactly `s[start ..< end]`, observed through `write_line`.
+#[test]
+fn str_byte_slice_materialises_the_byte_range() {
+    let mut b = B::new();
+    let str_ty = b.ty(PrimKind::Str);
+    let usize_ty = b.ty(PrimKind::Usize);
+    let (slice_sym, line_sym) = (Symbol(3), Symbol(4));
+    let s = b.const_str(0, str_ty);
+    let start = b.const_int(1, usize_ty);
+    let end = b.const_int(3, usize_ty);
+    let sub = call_intrinsic(&mut b, slice_sym, &[s, start, end], str_ty);
+    let recv = b.emit(
+        Op::ConstUnit,
+        NO_OPERAND,
+        NO_OPERAND,
+        NO_OPERAND,
+        fors_fir::ty::TY_UNIT,
+    );
+    call_intrinsic(&mut b, line_sym, &[recv, sub], fors_fir::ty::TY_UNIT);
+    b.term(Op::Ret, NO_OPERAND, NO_OPERAND, NO_OPERAND);
+    let (decl, tys) = b.finish();
+    // "a\xc3\xa9b": bytes 1..<3 are the two-byte sequence for U+00E9.
+    let prog = prog_of(
+        decl,
+        vec![(0, b"a\xc3\xa9b".to_vec())],
+        vec![
+            (slice_sym.0, "str_byte_slice".into()),
+            (line_sym.0, "stdout_write_line".into()),
+        ],
+    );
+    let out = run(&prog, &tys).unwrap();
+    assert_eq!(out.exit, Exit::Return);
+    assert_eq!(out.stdout, b"\xc3\xa9\n");
+}
+
+/// A range past the handle's bytes is a bug (`Str.slice`'s own `pre` runs
+/// first in Fors): trap `bounds`, never a clamp.
+#[test]
+fn str_byte_slice_past_end_traps_bounds() {
+    let mut b = B::new();
+    let str_ty = b.ty(PrimKind::Str);
+    let usize_ty = b.ty(PrimKind::Usize);
+    let sym = Symbol(3);
+    let s = b.const_str(0, str_ty);
+    let start = b.const_int(2, usize_ty);
+    let end = b.const_int(10, usize_ty);
+    call_intrinsic(&mut b, sym, &[s, start, end], str_ty);
+    b.term(Op::Ret, NO_OPERAND, NO_OPERAND, NO_OPERAND);
+    let (decl, tys) = b.finish();
+    let prog = prog_of(
+        decl,
+        vec![(0, b"abc".to_vec())],
+        vec![(sym.0, "str_byte_slice".into())],
+    );
+    let out = run(&prog, &tys).unwrap();
+    assert_eq!(out.exit, Exit::Trap(TrapKind::Bounds));
+}
+
+/// A `Str` intrinsic whose receiver is not a handle into the byte table is
+/// a lowering bug, reported as a diagnostic — never a zero length or an
+/// empty string (F7 verification: a user method that merely shares the
+/// intrinsic's spelling used to reach here and print `0`).
+#[test]
+fn str_intrinsic_on_a_non_str_receiver_is_a_diagnostic() {
+    let mut b = B::new();
+    let usize_ty = b.ty(PrimKind::Usize);
+    let sym = Symbol(3);
+    let bogus = b.const_int(999, usize_ty);
+    call_intrinsic(&mut b, sym, &[bogus], usize_ty);
+    b.term(Op::Ret, NO_OPERAND, NO_OPERAND, NO_OPERAND);
+    let (decl, tys) = b.finish();
+    let prog = prog_of(decl, vec![], vec![(sym.0, "str_byte_len".into())]);
+    let err = run(&prog, &tys).unwrap_err();
+    assert!(matches!(err, InterpError::MissingString(999)), "{err:?}");
+}
+
 #[test]
 fn unsupported_op_is_a_diagnostic_not_a_trap() {
     let mut b = B::new();
