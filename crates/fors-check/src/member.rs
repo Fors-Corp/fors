@@ -471,14 +471,18 @@ impl Wf<'_> {
         self.user_index(cx, node, bare, index)
     }
 
-    /// R29's `a[i]` over the `Index` impls. I3 decides only the
-    /// unambiguous case: exactly one impl for this head. Two impls
-    /// (R29's "several") and a rigid subject are I4's.
+    /// R29's `a[i]` over the `Index` impls. I3 decided only the
+    /// unambiguous case: exactly one impl for this head. I4 adds R29's
+    /// "several" ([`Self::index_several`]); a rigid subject, whose
+    /// candidate impls are its `Index[...]` BOUNDS, stays I5's.
     fn user_index(&mut self, cx: &mut BodyCx, _node: usize, s: TyId, index: Option<usize>) -> TyId {
         let idx_trait = self.prelude.traits[fors_fir::prelude::tr::INDEX];
         let head = self.fir.tys.head_key(s);
         self.impl_scans += 1;
         let rows = self.impls.bucket(idx_trait, head);
+        if rows.len() > 1 {
+            return self.index_several(cx, _node, s, index, idx_trait, &rows);
+        }
         if rows.len() != 1 {
             if let Some(i) = index {
                 self.synth(cx, i);
@@ -523,6 +527,79 @@ impl Wf<'_> {
         let out = self.fir.sigs.assoc(r.def);
         let rhs = self.fir.sigs.assocs.rhs_of(out, self.prelude.output_name);
         if rhs == NO_TY { TY_ERROR } else { rhs }
+    }
+
+    /// R29's "Several" clause (increment I4). With more than one `Index`
+    /// impl for the head the index is SYNTHESISED and `S` must implement
+    /// `Index[synth(i)]` by one Rule 12 lookup — so an unsuffixed literal
+    /// index, which has no type of its own to synthesise, MUST be rejected
+    /// ("suffix the index"). Adding a second impl can therefore break
+    /// `a[0]`, but can never silently change which impl `a[0]` meant.
+    /// Nothing is ranked.
+    fn index_several(
+        &mut self,
+        cx: &mut BodyCx,
+        node: usize,
+        s: TyId,
+        index: Option<usize>,
+        idx_trait: DefId,
+        rows: &[u32],
+    ) -> TyId {
+        let Some(i) = index else {
+            return TY_ERROR;
+        };
+        if self.is_bare_literal(cx, i) {
+            self.bemit(
+                cx,
+                node,
+                29,
+                29,
+                "with several `Index` impls the index is synthesised, so an unsuffixed literal \
+                 index names no impl; suffix the index"
+                    .to_string(),
+            );
+            return TY_ERROR;
+        }
+        let it = self.synth(cx, i);
+        if it == TY_ERROR || it == NO_TY {
+            return TY_ERROR;
+        }
+        let args = self.fir.tys.intern_args(&[it]);
+        let want = self.fir.tys.intern_trait_ref(idx_trait, args);
+        if self.holds(s, want) == crate::wf::Holds::No {
+            let n = self.show(s);
+            let ity = self.show(it);
+            self.bemit(
+                cx,
+                node,
+                29,
+                29,
+                format!("`{n}` does not implement `Index[{ity}]`, which `[ ]` needs here"),
+            );
+            return TY_ERROR;
+        }
+        // The result is the chosen impl's `Output`, never a ranked guess.
+        for &r in rows {
+            let row = self.impls.row(r);
+            if row.self_ty != s {
+                continue;
+            }
+            let ra = self
+                .fir
+                .tys
+                .args(row.trait_args)
+                .first()
+                .copied()
+                .unwrap_or(TY_ERROR);
+            if ra != it {
+                continue;
+            }
+            self.dep(row.def);
+            let out = self.fir.sigs.assoc(row.def);
+            let rhs = self.fir.sigs.assocs.rhs_of(out, self.prelude.output_name);
+            return if rhs == NO_TY { TY_ERROR } else { rhs };
+        }
+        TY_ERROR
     }
 
     /// Whether `s` is a type no `Index` impl outside this build could name.

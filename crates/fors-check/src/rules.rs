@@ -144,7 +144,7 @@ pub const CH09_RULES: [RuleEntry; 62] = [
         "type-application-arity-and-kind",
         &["lower::type_app"],
     ),
-    r(
+    imp(
         12,
         Some(12),
         "bound-satisfaction-holds",
@@ -357,14 +357,14 @@ pub const CH09_RULES: [RuleEntry; 62] = [
         &["call::visit_args"],
     ),
     imp(42, Some(42), "field-access-typing", &["member::field"]),
-    r(
+    imp(
         43,
         Some(43),
         "method-lookup-tier-search",
         &["member::method", "member::candidate_traits"],
     ),
-    r(44, Some(44), "method-lookup-ambiguity", &["member::method"]),
-    r(
+    imp(44, Some(44), "method-lookup-ambiguity", &["member::method"]),
+    imp(
         45,
         Some(45),
         "qualified-member-lookup",
@@ -645,13 +645,19 @@ mod tests {
             .map(|e| e.rule)
             .collect();
         // I2 flipped the signature and whole-head rows; I3 flips the body
-        // rows it decides (R38-R41 and R43-R46 stay unimplemented: a call
-        // with parameters to determine and method lookup are I4/I5's).
+        // rows it decides. I4 adds R12 (`wf::holds` plus the use site at a
+        // call), R43/R44 (the two-tier lookup and its ambiguity, nominal,
+        // rigid and PRIMITIVE heads) and R45 (the qualified form). R38-R41
+        // stay unimplemented (R38's inference is I5's — I4 determines a
+        // callee's parameters only in the bare-parameter argument
+        // positions R12's bound check needs), and so does R46: its typing
+        // side is in, but the rule's normative message is I8's, over a
+        // tape this increment only writes.
         assert_eq!(
             implemented,
             vec![
-                1, 3, 4, 5, 6, 7, 8, 9, 10, 11, 13, 14, 15, 16, 17, 18, 19, 21, 22, 23, 24, 25, 26,
-                27, 28, 29, 30, 31, 32, 33, 34, 35, 36, 37, 42, 47, 48, 49, 61, 62
+                1, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 21, 22, 23, 24, 25,
+                26, 27, 28, 29, 30, 31, 32, 33, 34, 35, 36, 37, 42, 43, 44, 45, 47, 48, 49, 61, 62
             ]
         );
         // NoCode rows, exactly as design §8 marks them.

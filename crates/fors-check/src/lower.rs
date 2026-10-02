@@ -2149,7 +2149,13 @@ impl Lowerer<'_> {
         }
         let a = self.fir.sigs.assocs.push(&assoc);
         self.fir.sigs.set_assoc(def, a);
-        self.member_items(cx, def, node);
+        // ch08 R11: a trait's methods are exactly as visible as the trait.
+        let tvis = if cx.f.own_has_kind(node, TokenKind::KwPub) {
+            VIS_PUBLIC
+        } else {
+            VIS_PRIVATE
+        };
+        self.member_items(cx, def, node, Some(tvis));
         HeadInfo {
             self_ty: cx.self_ty,
             trait_def: def,
@@ -2281,7 +2287,11 @@ impl Lowerer<'_> {
         let a = self.fir.sigs.assocs.push(&assoc);
         self.fir.sigs.set_assoc(def, a);
         cx.impl_assoc = assoc.iter().map(|a| (a.name, a.rhs)).collect();
-        self.member_items(cx, def, node);
+        // A method of `impl Tr for T` has the TRAIT's visibility and ch08
+        // R11 makes `pub` on it an error, so the trait's own member row
+        // (the one method lookup reads for a tier-(2) hit) decides; an
+        // inherent `impl T { }` method carries its own `pub`.
+        self.member_items(cx, def, node, None);
         if self_ty != TY_ERROR {
             let head = self.fir.tys.head_key(self_ty);
             let trait_args = if trait_ref == fors_fir::sig::NO_TRAIT_REF {
@@ -2311,7 +2321,13 @@ impl Lowerer<'_> {
     }
 
     /// The `fn` members of a trait or impl, as the head's member list.
-    fn member_items(&mut self, cx: &mut Cx, def: DefId, node: usize) {
+    ///
+    /// `inherit` is the visibility every member takes from its container,
+    /// for the two forms ch08 Rule 11 gives no `pub` of their own: "A
+    /// trait's methods and associated types are exactly as visible as the
+    /// trait (ch07 gives neither form a `pub`)". `None` is the inherent
+    /// `impl T { }` case, where each method carries its own `pub`.
+    fn member_items(&mut self, cx: &mut Cx, def: DefId, node: usize, inherit: Option<u8>) {
         let mut ms: Vec<Member> = Vec::new();
         for (c, k) in cx.f.child_kinds(node) {
             if !matches!(k, NodeKind::FnDecl | NodeKind::TraitItem) {
@@ -2327,10 +2343,15 @@ impl Lowerer<'_> {
                     .first()
                     .map(|&(s, _)| s)
                     .unwrap_or(Symbol(0));
-            let vis = if cx.f.own_has_kind(c, TokenKind::KwPub) {
-                VIS_PUBLIC
-            } else {
-                VIS_PRIVATE
+            let vis = match inherit {
+                Some(v) => v,
+                None => {
+                    if cx.f.own_has_kind(c, TokenKind::KwPub) {
+                        VIS_PUBLIC
+                    } else {
+                        VIS_PRIVATE
+                    }
+                }
             };
             // A `TraitItem` has no `DeclTable` row of its own unless the
             // index gave it one; `def_of` answers `NO_DEF` otherwise.

@@ -715,8 +715,11 @@ impl Wf<'_> {
     }
 
     /// Whether `node` is an unsuffixed numeric literal, optionally negated
-    /// (R29's one syntactic exception; ch07 Disambiguation 8).
-    fn is_bare_literal(&mut self, cx: &mut BodyCx, node: usize) -> bool {
+    /// (R29's one syntactic exception; ch07 Disambiguation 8). Also R29's
+    /// index clause, in `member.rs`: with several `Index` impls the index
+    /// is SYNTHESISED, so an unsuffixed literal has nothing to take its
+    /// type from and must be suffixed.
+    pub(crate) fn is_bare_literal(&mut self, cx: &mut BodyCx, node: usize) -> bool {
         let n = match cx.kind(node) {
             NodeKind::UnaryExpr if own_first(cx, node) == Some(TokenKind::Minus) => {
                 match cx.f.tree.children(node).next() {
