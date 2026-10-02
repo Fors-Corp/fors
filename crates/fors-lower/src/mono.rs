@@ -99,6 +99,14 @@ impl Instances {
         key
     }
 
+    /// F9: a fresh key no declaration and no instance answers to, for a
+    /// comptime block's thunk (the same minting rule as an instance's).
+    pub fn mint_key(&mut self) -> DeclKeyId {
+        let key = DeclKeyId(self.next_key);
+        self.next_key += 1;
+        key
+    }
+
     /// The next instance whose body has not been lowered, in request order
     /// (which makes the lowered program's function order deterministic).
     pub fn pop_pending(&mut self) -> Option<Instance> {

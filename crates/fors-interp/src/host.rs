@@ -216,6 +216,23 @@ impl Oracle {
         })
     }
 
+    /// F9's comptime oracle (design §6: "comptime mode starts with an empty
+    /// capability table"): a replay of NO responses. It reads nothing real,
+    /// and any request is the named [`OracleError`] divergence — although
+    /// the intrinsic table's `comptime` column stops every clock and entropy
+    /// door before it would ask.
+    pub fn sealed() -> Oracle {
+        Oracle {
+            mode: Mode::Replay {
+                events: Vec::new(),
+                at: 0,
+            },
+            log: Vec::new(),
+            last_mono: None,
+            counters: HostCounters::default(),
+        }
+    }
+
     /// Is this a replay?
     pub fn is_replay(&self) -> bool {
         matches!(self.mode, Mode::Replay { .. })

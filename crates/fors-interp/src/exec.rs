@@ -26,6 +26,7 @@ use fors_fmir::op::{Op, TrapKind};
 use fors_fmir::value::ValDef;
 
 use crate::arith::{FloatKind, IntKind, NumKind};
+use crate::intrinsic;
 use crate::program::Program;
 use crate::value::Slot;
 
@@ -160,6 +161,14 @@ pub enum InterpError {
     /// not (a field read of the opaque value, a host door reached with a
     /// receiver the shim did not create).
     Capability(String),
+    /// F9: an intrinsic whose table row forbids it at RUN time
+    /// (`input_read`: ch10 R42 makes the comptime file read comptime-only).
+    NotAtRunTime(String),
+    /// F9: a comptime-mode fault (design §6): a forbidden intrinsic, an
+    /// undeclared input, a budget, a sealed call. Raised only by a machine
+    /// in comptime mode; [`crate::comptime::evaluate`] turns it into the
+    /// named build error.
+    Comptime(crate::comptime::ComptimeFault),
 }
 
 impl std::fmt::Display for InterpError {
@@ -191,6 +200,11 @@ impl std::fmt::Display for InterpError {
                 "`{op}` needs a host syscall the M1 interpreter does not perform (design §5.8)"
             ),
             InterpError::Capability(m) => write!(f, "capability: {m}"),
+            InterpError::NotAtRunTime(n) => write!(
+                f,
+                "intrinsic `{n}` is comptime-only and was reached at run time (ch10 R42)"
+            ),
+            InterpError::Comptime(c) => write!(f, "comptime: {c}"),
         }
     }
 }
@@ -221,69 +235,69 @@ const STEP_BUDGET: u64 = 100_000_000;
 /// Frames before [`InterpError::StackOverflow`].
 const MAX_FRAMES: usize = 1024;
 
-/// The F1 closed intrinsic table (design §5.8, mechanism 2). Until std
-/// exists with Fors-written `write_*` bodies over `@fd_write`, lowering
-/// maps the `write_line` method to `stdout_write_line`, which appends one
-/// line to the in-memory stdout. No other host effect exists in F1.
-const INTRINSIC_STDOUT_WRITE_LINE: &str = "stdout_write_line";
-/// F7's twin stand-in (same §5.8 mechanism-2 note above): `write_uint` has
-/// no trailing newline (ch10 R39's "base 10, no locale"), so it cannot
-/// reuse `stdout_write_line`'s intrinsic.
-const INTRINSIC_STDOUT_WRITE_UINT: &str = "stdout_write_uint";
-/// F7's §5.8 "byte length"/"byte at" primitives for `Str` (ch10 R26:
-/// indexing is by byte). `Str.len`/`Str.at`'s real Fors bodies
-/// (`std/mem/text.fors`) bottom out in these.
-const INTRINSIC_STR_BYTE_LEN: &str = "str_byte_len";
-const INTRINSIC_STR_BYTE_AT: &str = "str_byte_at";
-/// F7's byte-slice primitive: `Str.slice`'s materialisation of
-/// `self[start ..< end]` AFTER its own boundary check (the `not_a_boundary`
-/// raise is Fors code in `std/mem/text.fors`; this only copies bytes).
-const INTRINSIC_STR_BYTE_SLICE: &str = "str_byte_slice";
+// The F1 closed intrinsic table (design §5.8, mechanism 2). Until std
+// exists with Fors-written `write_*` bodies over `@fd_write`, lowering
+// maps the `write_line` method to `stdout_write_line`, which appends one
+// line to the in-memory stdout. No other host effect exists in F1.
+// (`stdout_write_line`: [`crate::intrinsic::STDOUT_WRITE_LINE`])
+// F7's twin stand-in (same §5.8 mechanism-2 note above): `write_uint` has
+// no trailing newline (ch10 R39's "base 10, no locale"), so it cannot
+// reuse `stdout_write_line`'s intrinsic.
+// (`stdout_write_uint`: [`crate::intrinsic::STDOUT_WRITE_UINT`])
+// F7's §5.8 "byte length"/"byte at" primitives for `Str` (ch10 R26:
+// indexing is by byte). `Str.len`/`Str.at`'s real Fors bodies
+// (`std/mem/text.fors`) bottom out in these.
+// (`str_byte_len`: [`crate::intrinsic::STR_BYTE_LEN`])
+// (`str_byte_at`: [`crate::intrinsic::STR_BYTE_AT`])
+// F7's byte-slice primitive: `Str.slice`'s materialisation of
+// `self[start ..< end]` AFTER its own boundary check (the `not_a_boundary`
+// raise is Fors code in `std/mem/text.fors`; this only copies bytes).
+// (`str_byte_slice`: [`crate::intrinsic::STR_BYTE_SLICE`])
 
-/// `seq_len(seq)`: the element count of an `Array`/`Slice`-shaped value.
-/// ch10 Rule 42's `len` builtin and the bound of every `for` over a
-/// sequence (`fors-lower::emit_seq_len`). FMIR has no `len` opcode — design
-/// §3.10's 71 do not include one, because a real `Slice` is a `{ptr, len}`
-/// pair whose length is a `field` read — so until F7's real `Slice`
-/// representation lands the descriptor's own window answers it.
-const INTRINSIC_SEQ_LEN: &str = "seq_len";
+// `seq_len(seq)`: the element count of an `Array`/`Slice`-shaped value.
+// ch10 Rule 42's `len` builtin and the bound of every `for` over a
+// sequence (`fors-lower::emit_seq_len`). FMIR has no `len` opcode — design
+// §3.10's 71 do not include one, because a real `Slice` is a `{ptr, len}`
+// pair whose length is a `field` read — so until F7's real `Slice`
+// representation lands the descriptor's own window answers it.
+// (`seq_len`: [`crate::intrinsic::SEQ_LEN`])
 
-/// `agg_uninit(n)`: an aggregate of `n` UNINITIALISED cells (design §5.8's
-/// "minimal intrinsic-backed stub", F-mono's third instance).
-///
-/// `Buffer[T, N].empty()` has to produce a `Buffer { len: 0, data: <N
-/// uninitialised cells of T> }`, and no Fors *expression* names an
-/// uninitialised aggregate — `[v; N]` needs a `v`, which needs `T:
-/// Copyable`, which `Buffer`'s own impl does not have. So the primitive is
-/// here, and it is a REAL primitive rather than a zero-filled stand-in: each
-/// cell is [`Slot::uninit`], so reading element `i` before `push` wrote it
-/// is `ub: uninit-read` with its site (design §5.2), not a silent zero.
-/// `Buffer.empty()`'s `len: 0` is what keeps a correct program from ever
-/// reading one — `Index`/`IndexMut` check against `len`, not `N` (ch10 S23).
-const INTRINSIC_AGG_UNINIT: &str = "agg_uninit";
+// `agg_uninit(n)`: an aggregate of `n` UNINITIALISED cells (design §5.8's
+// "minimal intrinsic-backed stub", F-mono's third instance).
+//
+// `Buffer[T, N].empty()` has to produce a `Buffer { len: 0, data: <N
+// uninitialised cells of T> }`, and no Fors *expression* names an
+// uninitialised aggregate — `[v; N]` needs a `v`, which needs `T:
+// Copyable`, which `Buffer`'s own impl does not have. So the primitive is
+// here, and it is a REAL primitive rather than a zero-filled stand-in: each
+// cell is [`Slot::uninit`], so reading element `i` before `push` wrote it
+// is `ub: uninit-read` with its site (design §5.2), not a silent zero.
+// `Buffer.empty()`'s `len: 0` is what keeps a correct program from ever
+// reading one — `Index`/`IndexMut` check against `len`, not `N` (ch10 S23).
+// (`agg_uninit`: [`crate::intrinsic::AGG_UNINIT`])
 
-/// `str_eq(a, b) -> bool`: byte equality of two `Str` values.
-///
-/// What a `Str` LITERAL ARM of a `match` compares (R54's first-match test).
-/// It cannot be an `icmp`: a `Str` slot carries a HANDLE into the machine's
-/// byte table, and two equal strings interned from different sites have
-/// different handles, so comparing the slots would answer `false` for equal
-/// text. Same §5.8 stand-in family as `str_byte_len`; a real `Str` would
-/// compare `{ptr, len}` contents, which is what this does.
-const INTRINSIC_STR_EQ: &str = "str_eq";
+// `str_eq(a, b) -> bool`: byte equality of two `Str` values.
+//
+// What a `Str` LITERAL ARM of a `match` compares (R54's first-match test).
+// It cannot be an `icmp`: a `Str` slot carries a HANDLE into the machine's
+// byte table, and two equal strings interned from different sites have
+// different handles, so comparing the slots would answer `false` for equal
+// text. Same §5.8 stand-in family as `str_byte_len`; a real `Str` would
+// compare `{ptr, len}` contents, which is what this does.
+// (`str_eq`: [`crate::intrinsic::STR_EQ`])
 
-/// F8's host doors (design §5.8 mechanism 2's `@clock_mono`/`@clock_wall`/
-/// `@entropy` rows, plus the `fs`/`net` doors): lowering emits these for the
-/// self-recursive stand-ins on `std.time.Clock`, `std.rand.Rng`,
-/// `std.fs.Dir` and `std.net.Net` (and only on those types). Every one
-/// checks its receiver is the entry shim's value of that type; the clock and
-/// entropy reads are served by [`crate::host::Oracle`], the only real reader.
-const INTRINSIC_CLOCK_MONO: &str = "clock_mono";
-const INTRINSIC_CLOCK_WALL: &str = "clock_wall";
-const INTRINSIC_CLOCK_SLEEP: &str = "clock_sleep";
-const INTRINSIC_ENTROPY_U64: &str = "entropy_u64";
-const INTRINSIC_FS_DOOR: &str = "fs_door";
-const INTRINSIC_NET_DOOR: &str = "net_door";
+// F8's host doors (design §5.8 mechanism 2's `@clock_mono`/`@clock_wall`/
+// `@entropy` rows, plus the `fs`/`net` doors): lowering emits these for the
+// self-recursive stand-ins on `std.time.Clock`, `std.rand.Rng`,
+// `std.fs.Dir` and `std.net.Net` (and only on those types). Every one
+// checks its receiver is the entry shim's value of that type; the clock and
+// entropy reads are served by [`crate::host::Oracle`], the only real reader.
+// (`clock_mono`: [`crate::intrinsic::CLOCK_MONO`])
+// (`clock_wall`: [`crate::intrinsic::CLOCK_WALL`])
+// (`clock_sleep`: [`crate::intrinsic::CLOCK_SLEEP`])
+// (`entropy_u64`: [`crate::intrinsic::ENTROPY_U64`])
+// (`fs_door`: [`crate::intrinsic::FS_DOOR`])
+// (`net_door`: [`crate::intrinsic::NET_DOOR`])
 
 /// The bytes a `Str` handle names in the machine's byte table. A handle
 /// outside the table is a lowering bug (an intrinsic reached with a
@@ -322,6 +336,13 @@ enum CellKind {
     /// design §5.9's capability object. It has NO program-visible
     /// components (ch04 R7: opaque, no field access), so it has no slots.
     Capability(fors_fmir::caps::RootCap),
+    /// F9: a root-capability PARAMETER of the enclosing function as a
+    /// comptime block sees it (design §6: "comptime mode starts with an
+    /// empty capability table"). It names the type and holds no authority:
+    /// no host door accepts it ([`cap_receiver`] wants a `Capability` cell),
+    /// and the intrinsic table's `comptime` column stops every door before
+    /// a receiver is even looked at.
+    Withheld(fors_fmir::caps::RootCap),
 }
 
 impl Cells {
@@ -364,10 +385,12 @@ fn seq_window(m: &Machine<'_>, v: Slot) -> Result<(usize, u64, u64), InterpError
             }
             Ok((base.bits as usize, start.bits, len.bits))
         }
-        CellKind::Capability(cap) => Err(InterpError::Capability(format!(
-            "a `{}` value used as a sequence: a root-capability value is opaque (ch04 R7)",
-            cap.display()
-        ))),
+        CellKind::Capability(cap) | CellKind::Withheld(cap) => {
+            Err(InterpError::Capability(format!(
+                "a `{}` value used as a sequence: a root-capability value is opaque (ch04 R7)",
+                cap.display()
+            )))
+        }
     }
 }
 
@@ -389,7 +412,7 @@ fn cell_slot(
     what: &str,
 ) -> Result<Slot, Fault> {
     if let Some(Cells {
-        kind: CellKind::Capability(cap),
+        kind: CellKind::Capability(cap) | CellKind::Withheld(cap),
         ..
     }) = m.cells.get(cell)
     {
@@ -477,6 +500,14 @@ struct Machine<'a> {
     next_tag: u32,
     /// The next frame activation number (see [`Frame::serial`]).
     next_serial: u32,
+    /// F9: `Some` exactly in comptime mode (design §6): the budget meter,
+    /// the declared inputs, the extern table and the address-observation
+    /// flag. `None` is run mode.
+    ct: Option<crate::comptime::CtState>,
+    /// F9: the static type of the value the ENTRY frame's `ret` returned
+    /// (read off the terminator's operand), so a comptime result can be
+    /// encoded canonically. `None` for a `ret` with no operand (unit).
+    entry_ret_ty: Option<fors_fir::ty::TyId>,
 }
 
 /// One scope exit in progress: `type-checker.md` §13 I8b's four steps,
@@ -559,10 +590,82 @@ impl<'a> Machine<'a> {
 
     fn charge(&mut self) -> Result<(), InterpError> {
         self.steps += 1;
+        // F9 (ch04 R14): in comptime mode every instruction and terminator
+        // is one step against the evaluation's budget and the build's cap;
+        // run mode has only the runaway guard.
+        if let Some(ct) = self.ct.as_mut() {
+            return ct
+                .meter
+                .step()
+                .map_err(|e| InterpError::Comptime(crate::comptime::ComptimeFault::Budget(e)));
+        }
         if self.steps > STEP_BUDGET {
             return Err(InterpError::StepBudget);
         }
         Ok(())
+    }
+
+    /// F9 (ch04 R14): charges `n` allocated bytes in comptime mode. Run mode
+    /// allocates from the host and charges nothing.
+    fn charge_bytes(&mut self, n: u64) -> Result<(), InterpError> {
+        match self.ct.as_mut() {
+            Some(ct) => ct
+                .meter
+                .bytes(n)
+                .map_err(|e| InterpError::Comptime(crate::comptime::ComptimeFault::Budget(e))),
+            None => Ok(()),
+        }
+    }
+
+    /// A new aggregate cell row, charged at eight bytes per slot.
+    fn new_cells(&mut self, cells: Cells) -> Result<u64, InterpError> {
+        self.charge_bytes(8 * cells.slots.len() as u64)?;
+        let id = self.cells.len() as u64;
+        self.cells.push(cells);
+        Ok(id)
+    }
+
+    /// A new `Str` byte row, charged at its length.
+    fn new_str(&mut self, bytes: Vec<u8>) -> Result<u64, InterpError> {
+        self.charge_bytes(bytes.len() as u64)?;
+        let id = self.strs.len() as u64;
+        self.strs.push(bytes);
+        Ok(id)
+    }
+
+    /// design §6's synthetic, deterministic address of a pointer:
+    /// `(AllocId << 32) | offset` — never a host address. A frame-local root
+    /// has no `AllocId`, so it lives in the top half of the space,
+    /// `(1 << 63) | (activation serial << 32) | root`. Observing one in
+    /// comptime mode sets the ch04 R15 tier-up bar.
+    fn observe_address(&mut self, s: Slot) -> Result<u64, InterpError> {
+        let row = self.prov_of(s)?;
+        let addr = match row.target {
+            crate::mem::MemTarget::Alloc(id) => (u64::from(id.0) << 32) | (s.bits & 0xffff_ffff),
+            crate::mem::MemTarget::Arena { data, .. } => {
+                (u64::from(data.0) << 32) | (s.bits & 0xffff_ffff)
+            }
+            crate::mem::MemTarget::Root { serial, root, .. } => {
+                (1u64 << 63) | (u64::from(serial) << 32) | u64::from(root)
+            }
+        };
+        if let Some(ct) = self.ct.as_mut() {
+            ct.observed_address = true;
+        }
+        Ok(addr)
+    }
+
+    /// The allocation identity a pointer's synthetic address lives in: what
+    /// "cross-allocation" means for a pointer comparison (ch04 R15).
+    fn alloc_identity(&self, s: Slot) -> Result<u64, InterpError> {
+        let row = self.prov_of(s)?;
+        Ok(match row.target {
+            crate::mem::MemTarget::Alloc(id) => u64::from(id.0),
+            crate::mem::MemTarget::Arena { data, .. } => u64::from(data.0),
+            crate::mem::MemTarget::Root { serial, root, .. } => {
+                (1u64 << 63) | (u64::from(serial) << 32) | u64::from(root)
+            }
+        })
     }
 
     /// The numeric kind of a value's type. Non-numeric types (`bool`,
@@ -761,16 +864,14 @@ pub fn run_with_oracle(
     Ok(out)
 }
 
-fn run_machine(
-    prog: &Program,
-    tys: &TyStore,
-    host: &crate::shim::HostEnv,
-    oracle: &mut crate::host::Oracle,
-) -> Result<Outcome, InterpError> {
-    if prog.entry >= prog.fns.len() {
-        return Err(InterpError::NoEntry(format!("entry {}", prog.entry)));
-    }
-    let mut m = Machine {
+fn new_machine<'a>(
+    prog: &'a Program,
+    tys: &'a TyStore,
+    host: crate::shim::HostEnv,
+    oracle: &'a mut crate::host::Oracle,
+    ct: Option<crate::comptime::CtState>,
+) -> Machine<'a> {
+    Machine {
         prog,
         tys,
         frames: Vec::new(),
@@ -779,7 +880,7 @@ fn run_machine(
         strs: Vec::new(),
         stdout: Vec::new(),
         stdout_latched: false,
-        host: *host,
+        host,
         oracle,
         steps: 0,
         // Row 0 of each table is the `PROV_NONE` / "no allocation"
@@ -799,20 +900,163 @@ fn run_machine(
         borrows: std::collections::HashMap::new(),
         next_tag: 0,
         next_serial: 0,
-    };
+        ct,
+        entry_ret_ty: None,
+    }
+}
+
+fn run_machine(
+    prog: &Program,
+    tys: &TyStore,
+    host: &crate::shim::HostEnv,
+    oracle: &mut crate::host::Oracle,
+) -> Result<Outcome, InterpError> {
+    if prog.entry >= prog.fns.len() {
+        return Err(InterpError::NoEntry(format!("entry {}", prog.entry)));
+    }
+    let mut m = new_machine(prog, tys, *host, oracle, None);
     let args = entry_args(&mut m)?;
     call(prog.entry, None, args, &mut m)?;
+    drive(&mut m).map(|(o, _)| o)
+}
+
+/// F9: one comptime evaluation of `prog.entry` (design §6). The entry is a
+/// comptime block's thunk: its parameters are the enclosing function's
+/// RUN-TIME bindings, which have no comptime value, so each is passed
+/// uninitialised — reading one is `ub: uninit-read`, never a fabricated
+/// value; the capability table is empty (no shim runs). Returns the run and
+/// the canonical encoding of its result, plus the comptime state (counters,
+/// address flag, inputs read) whatever the outcome.
+pub(crate) fn run_comptime<'a>(
+    prog: &'a Program,
+    tys: &'a TyStore,
+    oracle: &'a mut crate::host::Oracle,
+    ct: crate::comptime::CtState,
+) -> (ComptimeRun, crate::comptime::CtState) {
+    let mut m = new_machine(prog, tys, crate::shim::HostEnv::default(), oracle, Some(ct));
+    let res = comptime_body(prog, &mut m);
+    let ct =
+        m.ct.take()
+            .expect("a comptime machine keeps its state until it is taken here");
+    (res, ct)
+}
+
+/// One comptime run's result: the outcome and the encoded value (or why it
+/// has no encoding), or the interpreter's refusal.
+pub(crate) type ComptimeRun = Result<(Outcome, Result<Vec<u8>, String>), InterpError>;
+
+fn comptime_body(prog: &Program, m: &mut Machine<'_>) -> ComptimeRun {
+    if prog.entry >= prog.fns.len() {
+        return Err(InterpError::NoEntry(format!("entry {}", prog.entry)));
+    }
+    let nparams = prog.fns[prog.entry]
+        .decl
+        .vals
+        .all_rows()
+        .filter(|(_, r)| matches!(r.def(), ValDef::Param(_)))
+        .count();
+    // ch04 R12 / design §6: a root-capability parameter is a WITHHELD cell
+    // (the type, no authority); every other parameter is uninitialised.
+    let mut params: Vec<(u16, fors_fir::ty::TyId)> = prog.fns[prog.entry]
+        .decl
+        .vals
+        .all_rows()
+        .filter_map(|(_, row)| match row.def() {
+            ValDef::Param(o) => Some((o, row.ty)),
+            _ => None,
+        })
+        .collect();
+    params.sort();
+    debug_assert_eq!(params.len(), nparams);
+    let mut args = Vec::with_capacity(nparams);
+    for (_, ty) in params {
+        let bare = if (ty.0 as usize) < m.tys.len() {
+            m.tys.unqual(ty)
+        } else {
+            ty
+        };
+        match prog.names.root_cap(bare) {
+            Some(cap) => {
+                let id = m.new_cells(Cells {
+                    slots: Vec::new(),
+                    kind: CellKind::Withheld(cap),
+                })?;
+                args.push(Slot::val(id));
+            }
+            None => args.push(Slot::uninit()),
+        }
+    }
+    call(prog.entry, None, args, m)?;
+    let (outcome, v) = drive(m)?;
+    let value = encode_result(m, v);
+    Ok((outcome, value))
+}
+
+/// The canonical encoding of the entry frame's returned value
+/// ([`crate::comptime::encode`]'s format). A shape with no encoding is
+/// named, never approximated.
+fn encode_result(m: &Machine<'_>, v: Slot) -> Result<Vec<u8>, String> {
+    use crate::comptime::encode as enc;
+    let Some(ty) = m.entry_ret_ty else {
+        return Ok(vec![enc::UNIT]);
+    };
+    if ty == fors_fir::ty::TY_UNIT {
+        return Ok(vec![enc::UNIT]);
+    }
+    if is_bool(m, ty) {
+        return Ok(vec![enc::BOOL, (v.bits != 0) as u8]);
+    }
+    let bare = m.tys.unqual(ty);
+    if m.tys.tag(bare) == TyTag::Prim
+        && PrimKind::from_u8(m.tys.a(bare) as u8) == Some(PrimKind::Str)
+    {
+        let bytes = m
+            .strs
+            .get(v.bits as usize)
+            .ok_or_else(|| "the returned `Str` handle names no bytes".to_string())?;
+        let mut out = vec![enc::STR];
+        out.extend_from_slice(&(bytes.len() as u64).to_le_bytes());
+        out.extend_from_slice(bytes);
+        return Ok(out);
+    }
+    match m.num_kind(ty).map_err(|e| e.to_string())? {
+        Some(NumKind::Int(k)) => {
+            let mut out = vec![enc::INT, k.width() as u8, k.signed() as u8];
+            out.extend_from_slice(&v.bits.to_le_bytes());
+            Ok(out)
+        }
+        Some(NumKind::Float(k)) => {
+            let width = match k {
+                FloatKind::F32 => 32u8,
+                FloatKind::F64 => 64u8,
+            };
+            let mut out = vec![enc::FLOAT, width];
+            out.extend_from_slice(&v.bits.to_le_bytes());
+            Ok(out)
+        }
+        None => Err(format!(
+            "a comptime result of type #{} (an aggregate or pointer) has no canonical encoding \
+             in F9; only unit, bool, integers, floats and `Str` are content-addressed",
+            ty.0
+        )),
+    }
+}
+
+/// The dispatch loop proper, from the entry frame already pushed to the
+/// run's end: the outcome plus the value the entry frame returned (unit on
+/// any other exit).
+fn drive(m: &mut Machine<'_>) -> Result<(Outcome, Slot), InterpError> {
     loop {
         let fr = m.frames.len() - 1;
-        match step_frame(fr, &mut m)? {
+        match step_frame(fr, m)? {
             FrameStep::Continue => {}
             FrameStep::Return(v) => {
-                pop_frame(&mut m);
+                pop_frame(m);
                 let dest = m.pending.pop().unwrap_or(None);
                 match m.frames.last() {
                     None => {
                         debug_assert!(dest.is_none());
-                        return Ok(settle(&mut m, Exit::Return, None, None));
+                        return Ok((settle(m, Exit::Return, None, None), v));
                     }
                     Some(_) => {
                         let caller = m.frames.len() - 1;
@@ -836,10 +1080,10 @@ fn run_machine(
                     // live on each edge, so one `ValId` names whichever the
                     // edge took.
                     let func = m.prog.fns[m.frames[fr].func].name.clone();
-                    pop_frame(&mut m);
+                    pop_frame(m);
                     let dest = m.pending.pop().unwrap_or(None);
                     let caller = m.frames.len() - 1;
-                    if !at_try_br(&m, caller) {
+                    if !at_try_br(m, caller) {
                         return Err(InterpError::UnhandledRaise(func));
                     }
                     if let Some(d) = dest {
@@ -857,16 +1101,16 @@ fn run_machine(
                         decl.blocks.try_row(f.block).map(|b| b.term.site)
                     })
                     .map(|s| m.site_of(m.frames.len() - 1, s));
-                return error_exit(&mut m, err, ty, site);
+                return error_exit(m, err, ty, site).map(|o| (o, Slot::unit()));
             }
             FrameStep::Trap(kind, site) => {
                 let site = Some(m.site_of(fr, site));
-                return Ok(settle(&mut m, Exit::Trap(kind), site, None));
+                return Ok((settle(m, Exit::Trap(kind), site, None), Slot::unit()));
             }
             FrameStep::Ub(report) => {
                 let exit = Exit::Ub(report.class);
                 let site = Some(report.site);
-                return Ok(settle(&mut m, exit, site, Some(report)));
+                return Ok((settle(m, exit, site, Some(report)), Slot::unit()));
             }
         }
     }
@@ -1233,8 +1477,7 @@ fn exec_inst(fr: usize, inst: u32, inst_row: InstRow, m: &mut Machine<'_>) -> Re
         }
         Op::ConstStr => {
             let bytes = find_string(m, fr, inst_row.a)?.to_vec();
-            let id = m.strs.len() as u64;
-            m.strs.push(bytes);
+            let id = m.new_str(bytes)?;
             define(dest, m, fr, Slot::val(id));
         }
         Op::Add(mode)
@@ -1315,6 +1558,20 @@ fn exec_inst(fr: usize, inst: u32, inst_row: InstRow, m: &mut Machine<'_>) -> Re
             let a = val_operand(m, fr, inst, inst_row.site, inst_row.a)?;
             let b = val_operand(m, fr, inst, inst_row.site, inst_row.b)?;
             let ty = val_ty(m, fr, inst, inst_row.a)?;
+            // F9 (ch04 R15): a comparison of two pointers into DIFFERENT
+            // allocations observes their addresses (the synthetic ones);
+            // within one allocation it compares offsets and observes nothing.
+            if is_raw_ptr(m, ty) {
+                let (ia, ib) = (m.alloc_identity(a)?, m.alloc_identity(b)?);
+                let (x, y) = if ia == ib {
+                    (a.bits, b.bits)
+                } else {
+                    (m.observe_address(a)?, m.observe_address(b)?)
+                };
+                let r = crate::arith::icmp(x, y, IntKind::U64, pred);
+                define(dest, m, fr, Slot::val(r as u64));
+                return Ok(());
+            }
             let r = match m.num_kind(ty)? {
                 Some(NumKind::Int(k)) => crate::arith::icmp(a.bits, b.bits, k, pred),
                 // A `bool` comparison is an 8-bit unsigned one.
@@ -1358,6 +1615,25 @@ fn exec_inst(fr: usize, inst: u32, inst_row: InstRow, m: &mut Machine<'_>) -> Re
             let a = val_operand(m, fr, inst, inst_row.site, inst_row.a)?;
             let from_ty = val_ty(m, fr, inst, inst_row.a)?;
             let to_ty = result_ty(m, fr, inst, dest)?;
+            // F9 (ch04 R15, design §6): a pointer-to-integer conversion
+            // OBSERVES an address. The value is the synthetic, deterministic
+            // `(AllocId << 32) | offset`, never a host address, and in
+            // comptime mode the observation bars tier-up.
+            if is_raw_ptr(m, from_ty) {
+                let addr = m.observe_address(a)?;
+                let to = num_kind_of(m, to_ty)?;
+                let r = match op {
+                    Op::ConvChecked => {
+                        crate::arith::conv_checked(addr, NumKind::Int(IntKind::U64), to)
+                            .map_err(Fault::Trap)?
+                    }
+                    Op::ConvWrap => crate::arith::conv_wrap(addr, NumKind::Int(IntKind::U64), to),
+                    Op::ConvSat => crate::arith::conv_sat(addr, NumKind::Int(IntKind::U64), to),
+                    _ => crate::arith::conv_trunc(addr, NumKind::Int(IntKind::U64), to),
+                };
+                define(dest, m, fr, Slot::val(r));
+                return Ok(());
+            }
             let from = num_kind_of(m, from_ty)?;
             let to = num_kind_of(m, to_ty)?;
             let r = match op {
@@ -1379,8 +1655,7 @@ fn exec_inst(fr: usize, inst: u32, inst_row: InstRow, m: &mut Machine<'_>) -> Re
             for v in args {
                 slots.push(m.slot(fr, inst, v)?);
             }
-            let id = m.cells.len() as u64;
-            m.cells.push(Cells::agg(slots));
+            let id = m.new_cells(Cells::agg(slots))?;
             define(dest, m, fr, Slot::val(id));
         }
         Op::Field => {
@@ -1417,8 +1692,7 @@ fn exec_inst(fr: usize, inst: u32, inst_row: InstRow, m: &mut Machine<'_>) -> Re
             for v in args {
                 slots.push(m.slot(fr, inst, v)?);
             }
-            let id = m.cells.len() as u64;
-            m.cells.push(Cells::agg(slots));
+            let id = m.new_cells(Cells::agg(slots))?;
             define(dest, m, fr, Slot::val(id));
         }
         Op::Discr => {
@@ -1466,15 +1740,14 @@ fn exec_inst(fr: usize, inst: u32, inst_row: InstRow, m: &mut Machine<'_>) -> Re
             if lo.bits > hi.bits || hi.bits > base_len {
                 return Err(Fault::Trap(TrapKind::Bounds));
             }
-            let id = m.cells.len() as u64;
-            m.cells.push(Cells {
+            let id = m.new_cells(Cells {
                 slots: vec![
                     Slot::val(cell as u64),
                     Slot::val(start + lo.bits),
                     Slot::val(hi.bits - lo.bits),
                 ],
                 kind: CellKind::Slice,
-            });
+            })?;
             define(dest, m, fr, Slot::val(id));
         }
         Op::Index => {
@@ -1572,12 +1845,23 @@ fn exec_inst(fr: usize, inst: u32, inst_row: InstRow, m: &mut Machine<'_>) -> Re
                     .collect::<Result<Vec<Slot>, InterpError>>()?;
                 (key, argv)
             };
-            let target = m
-                .prog
-                .fns
-                .iter()
-                .position(|f| f.decl.decl == key)
-                .ok_or(InterpError::UnknownCallee(key.0))?;
+            let Some(target) = m.prog.fns.iter().position(|f| f.decl.decl == key) else {
+                // F9 (ch04 R2a, R12): in comptime mode a call to an `extern`
+                // declaration is a sealed operation, named — never an
+                // anonymous unknown callee.
+                if let Some(ct) = m.ct.as_ref()
+                    && let Some((_, name)) = ct.externs.iter().find(|(k, _)| *k == key)
+                {
+                    return Err(InterpError::Comptime(
+                        crate::comptime::ComptimeFault::SealedCall {
+                            callee: name.clone(),
+                            func: m.prog.fns[m.frames[fr].func].name.clone(),
+                        },
+                    )
+                    .into());
+                }
+                return Err(InterpError::UnknownCallee(key.0).into());
+            };
             call(target, dest, args, m)?;
         }
         Op::Intrinsic => {
@@ -1598,6 +1882,7 @@ fn exec_inst(fr: usize, inst: u32, inst_row: InstRow, m: &mut Machine<'_>) -> Re
                     .collect::<Result<Vec<Slot>, InterpError>>()?;
                 (iname, argv)
             };
+            gate_intrinsic(fr, inst_row.site, &name, m)?;
             exec_intrinsic(fr, dest, &name, args, m)?;
         }
         Op::CopyFrom => {
@@ -1674,6 +1959,7 @@ fn exec_inst(fr: usize, inst: u32, inst_row: InstRow, m: &mut Machine<'_>) -> Re
             // and `free` can compare.
             let size = val_operand(m, fr, inst, inst_row.site, inst_row.a)?.bits as u32;
             let align = val_operand(m, fr, inst, inst_row.site, inst_row.b)?.bits as u32;
+            m.charge_bytes(u64::from(size))?;
             let block = m.frames[fr].block;
             let owner = m.allocator_at(fr, block);
             let id = m.allocs.len() as u32;
@@ -1825,6 +2111,7 @@ fn exec_inst(fr: usize, inst: u32, inst_row: InstRow, m: &mut Machine<'_>) -> Re
                 );
             };
             check_arena_live(m, data.0)?;
+            m.charge_bytes(u64::from(size))?;
             let a = m.arenas[arena.0 as usize];
             // design §3.7 packs the offset into a `u32`; an arena past that
             // is a representation limit, reported rather than truncated
@@ -1971,6 +2258,16 @@ fn result_ty(
         Some(v) => val_ty(m, fr, inst, v.0),
         None => Err(InterpError::TypeMismatch("typeless conversion".into())),
     }
+}
+
+/// Is `ty` the `rawptr` primitive (design §6's address-observation rows)?
+fn is_raw_ptr(m: &Machine<'_>, ty: fors_fir::ty::TyId) -> bool {
+    if (ty.0 as usize) >= m.tys.len() {
+        return false;
+    }
+    let bare = m.tys.unqual(ty);
+    m.tys.tag(bare) == TyTag::Prim
+        && PrimKind::from_u8(m.tys.a(bare) as u8) == Some(PrimKind::RawPtr)
 }
 
 fn is_bool(m: &Machine<'_>, ty: fors_fir::ty::TyId) -> bool {
@@ -2536,6 +2833,39 @@ fn write_through(
     }
 }
 
+/// The table's two columns, consulted BEFORE any door runs (design §5.8,
+/// §6): a name outside the table is [`InterpError::UnknownIntrinsic`]; in
+/// comptime mode a `Forbidden` row is the named build error with the
+/// intrinsic and the site (ch04 R12) — no operand is inspected and no host
+/// is touched; at run time a comptime-only row is
+/// [`InterpError::NotAtRunTime`].
+fn gate_intrinsic(
+    fr: usize,
+    site: fors_fmir::ids::SiteId,
+    name: &str,
+    m: &Machine<'_>,
+) -> Result<(), Fault> {
+    let Some(row) = intrinsic::lookup(name) else {
+        return Err(InterpError::UnknownIntrinsic(name.to_string()).into());
+    };
+    if m.ct.is_some() {
+        if row.comptime == intrinsic::When::Forbidden {
+            return Err(InterpError::Comptime(
+                crate::comptime::ComptimeFault::ForbiddenIntrinsic {
+                    intrinsic: name.to_string(),
+                    design: row.design,
+                    func: m.prog.fns[m.frames[fr].func].name.clone(),
+                    site: m.site_of(fr, site),
+                },
+            )
+            .into());
+        }
+    } else if row.run == intrinsic::When::Forbidden {
+        return Err(InterpError::NotAtRunTime(name.to_string()).into());
+    }
+    Ok(())
+}
+
 fn exec_intrinsic(
     fr: usize,
     dest: Option<ValId>,
@@ -2544,7 +2874,7 @@ fn exec_intrinsic(
     m: &mut Machine<'_>,
 ) -> Result<(), Fault> {
     match name {
-        INTRINSIC_STDOUT_WRITE_LINE => {
+        intrinsic::STDOUT_WRITE_LINE => {
             // `stdout_write_line(receiver, text)`: the receiver is ignored
             // (the entry shim fabricates it); the text operand is a `Str`
             // handle into the machine's byte table. ch10 R39: TOTAL and
@@ -2568,7 +2898,7 @@ fn exec_intrinsic(
             define(dest, m, fr, Slot::unit());
             Ok(())
         }
-        INTRINSIC_STDOUT_WRITE_UINT => {
+        intrinsic::STDOUT_WRITE_UINT => {
             // `stdout_write_uint(receiver, v)`: base 10, no locale, no
             // trailing newline (ch10 R39) — same total/latching write
             // path as `stdout_write_line`, minus the `\n`.
@@ -2586,7 +2916,7 @@ fn exec_intrinsic(
             define(dest, m, fr, Slot::unit());
             Ok(())
         }
-        INTRINSIC_STR_BYTE_LEN => {
+        intrinsic::STR_BYTE_LEN => {
             // `str_byte_len(self)`: the receiver's own byte count. `Str`
             // values are handles into the machine's byte table (§5.1
             // treats `Str` as an allocation object; F1's materialisation
@@ -2596,7 +2926,7 @@ fn exec_intrinsic(
             define(dest, m, fr, Slot::val(n as u64));
             Ok(())
         }
-        INTRINSIC_STR_BYTE_AT => {
+        intrinsic::STR_BYTE_AT => {
             // `str_byte_at(self, i)`: ch10 R23/R26 — out of range is a
             // bug, trap `bounds`, same as `index` on a `Slice`/`Array`.
             let recv = args.first().copied().unwrap_or_else(Slot::unit);
@@ -2607,7 +2937,7 @@ fn exec_intrinsic(
             define(dest, m, fr, Slot::val(b as u64));
             Ok(())
         }
-        INTRINSIC_STR_BYTE_SLICE => {
+        intrinsic::STR_BYTE_SLICE => {
             // `str_byte_slice(self, start, end)`: a fresh handle over the
             // byte range. `Str.slice`'s `pre start <= end and end <=
             // self.len()` (kind `contract`) runs before this is reached;
@@ -2620,41 +2950,39 @@ fn exec_intrinsic(
                 return Err(Fault::Trap(TrapKind::Bounds));
             }
             let out = bytes[start..end].to_vec();
-            let id = m.strs.len() as u64;
-            m.strs.push(out);
+            let id = m.new_str(out)?;
             define(dest, m, fr, Slot::val(id));
             Ok(())
         }
-        INTRINSIC_SEQ_LEN => {
-            // `seq_len(seq)`: see `INTRINSIC_SEQ_LEN`. Total — it reads a
+        intrinsic::SEQ_LEN => {
+            // `seq_len(seq)`: see `intrinsic::SEQ_LEN`. Total — it reads a
             // window, touches no element, and cannot trap.
             let seq = args.first().copied().unwrap_or_else(Slot::unit);
             let (_, _, len) = seq_window(m, seq)?;
             define(dest, m, fr, Slot::val(len));
             Ok(())
         }
-        INTRINSIC_STR_EQ => {
-            // `str_eq(a, b)`: see `INTRINSIC_STR_EQ`. Total; no trap.
+        intrinsic::STR_EQ => {
+            // `str_eq(a, b)`: see `intrinsic::STR_EQ`. Total; no trap.
             let a = args.first().copied().unwrap_or_else(Slot::unit);
             let b = args.get(1).copied().unwrap_or_else(Slot::unit);
             let eq = str_bytes(m, a)? == str_bytes(m, b)?;
             define(dest, m, fr, Slot::val(eq as u64));
             Ok(())
         }
-        INTRINSIC_AGG_UNINIT => {
-            // `agg_uninit(n)`: see `INTRINSIC_AGG_UNINIT`. The cells are
+        intrinsic::AGG_UNINIT => {
+            // `agg_uninit(n)`: see `intrinsic::AGG_UNINIT`. The cells are
             // genuinely uninitialised, so `cell_slot` reports a read of one
             // as `ub: uninit-read` rather than handing back a zero.
             let n = args.first().copied().unwrap_or_else(Slot::unit).bits;
             let n = usize::try_from(n).map_err(|_| {
                 InterpError::TypeMismatch("agg_uninit length does not fit the host".into())
             })?;
-            let id = m.cells.len() as u64;
-            m.cells.push(Cells::agg(vec![Slot::uninit(); n]));
+            let id = m.new_cells(Cells::agg(vec![Slot::uninit(); n]))?;
             define(dest, m, fr, Slot::val(id));
             Ok(())
         }
-        INTRINSIC_CLOCK_MONO => {
+        intrinsic::CLOCK_MONO => {
             // `clock_mono(self)`: `time.Clock.now`'s monotonic nanoseconds,
             // served (and logged, or replayed) by the oracle (design §7.2).
             let recv = host_operand(&args, 0, name)?;
@@ -2663,7 +2991,7 @@ fn exec_intrinsic(
             define(dest, m, fr, Slot::val(v));
             Ok(())
         }
-        INTRINSIC_CLOCK_WALL => {
+        intrinsic::CLOCK_WALL => {
             // `clock_wall(self)`: UTC nanoseconds since the epoch, as `i64`.
             let recv = host_operand(&args, 0, name)?;
             cap_receiver(m, recv, fors_fmir::caps::RootCap::Clock, name)?;
@@ -2671,7 +2999,7 @@ fn exec_intrinsic(
             define(dest, m, fr, Slot::val(v as u64));
             Ok(())
         }
-        INTRINSIC_CLOCK_SLEEP => {
+        intrinsic::CLOCK_SLEEP => {
             // `clock_sleep(self, nanos)`: not a read, so not recorded.
             let recv = host_operand(&args, 0, name)?;
             cap_receiver(m, recv, fors_fmir::caps::RootCap::Clock, name)?;
@@ -2680,7 +3008,7 @@ fn exec_intrinsic(
             define(dest, m, fr, Slot::unit());
             Ok(())
         }
-        INTRINSIC_ENTROPY_U64 => {
+        intrinsic::ENTROPY_U64 => {
             // `entropy_u64(self)`: eight bytes of host entropy (ch10 R47),
             // served (and logged, or replayed) by the oracle.
             let recv = host_operand(&args, 0, name)?;
@@ -2689,12 +3017,12 @@ fn exec_intrinsic(
             define(dest, m, fr, Slot::val(v));
             Ok(())
         }
-        INTRINSIC_FS_DOOR | INTRINSIC_NET_DOOR => {
+        intrinsic::FS_DOOR | intrinsic::NET_DOOR => {
             // `fs_door(self, op)` / `net_door(self, op)`: the M1 host opens
             // no file and no socket (design §5.8), so reaching a door is a
             // NAMED refusal — counted first, so a test can prove a rejected
             // entry name (ch10 R41) never got here.
-            let (cap, owner) = if name == INTRINSIC_FS_DOOR {
+            let (cap, owner) = if name == intrinsic::FS_DOOR {
                 m.oracle.note_fs_host_call();
                 (fors_fmir::caps::RootCap::Dir, "std.fs.Dir")
             } else {
@@ -2706,6 +3034,36 @@ fn exec_intrinsic(
             let op = host_operand(&args, 1, name)?;
             let op = String::from_utf8_lossy(str_bytes(m, op)?).into_owned();
             Err(InterpError::HostRefused(format!("{owner}.{op}")).into())
+        }
+        intrinsic::INPUT_READ => {
+            // `input_read(path)`: ch10 R42's comptime file read, served from
+            // the declared-inputs map the build resolved BEFORE evaluation
+            // (ch04 R13) — never a descriptor, never the file system. A path
+            // the module header does not declare is the named build error.
+            // `gate_intrinsic` already refused it at run time.
+            let path = host_operand(&args, 0, name)?;
+            let path = str_bytes(m, path)?.to_vec();
+            let func = m.prog.fns[m.frames[fr].func].name.clone();
+            let Some(ct) = m.ct.as_mut() else {
+                return Err(InterpError::NotAtRunTime(name.to_string()).into());
+            };
+            let Some(input) = ct.inputs.get(&path) else {
+                return Err(InterpError::Comptime(
+                    crate::comptime::ComptimeFault::UndeclaredInput {
+                        path: String::from_utf8_lossy(&path).into_owned(),
+                        func,
+                        site: (0, 0),
+                    },
+                )
+                .into());
+            };
+            let bytes = input.bytes.clone();
+            if !ct.inputs_read.contains(&path) {
+                ct.inputs_read.push(path);
+            }
+            let id = m.new_str(bytes)?;
+            define(dest, m, fr, Slot::val(id));
+            Ok(())
         }
         other => Err(InterpError::UnknownIntrinsic(other.to_string()).into()),
     }
@@ -2797,6 +3155,9 @@ fn exec_term(
             if term.op == Op::Raise {
                 // F3: the static type ch02 R17's `render` is defined on.
                 m.frames[fr].raise_ty = term.ty;
+            } else if fr == 0 && m.ct.is_some() && term.a != fors_fmir::op::NO_OPERAND {
+                // F9: the comptime result's static type, for its encoding.
+                m.entry_ret_ty = Some(val_ty(m, fr, u32::MAX, term.a)?);
             }
             begin_exit_or_goto(fr, block, BlockId::NONE, Some(v), term.op == Op::Raise, m)
         }

@@ -39,5 +39,5 @@ pub mod lower;
 pub mod mono;
 
 pub use diag::{LowerDiag, LowerError};
-pub use lower::{LoweredBuild, LoweredFn, lower_build};
+pub use lower::{ComptimeThunk, LoweredBuild, LoweredFn, lower_build};
 pub use mono::{Instance, Instances};
