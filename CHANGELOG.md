@@ -7,7 +7,8 @@ commit history, which predates the Conventional Commits convention.
 
 | Language | Compiler | Meaning |
 |---|---|---|
-| `lang-v0.5.3` | `compiler-v0.10.0` | current |
+| `lang-v0.5.3` | `compiler-v0.11.0` | current |
+| `lang-v0.5.3` | `compiler-v0.10.0` | FMIR F1-completion |
 | `lang-v0.5.3` | `compiler-v0.9.0` | checker I8b, the round-6 flow |
 | `lang-v0.5.2` | `compiler-v0.8.0` | FMIR F7 in part |
 | `lang-v0.5.2` | `compiler-v0.7.0` | checker I8, the flow pass |
@@ -97,6 +98,39 @@ measurement, the grammar, names and visibility), with a conformance corpus and
 an independent reference parser.
 
 ## Compiler
+
+### compiler-v0.11.0 — 2026-10-02
+
+Type checker increment **I10a**, the facts lowering was missing, produced
+by one agent and independently verified by another. Implements
+`lang-v0.5.3`; still no code generator.
+
+- **Determined generic arguments.** `BodyFacts::generic_args` records, for
+  every call the checker resolves to a generic callee and every generic
+  struct literal, the arguments R38(a)–(f) determined, normalised through
+  R20, in R38(a)'s order; one column covers type, brand and const
+  arguments; a monomorphic callee records an empty row, an undetermined
+  slot `NO_TY`.
+- **Pattern facts.** `BodyFacts::patterns` publishes what the checker
+  already decided: per pattern node its shape (wild, binding with its
+  copy-or-move convention, literal, variant, struct in field order,
+  tuple), the faced type and parent component; per `match` the arm order
+  and R53's exhaustiveness; `let`/`var` destructurings as one-arm matches.
+- **A silent `TY_ERROR` fixed.** R45's qualified form on a generic head
+  (`Buffer.empty()`, the commonest `std` constructor shape) resolved to
+  nothing with no diagnostic; the head is applied to its own parameters
+  and the impl's parameters enter the binding, so R38(c) determines them
+  from the expected type and R39 speaks where nothing does. `std`'s own
+  `return Buffer.empty();` types for the first time.
+- **Coverage.** 803 Rust tests; PENDING_09 unchanged at 6.
+- **Verification found and fixed before merge.** A second silent shape:
+  R38(a) explicit arguments on the function segment of a qualified call
+  to a non-generic head (`Layout.of[T]()`).
+- **Listed for the next increment.** A sweep of `std` found 17 more silent
+  `TY_ERROR` nodes in three pre-existing families (parameterised-trait
+  methods, explicit type arguments on a type path used as a value head,
+  `[ ]` on a scoped slice through an `inout` receiver) — I10b adds a
+  permanent sweep gate and fixes them at the root.
 
 ### compiler-v0.10.0 — 2026-10-02
 
