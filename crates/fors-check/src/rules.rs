@@ -728,13 +728,17 @@ mod tests {
         // `wf::marker_traits`, R50 at `pat::check_pat` — were already
         // `Implemented` and keep their sites.
         //
-        // R58 stays unimplemented, for one site:
-        //  - R58's `lower::brand_as_type` site is in
-        //    (`brand-param-as-value-type-rejected`, reported with ch01
-        //    R15d's own code as §8's row 58 requires), but
-        //    `expr::const_param_value` is not: no increment has given a
-        //    const parameter its value in a body (`LocalKind::ConstParam`
-        //    is still unread), and no ch09 corpus test asks for it.
+        // R58 stays unimplemented, although I10b landed the body half of
+        // both its clauses at `member::path_head`'s `gparam_value` (§8's
+        // row 58 names the site `expr::const_param_value`; the judgement
+        // lives with the rest of the path-head reading instead): a CONST
+        // parameter is now a constant of its declared type in a body —
+        // which is what made `a[0 ..< N]` type rather than absorb — and a
+        // BRAND parameter in VALUE position now reports ch01 R15d's own
+        // code beside `lower::brand_as_type`'s type position. What is left
+        // is the clause's reach: `LocalKind::ConstParam` is still unread,
+        // the value a const parameter denotes is not folded, and no ch09
+        // corpus test asks for either, so the row does not yet flip.
         assert_eq!(
             implemented,
             vec![
