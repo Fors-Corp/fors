@@ -7,11 +7,22 @@ commit history, which predates the Conventional Commits convention.
 
 | Language | Compiler | Meaning |
 |---|---|---|
-| `lang-v0.5.1` | `compiler-v0.2.0` | current |
+| `lang-v0.5.2` | `compiler-v0.3.0` | current |
+| `lang-v0.5.1` | `compiler-v0.2.0` | checker I3.5–I4b, FMIR F1–F2 |
 | `lang-v0.5.0` | `compiler-v0.1.1` | type checker I2–I3 |
 | `lang-v0.5.0` | `compiler-v0.1.0` | first tagged front end |
 
 ## Language
+
+### lang-v0.5.2 — 2026-10-02
+
+Clarification only; no program changes meaning.
+
+- ch03 R12 now reads that `reduce` MUST be given its final shape in FMIR as
+  a function of `(n, B, L)` before parallel lowering, the tree explicit where
+  `n` is comptime-known. The old wording ("MUST lower to this explicit tree")
+  was unimplementable for a runtime-length input; the `--serial-elide`
+  bit-exactness clause is unchanged (FMIR owner decision Q3).
 
 ### lang-v0.5.1 — 2026-10-02
 
@@ -71,6 +82,29 @@ measurement, the grammar, names and visibility), with a conformance corpus and
 an independent reference parser.
 
 ## Compiler
+
+### compiler-v0.3.0 — 2026-10-02
+
+FMIR increment **F5**, the `reduce` tree, produced by one agent and
+independently verified by another. Implements `lang-v0.5.2`; still no code
+generator.
+
+- **One owner for the shape.** `fors-fmir::reduce`: `REDUCE_BLOCK = 256`,
+  `REDUCE_LANES = 8`, `reduce_tree(n, B, L)`, the pairwise combine with the
+  accumulator, lower lane and left partial on the left, a single empty side
+  passing through with no op call, no identity padding (ch03 R13a), the
+  independently walked comptime-`n` form, and a committed shape-table hash
+  over `n ∈ 0..1024`. `[1.0, 1e16, -1e16, 1.0]` is `0.0` by the tree and
+  `1.0` by a fold, as the spec requires.
+- **Interpreter and lowering.** `reduce_tree` reads `B` and `L` from the
+  instruction, never the host; `n = 0` traps `empty-reduce` unless an
+  identity is present (R11a); array literals, `base[lo ..< hi]` with its
+  alias seed, the explicit tree for a comptime-known `n`. All eight
+  `03-numerics/reduce-*` conformance tests run end to end.
+- **Verification found and fixed before merge, a pre-existing miscompile:**
+  `fors-lower` laid out blocks by id while emitting in seal order, so an
+  `if` nested in a then-branch ran the inner `else`. Regression probe added.
+- `Cargo.lock` refreshed for the workspace version.
 
 ### compiler-v0.2.0 — 2026-10-02
 
