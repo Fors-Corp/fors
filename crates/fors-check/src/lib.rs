@@ -37,6 +37,7 @@ pub mod member;
 pub mod methods;
 pub mod normalise;
 pub mod pat;
+pub mod queries;
 pub mod rules;
 pub mod show;
 pub mod tape;
@@ -137,6 +138,79 @@ pub struct Counters {
     pub exhaust_steps: u64,
 }
 
+/// Which bodies the body phase types (design §9.1's `check_body(k)` node).
+///
+/// A whole compile types them all; I9's query engine hands over exactly the
+/// `check_body` keys its red-green walk found red, so an incremental check
+/// re-types those bodies and no others. Anything not selected is not
+/// visited: it is neither checked nor counted as skipped.
+#[derive(Clone, Copy, Debug)]
+pub enum Bodies<'s> {
+    All,
+    /// Exactly these declarations, which must be sorted by `DefId`.
+    Only(&'s [fors_index::ids::DefId]),
+}
+
+impl Bodies<'_> {
+    pub fn selects(&self, def: fors_index::ids::DefId) -> bool {
+        match self {
+            Bodies::All => true,
+            Bodies::Only(set) => set.binary_search_by_key(&def.0, |d| d.0).is_ok(),
+        }
+    }
+}
+
+/// The build after design §7.1's phases 1-5: the prelude, the `DefTable`,
+/// lowering, whole-head well-formedness and the freeze. Everything a body
+/// needs, and nothing a body produces.
+///
+/// `check_build` runs this and then [`check_bodies`]; the query engine keeps
+/// one of these per revision and runs [`check_bodies`] once, for the
+/// declarations the DAG asked for. There is only one code path, so the
+/// conformance corpus tests the split as well as the whole.
+pub struct Signatures<'a> {
+    pub fir: fors_fir::Fir,
+    pub prelude: fors_fir::prelude::PreludeDefs,
+    pub defs: defs::DefTable,
+    pub shapes: lower::Shapes,
+    pub low: lower::Lowered,
+    pub files: Vec<lower::FileCtx<'a>>,
+    /// The impl index, kept out of `low` from the moment `holds` needs to
+    /// probe it (design §4.1).
+    pub impls: fors_fir::impls::ImplIndex,
+    /// Per `DefId`: did this declaration already produce a diagnostic? A
+    /// body is typed only when its own signature and its `impl`/`trait` head
+    /// came out clean (design §10).
+    pub spoke: Vec<bool>,
+    /// Per declaration the whole-head passes judged: the impl buckets
+    /// `(trait DefId, HeadKey::as_u64)` its `holds` questions probed —
+    /// `signature_of(k)`'s `impls_for` in-edges in the query DAG.
+    pub sig_buckets: Vec<(fors_index::ids::DefId, Vec<(u32, u64)>)>,
+    pub mod_edges: Vec<(ModuleId, ModuleId)>,
+    /// Phases 1-5's diagnostics, already sorted. Separate from the body
+    /// phase's so the query engine can cache each half against the node that
+    /// produced it.
+    pub diagnostics: Vec<Diagnostic>,
+    pub decls_lowered: usize,
+    sink: diag::Sink,
+}
+
+/// What one run of the body phase produced.
+#[derive(Default)]
+pub struct BodyPhase {
+    pub diagnostics: Vec<Diagnostic>,
+    pub counters: Counters,
+    pub check_sites: Vec<body::CheckSite>,
+    pub deps: Vec<(fors_index::ids::DefId, deps::DepSet)>,
+    pub facts: Vec<(fors_index::ids::DefId, facts::BodyFacts)>,
+    /// Per typed body: the impl buckets `(trait DefId, HeadKey::as_u64)` it
+    /// probed (design §9.1's `impls_for` in-edge of `check_body`). The empty
+    /// buckets are in it too: adding the first impl to one must wake the body
+    /// that asked.
+    pub buckets: Vec<(fors_index::ids::DefId, Vec<(u32, u64)>)>,
+    pub cache_rebuild: Option<CacheRebuild>,
+}
+
 // MARC: design §4.2/§4.4 gives `check_build`'s signature as
 // `check_build(&ResolveOutput, ...) -> CheckOutput` without spelling out the
 // `...`. Lowering reads the CST, which `ResolveOutput` does not carry, and
@@ -145,37 +219,13 @@ pub struct Counters {
 // `&mut Interner`, closes that gap before any body is checked"). So the
 // parameters are the same `&[FileInput]` the caller already built for
 // `resolve` plus that interner.
-/// Type-checks a whole resolved build (design §7.1's phases 1-5; phases 6-7
-/// are I3 onward's). `inputs` is the same slice handed to
+/// Design §7.1 phases 1-5. `inputs` is the same slice handed to
 /// [`fors_resolve::resolve`], in the same order.
-pub fn check_build(
-    inputs: &[FileInput],
-    resolved: &ResolveOutput,
+pub fn check_signatures<'a>(
+    inputs: &[FileInput<'a>],
+    resolved: &'a ResolveOutput,
     interner: &mut fors_index::Interner,
-) -> CheckOutput {
-    check_build_inner(inputs, resolved, interner, false)
-}
-
-/// [`check_build`] plus design §16 point 3's measurement: after the body
-/// phase, both trait-world caches are dropped and every body re-typed, so
-/// the cost of one impl edit's invalidation is a measured number rather than
-/// an estimate. The returned diagnostics, facts and deps are those of the
-/// REBUILD run as well as the cold one, so this entry point is for the
-/// measurement harness only — never for a compile.
-pub fn check_build_measuring_caches(
-    inputs: &[FileInput],
-    resolved: &ResolveOutput,
-    interner: &mut fors_index::Interner,
-) -> CheckOutput {
-    check_build_inner(inputs, resolved, interner, true)
-}
-
-fn check_build_inner(
-    inputs: &[FileInput],
-    resolved: &ResolveOutput,
-    interner: &mut fors_index::Interner,
-    measure_caches: bool,
-) -> CheckOutput {
+) -> Signatures<'a> {
     // `FORS_PHASES=1` prints the elapsed time at each phase boundary of §7.1.
     // Read once per process, not once per phase: `check_build` runs 900 times
     // in the conformance harness.
@@ -213,9 +263,7 @@ fn check_build_inner(
         })
         .collect();
     let decls: Vec<&fors_index::DeclTable> = resolved.files.iter().map(|f| &f.decls).collect();
-    let def_table = defs::build(&mut fir, &decls, &modules);
-
-    let files: Vec<lower::FileCtx> = inputs
+    let files: Vec<lower::FileCtx<'a>> = inputs
         .iter()
         .enumerate()
         .zip(resolved.files.iter())
@@ -227,6 +275,9 @@ fn check_build_inner(
             uses: &fr.name_uses,
         })
         .collect();
+    // `defs::build` reads the CST only for an `impl`'s header fold
+    // (`defs::impl_header_fold`, design §3 fork 13), so `files` comes first.
+    let def_table = defs::build(&mut fir, &decls, &modules, &files);
 
     // Pass A: arities and kinds, with no type.
     phase!("defs");
@@ -253,10 +304,8 @@ fn check_build_inner(
     low.impls.finish();
     let decls_lowered = def_table.len() - def_table.first_user.index();
 
-    // 4-6. Whole-head well-formedness, the freeze, then every body. All
-    // three read the same tables, so they share one context: `holds`, the
-    // impl index and the linearity memo are built once (design §7.1).
-    let (counters, check_sites, deps, facts, cache_rebuild) = {
+    // 4-5. Whole-head well-formedness, then the freeze.
+    let (impls, spoke, sig_buckets) = {
         let mut w = wf::Wf::new(&mut fir, interner, &prelude, &def_table, &shapes, &mut sink);
         // R43's candidate-trait search walks the module graph: hand over
         // the edge list `resolve()` kept for exactly this.
@@ -271,73 +320,171 @@ fn check_build_inner(
         // query DAG keys on.
         w.freeze(&def_table);
         phase!("hash");
-        // 6. Bodies.
-        let t_bodies = std::time::Instant::now();
-        w.bodies(&low, &files);
-        let cold_bodies_ns = t_bodies.elapsed().as_nanos();
-        let cache_rebuild = measure_caches.then(|| {
-            let t0 = std::time::Instant::now();
-            let (method_memo_rows, norm_memo_rows) = w.clear_trait_world_caches();
-            let clear_ns = t0.elapsed().as_nanos();
-            let t1 = std::time::Instant::now();
-            w.bodies(&low, &files);
-            let rebuild_ns = t1.elapsed().as_nanos();
-            let t2 = std::time::Instant::now();
-            w.bodies(&low, &files);
-            CacheRebuild {
-                method_memo_rows: method_memo_rows as u64,
-                norm_memo_rows: norm_memo_rows as u64,
-                clear_ns,
-                rebuild_ns,
-                cold_bodies_ns,
-                warm_rebuild_ns: t2.elapsed().as_nanos(),
-            }
-        });
-        let c = Counters {
-            nodes_visited: w.body_nodes,
-            synths: w.synths,
-            checks: w.checks,
-            subst_norm_calls: w.subst_calls,
-            holds_probes: w.holds_probes,
-            holds_misses: w.holds_misses,
-            impl_scans: w.impl_scans,
-            tape_events: w.tape_events,
-            types_interned: 0,
-            bodies_checked: w.bodies_checked,
-            bodies_skipped: w.bodies_skipped,
-            norm_queries: w.norm.proj_queries,
-            norm_memo_misses: w.norm.memo_misses,
-            norm_match_steps: w.norm.match_steps,
-            norm_budget_peak: w.norm.budget_peak,
-            norm_memo_rows: w.norm.len() as u64,
-            exhaust_steps: w.exhaust_steps,
-        };
+        let sig_buckets = w.take_wf_buckets();
         (
-            c,
-            std::mem::take(&mut w.check_sites),
-            std::mem::take(&mut w.deps),
-            std::mem::take(&mut w.facts),
-            cache_rebuild,
+            std::mem::take(&mut w.impls),
+            std::mem::take(&mut w.spoke),
+            sig_buckets,
         )
     };
-    phase!("bodies");
 
-    phase!("wf");
-    let types_interned = fir.tys.len();
-    CheckOutput {
-        diagnostics: sink.finish(),
+    let diagnostics = sink.take();
+    Signatures {
         fir,
-        defs: Some(def_table),
-        types_interned,
+        prelude,
+        defs: def_table,
+        shapes,
+        low,
+        files,
+        impls,
+        spoke,
+        sig_buckets,
+        mod_edges: resolved.edges.clone(),
+        diagnostics,
         decls_lowered,
-        counters: Counters {
-            types_interned: types_interned as u64,
-            ..counters
-        },
-        check_sites,
-        deps,
-        facts,
+        sink,
+    }
+}
+
+/// Design §7.1 phase 6: the selected bodies, in declaration order.
+///
+/// `measure_caches` adds design §16 point 3's measurement — see
+/// [`check_build_measuring_caches`].
+pub fn check_bodies(
+    sigs: &mut Signatures<'_>,
+    interner: &mut fors_index::Interner,
+    which: Bodies<'_>,
+    measure_caches: bool,
+) -> BodyPhase {
+    let Signatures {
+        fir,
+        prelude,
+        defs,
+        shapes,
+        low,
+        files,
+        impls,
+        spoke,
+        mod_edges,
+        sink,
+        ..
+    } = sigs;
+    let mut w = wf::Wf::new(fir, interner, prelude, defs, shapes, sink);
+    w.mod_edges = mod_edges.clone();
+    w.spoke = std::mem::take(spoke);
+    w.impls = std::mem::take(impls);
+    let t_bodies = std::time::Instant::now();
+    w.bodies_selected(low, files, which);
+    let cold_bodies_ns = t_bodies.elapsed().as_nanos();
+    let cache_rebuild = measure_caches.then(|| {
+        let t0 = std::time::Instant::now();
+        let (method_memo_rows, norm_memo_rows) = w.clear_trait_world_caches();
+        let clear_ns = t0.elapsed().as_nanos();
+        let t1 = std::time::Instant::now();
+        w.bodies_selected(low, files, which);
+        let rebuild_ns = t1.elapsed().as_nanos();
+        let t2 = std::time::Instant::now();
+        w.bodies_selected(low, files, which);
+        CacheRebuild {
+            method_memo_rows: method_memo_rows as u64,
+            norm_memo_rows: norm_memo_rows as u64,
+            clear_ns,
+            rebuild_ns,
+            cold_bodies_ns,
+            warm_rebuild_ns: t2.elapsed().as_nanos(),
+        }
+    });
+    let counters = Counters {
+        nodes_visited: w.body_nodes,
+        synths: w.synths,
+        checks: w.checks,
+        subst_norm_calls: w.subst_calls,
+        holds_probes: w.holds_probes,
+        holds_misses: w.holds_misses,
+        impl_scans: w.impl_scans,
+        tape_events: w.tape_events,
+        types_interned: 0,
+        bodies_checked: w.bodies_checked,
+        bodies_skipped: w.bodies_skipped,
+        norm_queries: w.norm.proj_queries,
+        norm_memo_misses: w.norm.memo_misses,
+        norm_match_steps: w.norm.match_steps,
+        norm_budget_peak: w.norm.budget_peak,
+        norm_memo_rows: w.norm.len() as u64,
+        exhaust_steps: w.exhaust_steps,
+    };
+    let out = BodyPhase {
+        diagnostics: w.sink.take(),
+        counters,
+        check_sites: std::mem::take(&mut w.check_sites),
+        deps: std::mem::take(&mut w.deps),
+        facts: std::mem::take(&mut w.facts),
+        buckets: std::mem::take(&mut w.buckets),
         cache_rebuild,
+    };
+    *impls = std::mem::take(&mut w.impls);
+    *spoke = std::mem::take(&mut w.spoke);
+    out
+}
+
+/// Type-checks a whole resolved build: [`check_signatures`] then
+/// [`check_bodies`] over every body (design §7.1's phases 1-7).
+pub fn check_build(
+    inputs: &[FileInput],
+    resolved: &ResolveOutput,
+    interner: &mut fors_index::Interner,
+) -> CheckOutput {
+    check_build_inner(inputs, resolved, interner, false)
+}
+
+/// [`check_build`] plus design §16 point 3's measurement: after the body
+/// phase, both trait-world caches are dropped and every body re-typed, so
+/// the cost of one impl edit's invalidation is a measured number rather than
+/// an estimate. The returned diagnostics, facts and deps are those of the
+/// REBUILD run as well as the cold one, so this entry point is for the
+/// measurement harness only — never for a compile.
+pub fn check_build_measuring_caches(
+    inputs: &[FileInput],
+    resolved: &ResolveOutput,
+    interner: &mut fors_index::Interner,
+) -> CheckOutput {
+    check_build_inner(inputs, resolved, interner, true)
+}
+
+fn check_build_inner(
+    inputs: &[FileInput],
+    resolved: &ResolveOutput,
+    interner: &mut fors_index::Interner,
+    measure_caches: bool,
+) -> CheckOutput {
+    let mut sigs = check_signatures(inputs, resolved, interner);
+    let body = check_bodies(&mut sigs, interner, Bodies::All, measure_caches);
+    sigs.finish(body)
+}
+
+impl Signatures<'_> {
+    /// The signature phase's own diagnostics plus one body phase's, in
+    /// design §7.1 phase 7's order.
+    pub fn finish(self, body: BodyPhase) -> CheckOutput {
+        let types_interned = self.fir.tys.len();
+        let mut diagnostics = self.diagnostics;
+        diagnostics.extend(body.diagnostics);
+        diag::sort_diagnostics(&mut diagnostics);
+        CheckOutput {
+            diagnostics,
+            fir: self.fir,
+            defs: Some(self.defs),
+            types_interned,
+            decls_lowered: self.decls_lowered,
+            counters: Counters {
+                types_interned: types_interned as u64,
+                ..body.counters
+            },
+            check_sites: body.check_sites,
+            deps: body.deps,
+            facts: body.facts,
+            cache_rebuild: body.cache_rebuild,
+        }
     }
 }
 

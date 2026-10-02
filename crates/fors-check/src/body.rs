@@ -552,10 +552,28 @@ impl<'f, 'a> BodyCx<'f, 'a> {
 impl Wf<'_> {
     /// Design §7.1 phase 6: every body in declaration order.
     pub fn bodies(&mut self, low: &Lowered, files: &[FileCtx]) {
+        self.bodies_selected(low, files, crate::Bodies::All);
+    }
+
+    /// Design §7.1 phase 6 for the selected declarations only (design §9.1's
+    /// `check_body(k)` node). A declaration `which` does not select is not
+    /// visited at all: no diagnostic, no `DepSet`, no `BodyFacts` row, and no
+    /// counter charged. That is what makes I9's incremental re-check cost the
+    /// bodies it demanded and nothing else.
+    pub fn bodies_selected(&mut self, low: &Lowered, files: &[FileCtx], which: crate::Bodies<'_>) {
+        // The linearity classification `is_linear` memoises against (ch01
+        // R22's roots and R22a's three head classes). `run()` builds it for
+        // the well-formedness phase; a body phase that runs in its own `Wf`
+        // (every one does — the signature phase's `Wf` cannot outlive its
+        // borrow of the `Fir`) builds it here, once, before any body.
+        self.collect_linear(low);
         let user: Vec<DefId> = self.defs.user_defs().map(|(d, _)| d).collect();
         for def in user {
             let row = *self.defs.get(def).expect("user def has a row");
             if row.kind != DeclKind::Fn {
+                continue;
+            }
+            if !which.selects(def) {
                 continue;
             }
             if self.already_spoke(low, def, row.parent) {
@@ -586,6 +604,12 @@ impl Wf<'_> {
             self.cur_scope = fors_fir::NO_DEF;
             let set = self.cur_deps.take();
             self.deps.push((def, set));
+            // The impl buckets this body probed, as the set rather than the
+            // sequence (design §9.1's `impls_for` in-edge of `check_body`).
+            let mut bs = std::mem::take(&mut self.cur_buckets);
+            bs.sort_unstable();
+            bs.dedup();
+            self.buckets.push((def, bs));
             self.body_nodes += cx.nodes;
             self.tape_events += cx.tape.len() as u64;
             // I8 (design §7.9): the flow pass reads the tape typing just
@@ -1523,6 +1547,7 @@ impl Wf<'_> {
         // `normalise.rs` adds. Every impl the lookup could consult is a
         // dependency of this body (design §9), recorded before the question.
         let head = self.fir.tys.head_key(subject);
+        self.note_bucket(trait_def, head);
         let mut rows = self.impls.exact(trait_def, subject);
         rows.extend(self.impls.bucket(trait_def, head));
         rows.sort_unstable();

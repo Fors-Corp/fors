@@ -771,3 +771,294 @@ fn i6_trait_world_cache_clearing_is_cheap_on_a_cold_100k_check() {
         r.norm_memo_rows
     );
 }
+
+// ============================================================ I9: the M1 exit
+//
+// `docs/PLAN.md` M1's exit gates (a) and (b), and design §16 point 5's
+// disproof, measured through the query DAG (`fors_check::queries`).
+//
+// Everything here is `#[ignore]`d: these are wall-clock numbers and belong on
+// the pinned M1 box, never in cloud CI (design §12). The DETERMINISTIC half of
+// gate (b) is `tests/incremental.rs`'s
+// `the_reexecution_count_per_edit_class_is_independent_of_corpus_size`, which
+// is not ignored.
+//
+// `cargo test --release -p fors-check --test scale -- --ignored --nocapture`
+
+/// Builds a `QueryBuild` over a generated package.
+fn query_build(
+    sources: &[String],
+) -> (
+    fors_check::queries::QueryBuild,
+    Vec<fors_index::ids::FileId>,
+) {
+    let mut qb = fors_check::queries::QueryBuild::new();
+    let mut ids = Vec::new();
+    for (m, src) in sources.iter().enumerate() {
+        let segs: Vec<fors_index::Symbol> = {
+            let i = qb.interner_mut();
+            vec![i.intern(b"pkg"), i.intern(format!("m{m}").as_bytes())]
+        };
+        ids.push(qb.add_file(&format!("pkg/m{m}.fors"), segs, src.clone().into_bytes()));
+    }
+    (qb, ids)
+}
+
+fn corpus(modules: usize, items: usize) -> (Vec<String>, usize) {
+    let sources: Vec<String> = (0..modules)
+        .map(|m| module_source_nongeneric(m, items))
+        .collect();
+    let lines = sources.iter().map(|s| s.lines().count()).sum();
+    (sources, lines)
+}
+
+/// M1 exit gate (a): a ~100k-line corpus checks CLEAN, cold, through the DAG.
+#[test]
+#[ignore]
+fn m1_exit_100k_corpus_checks_clean_cold() {
+    let _serial = SERIAL.lock().unwrap_or_else(|e| e.into_inner());
+    let (sources, lines) = corpus(250, 20);
+    let (mut qb, _) = query_build(&sources);
+    let t = Instant::now();
+    qb.recheck().expect("never cancelled");
+    let wall = t.elapsed();
+    let ds = qb.diagnostics();
+    let s = qb.stats();
+    eprintln!("gate (a): {lines} lines, {:?} cold", wall);
+    eprintln!(
+        "          {} nodes, {} dependency edges, {} executed",
+        s.nodes, s.dep_edges, s.executed
+    );
+    eprintln!("{}", qb.render_stats());
+    assert!(
+        ds.is_empty(),
+        "the 100k corpus must check clean, got {} diagnostics, first {:?}",
+        ds.len(),
+        ds.first()
+    );
+    assert!(lines > 95_000, "the corpus is only {lines} lines");
+}
+
+/// M1 exit gate (b), the MEASUREMENT half: the log-log wall slope of a cold
+/// check over 12.5k / 25k / 50k / 100k lines (target <= 1.05), the cost of one
+/// incremental re-check after a one-line body edit, and the per-declaration
+/// cost histogram.
+///
+/// The machine state is printed with the numbers. Another agent may be running
+/// on this box; design §12 puts the wall-clock gate on the pinned M1 box and
+/// nowhere else, so treat these as a measurement to be re-taken on a quiet
+/// machine, and the counter gate in `tests/incremental.rs` as the CI gate.
+#[test]
+#[ignore]
+fn m1_exit_wall_slope_and_per_declaration_histogram() {
+    let _serial = SERIAL.lock().unwrap_or_else(|e| e.into_inner());
+    eprintln!(
+        "machine: {} logical cpus, release={}",
+        std::thread::available_parallelism().map_or(0, |n| n.get()),
+        !cfg!(debug_assertions)
+    );
+    let sizes = [31usize, 62, 125, 250];
+    let mut rows: Vec<(usize, f64)> = Vec::new();
+    for modules in sizes {
+        let (sources, lines) = corpus(modules, 20);
+        // Median of three cold builds.
+        let mut walls: Vec<f64> = (0..3)
+            .map(|_| {
+                let (mut qb, _) = query_build(&sources);
+                let t = Instant::now();
+                qb.recheck().expect("never cancelled");
+                let w = t.elapsed().as_secs_f64();
+                assert!(
+                    qb.diagnostics().is_empty(),
+                    "generated corpus must be clean"
+                );
+                w
+            })
+            .collect();
+        walls.sort_by(f64::total_cmp);
+        rows.push((lines, walls[1]));
+        eprintln!("cold  {lines:>7} lines  {:>8.1} ms", walls[1] * 1000.0);
+    }
+    // Least-squares log-log slope.
+    let n = rows.len() as f64;
+    let xs: Vec<f64> = rows.iter().map(|&(l, _)| (l as f64).ln()).collect();
+    let ys: Vec<f64> = rows.iter().map(|&(_, w)| w.ln()).collect();
+    let mx = xs.iter().sum::<f64>() / n;
+    let my = ys.iter().sum::<f64>() / n;
+    let num: f64 = xs.iter().zip(&ys).map(|(x, y)| (x - mx) * (y - my)).sum();
+    let den: f64 = xs.iter().map(|x| (x - mx) * (x - mx)).sum();
+    let slope = num / den;
+    eprintln!("gate (b) MEASUREMENT: log-log cold slope = {slope:.4} (target <= 1.05)");
+
+    // The incremental half: one body edit on the 100k corpus, repeated over a
+    // sample of declarations, as a histogram.
+    let (sources, lines) = corpus(250, 20);
+    let (mut qb, ids) = query_build(&sources);
+    let t = Instant::now();
+    qb.recheck().expect("never cancelled");
+    let cold = t.elapsed().as_secs_f64();
+    let mut samples: Vec<f64> = Vec::new();
+    let mut edited = sources.clone();
+    for (k, m) in (0..250usize).step_by(5).enumerate() {
+        let needle = format!("pub fn work{m}_0(let x: i32, let sh: Shape{m}_0) -> i32 {{");
+        if !edited[m].contains(&needle) {
+            continue;
+        }
+        let with = format!("{needle}\n    let probe{k}: i32 = {k};");
+        edited[m] = edited[m].replacen(&needle, &with, 1);
+        qb.edit_file(ids[m], edited[m].clone().into_bytes());
+        let t = Instant::now();
+        qb.recheck().expect("never cancelled");
+        samples.push(t.elapsed().as_secs_f64());
+        assert!(
+            qb.diagnostics().is_empty(),
+            "an added `let` must not break the corpus: {:?}",
+            qb.diagnostics().first()
+        );
+    }
+    samples.sort_by(f64::total_cmp);
+    let pick = |q: f64| samples[((samples.len() - 1) as f64 * q) as usize] * 1000.0;
+    eprintln!(
+        "per-declaration edit histogram over {} edits of the {lines}-line corpus:",
+        samples.len()
+    );
+    eprintln!("  cold   {:>8.1} ms", cold * 1000.0);
+    eprintln!("  p50    {:>8.1} ms", pick(0.50));
+    eprintln!("  p95    {:>8.1} ms", pick(0.95));
+    eprintln!("  max    {:>8.1} ms", samples[samples.len() - 1] * 1000.0);
+    eprintln!(
+        "  speedup over cold: p50 x{:.2}, p95 x{:.2}",
+        cold / (pick(0.50) / 1000.0),
+        cold / (pick(0.95) / 1000.0)
+    );
+
+    // What the incremental number is MADE of. The two whole-build passes run
+    // on every revision in M1 (design §3 fork 14 for `resolve`; the signature
+    // phase because `fors-check` cannot lower one declaration's signature
+    // alone), so they are the floor the body-level incrementality sits on.
+    // Reporting them separately is what keeps the speedup above from being
+    // read as more than it is.
+    {
+        let parsed: Vec<_> = sources.iter().map(|s| parse_file(s.as_bytes())).collect();
+        let mut interner = Interner::new();
+        let names: Vec<Segments> = (0..sources.len())
+            .map(|m| {
+                vec![
+                    interner.intern(b"pkg"),
+                    interner.intern(format!("m{m}").as_bytes()),
+                ]
+            })
+            .collect();
+        let inputs: Vec<FileInput> = parsed
+            .iter()
+            .zip(&sources)
+            .zip(&names)
+            .map(|((p, s), n)| FileInput {
+                tree: &p.tree,
+                tokens: &p.tokens,
+                source: s.as_bytes(),
+                name: n.clone(),
+            })
+            .collect();
+        let t = Instant::now();
+        let resolved = fors_resolve::resolve(&mut interner, &inputs, None);
+        let resolve_ns = t.elapsed().as_secs_f64();
+        let t = Instant::now();
+        let mut sigs = fors_check::check_signatures(&inputs, &resolved, &mut interner);
+        let sig_ns = t.elapsed().as_secs_f64();
+        let t = Instant::now();
+        let _ = fors_check::check_bodies(&mut sigs, &mut interner, fors_check::Bodies::All, false);
+        let bodies_ns = t.elapsed().as_secs_f64();
+        eprintln!(
+            "  floor: resolve {:>7.1} ms + signature phase {:>7.1} ms = {:>7.1} ms \
+             (all bodies would add {:>7.1} ms)",
+            resolve_ns * 1000.0,
+            sig_ns * 1000.0,
+            (resolve_ns + sig_ns) * 1000.0,
+            bodies_ns * 1000.0
+        );
+    }
+    eprintln!("{}", qb.render_stats());
+    assert!(
+        slope <= 1.30,
+        "the cold slope is {slope:.4}: far enough past 1.05 that it is a defect, \
+         not machine noise"
+    );
+}
+
+/// Design §16 point 5's disproof: "a 20k-line single file with a one-character
+/// body edit shows p95 of `parse + decl_index + decl_keys` above 3 ms, which
+/// would eat the M2 frame". Measured here, as §16 assigns it to I9.
+#[test]
+#[ignore]
+fn m1_exit_one_big_file_reparse_cost() {
+    let _serial = SERIAL.lock().unwrap_or_else(|e| e.into_inner());
+    // ~20k lines in ONE module.
+    let src = module_source_nongeneric(0, 1_300);
+    let lines = src.lines().count();
+    let (mut qb, ids) = query_build(std::slice::from_ref(&src));
+    qb.recheck().expect("never cancelled");
+    assert!(qb.diagnostics().is_empty(), "the big file must check clean");
+    let mut samples: Vec<f64> = Vec::new();
+    let mut cur = src;
+    for k in 0..20 {
+        let needle = format!("pub fn work0_{k}(let x: i32, let sh: Shape0_{k}) -> i32 {{");
+        if !cur.contains(&needle) {
+            continue;
+        }
+        cur = cur.replacen(
+            &needle,
+            &format!("{needle}\n    let probe{k}: i32 = {k};"),
+            1,
+        );
+        qb.edit_file(ids[0], cur.clone().into_bytes());
+        let t = Instant::now();
+        qb.recheck().expect("never cancelled");
+        samples.push(t.elapsed().as_secs_f64());
+    }
+    samples.sort_by(f64::total_cmp);
+    let p95 = samples[((samples.len() - 1) as f64 * 0.95) as usize] * 1000.0;
+    eprintln!(
+        "§16 point 5: {lines} lines in one file, {} one-line body edits",
+        samples.len()
+    );
+    eprintln!(
+        "  whole re-check p50 {:>8.2} ms",
+        samples[samples.len() / 2] * 1000.0
+    );
+    eprintln!("  whole re-check p95 {p95:>8.2} ms");
+
+    // §16 point 5 is specifically about `parse + decl_index + decl_keys`,
+    // which are the three nodes a one-character body edit forces on a big
+    // file. Measured on their own, since the whole re-check above also carries
+    // the whole-build `resolve` and signature phase.
+    let mut three: Vec<f64> = Vec::new();
+    let mut interner = Interner::new();
+    let module = vec![interner.intern(b"pkg"), interner.intern(b"m0")];
+    for _ in 0..10 {
+        let t = Instant::now();
+        let p = parse_file(cur.as_bytes());
+        let decls = fors_index::build_decl_table(&p.tree, &p.tokens, cur.as_bytes(), &mut interner);
+        let _ = fors_check::queries::keys::file_decl_keys(
+            &module,
+            &decls,
+            &p.tree,
+            &p.tokens,
+            cur.as_bytes(),
+            &interner,
+        );
+        three.push(t.elapsed().as_secs_f64());
+    }
+    three.sort_by(f64::total_cmp);
+    let three_p95 = three[((three.len() - 1) as f64 * 0.95) as usize] * 1000.0;
+    eprintln!(
+        "  parse + decl_index + decl_keys p50 {:>8.2} ms, p95 {three_p95:>8.2} ms",
+        three[three.len() / 2] * 1000.0
+    );
+    eprintln!(
+        "  §16's disproof threshold is 3 ms at 20k lines; this file is {lines} lines, \
+         so the scaled threshold is {:.2} ms",
+        3.0 * lines as f64 / 20_000.0
+    );
+    eprintln!("{}", qb.render_stats());
+}

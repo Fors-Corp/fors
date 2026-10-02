@@ -226,6 +226,7 @@ impl Wf<'_> {
             self.dep(h);
         }
         let key = self.fir.tys.head_key(recv);
+        self.note_bucket(fors_fir::NO_DEF, key);
         let mut tier1: Vec<Candidate> = Vec::new();
         for r in self.impls.inherent(key) {
             let row = self.impls.row(r);

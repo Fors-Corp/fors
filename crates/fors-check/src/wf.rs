@@ -106,6 +106,23 @@ pub struct Wf<'a> {
     /// finished set for every body typed (design §9).
     pub cur_deps: crate::deps::DepSet,
     pub deps: Vec<(DefId, crate::deps::DepSet)>,
+    /// The impl buckets the body being typed has probed, and the finished set
+    /// per body (design §9.1: `check_body`'s `impls_for` in-edges, and the
+    /// contract `adding_an_impl_invalidates_only_its_head_bucket` tests). A
+    /// bucket is `(trait `DefId`, `HeadKey::as_u64`)`; the empty buckets
+    /// count, because adding the first impl to one must wake the body that
+    /// asked. Recorded only while a body is being typed.
+    pub cur_buckets: Vec<(u32, u64)>,
+    pub buckets: Vec<(DefId, Vec<(u32, u64)>)>,
+    /// The declaration a whole-head well-formedness pass is currently
+    /// judging, or [`NO_DEF`] outside one. Each pass sets it per impl so the
+    /// impl buckets its `holds` questions probe are recorded against THAT
+    /// declaration (`wf_buckets`), which is `signature_of(k)`'s `impls_for`
+    /// in-edge in the query DAG (design §9.1). Without it `impl Copyable for
+    /// W` would keep its "field is not Copyable" verdict after the field's
+    /// impl was added in another module.
+    pub wf_scope: DefId,
+    pub wf_buckets: Vec<(DefId, (u32, u64))>,
     /// One `BodyFacts` per typed body, in declaration order (I3.5).
     pub facts: Vec<(DefId, crate::facts::BodyFacts)>,
     /// The module graph's `(from, to)` edges, sorted (R43's candidate-trait
@@ -175,6 +192,10 @@ impl<'a> Wf<'a> {
             iter_traits: Vec::new(),
             cur_deps: crate::deps::DepSet::new(),
             deps: Vec::new(),
+            cur_buckets: Vec::new(),
+            buckets: Vec::new(),
+            wf_scope: fors_fir::NO_DEF,
+            wf_buckets: Vec::new(),
             facts: Vec::new(),
             mod_edges: Vec::new(),
             holds_depth: 0,
@@ -199,6 +220,38 @@ impl<'a> Wf<'a> {
     /// Records that the body being typed read `def`'s signature (ch09 R2).
     pub fn dep(&mut self, def: DefId) {
         self.cur_deps.record(def);
+    }
+
+    /// Records that the body being typed consulted the impl bucket
+    /// `(trait_def, head)` — design §9.1's `impls_for(tr, h)` in-edge of
+    /// `check_body`. Outside a body (`cur_scope == NO_DEF`) nothing is
+    /// recorded: a signature's or a well-formedness check's probes belong to
+    /// `signature_of`/`overlap_check`, not to a body. The guard against the
+    /// last entry makes the common case (the same bucket twice running) free;
+    /// `bodies_selected` sorts and deduplicates at the end of the body.
+    pub fn note_bucket(&mut self, trait_def: DefId, head: fors_fir::defpath::HeadKey) {
+        self.note_bucket_raw(trait_def.0, head.as_u64());
+    }
+
+    /// [`Wf::note_bucket`] with the bucket already flattened, for the one
+    /// caller that cannot build a `HeadKey` back ([`crate::normalise`]).
+    pub fn note_bucket_raw(&mut self, trait_def: u32, head: u64) {
+        if self.cur_scope == fors_fir::NO_DEF {
+            // A whole-head pass's probe belongs to the declaration it is
+            // judging (`wf_scope`); outside both scopes nothing is recorded.
+            if self.wf_scope != fors_fir::NO_DEF {
+                let row = (self.wf_scope, (trait_def, head));
+                if self.wf_buckets.last() != Some(&row) {
+                    self.wf_buckets.push(row);
+                }
+            }
+            return;
+        }
+        let row = (trait_def, head);
+        if self.cur_buckets.last() == Some(&row) {
+            return;
+        }
+        self.cur_buckets.push(row);
     }
 
     /// R31's candidate `Iterator` traits (see [`Wf::iter_traits`]).
@@ -252,11 +305,28 @@ impl<'a> Wf<'a> {
         self.member_clashes(low, files);
         self.linear_elements(low, files);
         self.infinite_size(low, files);
+        self.wf_scope = fors_fir::NO_DEF;
+    }
+
+    /// The impl buckets each declaration's whole-head checks probed, grouped
+    /// and deduplicated: `signature_of(k)`'s `impls_for` in-edges.
+    pub fn take_wf_buckets(&mut self) -> Vec<(DefId, Vec<(u32, u64)>)> {
+        let mut raw = std::mem::take(&mut self.wf_buckets);
+        raw.sort_unstable_by_key(|&(d, b)| (d.0, b));
+        raw.dedup();
+        let mut out: Vec<(DefId, Vec<(u32, u64)>)> = Vec::new();
+        for (d, b) in raw {
+            match out.last_mut() {
+                Some((last, bs)) if *last == d => bs.push(b),
+                _ => out.push((d, vec![b])),
+            }
+        }
+        out
     }
 
     // -------------------------------------------------------- linearity
 
-    fn collect_linear(&mut self, _low: &Lowered) {
+    pub(crate) fn collect_linear(&mut self, _low: &Lowered) {
         let lin = self.prelude.traits[tr::LINEAR];
         let rows: Vec<ImplRow> = self.impls.rows().to_vec();
         for r in &rows {
@@ -655,6 +725,12 @@ impl<'a> Wf<'a> {
     /// subject (R18), so the recursion terminates.
     fn impl_holds(&mut self, subject: TyId, want: TraitRefId, want_def: DefId) -> Holds {
         let want_args = self.fir.tys.trait_ref(want).1;
+        // Recorded BEFORE the exact scan: a question answered `Yes` by an
+        // exact row is still a question about this bucket, and the asker
+        // must be woken when that row is removed (I9 verification: the
+        // removal direction of `adding_an_impl_invalidates_only_its_head_bucket`).
+        let head = self.fir.tys.head_key(subject);
+        self.note_bucket(want_def, head);
         let exact: Vec<ImplRow> = self
             .impls
             .exact(want_def, subject)
@@ -666,7 +742,6 @@ impl<'a> Wf<'a> {
                 return Holds::Yes;
             }
         }
-        let head = self.fir.tys.head_key(subject);
         let bucket: Vec<ImplRow> = self
             .impls
             .bucket(want_def, head)
@@ -881,6 +956,7 @@ impl Wf<'_> {
         let linear = self.prelude.traits[tr::LINEAR];
         let rows: Vec<ImplRow> = self.impls.rows().to_vec();
         for r in rows {
+            self.wf_scope = r.def;
             if poisoned(low, r.def) {
                 continue;
             }
@@ -946,6 +1022,7 @@ impl Wf<'_> {
     fn impl_params(&mut self, low: &Lowered, files: &[FileCtx]) {
         let rows: Vec<ImplRow> = self.impls.rows().to_vec();
         for r in rows {
+            self.wf_scope = r.def;
             if poisoned(low, r.def) || r.self_ty == TY_ERROR {
                 continue;
             }
@@ -1090,6 +1167,7 @@ impl Wf<'_> {
     fn impl_completeness(&mut self, low: &Lowered, files: &[FileCtx]) {
         let rows: Vec<ImplRow> = self.impls.rows().to_vec();
         for r in rows {
+            self.wf_scope = r.def;
             if poisoned(low, r.def) {
                 continue;
             }
@@ -1554,6 +1632,7 @@ impl Wf<'_> {
     fn prerequisites(&mut self, low: &Lowered, files: &[FileCtx]) {
         let rows: Vec<ImplRow> = self.impls.rows().to_vec();
         for r in rows {
+            self.wf_scope = r.def;
             if poisoned(low, r.def) || r.self_ty == TY_ERROR {
                 continue;
             }
@@ -1596,6 +1675,7 @@ impl Wf<'_> {
         let copyable = self.prelude.traits[tr::COPYABLE];
         let rows: Vec<ImplRow> = self.impls.rows().to_vec();
         for r in rows {
+            self.wf_scope = r.def;
             if r.trait_def != copyable || poisoned(low, r.def) || r.self_ty == TY_ERROR {
                 continue;
             }

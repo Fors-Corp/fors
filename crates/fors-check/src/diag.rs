@@ -103,10 +103,25 @@ impl Sink {
     /// The diagnostics, sorted by `(file, offset, code)` as design §7.1 phase
     /// 7 requires.
     pub fn finish(mut self) -> Vec<Diagnostic> {
-        self.out
-            .sort_by_key(|d| (d.file.0, d.start, d.code.as_string()));
+        sort_diagnostics(&mut self.out);
         self.out
     }
+
+    /// Drains what has been emitted so far, sorted the same way, leaving the
+    /// sink reusable. `check_signatures` takes the signature phase's half
+    /// this way so the query engine can cache each half against the node
+    /// that produced it (design §9's declaration-relative cached
+    /// diagnostics) without having to re-run one phase to see the other's.
+    pub fn take(&mut self) -> Vec<Diagnostic> {
+        let mut out = std::mem::take(&mut self.out);
+        sort_diagnostics(&mut out);
+        out
+    }
+}
+
+/// Design §7.1 phase 7's order: `(file, offset, code)`.
+pub fn sort_diagnostics(ds: &mut [Diagnostic]) {
+    ds.sort_by_key(|d| (d.file.0, d.start, d.code.as_string()));
 }
 
 /// `T00nn`.

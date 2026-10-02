@@ -15,6 +15,7 @@ dependencies = [
  "fors-fmir",
  "fors-index",
  "fors-lex",
+ "fors-query",
  "fors-resolve",
  "fors-syntax",
 ]
