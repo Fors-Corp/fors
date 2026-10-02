@@ -197,7 +197,7 @@ pub const CH09_RULES: [RuleEntry; 62] = [
         "no-overlapping-impls-per-bucket",
         &["impls::overlap"],
     ),
-    r(
+    imp(
         20,
         Some(20),
         "projection-normalisation",
@@ -668,12 +668,23 @@ mod tests {
         // unimplemented: their remaining sites are `pat::check_pat`
         // (I7), the tape's rigid `Move` (I8) and `lower::brand_as_type`
         // (`brand-param-as-value-type-rejected`, still pending).
+        //
+        // I6 adds R20, the only row it flips: `normalise.rs`'s
+        // `normalise_proj` and the `ProjSolver` every `subst_norm` in the
+        // checker now carries. The rest of I6's GATE is use sides of rows
+        // already `Implemented` — R12 for projection subjects and R62's
+        // constraint entries at a call (`call::check_bounds` /
+        // `call::check_constraint_entries`), R43 on a neutral projection
+        // (`methods::lookup_on_rigid`), R38's steps with the container's
+        // slots (`call::call_owners`) — so they have no row to flip.
+        // R57 stays unimplemented: its remaining sites are `pat::check_pat`
+        // (I7) and the tape's rigid `Move` (I8), as I5 recorded.
         assert_eq!(
             implemented,
             vec![
-                1, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 21, 22, 23, 24, 25,
-                26, 27, 28, 29, 30, 31, 32, 33, 34, 35, 36, 37, 38, 39, 40, 41, 42, 43, 44, 45, 47,
-                48, 49, 59, 60, 61, 62
+                1, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24,
+                25, 26, 27, 28, 29, 30, 31, 32, 33, 34, 35, 36, 37, 38, 39, 40, 41, 42, 43, 44, 45,
+                47, 48, 49, 59, 60, 61, 62
             ]
         );
         // NoCode rows, exactly as design §8 marks them.

@@ -86,7 +86,7 @@ fn module_source_i0(m: usize, items: usize) -> String {
         if m > 0 {
             let _ = writeln!(
                 s,
-                "    let prev: i32 = m{p}.work{p}_{i}(x, item, Shape{p}_0.dot);",
+                "    let prev: i32 = m{p}.work{p}_{i}(x, item, m{p}.Shape{p}_{i}.dot);",
                 p = m - 1
             );
         } else {
@@ -150,7 +150,7 @@ fn module_source(m: usize, items: usize) -> String {
         if m > 0 {
             let _ = writeln!(
                 s,
-                "    let prev: i32 = m{p}.work{p}_{i}(x, item, Shape{p}_0.dot);",
+                "    let prev: i32 = m{p}.work{p}_{i}(x, item, m{p}.Shape{p}_{i}.dot);",
                 p = m - 1
             );
         } else {
@@ -442,5 +442,332 @@ fn run(i0_shape: bool) {
         "combined: retained {total_retained} B ({:.2} B/byte), peak {total_peak} B ({:.2} B/byte)",
         total_retained as f64 / bytes as f64,
         total_peak as f64 / bytes as f64
+    );
+}
+
+// ---------------------------------------------------------------- I6 (§13)
+//
+// The two MEASUREMENTs design §13's I6 paragraph names:
+//
+// 1. the adversarial-shape counter suite from the I1 spike
+//    (`spikes/fir-normalise`), now run THROUGH THE REAL CHECKER: the
+//    normalisation counters must be linear in chain depth and independent of
+//    `k`, the number of impls in one `(trait, HeadKey)` bucket, beyond the
+//    bucket scan itself (§17 amendments 2 and 3);
+// 2. the cost of clearing the `TraitWorldRevision` caches on a cold 100k
+//    check, against §16 point 3's decision rule ("more than ~2 ms ⇒ promote
+//    `holds` to a DAG node keyed `(TyId, TraitRefId)`").
+//
+// `cargo test --release -p fors-check --test scale -- --ignored --nocapture`
+
+/// The spike's shapes as real Fors: `k` concrete impls of `Iterator` in one
+/// `(Iterator, HeadKey(Cell))` bucket (the exact probe's case), and a chain
+/// of `depth` generic adaptors above one of them whose `type Item = I.Item`
+/// forces `depth` structural descents per query.
+fn adaptor_chain_source(depth: usize, k: usize) -> String {
+    let mut s = String::new();
+    let _ = writeln!(s, "module pkg.chain;");
+    for j in 0..k {
+        let _ = writeln!(s, "struct Mk{j} {{ z: i64 }}");
+    }
+    let _ = writeln!(s, "struct Cell[T] {{ t: T, n: i64 }}");
+    for j in 0..k {
+        let _ = writeln!(s, "impl Iterator for Cell[Mk{j}] {{");
+        let _ = writeln!(s, "    type Item = i64;");
+        let _ = writeln!(
+            s,
+            "    fn next(inout self: Cell[Mk{j}]) -> Option[i64] {{ return none; }}"
+        );
+        let _ = writeln!(s, "}}");
+    }
+    for a in 0..3 {
+        let _ = writeln!(s, "struct Ad{a}[I] {{ inner: I }}");
+        let _ = writeln!(s, "impl[I: Iterator] Iterator for Ad{a}[I] {{");
+        let _ = writeln!(s, "    type Item = I.Item;");
+        let _ = writeln!(
+            s,
+            "    fn next(inout self: Ad{a}[I]) -> Option[I.Item] {{ return self.inner.next(); }}"
+        );
+        let _ = writeln!(s, "}}");
+    }
+    let _ = writeln!(
+        s,
+        "fn first[I: Iterator](inout it: I) -> Option[I.Item] {{ return it.next(); }}"
+    );
+    let mut deep = String::from("Cell[Mk0]");
+    for d in 0..depth {
+        deep = format!("Ad{}[{deep}]", d % 3);
+    }
+    let _ = writeln!(s, "fn probe(inout it: {deep}) -> i64 {{");
+    let _ = writeln!(s, "    let got: Option[i64] = first(&it);");
+    let _ = writeln!(s, "    match got {{");
+    let _ = writeln!(s, "        some(let v) => v,");
+    let _ = writeln!(s, "        none => 0,");
+    let _ = writeln!(s, "    }}");
+    let _ = writeln!(s, "}}");
+    s
+}
+
+fn check_one(src: &str) -> fors_check::CheckOutput {
+    let p = parse_file(src.as_bytes());
+    assert!(
+        p.diags.is_empty(),
+        "generated source must parse: {:?}",
+        p.diags.first()
+    );
+    let mut interner = Interner::new();
+    let name: Segments = vec![interner.intern(b"pkg"), interner.intern(b"chain")];
+    let inputs = [FileInput {
+        tree: &p.tree,
+        tokens: &p.tokens,
+        source: src.as_bytes(),
+        name,
+    }];
+    let resolved = fors_resolve::resolve(&mut interner, &inputs, None);
+    assert!(
+        resolved.files.iter().all(|f| f.diagnostics.is_empty()),
+        "generated source must resolve: {:?}",
+        resolved.files.iter().flat_map(|f| &f.diagnostics).next()
+    );
+    fors_check::check_build(&inputs, &resolved, &mut interner)
+}
+
+#[test]
+#[ignore]
+fn i6_normalisation_counters_are_linear_in_depth_and_flat_in_k() {
+    let _serial = SERIAL.lock().unwrap_or_else(|e| e.into_inner());
+    let mut failures: Vec<String> = Vec::new();
+
+    eprintln!("\nTable 1 — adaptor chain, k = 8 impls in the (Iterator, Cell) bucket");
+    eprintln!(
+        "{:<10}{:>12}{:>14}{:>14}{:>14}{:>14}",
+        "depth", "subst_norm", "proj_queries", "memo_misses", "match_steps", "budget_peak"
+    );
+    let mut depth_rows: Vec<(usize, fors_check::Counters)> = Vec::new();
+    for &d in &[1usize, 2, 4, 8, 16, 32, 64] {
+        let out = check_one(&adaptor_chain_source(d, 8));
+        if !out.diagnostics.is_empty() {
+            failures.push(format!(
+                "depth {d}: the chain must check clean, got {:?}",
+                out.diagnostics.first()
+            ));
+        }
+        let c = out.counters;
+        eprintln!(
+            "{d:<10}{:>12}{:>14}{:>14}{:>14}{:>14}",
+            c.subst_norm_calls,
+            c.norm_queries,
+            c.norm_memo_misses,
+            c.norm_match_steps,
+            c.norm_budget_peak
+        );
+        depth_rows.push((d, c));
+    }
+    // Linear: doubling the depth may at most roughly double the work. The
+    // spike's own gate is x2.6 per doubling; the same number here.
+    for w in depth_rows.windows(2) {
+        let (d0, c0) = w[0];
+        let (d1, c1) = w[1];
+        if d1 != 2 * d0 {
+            continue;
+        }
+        for (name, a, b) in [
+            ("subst_norm_calls", c0.subst_norm_calls, c1.subst_norm_calls),
+            ("norm_queries", c0.norm_queries, c1.norm_queries),
+            ("norm_memo_misses", c0.norm_memo_misses, c1.norm_memo_misses),
+        ] {
+            if a == 0 {
+                continue;
+            }
+            let ratio = b as f64 / a as f64;
+            if ratio > 2.6 {
+                failures.push(format!(
+                    "{name} superlinear from depth {d0} to {d1}: x{ratio:.2}"
+                ));
+            }
+        }
+    }
+
+    eprintln!("\nTable 2 — depth 32 chain, k impls in ONE (Iterator, Cell) bucket");
+    eprintln!(
+        "{:<10}{:>12}{:>14}{:>14}{:>14}",
+        "k", "subst_norm", "proj_queries", "memo_misses", "match_steps"
+    );
+    let mut k_rows: Vec<(usize, fors_check::Counters)> = Vec::new();
+    for &k in &[1usize, 8, 64, 256] {
+        let out = check_one(&adaptor_chain_source(32, k));
+        if !out.diagnostics.is_empty() {
+            failures.push(format!(
+                "k = {k}: the chain must check clean, got {:?}",
+                out.diagnostics.first()
+            ));
+        }
+        let c = out.counters;
+        eprintln!(
+            "{k:<10}{:>12}{:>14}{:>14}{:>14}",
+            c.subst_norm_calls, c.norm_queries, c.norm_memo_misses, c.norm_match_steps
+        );
+        k_rows.push((k, c));
+    }
+    // §17 amendment 3: the exact `(trait, self TyId)` probe answers every
+    // concrete impl in one binary search, so NOTHING about normalisation
+    // moves with the bucket's size — not the queries, not the misses, and
+    // not the match steps (which are spent only on genuinely generic heads).
+    let base = k_rows[0].1;
+    for &(k, c) in &k_rows {
+        for (name, a, b) in [
+            ("norm_queries", base.norm_queries, c.norm_queries),
+            (
+                "norm_memo_misses",
+                base.norm_memo_misses,
+                c.norm_memo_misses,
+            ),
+            (
+                "norm_match_steps",
+                base.norm_match_steps,
+                c.norm_match_steps,
+            ),
+        ] {
+            if a != b {
+                failures.push(format!("k = {k}: {name} moved with k ({a} -> {b})"));
+            }
+        }
+    }
+    assert!(
+        failures.is_empty(),
+        "I6 normalisation measurement ({}):\n{}",
+        failures.len(),
+        failures.join("\n")
+    );
+}
+
+/// I6's corpus: `module_source`'s shape with the trait work moved into the
+/// BODIES, which is where the two trait-world caches are filled. Every item
+/// declares an iterator, a generic adaptor over it whose `type Item =
+/// I.Item`, and a body that calls a generic function on a two-deep chain —
+/// one member lookup and one projection normalisation per body, which is
+/// the traffic a `TraitWorldRevision` bump throws away.
+fn module_source_i6(m: usize, items: usize) -> String {
+    let mut s = String::new();
+    let _ = writeln!(s, "module pkg.m{m};");
+    for i in 0..items {
+        let _ = writeln!(s, "\npub struct Base{m}_{i} {{ n: i64, end: i64 }}");
+        let _ = writeln!(s, "impl Iterator for Base{m}_{i} {{");
+        let _ = writeln!(s, "    type Item = i64;");
+        let _ = writeln!(s, "    fn next(inout self: Base{m}_{i}) -> Option[i64] {{");
+        let _ = writeln!(s, "        if self.n >= self.end {{ return none; }}");
+        let _ = writeln!(s, "        self.n = self.n + 1;");
+        let _ = writeln!(s, "        return some(self.n);");
+        let _ = writeln!(s, "    }}");
+        let _ = writeln!(s, "}}");
+        let _ = writeln!(s, "pub struct Wrap{m}_{i}[I] {{ inner: I }}");
+        let _ = writeln!(s, "impl[I: Iterator] Iterator for Wrap{m}_{i}[I] {{");
+        let _ = writeln!(s, "    type Item = I.Item;");
+        let _ = writeln!(
+            s,
+            "    fn next(inout self: Wrap{m}_{i}[I]) -> Option[I.Item] {{ return self.inner.next(); }}"
+        );
+        let _ = writeln!(s, "}}");
+        let _ = writeln!(
+            s,
+            "pub fn first{m}_{i}[I: Iterator](inout it: I) -> Option[I.Item] {{ return it.next(); }}"
+        );
+        let _ = writeln!(
+            s,
+            "pub fn run{m}_{i}(inout w: Wrap{m}_{i}[Wrap{m}_{i}[Base{m}_{i}]]) -> i64 {{"
+        );
+        let _ = writeln!(s, "    let got: Option[i64] = first{m}_{i}(&w);");
+        let _ = writeln!(s, "    match got {{");
+        let _ = writeln!(s, "        some(let v) => v,");
+        let _ = writeln!(s, "        none => 0,");
+        let _ = writeln!(s, "    }}");
+        let _ = writeln!(s, "}}");
+    }
+    s
+}
+
+#[test]
+#[ignore]
+fn i6_trait_world_cache_clearing_is_cheap_on_a_cold_100k_check() {
+    let _serial = SERIAL.lock().unwrap_or_else(|e| e.into_inner());
+    let (modules, items) = (250, 20);
+    let sources: Vec<String> = (0..modules).map(|m| module_source_i6(m, items)).collect();
+    let lines: usize = sources.iter().map(|s| s.lines().count()).sum();
+    let parsed: Vec<_> = sources.iter().map(|s| parse_file(s.as_bytes())).collect();
+    assert!(
+        parsed.iter().all(|p| p.diags.is_empty()),
+        "generated source must parse"
+    );
+    let mut interner = Interner::new();
+    let names: Vec<Segments> = (0..modules)
+        .map(|m| {
+            vec![
+                interner.intern(b"pkg"),
+                interner.intern(format!("m{m}").as_bytes()),
+            ]
+        })
+        .collect();
+    let inputs: Vec<FileInput> = parsed
+        .iter()
+        .zip(&sources)
+        .zip(&names)
+        .map(|((p, s), n)| FileInput {
+            tree: &p.tree,
+            tokens: &p.tokens,
+            source: s.as_bytes(),
+            name: n.clone(),
+        })
+        .collect();
+    let resolved = fors_resolve::resolve(&mut interner, &inputs, None);
+    assert!(
+        resolved.files.iter().all(|f| f.diagnostics.is_empty()),
+        "generated package must resolve cleanly"
+    );
+    let out = fors_check::check_build_measuring_caches(&inputs, &resolved, &mut interner);
+    assert!(
+        out.diagnostics.is_empty(),
+        "the I6 corpus must check CLEAN or the rebuild measures skipped bodies, got {:?}",
+        out.diagnostics.first()
+    );
+    let r = out
+        .cache_rebuild
+        .expect("the measuring entry point fills this in");
+    let clear_ms = r.clear_ns as f64 / 1e6;
+    let rebuild_ms = r.rebuild_ns as f64 / 1e6;
+    let refill_ms = clear_ms + (r.rebuild_ns as f64 - r.warm_rebuild_ns as f64).max(0.0) / 1e6;
+    eprintln!(
+        "\n100k corpus: {lines} lines, {} bodies\n  \
+         method-lookup memo rows: {}\n  \
+         normalisation memo rows: {}\n  \
+         cold body phase:         {:.3} ms\n  \
+         clear both caches:       {clear_ms:.4} ms\n  \
+         rebuild (bodies, cold):  {rebuild_ms:.3} ms\n  \
+         rebuild (bodies, warm):  {warm_ms:.3} ms\n  \
+         CACHE refill only:       {refill_ms:.3} ms   = clear + (cold rebuild - warm rebuild)\n  \
+         §16 point 3's rule: > ~2 ms  =>  promote `holds` to a DAG node keyed (TyId, TraitRefId)\n  \
+         verdict:                 {verdict}",
+        out.counters.bodies_checked,
+        r.method_memo_rows,
+        r.norm_memo_rows,
+        r.cold_bodies_ns as f64 / 1e6,
+        warm_ms = r.warm_rebuild_ns as f64 / 1e6,
+        refill_ms = refill_ms,
+        verdict = if refill_ms > 2.0 {
+            "OVER the rule - the fix in §16 point 3 is due"
+        } else {
+            "within the rule - wholesale clearing stays"
+        }
+    );
+    // The clear itself is what §9.1 calls "wholesale": two `HashMap::clear`s.
+    // The decision rule is about clear PLUS rebuild, which is reported above
+    // and judged in the increment's write-up; the only thing asserted here is
+    // that the measurement ran and the caches were actually populated, so a
+    // future refactor that silently stops memoising fails loudly.
+    assert!(
+        r.norm_memo_rows > 0 && r.method_memo_rows > 0,
+        "both trait-world caches must be populated by a 100k check \
+         (method {}, normalisation {})",
+        r.method_memo_rows,
+        r.norm_memo_rows
     );
 }

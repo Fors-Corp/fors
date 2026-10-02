@@ -27,6 +27,7 @@ pub mod facts;
 pub mod lower;
 pub mod member;
 pub mod methods;
+pub mod normalise;
 pub mod rules;
 pub mod show;
 pub mod tape;
@@ -62,6 +63,28 @@ pub struct CheckOutput {
     /// (I3.5) FMIR lowering reads — decided types, callees, member
     /// resolutions and the retained use tape.
     pub facts: Vec<(fors_index::ids::DefId, facts::BodyFacts)>,
+    /// Only [`check_build_measuring_caches`] fills this in.
+    pub cache_rebuild: Option<CacheRebuild>,
+}
+
+/// What a `TraitWorldRevision` bump costs (design §16 point 3; I6's second
+/// MEASUREMENT). An impl edit drops both caches that hold an answer read
+/// from the trait world — `methods.rs`'s member-lookup memo and
+/// `normalise.rs`'s projection memo — and every body then re-asks its
+/// questions, which is the body phase run again. `rebuild_ns` is that run;
+/// `clear_ns` is the drop itself.
+#[derive(Clone, Copy, Debug, Default)]
+pub struct CacheRebuild {
+    pub method_memo_rows: u64,
+    pub norm_memo_rows: u64,
+    pub clear_ns: u128,
+    pub rebuild_ns: u128,
+    pub cold_bodies_ns: u128,
+    /// The same body phase run a THIRD time with the caches left warm.
+    /// `rebuild_ns - warm_rebuild_ns` isolates what the caches themselves
+    /// cost to refill, which is the number §16 point 3's rule is about: the
+    /// two runs are identical in every other respect.
+    pub warm_rebuild_ns: u128,
 }
 
 /// The counters `fors check --count` prints and the near-linearity gate
@@ -88,6 +111,17 @@ pub struct Counters {
     /// had a diagnostic (design §10: one root cause per declaration).
     pub bodies_checked: u64,
     pub bodies_skipped: u64,
+    /// R20's normalisation (design §7.5, I6): projection questions asked,
+    /// the ones the memo could not answer, and the `one_way_match` steps
+    /// spent scanning impl buckets. The I6 MEASUREMENT reads these three.
+    pub norm_queries: u64,
+    pub norm_memo_misses: u64,
+    pub norm_match_steps: u64,
+    /// The largest number of memo misses any ONE top-level normalisation
+    /// cost (§17 amendment 2's per-query work budget) and the memo's final
+    /// size, which is what a `TraitWorldRevision` bump throws away.
+    pub norm_budget_peak: u32,
+    pub norm_memo_rows: u64,
 }
 
 // MARC: design §4.2/§4.4 gives `check_build`'s signature as
@@ -105,6 +139,29 @@ pub fn check_build(
     inputs: &[FileInput],
     resolved: &ResolveOutput,
     interner: &mut fors_index::Interner,
+) -> CheckOutput {
+    check_build_inner(inputs, resolved, interner, false)
+}
+
+/// [`check_build`] plus design §16 point 3's measurement: after the body
+/// phase, both trait-world caches are dropped and every body re-typed, so
+/// the cost of one impl edit's invalidation is a measured number rather than
+/// an estimate. The returned diagnostics, facts and deps are those of the
+/// REBUILD run as well as the cold one, so this entry point is for the
+/// measurement harness only — never for a compile.
+pub fn check_build_measuring_caches(
+    inputs: &[FileInput],
+    resolved: &ResolveOutput,
+    interner: &mut fors_index::Interner,
+) -> CheckOutput {
+    check_build_inner(inputs, resolved, interner, true)
+}
+
+fn check_build_inner(
+    inputs: &[FileInput],
+    resolved: &ResolveOutput,
+    interner: &mut fors_index::Interner,
+    measure_caches: bool,
 ) -> CheckOutput {
     // `FORS_PHASES=1` prints the elapsed time at each phase boundary of §7.1.
     // Read once per process, not once per phase: `check_build` runs 900 times
@@ -186,7 +243,7 @@ pub fn check_build(
     // 4-6. Whole-head well-formedness, the freeze, then every body. All
     // three read the same tables, so they share one context: `holds`, the
     // impl index and the linearity memo are built once (design §7.1).
-    let (counters, check_sites, deps, facts) = {
+    let (counters, check_sites, deps, facts, cache_rebuild) = {
         let mut w = wf::Wf::new(&mut fir, interner, &prelude, &def_table, &shapes, &mut sink);
         // R43's candidate-trait search walks the module graph: hand over
         // the edge list `resolve()` kept for exactly this.
@@ -202,7 +259,27 @@ pub fn check_build(
         w.freeze(&def_table);
         phase!("hash");
         // 6. Bodies.
+        let t_bodies = std::time::Instant::now();
         w.bodies(&low, &files);
+        let cold_bodies_ns = t_bodies.elapsed().as_nanos();
+        let cache_rebuild = measure_caches.then(|| {
+            let t0 = std::time::Instant::now();
+            let (method_memo_rows, norm_memo_rows) = w.clear_trait_world_caches();
+            let clear_ns = t0.elapsed().as_nanos();
+            let t1 = std::time::Instant::now();
+            w.bodies(&low, &files);
+            let rebuild_ns = t1.elapsed().as_nanos();
+            let t2 = std::time::Instant::now();
+            w.bodies(&low, &files);
+            CacheRebuild {
+                method_memo_rows: method_memo_rows as u64,
+                norm_memo_rows: norm_memo_rows as u64,
+                clear_ns,
+                rebuild_ns,
+                cold_bodies_ns,
+                warm_rebuild_ns: t2.elapsed().as_nanos(),
+            }
+        });
         let c = Counters {
             nodes_visited: w.body_nodes,
             synths: w.synths,
@@ -215,12 +292,18 @@ pub fn check_build(
             types_interned: 0,
             bodies_checked: w.bodies_checked,
             bodies_skipped: w.bodies_skipped,
+            norm_queries: w.norm.proj_queries,
+            norm_memo_misses: w.norm.memo_misses,
+            norm_match_steps: w.norm.match_steps,
+            norm_budget_peak: w.norm.budget_peak,
+            norm_memo_rows: w.norm.len() as u64,
         };
         (
             c,
             std::mem::take(&mut w.check_sites),
             std::mem::take(&mut w.deps),
             std::mem::take(&mut w.facts),
+            cache_rebuild,
         )
     };
     phase!("bodies");
@@ -240,6 +323,7 @@ pub fn check_build(
         check_sites,
         deps,
         facts,
+        cache_rebuild,
     }
 }
 
