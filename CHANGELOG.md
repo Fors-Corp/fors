@@ -7,7 +7,8 @@ commit history, which predates the Conventional Commits convention.
 
 | Language | Compiler | Meaning |
 |---|---|---|
-| `lang-v0.5.3` | `compiler-v0.14.0` | current |
+| `lang-v0.5.3` | `compiler-v0.15.0` | current |
+| `lang-v0.5.3` | `compiler-v0.14.0` | FMIR F4/F6, defer and arena lowering |
 | `lang-v0.5.3` | `compiler-v0.13.0` | FMIR F-mono, monomorphisation and pattern lowering |
 | `lang-v0.5.3` | `compiler-v0.12.0` | checker I9, the query engine and the M1 exit |
 | `lang-v0.5.3` | `compiler-v0.11.0` | checker I10a |
@@ -101,6 +102,45 @@ measurement, the grammar, names and visibility), with a conformance corpus and
 an independent reference parser.
 
 ## Compiler
+
+### compiler-v0.15.0 — 2026-10-02
+
+Type checker increment **I10b**, produced by one agent and independently
+verified by another. Implements `lang-v0.5.3`; still no code generator.
+
+- **The no-silent-`TY_ERROR` gate.** A new test sweeps every typed node
+  of the whole `std` package and of every check-ok/run-ok conformance
+  target (245, built with `std`): a node that was typed and ended
+  `TY_ERROR` while its declaration produced no diagnostic is a failure,
+  named by its own span. Baseline before the increment: 210 absorbed
+  nodes (17 in `std`); now 0 in `std` and 188 over the corpus, each
+  carried by a named allow-list row that must stay live, so a fix
+  deletes its row rather than leaving it stale.
+- **Six families of silent absorption, fixed at the root.** Methods of
+  a trait with parameters (`s.conv()`, `Allocator[A: brand]`'s `free`);
+  explicit type arguments on a value head (`Option[i64].none`,
+  `Bag[i64].of(1)`); `self.items_mut()[i]` inside an `IndexMut` impl
+  (the sibling `Index` impl's `Output` is read, and a missing one is
+  reported); a const generic parameter as a value, with a brand
+  parameter in value position reported as O0015; `Self { .. }` inside an
+  impl; `Option.some(1)` and `Option[i64].none` as variant constructors.
+- **Verification found and fixed before merge.** Two impls of a
+  parameterised trait at different arguments silently resolved to the
+  first (now R44's ambiguity); explicit arguments with the wrong count
+  on a value head were silent (now R11); the producer's own change
+  regressed a called unit variant from T0043 to silence; `Self { .. }`
+  in a trait default body, a bare tuple variant, and a type named as a
+  value were silent or silently accepted; `impl IndexMut` written before
+  `impl Index` was wrongly rejected. Reverting one family makes the
+  gate name ten offenders, so the gate is not tautological.
+- **Finding for the owner.** 137 of the 188 allow-list rows are one
+  unimplemented binding: the eight prelude-opaque names (`Vec`, `Map`,
+  `Buffer`, `String`, `Allocator`, …) stay opaque even when package
+  `std` is in the build, so every expression over them is absorbed and
+  ~70 Iterator-adaptor corpus files pass check-ok vacuously. That is the
+  next increment, I10c.
+- **Coverage.** 14 new probes (six families plus eight verifier
+  repairs); 920 Rust tests (20 held out with a stated reason).
 
 ### compiler-v0.14.0 — 2026-10-02
 
