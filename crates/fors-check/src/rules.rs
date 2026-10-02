@@ -370,7 +370,7 @@ pub const CH09_RULES: [RuleEntry; 62] = [
         "qualified-member-lookup",
         &["member::qualified"],
     ),
-    r(
+    imp(
         46,
         Some(46),
         "implicit-receiver-convention-and-move",
@@ -691,12 +691,41 @@ mod tests {
         // that site is the "rigid types without a bound" half (matching a
         // generic parameter's pattern needs a bound this increment does
         // not check), not the ordinary case I7 built.
+        //
+        // I8 (the flow pass) adds R46, the ONE row it flips: the typing
+        // side (`call::receiver`) and the tape's cause
+        // (`tape::ImplicitReceiver`) were already in, and
+        // `flow::render_move_error` is the rule's normative message, the
+        // last of its three sites. The rest of I8's GATE is ch01's, not
+        // ch09's, and has no row in this table: R2's markers at a call
+        // (`call::conv_marker`, O0002 — R39's row already lists that
+        // site, and R39 is `Implemented` for its own three T0039 sites),
+        // R3 and R4a(a)-(e) (`flow.rs`, O0003 and O0004) and R8's
+        // two-valued merge at every join, loop head and loop exit
+        // (`flow::merge`, `flow::loop_head`, O0008 — the corpus's
+        // `merge-liveness-disagreement-rejected` is 01.R8's own test).
+        //
+        // R57 and R58 stay unimplemented, each for one site:
+        //  - R57's `tape` site is in (a value use of a non-`Copyable`
+        //    rigid place is a Move, which `flow.rs` now judges —
+        //    `copy-without-copyable-rejected` is on), but
+        //    `pat::check_pat` is not. §8's ch01 R22c row assigns what
+        //    remains of it — "dropping a rigid value needs a bound",
+        //    which is R57's round-6 drop clause and covers `_` facing a
+        //    rigid type — to `flow::drop_rigid` at I8b, and §16
+        //    amendment 10 fixes I8's scope at "R3/R4a/R8/R46 only".
+        //  - R58's `lower::brand_as_type` site is in
+        //    (`brand-param-as-value-type-rejected`, reported with ch01
+        //    R15d's own code as §8's row 58 requires), but
+        //    `expr::const_param_value` is not: no increment has given a
+        //    const parameter its value in a body (`LocalKind::ConstParam`
+        //    is still unread), and no ch09 corpus test asks for it.
         assert_eq!(
             implemented,
             vec![
                 1, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24,
                 25, 26, 27, 28, 29, 30, 31, 32, 33, 34, 35, 36, 37, 38, 39, 40, 41, 42, 43, 44, 45,
-                47, 48, 49, 50, 51, 53, 54, 55, 59, 60, 61, 62
+                46, 47, 48, 49, 50, 51, 53, 54, 55, 59, 60, 61, 62
             ]
         );
         // NoCode rows, exactly as design §8 marks them.

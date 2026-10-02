@@ -415,6 +415,23 @@ impl<'a> Wf<'a> {
                         use fors_fir::prelude::gty;
                         match g {
                             gty::REF => return Holds::Yes,
+                            // ch10 Rule 30 (S0030) names `Slice[T]` among
+                            // the `Copyable` std types outright, for every
+                            // `T`: a slice is a VIEW, so copying it copies
+                            // no element. The index below cannot find this
+                            // — `std` writes no `impl Copyable for Slice`,
+                            // and a single-file corpus build has no `std`
+                            // at all — which left every `for x in xs` and
+                            // every `xs = data[a ..< b]` on the tape as a
+                            // MOVE. Nothing read the tape before I8, so
+                            // the disagreement with ch10 was invisible;
+                            // `plain-for-accumulator-accepted-run-ok` and
+                            // `prelude-usable-without-use-accepted` are
+                            // the corpus stating the rule from the other
+                            // side (`let xs: Slice[T]` IS iterable, which
+                            // ch09 Rule 31 allows only for a `Copyable`
+                            // iterable).
+                            gty::SLICE => return Holds::Yes,
                             gty::OWN | gty::ARENA | gty::ATOMIC => return Holds::No,
                             gty::ARRAY | gty::VECTOR | gty::MASK | gty::OPTION => {
                                 let args = self.fir.tys.args_vec(ArgsId(self.fir.tys.b(subject)));

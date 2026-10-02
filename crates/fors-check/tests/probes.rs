@@ -719,7 +719,11 @@ fn r33_never_binds_nothing_at_an_argument() {
 /// call, both T0039.
 #[test]
 fn r39_counts_are_checked_at_the_call() {
-    const G: &str = "fn g[T](let a: T) -> T { return a; }\n";
+    // I8: `return a;` on a `let` parameter of unbounded rigid type is a
+    // move out of a `let` parameter (ch01 R3, the clause
+    // `copy-without-copyable-rejected` asserts), so the fixture carries
+    // a `Copyable` bound. Nothing this probe measures changes.
+    const G: &str = "fn g[T: Copyable](let a: T) -> T { return a; }\n";
     assert!(check_source(&format!("{G}fn f() -> i32 {{ return g[i32](1); }}")).is_empty());
     assert_eq!(
         check_source(&format!("{G}fn f() -> i32 {{ return g[i32, u8](1); }}")),
@@ -889,8 +893,12 @@ fn r12_bounds_are_checked_with_the_binding_r38_determined() {
 /// substituted rather than left open.
 #[test]
 fn a_generic_index_impl_is_instantiated_not_read_open() {
+    // I8: `return self.v;` on a non-`Copyable` rigid field is a partial
+    // move out of a `let self` (ch01 R4a(c)), so the impl carries a
+    // `Copyable` bound; `i64` satisfies it and the probe's subject (the
+    // container slot the receiver binds) is unchanged.
     const B: &str = "struct Box[T] { v: T }\n\
-         impl[T] Index[usize] for Box[T] {\n\
+         impl[T: Copyable] Index[usize] for Box[T] {\n\
              type Output = T;\n\
              fn at(let self: Box[T], let i: usize) -> scoped(self) T { return self.v; }\n}\n";
     assert!(
@@ -1106,7 +1114,11 @@ fn a_generic_struct_literal_in_synth_binds_from_its_fields() {
 /// that would make the whole call absorbing.
 #[test]
 fn a_value_in_an_explicit_type_slot_is_t0011() {
-    const G: &str = "fn g[T](let a: T) -> T { return a; }\n";
+    // I8: `return a;` on a `let` parameter of unbounded rigid type is a
+    // move out of a `let` parameter (ch01 R3, the clause
+    // `copy-without-copyable-rejected` asserts), so the fixture carries
+    // a `Copyable` bound. Nothing this probe measures changes.
+    const G: &str = "fn g[T: Copyable](let a: T) -> T { return a; }\n";
     assert_eq!(
         check_source(&format!("{G}fn f() -> i32 {{ return g[1](1); }}")),
         vec!["T0011"]
@@ -1311,8 +1323,12 @@ fn i6_a_neutral_projection_carries_exactly_its_declared_bounds() {
 /// I5 left every such method `Candidate::Generic` and the call untyped.
 #[test]
 fn i6_a_generic_method_binds_its_container_from_the_receiver() {
+    // I8: `return self.v;` on a non-`Copyable` rigid field is a partial
+    // move out of a `let self` (ch01 R4a(c)), so the impl carries a
+    // `Copyable` bound; `i64` satisfies it and the probe's subject (the
+    // container slot the receiver binds) is unchanged.
     const B: &str = "struct Bag[T] { v: T }\n\
-         impl[T] Bag[T] { pub fn get(let self: Bag[T]) -> T { return self.v; } }\n";
+         impl[T: Copyable] Bag[T] { pub fn get(let self: Bag[T]) -> T { return self.v; } }\n";
     assert!(
         check_source(&format!(
             "{B}fn f(let b: Bag[i64]) -> i64 {{ return b.get(); }}"
@@ -2421,7 +2437,11 @@ fn i7v_witness_is_a_value_no_arm_covers() {
 /// lowers like a `TypeApp` — one and two levels deep, in both directions.
 #[test]
 fn i7v_nested_explicit_generic_argument_lowers_at_every_depth() {
-    const ID: &str = "fn id[T](let t: T) -> T { return t; }\n";
+    // I8: `return a;` on a `let` parameter of unbounded rigid type is a
+    // move out of a `let` parameter (ch01 R3, the clause
+    // `copy-without-copyable-rejected` asserts), so the fixture carries
+    // a `Copyable` bound. Nothing this probe measures changes.
+    const ID: &str = "fn id[T: Copyable](let t: T) -> T { return t; }\n";
     assert_eq!(
         check_source(&format!(
             "{ID}fn f() -> Option[i64] {{ return id[Option[i64]](true); }}"
@@ -2446,4 +2466,411 @@ fn i7v_nested_explicit_generic_argument_lowers_at_every_depth() {
         )),
         vec!["T0026"]
     );
+}
+
+// ------------------------------------------------- increment I8's probes
+
+/// The fixture every move probe below is written against: a `Builder`
+/// with a `sink self` consumer, a `let self` reader and an `inout self`
+/// mutator, plus a non-`Copyable` wrapper to take a field out of.
+const BUILDER: &str = "struct Builder { parts: i64 }\n\
+     impl Builder {\n\
+         fn finish(sink self: Builder) -> i64 { let p = self.parts; discard self; return p; }\n\
+         fn peek(let self: Builder) -> i64 { return self.parts; }\n\
+     }\n\
+     struct Site { b: Builder, id: i64 }\n";
+
+/// One mutation probe per mechanism the flow pass decides (design §11's
+/// "typed mutations with expected code and site", brought forward for
+/// I8's own rules). Each row is `(mechanism, rejected program, expected
+/// code, the ONE mutation that repairs it)`: the rejected half proves the
+/// rule fires, and the repaired half proves it fires for its own reason
+/// and not because the fixture is ill-formed in some other way.
+#[test]
+fn every_flow_mechanism_fires_for_its_own_reason() {
+    let rows: &[(&str, String, &str, String)] = &[
+        (
+            "ch01 R3: a move out of a `let` parameter",
+            format!("{BUILDER}fn f(let d: Builder) -> i64 {{ return d.finish(); }}"),
+            "O0003",
+            format!("{BUILDER}fn f(sink d: Builder) -> i64 {{ return d.finish(); }}"),
+        ),
+        (
+            "ch01 R4a(a): use after move",
+            format!(
+                "{BUILDER}fn f(sink b: Builder) -> i64 {{ let n = b.finish(); return n + b.peek(); }}"
+            ),
+            "O0004",
+            format!("{BUILDER}fn f(sink b: Builder) -> i64 {{ let n = b.finish(); return n; }}"),
+        ),
+        (
+            "ch01 R4a(a): a re-initialisation revives the place",
+            format!(
+                "{BUILDER}fn f(sink b: Builder) -> i64 {{ let n = b.finish(); return n + b.peek(); }}"
+            ),
+            "O0004",
+            format!(
+                "{BUILDER}fn f(sink b: Builder) -> i64 {{ let n = b.finish(); b = Builder {{ parts: 0 }}; return n + b.peek(); }}"
+            ),
+        ),
+        (
+            "ch01 R4a(b)/R8: a move inside a loop of a place declared outside it",
+            format!(
+                "{BUILDER}fn f(sink b: Builder, let n: usize) -> i64 {{ var t: i64 = 0; for i in 0 ..< n {{ t = t + b.finish(); }} return t; }}"
+            ),
+            "O0004",
+            format!(
+                "{BUILDER}fn f(sink b: Builder, let n: usize) -> i64 {{ var t: i64 = 0; for i in 0 ..< n {{ t = t + b.finish(); b = Builder {{ parts: 0 }}; }} return t; }}"
+            ),
+        ),
+        (
+            "ch01 R4a(b): a place declared INSIDE the loop may be moved there",
+            format!(
+                "{BUILDER}fn f(sink b: Builder, let n: usize) -> i64 {{ var t: i64 = 0; for i in 0 ..< n {{ t = t + b.finish(); }} return t; }}"
+            ),
+            "O0004",
+            format!(
+                "{BUILDER}fn f(let n: usize) -> i64 {{ var t: i64 = 0; for i in 0 ..< n {{ let c: Builder = Builder {{ parts: 1 }}; t = t + c.finish(); }} return t; }}"
+            ),
+        ),
+        (
+            "ch01 R4a(c): a partial move out of a field place",
+            format!("{BUILDER}fn f(sink s: Site) -> i64 {{ return s.b.finish(); }}"),
+            "O0004",
+            format!("{BUILDER}fn f(sink b: Builder) -> i64 {{ return b.finish(); }}"),
+        ),
+        (
+            "ch01 R4a(d): a move out of an `inout` parameter",
+            format!("{BUILDER}fn f(inout d: Builder) -> i64 {{ return d.finish(); }}"),
+            "O0004",
+            format!("{BUILDER}fn f(inout d: Builder) -> i64 {{ return d.peek(); }}"),
+        ),
+        (
+            "ch01 R4a(e): a closure body moving a place it captured",
+            format!(
+                "{BUILDER}fn f(sink b: Builder) -> i64 {{ let g: fn() -> i64 = || b.finish(); return g(); }}"
+            ),
+            "O0004",
+            format!(
+                "{BUILDER}fn f(sink b: Builder) -> i64 {{ let g: fn() -> i64 = || b.peek(); return g(); }}"
+            ),
+        ),
+        (
+            "ch01 R2: a `sink` argument needs `move`",
+            format!(
+                "{BUILDER}fn take(sink b: Builder) -> i64 {{ return b.finish(); }}\nfn f(sink b: Builder) -> i64 {{ return take(b); }}"
+            ),
+            "O0002",
+            format!(
+                "{BUILDER}fn take(sink b: Builder) -> i64 {{ return b.finish(); }}\nfn f(sink b: Builder) -> i64 {{ return take(move b); }}"
+            ),
+        ),
+        (
+            "ch01 R2: an `inout` argument needs `&`",
+            "fn bump(inout x: i64) { x = x + 1; }\nfn f(inout n: i64) { bump(n); }".to_string(),
+            "O0002",
+            "fn bump(inout x: i64) { x = x + 1; }\nfn f(inout n: i64) { bump(&n); }".to_string(),
+        ),
+        (
+            "ch01 R2: a `set` argument needs `&out`",
+            "fn fill(set o: i64) { o = 7; }\nfn f() { var v: i64; fill(v); }".to_string(),
+            "O0002",
+            "fn fill(set o: i64) { o = 7; }\nfn f() { var v: i64; fill(&out v); }".to_string(),
+        ),
+        (
+            "ch01 R2: a `let` argument carries no marker",
+            "fn read(let x: i64) -> i64 { return x; }\nfn f(inout n: i64) -> i64 { return read(&n); }"
+                .to_string(),
+            "O0002",
+            "fn read(let x: i64) -> i64 { return x; }\nfn f(inout n: i64) -> i64 { return read(n); }"
+                .to_string(),
+        ),
+        (
+            "ch01 R15d: a brand parameter used as the type of a value",
+            "fn f[A: brand](sink x: A) { discard x; }".to_string(),
+            "O0015",
+            "struct Cell[T, A: brand] { v: T }\nfn f[A: brand](sink x: Cell[i64, A]) { discard x; }"
+                .to_string(),
+        ),
+    ];
+    let mut failures = Vec::new();
+    for (what, bad, code, good) in rows {
+        let got = check_source(bad);
+        if got != vec![code.to_string()] {
+            failures.push(format!("{what}: expected [{code}], got {got:?}"));
+        }
+        let fixed = check_source(good);
+        if !fixed.is_empty() {
+            failures.push(format!(
+                "{what}: the repaired program must be accepted, got {fixed:?}"
+            ));
+        }
+    }
+    assert!(
+        failures.is_empty(),
+        "flow mechanism probes ({}):\n{}",
+        failures.len(),
+        failures.join("\n")
+    );
+}
+
+/// ch01 Rule 8's round-6 note: the merge lattice is TWO-valued, with no
+/// "maybe live" third element. A move made inside one branch of an `if`
+/// is that branch's: a use in the SAME branch after the move is R4a(a),
+/// a use in the sibling branch is not, and when both branches leave the
+/// body nothing merges.
+#[test]
+fn a_move_in_one_branch_is_not_live_in_the_other() {
+    let after_move_same_branch = format!(
+        "{BUILDER}fn f(sink b: Builder, let c: bool) -> i64 {{ \
+         if c {{ let n = b.finish(); return n + b.peek(); }} return 0; }}"
+    );
+    assert_eq!(check_source(&after_move_same_branch), vec!["O0004"]);
+    let sibling_branch = format!(
+        "{BUILDER}fn f(sink b: Builder, let c: bool) -> i64 {{ \
+         if c {{ return b.finish(); }} else {{ return b.peek(); }} }}"
+    );
+    assert!(
+        check_source(&sibling_branch).is_empty(),
+        "got {:?}",
+        check_source(&sibling_branch)
+    );
+}
+
+/// ch01 Rule 8 proper (I8 verification, 2026-10-02): every path that
+/// reaches a merge must agree on each place's liveness. A move on one
+/// path through an `if`/`match` and not the other is the disagreement,
+/// reported once at the move (O0008) whether or not the place is used
+/// afterwards; a move on EVERY path leaves the place dead, so a use after
+/// the merge is R4a(a); a path that leaves the body does not reach the
+/// merge; a re-initialisation on only some paths disagrees the other way
+/// round. Loops merge twice: at the head (R4a(b), against the entry
+/// state, with a `continue` inside an alternative reaching it too) and at
+/// the exit (the entry state against every `break`).
+#[test]
+fn every_path_must_agree_where_they_merge() {
+    let rows: &[(&str, String, Vec<&str>)] = &[
+        (
+            "moved on one branch, used after the join",
+            format!(
+                "{BUILDER}fn f(sink b: Builder, let c: bool) -> i64 {{ \
+                 if c {{ let n = b.finish(); }} return b.peek(); }}"
+            ),
+            vec!["O0008"],
+        ),
+        (
+            "moved on one branch, never used again: still a disagreement",
+            format!(
+                "{BUILDER}fn f(sink b: Builder, let c: bool) {{ if c {{ let n = b.finish(); }} }}"
+            ),
+            vec!["O0008"],
+        ),
+        (
+            "moved on both branches, then used",
+            format!(
+                "{BUILDER}fn f(sink b: Builder, let c: bool) -> i64 {{ \
+                 if c {{ let n = b.finish(); }} else {{ discard b; }} return b.peek(); }}"
+            ),
+            vec!["O0004"],
+        ),
+        (
+            "moved on one arm of a `match`, the other arm leaves it live",
+            format!(
+                "{BUILDER}fn f(sink b: Builder, let n: i64) -> i64 {{ \
+                 match n {{ 0 => {{ discard b; }} let o => {{ }} }} return 0; }}"
+            ),
+            vec!["O0008"],
+        ),
+        (
+            "the moving branch returns: nothing merges",
+            format!(
+                "{BUILDER}fn f(sink b: Builder, let c: bool) -> i64 {{ \
+                 if c {{ let n = b.finish(); return n; }} return b.peek(); }}"
+            ),
+            vec![],
+        ),
+        (
+            "re-initialised on the moving branch before the join",
+            format!(
+                "{BUILDER}fn f(sink b: Builder, let c: bool) -> i64 {{ \
+                 if c {{ let n = b.finish(); b = Builder {{ parts: n }}; }} return b.peek(); }}"
+            ),
+            vec![],
+        ),
+        (
+            "dead before the `if`, re-initialised on one branch only",
+            format!(
+                "{BUILDER}fn f(sink b: Builder, let c: bool) -> i64 {{ \
+                 discard b; if c {{ b = Builder {{ parts: 0 }}; }} return 0; }}"
+            ),
+            vec!["O0008"],
+        ),
+        (
+            "an `if` without `else` as the initialiser: the join precedes the `let`",
+            format!(
+                "{BUILDER}fn f(sink b: Builder, let c: bool) -> i64 {{ \
+                 let x: i64 = if c {{ b.finish() }} else {{ 0 }}; return x; }}"
+            ),
+            vec!["O0008"],
+        ),
+        (
+            "a loop re-initialises only on one branch: the head still disagrees",
+            format!(
+                "{BUILDER}fn f(sink b: Builder, let n: usize, let c: bool) -> i64 {{ \
+                 var t: i64 = 0; for i in 0 ..< n {{ t = t + b.finish(); \
+                 if c {{ b = Builder {{ parts: 0 }}; }} }} return t; }}"
+            ),
+            vec!["O0008"],
+        ),
+        (
+            "a `continue` inside an alternative reaches the loop head",
+            format!(
+                "{BUILDER}fn f(sink b: Builder, let n: usize, let c: bool) -> i64 {{ \
+                 for i in 0 ..< n {{ if c {{ let m = b.finish(); continue; }} }} return 0; }}"
+            ),
+            vec!["O0004"],
+        ),
+        (
+            "a `break` after the move reaches the loop exit live-or-dead",
+            format!(
+                "{BUILDER}fn f(sink b: Builder, let n: usize) -> i64 {{ \
+                 for i in 0 ..< n {{ let m = b.finish(); break; }} return 0; }}"
+            ),
+            vec!["O0008"],
+        ),
+        (
+            "a `return` after the move reaches neither the head nor the exit",
+            format!(
+                "{BUILDER}fn f(sink b: Builder, let n: usize) -> i64 {{ \
+                 for i in 0 ..< n {{ let m = b.finish(); return m; }} return b.peek(); }}"
+            ),
+            vec![],
+        ),
+        (
+            "a `parallel` block runs once: its moves are the body's",
+            format!(
+                "{BUILDER}fn take(sink b: Builder) {{ discard b; }}\n\
+                 fn f(sink b: Builder) -> i64 {{ parallel {{ spawn take(move b); }} return b.peek(); }}"
+            ),
+            vec!["O0004"],
+        ),
+        (
+            "ch09 R46: the explicit form's message names the place, not the wrapper",
+            format!(
+                "{BUILDER}fn f(sink b: Builder) -> i64 {{ let n = (move b).finish(); return n + b.peek(); }}"
+            ),
+            vec!["O0004"],
+        ),
+    ];
+    for (what, src, want) in rows {
+        let got = check_source(src);
+        assert_eq!(&got, want, "{what}:\n{src}");
+    }
+    let explicit = format!(
+        "{BUILDER}fn f(sink b: Builder) -> i64 {{ let n = (move b).finish(); return n + b.peek(); }}"
+    );
+    let msgs = check_messages(&explicit);
+    assert_eq!(msgs.len(), 1);
+    assert!(
+        msgs[0].contains("`b` was moved by the call `(move b).finish()`"),
+        "got {:?}",
+        msgs[0]
+    );
+}
+
+/// ch09 R46's `Copyable` carve-out: a `Copyable` receiver is COPIED by a
+/// `sink self` method, so the place stays usable and `move` is not
+/// required at a `sink` argument either.
+#[test]
+fn a_copyable_receiver_is_copied_not_moved() {
+    const P: &str = "struct P { x: i64 }\nimpl Copyable for P { }\nimpl P { fn take(sink self: P) -> i64 { return self.x; } }\n";
+    assert!(
+        check_source(&format!(
+            "{P}fn f(let p: P) -> i64 {{ return p.take() + p.take(); }}"
+        ))
+        .is_empty()
+    );
+    assert!(
+        check_source(&format!(
+            "{P}fn eat(sink q: P) -> i64 {{ return q.x; }}\nfn f(let p: P) -> i64 {{ return eat(p) + p.x; }}"
+        ))
+        .is_empty()
+    );
+}
+
+/// Metamorphic: the flow pass walks the tape in source order, so a
+/// REORDERING of statements that touch disjoint places must not change
+/// the diagnostic set. (It may change a diagnostic's position; the set of
+/// codes is what this asserts, which is the property design §11 calls
+/// metamorphic.)
+#[test]
+fn reordering_independent_statements_does_not_change_the_diagnostics() {
+    fn permutations(stmts: &[&str]) -> Vec<String> {
+        let n = stmts.len();
+        let mut out = Vec::new();
+        let mut idx: Vec<usize> = (0..n).collect();
+        // Heap's algorithm, iterative, over at most 4 statements.
+        let mut c = vec![0usize; n];
+        out.push(idx.iter().map(|&i| stmts[i]).collect::<Vec<_>>().join(" "));
+        let mut i = 0;
+        while i < n {
+            if c[i] < i {
+                if i % 2 == 0 {
+                    idx.swap(0, i);
+                } else {
+                    idx.swap(c[i], i);
+                }
+                out.push(idx.iter().map(|&k| stmts[k]).collect::<Vec<_>>().join(" "));
+                c[i] += 1;
+                i = 0;
+            } else {
+                c[i] = 0;
+                i += 1;
+            }
+        }
+        out
+    }
+    // Three independent statements, each on its own place, and a tail
+    // that uses all three results.
+    let clean = [
+        "let x: i64 = a.finish();",
+        "let y: i64 = b.finish();",
+        "let z: i64 = c + 1;",
+    ];
+    let mut seen: Vec<Vec<String>> = Vec::new();
+    for body in permutations(&clean) {
+        let src = format!(
+            "{BUILDER}fn f(sink a: Builder, sink b: Builder, let c: i64) -> i64 {{ {body} return x + y + z; }}"
+        );
+        seen.push(check_source(&src));
+    }
+    assert_eq!(seen.len(), 6);
+    for got in &seen {
+        assert!(
+            got.is_empty(),
+            "a permutation of independent statements changed the answer: {got:?}"
+        );
+    }
+    // The same, with one statement that is an R3 violation: every
+    // permutation must still report exactly that one diagnostic.
+    let faulty = [
+        "let x: i64 = a.finish();",
+        "let y: i64 = d.finish();",
+        "let z: i64 = c + 1;",
+    ];
+    let mut codes: Vec<Vec<String>> = Vec::new();
+    for body in permutations(&faulty) {
+        let src = format!(
+            "{BUILDER}fn f(sink a: Builder, let d: Builder, let c: i64) -> i64 {{ {body} return x + y + z; }}"
+        );
+        codes.push(check_source(&src));
+    }
+    assert_eq!(codes.len(), 6);
+    for got in &codes {
+        assert_eq!(
+            got,
+            &vec!["O0003".to_string()],
+            "a permutation changed the diagnostic set"
+        );
+    }
 }
