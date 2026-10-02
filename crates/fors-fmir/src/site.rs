@@ -43,6 +43,14 @@ impl SitePool {
     pub fn row(&self, id: SiteId) -> SiteRow {
         self.rows[id.index()]
     }
+
+    /// [`SitePool::row`] for a `SiteId` read out of an `InstRow.site` slot
+    /// rather than out of this pool's own iteration: hand-written, decoded or
+    /// fuzzed FMIR may point past the end, and a trap or `ub:` report must
+    /// still be printable (design §5.3, §7.2a).
+    pub fn try_row(&self, id: SiteId) -> Option<SiteRow> {
+        self.rows.get(id.index()).copied()
+    }
 }
 
 #[cfg(test)]

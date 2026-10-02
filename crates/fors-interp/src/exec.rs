@@ -32,12 +32,22 @@ use crate::value::Slot;
 /// How the process ended.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum Exit {
-    /// Returned from the entry function (unit value; F1 has no `raises`
-    /// edge yet — that is F3).
+    /// Returned from the entry function.
     Return,
-    /// A program trap: one of ch02 R15's closed eight (only the arithmetic
-    /// and conversion kinds are reachable in F1).
+    /// An error left the entry function by a `raise` terminator — ch02 R17's
+    /// error exit, status 1. F4 needs this to have an ERROR EXIT at all
+    /// (ch01 R23b: `errdefer` runs on error exits and never on normal ones);
+    /// `render`'s `error: ` line and `?`/`try_br` stay **F3's**, so the slot
+    /// the error was moved into is carried here and nothing formats it.
+    Raise,
+    /// A program trap: one of ch02 R15's closed eight.
     Trap(TrapKind),
+    /// A `ub:` report (design §5.2): the interpreter found something a
+    /// compiled program would get silently wrong. **Not** a trap (ch02 R15's
+    /// kind list is closed at eight, E4) — status
+    /// [`crate::ub::UB_EXIT_STATUS`], and the full record is
+    /// [`Outcome::ub`].
+    Ub(crate::ub::UbClass),
 }
 
 /// One run's observable behaviour (design §7.1's `OracleRecord` restricted
@@ -54,6 +64,30 @@ pub struct Outcome {
     /// of appending bytes. Meaningless when `exit` is a trap (§5.3: the
     /// trap path never reaches the entry shim's flush at all).
     pub stdout_latched: bool,
+    /// The `(line, col)` the trap or `ub:` report points at — what design
+    /// §7.2a's `trap: <kind> at <file>:<L>:<C>` line needs. `None` on a clean
+    /// return.
+    pub site: Option<(u32, u32)>,
+    /// The machine-readable `ub:` record (design §5.2), `Some` exactly when
+    /// `exit` is [`Exit::Ub`].
+    pub ub: Option<crate::ub::UbReport>,
+    /// The opt-in backtrace (owner **Q7**): populated ONLY when
+    /// `FORS_BACKTRACE=1` was set for this process, and **never** part of the
+    /// oracle record — see [`Outcome::oracle_record`] and design §7.2a's
+    /// "a backtrace on the trap path is illegal for any program in the
+    /// differential corpus".
+    pub backtrace: Vec<crate::trap::BacktraceFrame>,
+}
+
+impl Outcome {
+    /// What design §7.1 compares: the exit, the exact `Stdout` bytes and the
+    /// latch. The site, the `ub:` record and the Q7 backtrace are diagnostic
+    /// payload and are deliberately OUTSIDE this projection, which is how
+    /// §7.2a's "a backtrace ... is never part of the oracle record" is kept
+    /// true by construction rather than by a comment.
+    pub fn oracle_record(&self) -> (Exit, &[u8], bool) {
+        (self.exit, &self.stdout, self.stdout_latched)
+    }
 }
 
 /// A clean interpreter diagnostic: a malformed program, an unimplemented
@@ -76,9 +110,22 @@ pub enum InterpError {
     MissingString(u32),
     /// A value of unexpected type reached an op (lowering bug, not a trap).
     TypeMismatch(String),
-    /// Uninitialised slot read (would be `ub: uninit-read` in F6's Miri
-    /// mode; F1 reports it as a diagnostic).
-    UninitRead(u32),
+    /// An exit edge is internally inconsistent in a way `verify()` rejects
+    /// and the interpreter must not paper over: an `errdefer` body on a
+    /// NORMAL edge (ch01 R23b), a pending `DeferId` outside the pool, or a
+    /// deferred body that ran off the end of its own sub-CFG. A compiler
+    /// bug, never a trap and never silently skipped.
+    MalformedExitEdge(String),
+    /// A `raise` left a NON-entry frame and no `try_br` in the caller took
+    /// it. Propagating an error into a caller is `?`/`try_br`'s job, which
+    /// is F3's (design §3.6); until then the condition is REPORTED rather
+    /// than settled as if `main` had raised — which would skip the caller's
+    /// own pending bodies (ch01 R23a) and misreport ch02 R17's exit.
+    UnhandledRaise(String),
+    /// A quantity the interpreter's own representation cannot carry: an
+    /// arena offset past the `u32` design §3.7's `RefVal` packs. Not a trap
+    /// (ch02 R15's eight contain no such kind) and not silent truncation.
+    Unrepresentable(String),
     /// Exceeded the runaway guard. Run mode has no step budget (budgets are
     /// F9's comptime rule); this is a fixed cap far above any gate test,
     /// existing only so a bad loop reports instead of hanging the harness.
@@ -100,7 +147,13 @@ impl std::fmt::Display for InterpError {
             InterpError::UnknownIntrinsic(n) => write!(f, "intrinsic `{n}` is not in the F1 table"),
             InterpError::MissingString(c) => write!(f, "const_str {c} has no bytes in the program"),
             InterpError::TypeMismatch(m) => write!(f, "type mismatch: {m}"),
-            InterpError::UninitRead(v) => write!(f, "read of uninitialised value {v}"),
+            InterpError::MalformedExitEdge(m) => write!(f, "malformed exit edge: {m}"),
+            InterpError::UnhandledRaise(func) => write!(
+                f,
+                "`{func}` raised into a caller with no `try_br`; error propagation into a \
+                 caller is F3's (design §3.6)"
+            ),
+            InterpError::Unrepresentable(m) => write!(f, "unrepresentable: {m}"),
             InterpError::StepBudget => write!(f, "step budget exceeded"),
             InterpError::StackOverflow => write!(f, "call stack overflow"),
         }
@@ -109,11 +162,14 @@ impl std::fmt::Display for InterpError {
 
 impl std::error::Error for InterpError {}
 
-/// A fault inside one instruction: either a program trap (an outcome) or a
-/// malformed-program diagnostic (an error). `?` on `InterpError` lifts into
-/// the diagnostic side; trapping arithmetic raises the trap side.
+/// A fault inside one instruction: a program trap, a `ub:` report, or a
+/// malformed-program diagnostic. `?` on `InterpError` lifts into the
+/// diagnostic side; trapping arithmetic raises the trap side; design §5.2's
+/// detection list raises the `ub:` side, which is NEVER downgraded to either
+/// of the other two (E4).
 enum Fault {
     Trap(TrapKind),
+    Ub(crate::ub::UbReport),
     Error(InterpError),
 }
 
@@ -143,7 +199,20 @@ struct Cells {
     slots: Vec<Slot>,
 }
 
-/// A running machine: frames, cell tables, string bytes, captured stdout.
+/// Which memory range a borrow stack belongs to (design §5.2).
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
+enum BorrowKey {
+    /// A frame-local root slot: `&x` on a `let` binding allocates nothing
+    /// but still has provenance and exclusivity.
+    Root {
+        frame: u32,
+        root: u32,
+    },
+    Alloc(u32),
+}
+
+/// A running machine: frames, cell tables, string bytes, captured stdout,
+/// and (F6) the allocation, arena, provenance and borrow tables.
 struct Machine<'a> {
     prog: &'a Program,
     tys: &'a TyStore,
@@ -157,12 +226,60 @@ struct Machine<'a> {
     stdout_latched: bool,
     host: crate::shim::HostEnv,
     steps: u64,
+    /// design §5.1's allocation objects. Index 0 is a placeholder so that
+    /// [`crate::mem::PROV_NONE`] names no real row.
+    allocs: Vec<crate::mem::Alloc>,
+    /// design §3.7's live arena values, indexed by `ArenaId`.
+    arenas: Vec<crate::mem::ArenaVal>,
+    /// The `with arena` region each arena was entered by, parallel to
+    /// `arenas`: `region_exit` retires the newest live arena of ITS region,
+    /// not whichever arena was created last — with nested regions those
+    /// differ, and retiring the wrong one leaves the outer arena's `Ref`s
+    /// dereferenceable after their block has ended (ch01 R15, R17).
+    arena_region: Vec<fors_fmir::ids::RegionId>,
+    /// `Slot.prov -> ProvRow`. Row 0 is the `PROV_NONE` placeholder.
+    provs: Vec<crate::mem::ProvRow>,
+    /// One borrow stack per allocation object and per frame-local root
+    /// (design §5.2, E14).
+    borrows: std::collections::HashMap<BorrowKey, crate::ub::BorrowStack>,
+    next_tag: u32,
+    /// The next frame activation number (see [`Frame::serial`]).
+    next_serial: u32,
+}
+
+/// One scope exit in progress: `type-checker.md` §13 I8b's four steps,
+/// driven from the edge's own data (design §3.5, §3.8).
+///
+/// ch01 R23a licenses exactly this shape — "an implementation MAY emit one
+/// copy and jump to it; the behaviour is the same" — so each pending body is
+/// entered as a sub-CFG and ends at [`fors_fmir::scope::BODY_END`]. Bodies
+/// may nest (R23c), hence a STACK of these per frame rather than one slot.
+#[derive(Clone, Debug)]
+struct ExitRun {
+    /// The edge being executed.
+    edge: fors_fmir::ids::ExitEdgeId,
+    /// How many of the edge's pending bodies have been entered.
+    done: u32,
+    /// Where control goes once steps 2-4 are complete, or `BlockId::NONE`
+    /// for a function exit.
+    resume: BlockId,
+    /// Step 1's already-moved result operand (ch01 R23a: evaluated and moved
+    /// into the result BEFORE any body runs, so a body "can neither read nor
+    /// change the result").
+    result: Option<Slot>,
+    /// Does the function exit by `raise` when this sequence finishes?
+    raising: bool,
 }
 
 #[derive(Clone, Debug)]
 struct Frame {
     /// Function index in `prog.fns`.
     func: usize,
+    /// This activation's number, unique over the run. A frame INDEX is
+    /// reused by the next call after a return, so a pointer into a local
+    /// (`MemTarget::Root`) carries the serial too and is refused once the
+    /// frame it names has returned (design §5.2, `ub: use-after-free`).
+    serial: u32,
     /// `ValId.0 -> Slot`, sized to the value pool at call time.
     vals: Vec<Slot>,
     /// Local slots (`PlaceRow.root`): parameters in order, then `let`
@@ -173,6 +290,8 @@ struct Frame {
     /// block's regular range).
     block: BlockId,
     pc: u32,
+    /// The scope exits this frame is in the middle of (innermost last).
+    exits: Vec<ExitRun>,
 }
 
 impl<'a> Machine<'a> {
@@ -239,6 +358,124 @@ impl<'a> Machine<'a> {
             _ => Err(InterpError::TypeMismatch("expected float type".into())),
         }
     }
+
+    // -- F6: provenance, allocations, borrows -----------------------------
+
+    fn fresh_tag(&mut self) -> u32 {
+        self.next_tag += 1;
+        self.next_tag
+    }
+
+    fn push_prov(&mut self, target: crate::mem::MemTarget, tag: u32) -> u32 {
+        let id = self.provs.len() as u32;
+        self.provs.push(crate::mem::ProvRow { target, tag });
+        id
+    }
+
+    fn prov_of(&self, slot: Slot) -> Result<crate::mem::ProvRow, InterpError> {
+        if slot.prov == crate::mem::PROV_NONE {
+            return Err(InterpError::TypeMismatch(
+                "expected a pointer, got a value with no provenance".into(),
+            ));
+        }
+        self.provs
+            .get(slot.prov as usize)
+            .copied()
+            .ok_or_else(|| InterpError::TypeMismatch("dangling provenance".into()))
+    }
+
+    /// The allocator identity in force at `block` — ch01 R18's brand. A block
+    /// in no `with allocator` scope allocates from
+    /// [`crate::mem::AllocatorId::AMBIENT`].
+    fn allocator_at(&self, fr: usize, block: BlockId) -> crate::mem::AllocatorId {
+        let decl = &self.func(self.frames[fr].func).decl;
+        let Some(row) = decl.blocks.try_row(block) else {
+            return crate::mem::AllocatorId::AMBIENT;
+        };
+        if row.scope.index() >= decl.scopes.len() {
+            return crate::mem::AllocatorId::AMBIENT;
+        }
+        crate::mem::AllocatorId(decl.scopes.row(row.scope).brand.0)
+    }
+
+    /// The `(line, col)` of an instruction's site, for a trap or `ub:` line
+    /// (design §7.2a). Site 0 is the fallback for FMIR with no real spans.
+    fn site_of(&self, fr: usize, site: fors_fmir::ids::SiteId) -> (u32, u32) {
+        let decl = &self.func(self.frames[fr].func).decl;
+        decl.sites
+            .try_row(site)
+            .map(|r| (r.line, r.col))
+            .unwrap_or((0, 0))
+    }
+
+    /// The opt-in Q7 backtrace, innermost frame first. Built ONLY when
+    /// `FORS_BACKTRACE=1`: §7.2a keeps it out of the differential corpus, so
+    /// an unset variable must not even pay for the `Vec`.
+    fn backtrace(&self) -> Vec<crate::trap::BacktraceFrame> {
+        if !crate::trap::backtrace_enabled() {
+            return Vec::new();
+        }
+        self.frames
+            .iter()
+            .rev()
+            .map(|f| {
+                let decl = &self.prog.fns[f.func].decl;
+                let (line, col) = decl
+                    .blocks
+                    .try_row(f.block)
+                    .and_then(|b| decl.sites.try_row(b.term.site))
+                    .map(|s| (s.line, s.col))
+                    .unwrap_or((0, 0));
+                crate::trap::BacktraceFrame {
+                    func: self.prog.fns[f.func].name.clone(),
+                    line,
+                    col,
+                }
+            })
+            .collect()
+    }
+
+    /// Applies `how` through `tag` to `key`'s borrow stack. A range with no
+    /// stack yet is one nothing has borrowed, so the access is unrestricted.
+    fn borrow_access(
+        &mut self,
+        key: BorrowKey,
+        tag: u32,
+        how: crate::ub::Access,
+    ) -> Result<(), crate::ub::Violation> {
+        match self.borrows.get_mut(&key) {
+            Some(stack) => stack.access(tag, how),
+            None => Ok(()),
+        }
+    }
+
+    fn borrow_stack(&mut self, key: BorrowKey) -> &mut crate::ub::BorrowStack {
+        self.borrows
+            .entry(key)
+            .or_insert_with(|| crate::ub::BorrowStack::rooted(ROOT_TAG))
+    }
+}
+
+/// The tag a frame-local root slot's own stack is rooted at: the binding's
+/// unrestricted access. `fresh_tag` starts above it, so no borrow shares it.
+const ROOT_TAG: u32 = 0;
+
+/// Builds a `ub:` fault (design §5.2). Every report names its CLASS and the
+/// instruction that produced it; `inst == u32::MAX` is a terminator.
+fn ub(
+    m: &Machine<'_>,
+    fr: usize,
+    inst: u32,
+    site: fors_fmir::ids::SiteId,
+    class: crate::ub::UbClass,
+    detail: impl Into<String>,
+) -> Fault {
+    Fault::Ub(crate::ub::UbReport::new(
+        class,
+        inst,
+        m.site_of(fr, site),
+        detail,
+    ))
 }
 
 /// The interpreter environment: what a run needs beyond the program.
@@ -277,6 +514,23 @@ pub fn run_with_host(
         stdout_latched: false,
         host: *host,
         steps: 0,
+        // Row 0 of each table is the `PROV_NONE` / "no allocation"
+        // placeholder, so a zeroed `Slot.prov` can never name a real object.
+        allocs: vec![crate::mem::Alloc::new(
+            0,
+            1,
+            crate::mem::AllocKind::Static,
+            0,
+        )],
+        arenas: Vec::new(),
+        arena_region: Vec::new(),
+        provs: vec![crate::mem::ProvRow {
+            target: crate::mem::MemTarget::Alloc(crate::mem::AllocId(0)),
+            tag: 0,
+        }],
+        borrows: std::collections::HashMap::new(),
+        next_tag: 0,
+        next_serial: 0,
     };
     call(prog.entry, None, Vec::new(), &mut m)?;
     loop {
@@ -284,16 +538,12 @@ pub fn run_with_host(
         match step_frame(fr, &mut m)? {
             FrameStep::Continue => {}
             FrameStep::Return(v) => {
-                m.frames.pop();
+                pop_frame(&mut m);
                 let dest = m.pending.pop().unwrap_or(None);
                 match m.frames.last() {
                     None => {
                         debug_assert!(dest.is_none());
-                        return Ok(Outcome {
-                            exit: Exit::Return,
-                            stdout: std::mem::take(&mut m.stdout),
-                            stdout_latched: m.stdout_latched,
-                        });
+                        return Ok(settle(&mut m, Exit::Return, None, None));
                     }
                     Some(_) => {
                         let caller = m.frames.len() - 1;
@@ -303,21 +553,74 @@ pub fn run_with_host(
                     }
                 }
             }
-            FrameStep::Trap(kind) => {
-                return Ok(Outcome {
-                    exit: Exit::Trap(kind),
-                    stdout: std::mem::take(&mut m.stdout),
-                    stdout_latched: m.stdout_latched,
-                });
+            FrameStep::Raise(err) => {
+                // ch01 R23a: the operand was evaluated and moved into the
+                // result BEFORE the first body ran, so by here it is a live,
+                // initialised value — `render`ing it is F3's.
+                debug_assert!(err.init && err.live);
+                // ch02 R17's error exit. Only `main` raising is modelled
+                // here: propagating an error INTO a caller is `try_br`'s
+                // job, which is F3's (design §3.6) — so a raise out of any
+                // OTHER frame is reported, not settled as if `main` had
+                // raised (that would skip the caller's own pending bodies).
+                if m.frames.len() > 1 {
+                    let func = m.prog.fns[m.frames[fr].func].name.clone();
+                    return Err(InterpError::UnhandledRaise(func));
+                }
+                let site = m
+                    .frames
+                    .last()
+                    .and_then(|f| {
+                        let decl = &m.prog.fns[f.func].decl;
+                        decl.blocks.try_row(f.block).map(|b| b.term.site)
+                    })
+                    .map(|s| m.site_of(m.frames.len() - 1, s));
+                return Ok(settle(&mut m, Exit::Raise, site, None));
+            }
+            FrameStep::Trap(kind, site) => {
+                let site = Some(m.site_of(fr, site));
+                return Ok(settle(&mut m, Exit::Trap(kind), site, None));
+            }
+            FrameStep::Ub(report) => {
+                let exit = Exit::Ub(report.class);
+                let site = Some(report.site);
+                return Ok(settle(&mut m, exit, site, Some(report)));
             }
         }
+    }
+}
+
+/// Packages the final [`Outcome`], capturing the Q7 backtrace while the
+/// frames are still alive (and only when `FORS_BACKTRACE=1`).
+fn settle(
+    m: &mut Machine<'_>,
+    exit: Exit,
+    site: Option<(u32, u32)>,
+    ub: Option<crate::ub::UbReport>,
+) -> Outcome {
+    let backtrace = match exit {
+        Exit::Return => Vec::new(),
+        _ => m.backtrace(),
+    };
+    Outcome {
+        exit,
+        stdout: std::mem::take(&mut m.stdout),
+        stdout_latched: m.stdout_latched,
+        site,
+        ub,
+        backtrace,
     }
 }
 
 enum FrameStep {
     Continue,
     Return(Slot),
-    Trap(TrapKind),
+    /// ch02 R17: the entry function left by `raise`. The slot is the error
+    /// operand, already moved into the result by step 1 of the exit
+    /// sequence; `render`ing it is F3's.
+    Raise(Slot),
+    Trap(TrapKind, fors_fmir::ids::SiteId),
+    Ub(crate::ub::UbReport),
 }
 
 fn call(
@@ -352,14 +655,28 @@ fn call(
     }
     let entry = decl.entry;
     m.pending.push(dest);
+    let serial = m.next_serial;
+    m.next_serial += 1;
     m.frames.push(Frame {
         func,
+        serial,
         vals,
         roots,
         block: entry,
         pc: 0,
+        exits: Vec::new(),
     });
     Ok(())
+}
+
+/// Pops the innermost frame and the borrow stacks of its root slots: the
+/// next call reuses the frame index, and a stack left behind would make a
+/// fresh local start life with another activation's borrow history.
+fn pop_frame(m: &mut Machine<'_>) {
+    let fr = m.frames.len() - 1;
+    m.frames.pop();
+    m.borrows
+        .retain(|k, _| !matches!(k, BorrowKey::Root { frame, .. } if *frame as usize == fr));
 }
 
 fn goto(m: &mut Machine<'_>, fr: usize, b: BlockId) -> Result<(), InterpError> {
@@ -391,22 +708,51 @@ fn step_frame(fr: usize, m: &mut Machine<'_>) -> Result<FrameStep, InterpError> 
         m.frames[fr].pc += 1;
         match exec_inst(fr, inst_id.0, inst, m) {
             Ok(()) => Ok(FrameStep::Continue),
-            Err(Fault::Trap(kind)) => Ok(FrameStep::Trap(kind)),
+            Err(Fault::Trap(kind)) => Ok(FrameStep::Trap(kind, inst.site)),
+            Err(Fault::Ub(report)) => Ok(FrameStep::Ub(report)),
             Err(Fault::Error(e)) => Err(e),
         }
     } else {
-        exec_term(fr, row.term, m)
+        match exec_term(fr, block, row.term, m) {
+            Ok(step) => Ok(step),
+            Err(Fault::Trap(kind)) => Ok(FrameStep::Trap(kind, row.term.site)),
+            Err(Fault::Ub(report)) => Ok(FrameStep::Ub(report)),
+            Err(Fault::Error(e)) => Err(e),
+        }
     }
 }
 
-fn val_operand(m: &Machine<'_>, fr: usize, inst: u32, raw: u32) -> Result<Slot, Fault> {
+fn val_operand(
+    m: &Machine<'_>,
+    fr: usize,
+    inst: u32,
+    site: fors_fmir::ids::SiteId,
+    raw: u32,
+) -> Result<Slot, Fault> {
     if raw == fors_fmir::op::NO_OPERAND {
         return Err(InterpError::TypeMismatch("missing operand".into()).into());
     }
     let v = ValId(raw);
     let s = m.slot(fr, inst, v)?;
+    if !s.live {
+        return Err(ub(
+            m,
+            fr,
+            inst,
+            site,
+            crate::ub::UbClass::UseAfterMove,
+            format!("value %{raw} was moved out of before this use"),
+        ));
+    }
     if !s.init {
-        return Err(InterpError::UninitRead(raw).into());
+        return Err(ub(
+            m,
+            fr,
+            inst,
+            site,
+            crate::ub::UbClass::UninitRead,
+            format!("value %{raw} is read before it is initialised"),
+        ));
     }
     Ok(s)
 }
@@ -460,23 +806,41 @@ fn exec_inst(fr: usize, inst: u32, inst_row: InstRow, m: &mut Machine<'_>) -> Re
                 Op::Shl(_) => "shl",
                 _ => "shr",
             };
-            let a = val_operand(m, fr, inst, inst_row.a)?;
-            let b = val_operand(m, fr, inst, inst_row.b)?;
+            let a = val_operand(m, fr, inst, inst_row.site, inst_row.a)?;
+            let b = val_operand(m, fr, inst, inst_row.site, inst_row.b)?;
             let ty = val_ty(m, fr, inst, inst_row.a)?;
             let k = m.int_kind(ty)?;
             let r = crate::arith::int_binop(name, mode, a.bits, b.bits, k).map_err(Fault::Trap)?;
+            unchecked_overflow_check(
+                m,
+                fr,
+                inst,
+                inst_row.site,
+                mode,
+                crate::arith::int_binop(name, fors_fmir::op::ArithMode::Trap, a.bits, b.bits, k),
+                name,
+            )?;
             define(dest, m, fr, Slot::val(r));
         }
         Op::Neg(mode) => {
-            let a = val_operand(m, fr, inst, inst_row.a)?;
+            let a = val_operand(m, fr, inst, inst_row.site, inst_row.a)?;
             let ty = val_ty(m, fr, inst, inst_row.a)?;
             let k = m.int_kind(ty)?;
             let r = crate::arith::int_neg(mode, a.bits, k).map_err(Fault::Trap)?;
+            unchecked_overflow_check(
+                m,
+                fr,
+                inst,
+                inst_row.site,
+                mode,
+                crate::arith::int_neg(fors_fmir::op::ArithMode::Trap, a.bits, k),
+                "neg",
+            )?;
             define(dest, m, fr, Slot::val(r));
         }
         Op::Fadd(_) | Op::Fsub(_) | Op::Fmul(_) | Op::Fdiv(_) | Op::Frem(_) => {
-            let a = val_operand(m, fr, inst, inst_row.a)?;
-            let b = val_operand(m, fr, inst, inst_row.b)?;
+            let a = val_operand(m, fr, inst, inst_row.site, inst_row.a)?;
+            let b = val_operand(m, fr, inst, inst_row.site, inst_row.b)?;
             let ty = val_ty(m, fr, inst, inst_row.a)?;
             let k = m.float_kind(ty)?;
             let af = k.from_bits(a.bits);
@@ -494,15 +858,15 @@ fn exec_inst(fr: usize, inst: u32, inst_row: InstRow, m: &mut Machine<'_>) -> Re
             define(dest, m, fr, Slot::val(r));
         }
         Op::Fneg(_) => {
-            let a = val_operand(m, fr, inst, inst_row.a)?;
+            let a = val_operand(m, fr, inst, inst_row.site, inst_row.a)?;
             let ty = val_ty(m, fr, inst, inst_row.a)?;
             let k = m.float_kind(ty)?;
             let r = crate::arith::fneg(k.from_bits(a.bits), k);
             define(dest, m, fr, Slot::val(r));
         }
         Op::Icmp(pred) => {
-            let a = val_operand(m, fr, inst, inst_row.a)?;
-            let b = val_operand(m, fr, inst, inst_row.b)?;
+            let a = val_operand(m, fr, inst, inst_row.site, inst_row.a)?;
+            let b = val_operand(m, fr, inst, inst_row.site, inst_row.b)?;
             let ty = val_ty(m, fr, inst, inst_row.a)?;
             let r = match m.num_kind(ty)? {
                 Some(NumKind::Int(k)) => crate::arith::icmp(a.bits, b.bits, k, pred),
@@ -515,16 +879,16 @@ fn exec_inst(fr: usize, inst: u32, inst_row: InstRow, m: &mut Machine<'_>) -> Re
             define(dest, m, fr, Slot::val(r as u64));
         }
         Op::Fcmp(pred) => {
-            let a = val_operand(m, fr, inst, inst_row.a)?;
-            let b = val_operand(m, fr, inst, inst_row.b)?;
+            let a = val_operand(m, fr, inst, inst_row.site, inst_row.a)?;
+            let b = val_operand(m, fr, inst, inst_row.site, inst_row.b)?;
             let ty = val_ty(m, fr, inst, inst_row.a)?;
             let k = m.float_kind(ty)?;
             let r = crate::arith::fcmp(k.from_bits(a.bits), k.from_bits(b.bits), pred);
             define(dest, m, fr, Slot::val(r as u64));
         }
         Op::And | Op::Or | Op::Xor => {
-            let a = val_operand(m, fr, inst, inst_row.a)?;
-            let b = val_operand(m, fr, inst, inst_row.b)?;
+            let a = val_operand(m, fr, inst, inst_row.site, inst_row.a)?;
+            let b = val_operand(m, fr, inst, inst_row.site, inst_row.b)?;
             let r = match op {
                 Op::And => a.bits & b.bits,
                 Op::Or => a.bits | b.bits,
@@ -533,7 +897,7 @@ fn exec_inst(fr: usize, inst: u32, inst_row: InstRow, m: &mut Machine<'_>) -> Re
             define(dest, m, fr, Slot::val(r));
         }
         Op::Not => {
-            let a = val_operand(m, fr, inst, inst_row.a)?;
+            let a = val_operand(m, fr, inst, inst_row.site, inst_row.a)?;
             let ty = val_ty(m, fr, inst, inst_row.a)?;
             // `!b` on a `bool` is logical; on an integer it is bitwise.
             let r = if is_bool(m, ty) {
@@ -544,7 +908,7 @@ fn exec_inst(fr: usize, inst: u32, inst_row: InstRow, m: &mut Machine<'_>) -> Re
             define(dest, m, fr, Slot::val(r));
         }
         Op::ConvChecked | Op::ConvWrap | Op::ConvSat | Op::ConvTrunc => {
-            let a = val_operand(m, fr, inst, inst_row.a)?;
+            let a = val_operand(m, fr, inst, inst_row.site, inst_row.a)?;
             let from_ty = val_ty(m, fr, inst, inst_row.a)?;
             let to_ty = result_ty(m, fr, inst, dest)?;
             let from = num_kind_of(m, from_ty)?;
@@ -573,7 +937,7 @@ fn exec_inst(fr: usize, inst: u32, inst_row: InstRow, m: &mut Machine<'_>) -> Re
             define(dest, m, fr, Slot::val(id));
         }
         Op::Field => {
-            let base = val_operand(m, fr, inst, inst_row.a)?;
+            let base = val_operand(m, fr, inst, inst_row.site, inst_row.a)?;
             let field = m
                 .cells
                 .get(base.bits as usize)
@@ -591,9 +955,9 @@ fn exec_inst(fr: usize, inst: u32, inst_row: InstRow, m: &mut Machine<'_>) -> Re
             // aggregate the elements live in; the result is a descriptor,
             // not a copy, so the slice keeps aliasing its source exactly
             // as a real slice does.
-            let base = val_operand(m, fr, inst, inst_row.a)?;
-            let lo = val_operand(m, fr, inst, inst_row.b)?;
-            let hi = val_operand(m, fr, inst, inst_row.c)?;
+            let base = val_operand(m, fr, inst, inst_row.site, inst_row.a)?;
+            let lo = val_operand(m, fr, inst, inst_row.site, inst_row.b)?;
+            let hi = val_operand(m, fr, inst, inst_row.site, inst_row.c)?;
             let base_len = m
                 .cells
                 .get(base.bits as usize)
@@ -716,16 +1080,292 @@ fn exec_inst(fr: usize, inst: u32, inst_row: InstRow, m: &mut Machine<'_>) -> Re
             };
             exec_intrinsic(fr, dest, &name, args, m)?;
         }
-        Op::CopyFrom | Op::MoveFrom | Op::Borrow | Op::BorrowMut | Op::BorrowOut => {
-            // F1 place read: conventions need I8's flow data (D6), so every
-            // read shares the current value (aggregates are
-            // reference-shared; see `fors-lower`'s module docs).
-            let s = read_place(m, fr, inst, inst_row.a)?;
+        Op::CopyFrom => {
+            // F1 place read: conventions need I8's flow data (D6), so a copy
+            // shares the current value (aggregates are reference-shared; see
+            // `fors-lower`'s module docs).
+            let s = read_place(m, fr, inst, inst_row.site, inst_row.a)?;
             define(dest, m, fr, s);
         }
+        Op::MoveFrom => {
+            // design §5.2's first row: `move_from` clears the source place's
+            // `live` bit, so a later read is `ub: use-after-move` — "a
+            // compiler bug if it reaches here: the checker's ch01 R4a(a)
+            // should have caught it".
+            let s = read_place(m, fr, inst, inst_row.site, inst_row.a)?;
+            let (root, segs, _) = place_shape(m, fr, inst_row.a)?;
+            if segs.is_empty()
+                && let Some(slot) = m.frames[fr].roots.get_mut(root as usize)
+            {
+                *slot = slot.moved_out();
+            }
+            define(dest, m, fr, s);
+        }
+        Op::Borrow | Op::BorrowMut | Op::BorrowOut => {
+            // design §3.3: these PRODUCE a pointer, they do not read. The
+            // borrow stack is pushed here (E14's two item kinds) and the
+            // result carries the new tag as its provenance.
+            let (root, segs, _) = place_shape(m, fr, inst_row.a)?;
+            if !segs.is_empty() {
+                return Err(InterpError::TypeMismatch(
+                    "a borrow of a projected place needs sub-range borrow stacks (F7/M2)".into(),
+                )
+                .into());
+            }
+            let key = BorrowKey::Root {
+                frame: fr as u32,
+                root,
+            };
+            let tag = m.fresh_tag();
+            if op == Op::Borrow {
+                m.borrow_stack(key).push_shared(tag);
+            } else {
+                m.borrow_stack(key).push_unique(tag);
+            }
+            if op == Op::BorrowOut {
+                // `&out x` targets an UNINITIALISED slot (design §3.3): the
+                // callee must write it, and a read before that write is
+                // §5.2's "Uninitialised read (incl. through `&out`)".
+                let roots = &mut m.frames[fr].roots;
+                if (root as usize) >= roots.len() {
+                    roots.resize(root as usize + 1, Slot::uninit());
+                }
+                roots[root as usize] = Slot::uninit();
+            }
+            let serial = m.frames[fr].serial;
+            let prov = m.push_prov(
+                crate::mem::MemTarget::Root {
+                    frame: fr as u32,
+                    serial,
+                    root,
+                },
+                tag,
+            );
+            define(dest, m, fr, Slot::ptr(0, prov));
+        }
         Op::Init => {
-            let v = val_operand(m, fr, inst, inst_row.b)?;
-            write_place(m, fr, inst, inst_row.a, v)?;
+            let v = val_operand(m, fr, inst, inst_row.site, inst_row.b)?;
+            write_place(m, fr, inst, inst_row.site, inst_row.a, v)?;
+        }
+        Op::Alloc => {
+            // `@alloc` (ch01 R18). The allocator's IDENTITY is the brand of
+            // the block's scope — `with allocator x: Alloc { ... }` is what
+            // introduces one (R15) — so the allocation records who made it
+            // and `free` can compare.
+            let size = val_operand(m, fr, inst, inst_row.site, inst_row.a)?.bits as u32;
+            let align = val_operand(m, fr, inst, inst_row.site, inst_row.b)?.bits as u32;
+            let block = m.frames[fr].block;
+            let owner = m.allocator_at(fr, block);
+            let id = m.allocs.len() as u32;
+            m.allocs.push(crate::mem::Alloc::new(
+                size,
+                align.max(1),
+                crate::mem::AllocKind::Heap(owner),
+                0,
+            ));
+            let tag = m.fresh_tag();
+            m.borrows
+                .insert(BorrowKey::Alloc(id), crate::ub::BorrowStack::rooted(tag));
+            let prov = m.push_prov(crate::mem::MemTarget::Alloc(crate::mem::AllocId(id)), tag);
+            define(dest, m, fr, Slot::ptr(0, prov));
+        }
+        Op::Free => {
+            // design §5.2's two heap rows at once: freeing something already
+            // freed is `ub: use-after-free`, and freeing with the WRONG
+            // allocator is `ub: allocator-mismatch` (ch01 R18 makes the
+            // *typed* case a compile error; this catches the erased case).
+            let ptr = val_operand(m, fr, inst, inst_row.site, inst_row.a)?;
+            let prov = m.prov_of(ptr)?;
+            let crate::mem::MemTarget::Alloc(id) = prov.target else {
+                return Err(ub(
+                    m,
+                    fr,
+                    inst,
+                    inst_row.site,
+                    crate::ub::UbClass::AllocatorMismatch,
+                    "`free` of a pointer that no allocator produced".to_string(),
+                ));
+            };
+            check_alloc_live(m, fr, inst, inst_row.site, id.0)?;
+            let block = m.frames[fr].block;
+            let freeing = m.allocator_at(fr, block);
+            let owner = m.allocs[id.0 as usize].kind;
+            match owner {
+                crate::mem::AllocKind::Heap(o) if o == freeing => {}
+                _ => {
+                    return Err(ub(
+                        m,
+                        fr,
+                        inst,
+                        inst_row.site,
+                        crate::ub::UbClass::AllocatorMismatch,
+                        format!(
+                            "allocation {} was produced by {owner:?} but is freed by allocator \
+                             brand {}",
+                            id.0, freeing.0
+                        ),
+                    ));
+                }
+            }
+            m.allocs[id.0 as usize].state = crate::mem::AllocState::Freed(inst_row.site);
+            define(dest, m, fr, Slot::unit());
+        }
+        Op::RegionEnter => {
+            // `with arena x: Arena[T] { ... }` (ch01 R15): the block's own
+            // fresh brand becomes one live `ArenaVal` (R15a: no constructor,
+            // at most one live value per brand per block instance).
+            let region = fors_fmir::ids::RegionId(inst_row.a);
+            let kind = {
+                let decl = &m.func(m.frames[fr].func).decl;
+                if region.index() >= decl.regions.len() {
+                    None
+                } else {
+                    Some(decl.regions.row(region).kind)
+                }
+            };
+            match kind {
+                Some(fors_fmir::region::RegionKind::WithArena) => {
+                    let arena = crate::mem::ArenaId(m.arenas.len() as u32);
+                    let data = m.allocs.len() as u32;
+                    m.allocs.push(crate::mem::Alloc::new(
+                        0,
+                        16,
+                        crate::mem::AllocKind::Arena(arena),
+                        0,
+                    ));
+                    let tag = m.fresh_tag();
+                    m.borrows
+                        .insert(BorrowKey::Alloc(data), crate::ub::BorrowStack::rooted(tag));
+                    m.arenas.push(crate::mem::ArenaVal::new(
+                        arena,
+                        crate::mem::AllocId(data),
+                        u64::MAX,
+                    ));
+                    m.arena_region.push(region);
+                    let prov = m.push_prov(
+                        crate::mem::MemTarget::Arena {
+                            arena,
+                            data: crate::mem::AllocId(data),
+                        },
+                        tag,
+                    );
+                    // The arena HANDLE carries no generation: ch01 R15a
+                    // keeps it alive across its own `reset`s, and §3.7 puts
+                    // the generation on the `Ref`, not on the arena value.
+                    define(dest, m, fr, Slot::ptr(0, prov));
+                }
+                // M1 runs a `spawn`/`parallel` region inline, which IS the
+                // serial elision (design §1.2).
+                Some(_) => define(dest, m, fr, Slot::unit()),
+                None => {
+                    return Err(InterpError::TypeMismatch(
+                        "region_enter names no region row".into(),
+                    )
+                    .into());
+                }
+            }
+        }
+        Op::RegionExit => {
+            // Leaving a `with arena` block retires the arena: every `Ref`
+            // minted inside it is now stale, which ch01 R17 makes a program
+            // `trap arena-generation` on the next dereference.
+            let region = fors_fmir::ids::RegionId(inst_row.a);
+            let is_arena = {
+                let decl = &m.func(m.frames[fr].func).decl;
+                region.index() < decl.regions.len()
+                    && decl.regions.row(region).kind == fors_fmir::region::RegionKind::WithArena
+            };
+            if is_arena {
+                // The newest LIVE arena of THIS region (regions nest, so
+                // `arenas.last()` may be an inner region's). None live is a
+                // `region_exit` with no matching `region_enter`: malformed.
+                let live = m.arenas.iter().zip(&m.arena_region).rposition(|(a, r)| {
+                    *r == region
+                        && m.allocs[a.data.0 as usize].state == crate::mem::AllocState::Live
+                });
+                let Some(i) = live else {
+                    return Err(InterpError::TypeMismatch(format!(
+                        "region_exit of arena region {} with no live arena entered by it",
+                        region.0
+                    ))
+                    .into());
+                };
+                let data = m.arenas[i].data;
+                m.allocs[data.0 as usize].state = crate::mem::AllocState::Reset(inst_row.site);
+            }
+            define(dest, m, fr, Slot::unit());
+        }
+        Op::ArenaAlloc => {
+            let arena_slot = val_operand(m, fr, inst, inst_row.site, inst_row.a)?;
+            let size = val_operand(m, fr, inst, inst_row.site, inst_row.b)?.bits as u32;
+            let prov = m.prov_of(arena_slot)?;
+            let crate::mem::MemTarget::Arena { arena, data } = prov.target else {
+                return Err(
+                    InterpError::TypeMismatch("arena_alloc on a non-arena value".into()).into(),
+                );
+            };
+            check_arena_live(m, data.0)?;
+            let a = m.arenas[arena.0 as usize];
+            // design §3.7 packs the offset into a `u32`; an arena past that
+            // is a representation limit, reported rather than truncated
+            // (a wrapped `off` would alias an earlier allocation).
+            let end = a.bump + u64::from(size);
+            let Ok(end32) = u32::try_from(end) else {
+                return Err(InterpError::Unrepresentable(format!(
+                    "arena {} would reach offset {end}, past the u32 a `RefVal` offset holds",
+                    arena.0
+                ))
+                .into());
+            };
+            let off = end32 - size;
+            m.arenas[arena.0 as usize].bump = end;
+            m.allocs[data.0 as usize].grow_to(end32);
+            // Every `Ref` into one arena shares the arena's own borrow tag:
+            // at this crate's whole-object granularity (see `ub.rs`'s
+            // `BorrowStack` decision) two bump allocations are disjoint
+            // SUB-RANGES of one object, and minting a unique tag per `Ref`
+            // would make the second one pop the first.
+            let tag = prov.tag;
+            let prov = m.push_prov(crate::mem::MemTarget::Arena { arena, data }, tag);
+            // design §3.7's `RefVal { arena, generation, off }`: the generation is
+            // captured HERE, which is what a later `reset` invalidates.
+            define(
+                dest,
+                m,
+                fr,
+                Slot::ptr(crate::mem::RefVal::pack(a.generation, off), prov),
+            );
+        }
+        Op::ArenaDeref => {
+            // ch01 R17: generation-checked in EVERY build mode. There is no
+            // `may_elide` bit on this instruction and no representation in
+            // which the check could be dropped (design §3.7).
+            let r = val_operand(m, fr, inst, inst_row.site, inst_row.a)?;
+            let d = resolve_deref(m, fr, inst, inst_row.site, r)?;
+            let alloc = d
+                .alloc
+                .ok_or_else(|| InterpError::TypeMismatch("arena_deref on a local".into()))?;
+            let prov = m.push_prov(
+                crate::mem::MemTarget::Alloc(crate::mem::AllocId(alloc)),
+                d.tag,
+            );
+            define(dest, m, fr, Slot::ptr(u64::from(d.off), prov));
+        }
+        Op::ArenaReset => {
+            let arena_slot = val_operand(m, fr, inst, inst_row.site, inst_row.a)?;
+            let prov = m.prov_of(arena_slot)?;
+            let crate::mem::MemTarget::Arena { arena, data } = prov.target else {
+                return Err(
+                    InterpError::TypeMismatch("arena_reset on a non-arena value".into()).into(),
+                );
+            };
+            check_arena_live(m, data.0)?;
+            // [HOLE-2] / E9: the bump goes through `next_generation`, which
+            // TRAPS at `u32::MAX` rather than wrapping onto a generation a
+            // stale `Ref` still carries.
+            m.arenas[arena.0 as usize].reset().map_err(Fault::Trap)?;
+            m.allocs[data.0 as usize].forget();
+            define(dest, m, fr, Slot::unit());
         }
         Op::CheckPre(policy) | Op::CheckPost(policy) | Op::CheckInv(policy) => {
             // Lowering never emits these in F1 (contracts are F2), but the
@@ -736,7 +1376,7 @@ fn exec_inst(fr: usize, inst: u32, inst_row: InstRow, m: &mut Machine<'_>) -> Re
                 fors_fmir::op::Policy::Off => false,
             };
             if active {
-                let c = val_operand(m, fr, inst, inst_row.a)?;
+                let c = val_operand(m, fr, inst, inst_row.site, inst_row.a)?;
                 if c.bits == 0 {
                     return Err(Fault::Trap(TrapKind::Contract));
                 }
@@ -744,6 +1384,40 @@ fn exec_inst(fr: usize, inst: u32, inst_row: InstRow, m: &mut Machine<'_>) -> Re
             define(dest, m, fr, Slot::unit());
         }
         _ => return Err(InterpError::UnsupportedOp(op.discriminant()).into()),
+    }
+    Ok(())
+}
+
+/// design §5.5: "`unchecked_*` is wrapping **plus** a Miri-mode
+/// `ub: unchecked-overflow` diagnostic when the true result is out of range
+/// (ch03 R4 puts it behind `@unsafe(invariant:)`, so violating the invariant
+/// is exactly a UB report, not a trap)."
+///
+/// `trapping` is what the SAME operation would have answered in `Trap` mode;
+/// only `TrapKind::Overflow` means "out of range" (a zero divisor and a
+/// too-wide shift are different conditions, and ch03 R4's invariant is about
+/// representability).
+fn unchecked_overflow_check(
+    m: &Machine<'_>,
+    fr: usize,
+    inst: u32,
+    site: fors_fmir::ids::SiteId,
+    mode: fors_fmir::op::ArithMode,
+    trapping: Result<u64, TrapKind>,
+    name: &str,
+) -> Result<(), Fault> {
+    if mode != fors_fmir::op::ArithMode::Unchecked {
+        return Ok(());
+    }
+    if trapping == Err(TrapKind::Overflow) {
+        return Err(ub(
+            m,
+            fr,
+            inst,
+            site,
+            crate::ub::UbClass::UncheckedOverflow,
+            format!("`unchecked_{name}`'s true result is out of the type's range"),
+        ));
     }
     Ok(())
 }
@@ -834,32 +1508,61 @@ fn decl_intrinsic_name(m: &Machine<'_>, fr: usize, sym: u32) -> Result<String, I
         .ok_or_else(|| InterpError::UnknownIntrinsic(format!("symbol {sym}")))
 }
 
-/// Resolves a `PlaceId` operand to its `(root, segs)`. Bounds-checked: a
-/// dangling place is a diagnostic, never a panic.
+/// Resolves a `PlaceId` operand to its `(root, segs, ty)`. Bounds-checked: a
+/// dangling place is a diagnostic, never a panic. The type is what a
+/// `[Deref]` read or write needs to know how many bytes it touches.
 fn place_shape(
     m: &Machine<'_>,
     fr: usize,
     raw: u32,
-) -> Result<(u32, Vec<fors_fmir::place::Seg>), InterpError> {
+) -> Result<(u32, Vec<fors_fmir::place::Seg>, fors_fir::ty::TyId), InterpError> {
     let decl = &m.func(m.frames[fr].func).decl;
     if (raw as usize) >= decl.places.len() {
         return Err(InterpError::TypeMismatch("dangling place".into()));
     }
     let pid = fors_fmir::ids::PlaceId(raw);
     let row = decl.places.row(pid);
-    Ok((row.root, decl.places.segs(pid).to_vec()))
+    Ok((row.root, decl.places.segs(pid).to_vec(), row.ty))
 }
 
-fn root_slot(m: &Machine<'_>, fr: usize, _inst: u32, root: u32) -> Result<Slot, InterpError> {
-    // A slot that was never `init`-ed reads as uninitialised — whether it
-    // was declared and skipped, or never declared at all. Both are clean
-    // `UninitRead` diagnostics, never panics.
-    m.frames[fr]
+/// Reads a frame-local root slot, with design §5.2's two Miri bits checked
+/// in order: a DEAD slot (moved out of, or dropped at a scope exit) is
+/// `ub: use-after-move`; a live but UNINITIALISED one is `ub: uninit-read`.
+fn root_slot(
+    m: &Machine<'_>,
+    fr: usize,
+    inst: u32,
+    site: fors_fmir::ids::SiteId,
+    root: u32,
+) -> Result<Slot, Fault> {
+    // A root that was never declared reads exactly like one that was
+    // declared and never written: uninitialised, and a clean report.
+    let s = m.frames[fr]
         .roots
         .get(root as usize)
         .copied()
-        .filter(|s| s.init)
-        .ok_or(InterpError::UninitRead(root))
+        .unwrap_or_else(Slot::uninit);
+    if !s.live {
+        return Err(ub(
+            m,
+            fr,
+            inst,
+            site,
+            crate::ub::UbClass::UseAfterMove,
+            format!("local slot {root} was moved out of (or dropped) before this read"),
+        ));
+    }
+    if !s.init {
+        return Err(ub(
+            m,
+            fr,
+            inst,
+            site,
+            crate::ub::UbClass::UninitRead,
+            format!("local slot {root} is read before it is initialised"),
+        ));
+    }
+    Ok(s)
 }
 
 /// Resolves a `Seg::Index` segment's runtime index, bounds-checked against
@@ -869,10 +1572,11 @@ fn index_in_bounds(
     m: &Machine<'_>,
     fr: usize,
     inst: u32,
+    site: fors_fmir::ids::SiteId,
     idx: ValId,
     len: usize,
 ) -> Result<usize, Fault> {
-    let idx_slot = val_operand(m, fr, inst, idx.0)?;
+    let idx_slot = val_operand(m, fr, inst, site, idx.0)?;
     let i = idx_slot.bits as usize;
     if i >= len {
         return Err(Fault::Trap(TrapKind::Bounds));
@@ -880,16 +1584,183 @@ fn index_in_bounds(
     Ok(i)
 }
 
+/// The byte width of a scalar type, for a read or write THROUGH a pointer
+/// into an [`crate::mem::Alloc`] (design §5.1's byte-granular `init` map).
+///
+/// [decision: pointer traffic is scalar-only in F6. An aggregate read
+/// through a pointer needs a byte LAYOUT, which is D12 / **[HOLE-6]** — no
+/// chapter defines the algorithm yet (owner Q1). Every §5.2 detection the F6
+/// gate names (`use-after-free`, `uninit-read` through `&out`,
+/// `allocator-mismatch`, the arena generation trap) is reachable with scalar
+/// traffic, so F6 detects them all without pre-empting Q1.]
+fn scalar_width(m: &Machine<'_>, ty: fors_fir::ty::TyId) -> Result<u32, InterpError> {
+    let bare = m.tys.unqual(ty);
+    if m.tys.tag(bare) != TyTag::Prim {
+        return Err(InterpError::TypeMismatch(
+            "a non-scalar read through a pointer needs D12's layout ([HOLE-6])".into(),
+        ));
+    }
+    let p = PrimKind::from_u8(m.tys.a(bare) as u8)
+        .ok_or_else(|| InterpError::TypeMismatch("bad PrimKind".into()))?;
+    Ok(match p {
+        PrimKind::Bool | PrimKind::I8 | PrimKind::U8 => 1,
+        PrimKind::I16 | PrimKind::U16 => 2,
+        PrimKind::I32 | PrimKind::U32 | PrimKind::F32 => 4,
+        // `isize`/`usize`/`rawptr` are "the target pointer" width (ch09 R3),
+        // which comes from the explicit `Config`, never from the host.
+        PrimKind::Isize | PrimKind::Usize | PrimKind::RawPtr => {
+            u32::from(m.prog.config.ptr_bits) / 8
+        }
+        _ => 8,
+    })
+}
+
+/// Everything a dereference needs: which object, at which offset, through
+/// which borrow tag. Resolving it is where the arena generation check
+/// (ch01 R17 — a program TRAP) and the freed-allocation check (design §5.2 —
+/// a `ub:` report) both live.
+struct Deref {
+    key: BorrowKey,
+    alloc: Option<u32>,
+    off: u32,
+    tag: u32,
+}
+
+fn resolve_deref(
+    m: &Machine<'_>,
+    fr: usize,
+    inst: u32,
+    site: fors_fmir::ids::SiteId,
+    ptr: Slot,
+) -> Result<Deref, Fault> {
+    let prov = m.prov_of(ptr)?;
+    match prov.target {
+        crate::mem::MemTarget::Root {
+            frame,
+            serial,
+            root,
+        } => {
+            // design §5.2's "use of a freed allocation", on a stack slot: the
+            // frame this pointer names has returned (its index may already
+            // hold another activation, hence the serial, not the index).
+            let alive = m
+                .frames
+                .get(frame as usize)
+                .is_some_and(|f| f.serial == serial);
+            if !alive {
+                return Err(ub(
+                    m,
+                    fr,
+                    inst,
+                    site,
+                    crate::ub::UbClass::UseAfterFree,
+                    format!(
+                        "a pointer to local slot {root} of a frame that has returned \
+                         (activation {serial})"
+                    ),
+                ));
+            }
+            Ok(Deref {
+                key: BorrowKey::Root { frame, root },
+                alloc: None,
+                off: 0,
+                tag: prov.tag,
+            })
+        }
+        crate::mem::MemTarget::Alloc(id) => {
+            check_alloc_live(m, fr, inst, site, id.0)?;
+            Ok(Deref {
+                key: BorrowKey::Alloc(id.0),
+                alloc: Some(id.0),
+                off: ptr.bits as u32,
+                tag: prov.tag,
+            })
+        }
+        crate::mem::MemTarget::Arena { arena, data } => {
+            // ch01 R17: "every `Ref` dereference MUST be generation-checked
+            // in every build mode, never elided by optimization level" — and
+            // design §5.2 makes the mismatch a program `trap`, not a `ub:`.
+            let (generation, off) = crate::mem::RefVal::unpack(ptr.bits);
+            let live = m
+                .arenas
+                .get(arena.0 as usize)
+                .ok_or_else(|| InterpError::TypeMismatch("dangling arena".into()))?;
+            if live.generation != generation {
+                return Err(Fault::Trap(TrapKind::ArenaGeneration));
+            }
+            if !matches!(
+                m.allocs.get(data.0 as usize).map(|a| a.state),
+                Some(crate::mem::AllocState::Live)
+            ) {
+                return Err(Fault::Trap(TrapKind::ArenaGeneration));
+            }
+            Ok(Deref {
+                key: BorrowKey::Alloc(data.0),
+                alloc: Some(data.0),
+                off,
+                tag: prov.tag,
+            })
+        }
+    }
+}
+
+/// design §5.2: "Use of a freed or reset allocation -> `ub: use-after-free`
+/// (heap)". The arena half is handled in [`resolve_deref`], where ch01 R17
+/// makes it a trap instead.
+fn check_alloc_live(
+    m: &Machine<'_>,
+    fr: usize,
+    inst: u32,
+    site: fors_fmir::ids::SiteId,
+    id: u32,
+) -> Result<(), Fault> {
+    match m.allocs.get(id as usize).map(|a| a.state) {
+        Some(crate::mem::AllocState::Live) => Ok(()),
+        Some(crate::mem::AllocState::Freed(_)) => Err(ub(
+            m,
+            fr,
+            inst,
+            site,
+            crate::ub::UbClass::UseAfterFree,
+            format!("allocation {id} was freed before this access"),
+        )),
+        // `Reset` is set only by `region_exit` on an ARENA's backing object,
+        // and §5.2's row sends the arena case to ch01 R17's program trap.
+        Some(crate::mem::AllocState::Reset(_)) => Err(Fault::Trap(TrapKind::ArenaGeneration)),
+        None => Err(InterpError::TypeMismatch("dangling allocation".into()).into()),
+    }
+}
+
+/// The arena half of the same row: "Use of a freed or reset allocation ->
+/// ... **`trap arena-generation`** (arena, because ch01 R17 makes it a
+/// program trap)". An `arena_alloc`/`arena_reset` through a handle whose
+/// `with arena` block has ended is such a use; [`resolve_deref`] gives a
+/// stale `Ref` the same answer.
+fn check_arena_live(m: &Machine<'_>, data: u32) -> Result<(), Fault> {
+    match m.allocs.get(data as usize).map(|a| a.state) {
+        Some(crate::mem::AllocState::Live) => Ok(()),
+        Some(_) => Err(Fault::Trap(TrapKind::ArenaGeneration)),
+        None => Err(InterpError::TypeMismatch("dangling arena allocation".into()).into()),
+    }
+}
+
 /// Reads a place: `[]` is the local slot itself, `[Field(i)]` is one cell
 /// of the aggregate the slot names, `[Index(v)]` is the same cell array
-/// read at a RUNTIME index (bounds-checked). Deeper paths are a lowering
-/// bug (lowering only ever emits these shapes through F2).
-fn read_place(m: &mut Machine<'_>, fr: usize, inst: u32, raw: u32) -> Result<Slot, Fault> {
-    let (root, segs) = place_shape(m, fr, raw)?;
-    let base = root_slot(m, fr, inst, root)?;
-    if !base.init {
-        return Err(InterpError::UninitRead(root).into());
+/// read at a RUNTIME index (bounds-checked), and `[Deref]` follows an
+/// `Own`/`Ref` into an allocation object (design §3.3, §5.1). Deeper paths
+/// are a lowering bug.
+fn read_place(
+    m: &mut Machine<'_>,
+    fr: usize,
+    inst: u32,
+    site: fors_fmir::ids::SiteId,
+    raw: u32,
+) -> Result<Slot, Fault> {
+    let (root, segs, ty) = place_shape(m, fr, raw)?;
+    if let [fors_fmir::place::Seg::Deref] = segs.as_slice() {
+        return read_through(m, fr, inst, site, root, ty);
     }
+    let base = root_slot(m, fr, inst, site, root)?;
     match segs.as_slice() {
         [] => Ok(base),
         [fors_fmir::place::Seg::Field(i)] => {
@@ -907,16 +1778,130 @@ fn read_place(m: &mut Machine<'_>, fr: usize, inst: u32, raw: u32) -> Result<Slo
                 InterpError::TypeMismatch("place base is not an aggregate".into())
             })?;
             let len = cell.slots.len();
-            let i = index_in_bounds(m, fr, inst, idx, len)?;
+            let i = index_in_bounds(m, fr, inst, site, idx, len)?;
             Ok(m.cells[base.bits as usize].slots[i])
         }
         _ => Err(InterpError::TypeMismatch("place path outside the F1/F2 shapes".into()).into()),
     }
 }
 
-/// Writes a place (same shapes as [`read_place`]).
-fn write_place(m: &mut Machine<'_>, fr: usize, inst: u32, raw: u32, v: Slot) -> Result<(), Fault> {
-    let (root, segs) = place_shape(m, fr, raw)?;
+/// `*p` where `p` is the root's pointer value: the borrow-stack access, the
+/// liveness check and the byte-granular init check (design §5.1, §5.2).
+fn read_through(
+    m: &mut Machine<'_>,
+    fr: usize,
+    inst: u32,
+    site: fors_fmir::ids::SiteId,
+    root: u32,
+    ty: fors_fir::ty::TyId,
+) -> Result<Slot, Fault> {
+    let ptr = root_slot(m, fr, inst, site, root)?;
+    let d = resolve_deref(m, fr, inst, site, ptr)?;
+    if m.borrow_access(d.key, d.tag, crate::ub::Access::Read)
+        .is_err()
+    {
+        return Err(ub(
+            m,
+            fr,
+            inst,
+            site,
+            crate::ub::UbClass::Aliasing,
+            format!("a read through a borrow of local slot {root} that is no longer live"),
+        ));
+    }
+    match d.alloc {
+        // A pointer straight at a frame-local root: the value IS the slot.
+        // `resolve_deref` has checked the frame is the live activation.
+        None => {
+            let crate::mem::MemTarget::Root { frame, root: r, .. } = m.prov_of(ptr)?.target else {
+                unreachable!("`alloc == None` is exactly the Root target")
+            };
+            let s = m
+                .frames
+                .get(frame as usize)
+                .and_then(|f| f.roots.get(r as usize))
+                .copied()
+                .unwrap_or_else(Slot::uninit);
+            if !s.live {
+                return Err(ub(
+                    m,
+                    fr,
+                    inst,
+                    site,
+                    crate::ub::UbClass::UseAfterMove,
+                    format!("a read through a pointer to local slot {r}, which was moved out of"),
+                ));
+            }
+            if !s.init {
+                // design §5.2's "Uninitialised read (incl. through `&out`)".
+                return Err(ub(
+                    m,
+                    fr,
+                    inst,
+                    site,
+                    crate::ub::UbClass::UninitRead,
+                    format!("a read through a pointer to local slot {r}, which is uninitialised"),
+                ));
+            }
+            Ok(s)
+        }
+        Some(id) => {
+            let width = scalar_width(m, ty)?;
+            let alloc = &m.allocs[id as usize];
+            if d.off.saturating_add(width) > alloc.size() {
+                return Err(Fault::Trap(TrapKind::Bounds));
+            }
+            if !alloc.init.all_set(d.off, width) {
+                return Err(ub(
+                    m,
+                    fr,
+                    inst,
+                    site,
+                    crate::ub::UbClass::UninitRead,
+                    format!(
+                        "a read of {width} bytes at offset {} of allocation {id}, which are \
+                         uninitialised",
+                        d.off
+                    ),
+                ));
+            }
+            let mut bits = 0u64;
+            for i in 0..width {
+                bits |= (alloc.bytes[(d.off + i) as usize] as u64) << (8 * i);
+            }
+            let prov = alloc
+                .prov
+                .get(&d.off)
+                .copied()
+                .unwrap_or(crate::mem::PROV_NONE);
+            Ok(Slot::ptr(bits, prov))
+        }
+    }
+}
+
+/// Writes a place (same shapes as [`read_place`], plus `[Deref]`).
+fn write_place(
+    m: &mut Machine<'_>,
+    fr: usize,
+    inst: u32,
+    site: fors_fmir::ids::SiteId,
+    raw: u32,
+    v: Slot,
+) -> Result<(), Fault> {
+    let (root, segs, ty) = place_shape(m, fr, raw)?;
+    if !matches!(segs.as_slice(), [fors_fmir::place::Seg::Deref]) {
+        // A write to the binding ITSELF (or, at this crate's whole-object
+        // granularity, to one of its fields or elements) goes through the
+        // root's own tag and pops every borrow above it (design §5.2: "only
+        // a write or a new unique tag pops") — so an outstanding `let`
+        // borrow of `x` is invalid once `x` is assigned. The root tag is
+        // unrestricted, so this cannot fail; it only pops.
+        let key = BorrowKey::Root {
+            frame: fr as u32,
+            root,
+        };
+        let _ = m.borrow_access(key, ROOT_TAG, crate::ub::Access::Write);
+    }
     match segs.as_slice() {
         [] => {
             let roots = &mut m.frames[fr].roots;
@@ -927,11 +1912,9 @@ fn write_place(m: &mut Machine<'_>, fr: usize, inst: u32, raw: u32, v: Slot) -> 
             roots[i] = v;
             Ok(())
         }
+        [fors_fmir::place::Seg::Deref] => write_through(m, fr, inst, site, root, ty, v),
         [fors_fmir::place::Seg::Field(i)] => {
-            let base = root_slot(m, fr, inst, root)?;
-            if !base.init {
-                return Err(InterpError::UninitRead(root).into());
-            }
+            let base = root_slot(m, fr, inst, site, root)?;
             let cell = m.cells.get_mut(base.bits as usize).ok_or_else(|| {
                 InterpError::TypeMismatch("place base is not an aggregate".into())
             })?;
@@ -944,21 +1927,81 @@ fn write_place(m: &mut Machine<'_>, fr: usize, inst: u32, raw: u32, v: Slot) -> 
         }
         [fors_fmir::place::Seg::Index(idx)] => {
             let idx = *idx;
-            let base = root_slot(m, fr, inst, root)?;
-            if !base.init {
-                return Err(InterpError::UninitRead(root).into());
-            }
+            let base = root_slot(m, fr, inst, site, root)?;
             let len = m
                 .cells
                 .get(base.bits as usize)
                 .ok_or_else(|| InterpError::TypeMismatch("place base is not an aggregate".into()))?
                 .slots
                 .len();
-            let i = index_in_bounds(m, fr, inst, idx, len)?;
+            let i = index_in_bounds(m, fr, inst, site, idx, len)?;
             m.cells[base.bits as usize].slots[i] = v;
             Ok(())
         }
         _ => Err(InterpError::TypeMismatch("place path outside the F1/F2 shapes".into()).into()),
+    }
+}
+
+/// `*p = v`: the write half of [`read_through`]. A write is what pops a
+/// borrow stack (design §5.2), and it is what turns an `&out` target from
+/// uninitialised into initialised.
+fn write_through(
+    m: &mut Machine<'_>,
+    fr: usize,
+    inst: u32,
+    site: fors_fmir::ids::SiteId,
+    root: u32,
+    ty: fors_fir::ty::TyId,
+    v: Slot,
+) -> Result<(), Fault> {
+    let ptr = root_slot(m, fr, inst, site, root)?;
+    let d = resolve_deref(m, fr, inst, site, ptr)?;
+    if m.borrow_access(d.key, d.tag, crate::ub::Access::Write)
+        .is_err()
+    {
+        return Err(ub(
+            m,
+            fr,
+            inst,
+            site,
+            crate::ub::UbClass::Aliasing,
+            format!("a write through a borrow of local slot {root} that does not permit it"),
+        ));
+    }
+    match d.alloc {
+        None => {
+            let crate::mem::MemTarget::Root { frame, root: r, .. } = m.prov_of(ptr)?.target else {
+                unreachable!("`alloc == None` is exactly the Root target")
+            };
+            // `resolve_deref` has checked the frame is the live activation.
+            let Some(f) = m.frames.get_mut(frame as usize) else {
+                return Err(InterpError::TypeMismatch("dangling frame".into()).into());
+            };
+            let roots = &mut f.roots;
+            let i = r as usize;
+            if i >= roots.len() {
+                roots.resize(i + 1, Slot::uninit());
+            }
+            roots[i] = v;
+            Ok(())
+        }
+        Some(id) => {
+            let width = scalar_width(m, ty)?;
+            let alloc = &mut m.allocs[id as usize];
+            if d.off.saturating_add(width) > alloc.size() {
+                return Err(Fault::Trap(TrapKind::Bounds));
+            }
+            for i in 0..width {
+                alloc.bytes[(d.off + i) as usize] = (v.bits >> (8 * i)) as u8;
+            }
+            alloc.init.set_range(d.off, width, true);
+            if v.prov == crate::mem::PROV_NONE {
+                alloc.prov.remove(&d.off);
+            } else {
+                alloc.prov.insert(d.off, v.prov);
+            }
+            Ok(())
+        }
     }
 }
 
@@ -998,38 +2041,264 @@ fn exec_intrinsic(
     }
 }
 
-fn exec_term(fr: usize, term: InstRow, m: &mut Machine<'_>) -> Result<FrameStep, InterpError> {
+/// A terminator. Every control transfer out of a block first asks whether
+/// this `(from, to)` pair is a SCOPE EXIT (`DeclFmir::exits`); if it is, the
+/// four steps of `type-checker.md` §13 I8b run before the transfer.
+///
+/// `trap` is the one terminator that asks nothing: ch01 R23f, R22d and ch02
+/// R7 make a trap *not an exit* — it has no successor, runs no deferred
+/// body and discharges nothing. `verify()` rejects an exit edge on a
+/// `trap`-terminated block, and this arm never looks for one.
+fn exec_term(
+    fr: usize,
+    block: BlockId,
+    term: InstRow,
+    m: &mut Machine<'_>,
+) -> Result<FrameStep, Fault> {
     match term.op {
         Op::Br => {
-            goto(m, fr, BlockId(term.a))?;
-            Ok(FrameStep::Continue)
+            let to = BlockId(term.a);
+            // The jump BACK out of a deferred body (ch01 R23a's "emit one
+            // copy and jump to it"): resume the exit sequence.
+            if to == fors_fmir::scope::BODY_END {
+                return advance_exit(fr, m);
+            }
+            begin_exit_or_goto(fr, block, to, None, false, m)
         }
         Op::CondBr => {
-            let c = m.slot(fr, u32::MAX, ValId(term.a))?;
-            if !c.init {
-                return Err(InterpError::UninitRead(term.a));
-            }
-            goto(m, fr, BlockId(if c.bits != 0 { term.b } else { term.c }))?;
-            Ok(FrameStep::Continue)
+            let c = read_terminator_operand(m, fr, term.site, term.a)?;
+            let to = BlockId(if c.bits != 0 { term.b } else { term.c });
+            begin_exit_or_goto(fr, block, to, None, false, m)
         }
-        Op::Ret => {
+        Op::Ret | Op::Raise => {
+            // Step 1 (ch01 R23a): the operand is evaluated and moved into
+            // the result BEFORE any body runs. Made structural here by
+            // reading it at the terminator, ahead of `begin_exit_or_goto`.
             let v = if term.a == fors_fmir::op::NO_OPERAND {
                 Slot::unit()
             } else {
-                let s = m.slot(fr, u32::MAX, ValId(term.a))?;
-                if !s.init {
-                    return Err(InterpError::UninitRead(term.a));
-                }
-                s
+                read_terminator_operand(m, fr, term.site, term.a)?
             };
-            Ok(FrameStep::Return(v))
+            begin_exit_or_goto(fr, block, BlockId::NONE, Some(v), term.op == Op::Raise, m)
         }
         Op::Trap => {
             let kind = fors_fmir::op::TrapKind::from_u32(term.a)
                 .ok_or_else(|| InterpError::TypeMismatch("bad trap kind".into()))?;
-            Ok(FrameStep::Trap(kind))
+            Ok(FrameStep::Trap(kind, term.site))
         }
-        Op::Unreachable => Err(InterpError::TypeMismatch("reached unreachable".into())),
-        _ => Err(InterpError::UnsupportedOp(term.op.discriminant())),
+        Op::Unreachable => Err(InterpError::TypeMismatch("reached unreachable".into()).into()),
+        _ => Err(InterpError::UnsupportedOp(term.op.discriminant()).into()),
     }
+}
+
+/// A terminator's `ValId` operand, with design §5.2's two Miri bits checked
+/// (`inst == u32::MAX`: a terminator has no `InstPool` row).
+fn read_terminator_operand(
+    m: &Machine<'_>,
+    fr: usize,
+    site: fors_fmir::ids::SiteId,
+    raw: u32,
+) -> Result<Slot, Fault> {
+    val_operand(m, fr, u32::MAX, site, raw)
+}
+
+/// Either begin this terminator's exit sequence, or transfer control
+/// directly when the edge leaves no scope.
+fn begin_exit_or_goto(
+    fr: usize,
+    from: BlockId,
+    to: BlockId,
+    result: Option<Slot>,
+    raising: bool,
+    m: &mut Machine<'_>,
+) -> Result<FrameStep, Fault> {
+    let edge = {
+        let decl = &m.func(m.frames[fr].func).decl;
+        decl.exits.find(from, to).map(|(id, _)| id)
+    };
+    match edge {
+        Some(edge) => {
+            m.frames[fr].exits.push(ExitRun {
+                edge,
+                done: 0,
+                resume: to,
+                result,
+                raising,
+            });
+            advance_exit(fr, m)
+        }
+        None => finish_transfer(fr, to, result, raising, m),
+    }
+}
+
+/// Runs the NEXT pending body of the innermost exit in progress, or — once
+/// they are all done — steps 3 and 4 and the control transfer.
+///
+/// Step 2 (ch01 R23a, R23b): the bodies are taken from the edge's own
+/// `pending` list, IN THE ORDER IT CARRIES. The interpreter never re-derives
+/// that order (design §3.8: the verifier is what asserts the multiset); it
+/// does refuse to run an `ErrDefer` body on a NORMAL edge, because that is a
+/// compiler bug and §5.2's rule is that nothing is silently swallowed.
+fn advance_exit(fr: usize, m: &mut Machine<'_>) -> Result<FrameStep, Fault> {
+    let Some(run) = m.frames[fr].exits.last().cloned() else {
+        return Err(InterpError::DanglingBlock(fors_fmir::ids::ABSENT).into());
+    };
+    let next_body = {
+        let decl = &m.func(m.frames[fr].func).decl;
+        let row = decl.exits.row(run.edge);
+        let pending = decl.exits.pending(row.pending.clone());
+        let next = pending.get(run.done as usize).copied();
+        match next {
+            None => None,
+            Some(id) => {
+                let rows = decl.defers.get(id.0..id.0 + 1);
+                match rows.first() {
+                    None => {
+                        return Err(InterpError::MalformedExitEdge(format!(
+                            "exit edge {} names defer row {}, which does not exist",
+                            run.edge.0, id.0
+                        ))
+                        .into());
+                    }
+                    Some(d) => {
+                        if d.kind == fors_fmir::scope::DeferKind::ErrDefer
+                            && row.kind == fors_fmir::exit::ExitKind::Normal
+                        {
+                            return Err(InterpError::MalformedExitEdge(format!(
+                                "exit edge {} is a normal exit but carries `errdefer` body {}; \
+                                 ch01 R23b runs an `errdefer` only on an error exit",
+                                run.edge.0, id.0
+                            ))
+                            .into());
+                        }
+                        Some(d.body)
+                    }
+                }
+            }
+        }
+    };
+
+    if let Some(body) = next_body {
+        m.frames[fr].exits.last_mut().expect("just read").done += 1;
+        goto(m, fr, body)?;
+        return Ok(FrameStep::Continue);
+    }
+
+    // Step 3: the drops of the remaining non-linear bindings, AFTER the
+    // bodies (R23d(a), R23d(f)). A drop in v0.1 runs no user code — ch01
+    // R22c's `Droppable` has no impls — so its whole observable effect is
+    // that the binding is no longer live (design §5.2's `live` bit).
+    let (drops, discharges, leaving) = {
+        let decl = &m.func(m.frames[fr].func).decl;
+        let row = decl.exits.row(run.edge);
+        (
+            decl.exits.drops(row.drops.clone()).to_vec(),
+            decl.exits.discharges(row.discharges.clone()).to_vec(),
+            decl.exits.scopes(row.scopes.clone()).to_vec(),
+        )
+    };
+    for place in &drops {
+        let (root, _, _) = place_shape(m, fr, place.0)?;
+        if let Some(slot) = m.frames[fr].roots.get_mut(root as usize) {
+            *slot = slot.moved_out();
+        }
+    }
+
+    // Step 4: ch01 R22h's check on what is left, AFTER the pending bodies
+    // have been accounted for. design §3.5: the interpreter does not
+    // re-derive this — it ASSERTS the discharge records the edge carries.
+    if let Some(fault) = check_obligations(fr, m, &run, &leaving, &discharges) {
+        return Err(fault);
+    }
+
+    m.frames[fr].exits.pop();
+    finish_transfer(fr, run.resume, run.result, run.raising, m)
+}
+
+/// ch01 R22h as the interpreter sees it (design §3.5, §5.2): an obligation
+/// of a scope being left with NO discharge record is `ub: linear-leak`, and
+/// two records for one obligation is `ub: double-consume`. Neither is a
+/// trap: ch02 R15's kind list is closed at eight and a compiler bug must not
+/// look like a program trap (E4).
+fn check_obligations(
+    fr: usize,
+    m: &Machine<'_>,
+    run: &ExitRun,
+    leaving: &[fors_fmir::ids::ScopeId],
+    discharges: &[fors_fmir::exit::DischargeRow],
+) -> Option<Fault> {
+    // The report points at the EXIT's terminator (the edge's `from`), not at
+    // the current block: once a deferred body has run, the current block is
+    // the body's last one, and its `br BODY_END` is not where the leak is.
+    let site = {
+        let decl = &m.func(m.frames[fr].func).decl;
+        let from = decl.exits.row(run.edge).from;
+        decl.blocks
+            .try_row(from)
+            .map(|b| b.term.site)
+            .unwrap_or(fors_fmir::ids::SiteId(0))
+    };
+    let mut obligations: Vec<fors_fmir::ids::PlaceId> = Vec::new();
+    {
+        let decl = &m.func(m.frames[fr].func).decl;
+        for scope in leaving {
+            if scope.index() >= decl.scopes.len() {
+                continue;
+            }
+            obligations
+                .extend_from_slice(decl.obligations.get(decl.scopes.row(*scope).obligations));
+        }
+    }
+    for (i, d) in discharges.iter().enumerate() {
+        if discharges[..i].iter().any(|e| e.place == d.place) {
+            return Some(ub(
+                m,
+                fr,
+                u32::MAX,
+                site,
+                crate::ub::UbClass::DoubleConsume,
+                format!(
+                    "exit edge {} discharges place {} twice",
+                    run.edge.0, d.place.0
+                ),
+            ));
+        }
+    }
+    for place in &obligations {
+        if !discharges.iter().any(|d| d.place == *place) {
+            return Some(ub(
+                m,
+                fr,
+                u32::MAX,
+                site,
+                crate::ub::UbClass::LinearLeak,
+                format!(
+                    "place {} carries a linear obligation that is undischarged on exit edge {} \
+                     (ch01 R22h); this is a compiler bug, not a program trap",
+                    place.0, run.edge.0
+                ),
+            ));
+        }
+    }
+    None
+}
+
+/// The control transfer itself, once steps 1-4 are done.
+fn finish_transfer(
+    fr: usize,
+    to: BlockId,
+    result: Option<Slot>,
+    raising: bool,
+    m: &mut Machine<'_>,
+) -> Result<FrameStep, Fault> {
+    if to == BlockId::NONE {
+        let v = result.unwrap_or_else(Slot::unit);
+        return Ok(if raising {
+            FrameStep::Raise(v)
+        } else {
+            FrameStep::Return(v)
+        });
+    }
+    goto(m, fr, to)?;
+    Ok(FrameStep::Continue)
 }

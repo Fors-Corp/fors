@@ -193,6 +193,41 @@ fn gen_decl(rng: &mut Xorshift64) -> DeclFmir {
         });
     }
 
+    // A handful of exit edges (design §3.5, §3.8), so `encode_decode_
+    // roundtrip` and the `fmir_hash` gates cover the exit-edge pool and its
+    // `BlockId` remapping too. These are deliberately arbitrary rather than
+    // verify()-clean: this generator feeds the ENCODING gates, which must be
+    // total over any `DeclFmir` the types can express.
+    let mut exits = fors_fmir::exit::ExitEdgePool::new();
+    for _ in 0..rng.range(3) {
+        let to = if rng.bool() {
+            BlockId::NONE
+        } else {
+            BlockId(rng.next_u32() % n_blocks.max(1))
+        };
+        let kind = if rng.bool() {
+            fors_fmir::exit::ExitKind::Normal
+        } else {
+            fors_fmir::exit::ExitKind::Error
+        };
+        let scopes_range = exits.push_scopes(&[ScopeId(0)]);
+        let discharges = exits.push_discharges(&[fors_fmir::exit::DischargeRow {
+            place: fors_fmir::ids::PlaceId(rng.next_u32() % 4),
+            how: fors_fmir::scope::Discharge::DeferredBody(
+                ScopeId(0),
+                BlockId(rng.next_u32() % n_blocks.max(1)),
+            ),
+        }]);
+        let mut row = fors_fmir::exit::ExitEdgeRow::plain(
+            BlockId(rng.next_u32() % n_blocks.max(1)),
+            to,
+            kind,
+        );
+        row.scopes = scopes_range;
+        row.discharges = discharges;
+        exits.push(row);
+    }
+
     DeclFmir {
         decl: decl_key,
         sig,
@@ -207,6 +242,7 @@ fn gen_decl(rng: &mut Xorshift64) -> DeclFmir {
         obligations: PlaceListPool::new(),
         scoped_sources: PlaceListPool::new(),
         defers: DeferPool::new(),
+        exits,
         entry: BlockId(0),
         is_unsafe_invariant: rng.bool(),
         fingerprint: 0,

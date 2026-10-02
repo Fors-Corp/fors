@@ -71,6 +71,22 @@ pub enum DeferKind {
     ErrDefer,
 }
 
+/// Where a deferred body's control flow goes when the body is finished: a
+/// `br` to this sentinel ends the body and resumes the exit sequence at the
+/// next pending body (then the drops, then ch01 R22h's check).
+///
+/// [decision: `br BODY_END` as the body terminator, invented — design §3.8
+/// gives `DeferRow.body: BlockId` and says the bodies are "inlined" at each
+/// exit edge, which in a flat CFG leaves nothing to mark the END of one
+/// body. ch01 R23a explicitly licenses the other form — "an implementation
+/// MAY emit one copy and jump to it; the behaviour is the same" — and that
+/// form needs a jump BACK, which is what this is. R23c already forbids
+/// `return`/`raise`/`?`/an outward `break` inside a body, so a body has
+/// exactly one way out and one sentinel suffices. `fors-interp` runs each
+/// body to its `br BODY_END`; a `br BODY_END` reached anywhere else is a
+/// dangling block, exactly as before.]
+pub const BODY_END: BlockId = BlockId::NONE;
+
 /// design §3.8's literal `DeferRow`.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub struct DeferRow {

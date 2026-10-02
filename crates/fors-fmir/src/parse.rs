@@ -694,6 +694,13 @@ pub fn parse(text: &str) -> Result<DeclFmir, ParseError> {
         obligations: crate::scope::PlaceListPool::new(),
         scoped_sources: crate::scope::PlaceListPool::new(),
         defers: crate::scope::DeferPool::new(),
+        // The textual form carries no `defer`/obligation/exit-edge data, and
+        // never did (`dump` emits none either — see that module's documented
+        // scope): those three pools' hand-written provenance is this crate's
+        // own pool API, which `dump.rs`'s docs already name as the second
+        // way in for "anything outside that list". The byte encoding
+        // (`encode.rs`) is the full-fidelity path and does carry them.
+        exits: crate::exit::ExitEdgePool::new(),
         entry: BlockId(0),
         is_unsafe_invariant,
         fingerprint: 0,
