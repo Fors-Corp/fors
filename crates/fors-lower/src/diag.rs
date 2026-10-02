@@ -20,8 +20,12 @@ pub enum LowerError {
     Closure,
     /// `match`: I7 owns patterns and exhaustiveness.
     Match,
-    /// `?`, `else |e|`, `raise`, `Contract`, `raises`: I10 owns failure.
-    Failure,
+    /// A ch02 failure form (`?`, `else |e|`, `raise`) F3 cannot lower,
+    /// with the reason: the checker published no D10 row for it (a checker
+    /// gap — lowering never re-derives the edge from syntax), or the edge
+    /// needs an impl D10 does not name (`ErrorFromBound`, a generic
+    /// `ErrorFrom` impl).
+    Failure(String),
     /// `for`/`while` loops: F1 covers straight-line code plus `if`; loops
     /// lower in a later increment (design F1's `plain-for-accumulator` gate
     /// moves with them).
@@ -52,10 +56,7 @@ impl std::fmt::Display for LowerError {
             LowerError::Projection => write!(f, "projections need I6; not lowered in F1"),
             LowerError::Closure => write!(f, "closures need capture decisions; not lowered in F1"),
             LowerError::Match => write!(f, "`match` needs I7; not lowered in F1"),
-            LowerError::Failure => write!(
-                f,
-                "failure edges (`?`/`raise`/contracts) need I10; not lowered in F1"
-            ),
+            LowerError::Failure(w) => write!(f, "failure edge not lowered: {w}"),
             LowerError::Loop => write!(f, "loops are not lowered in F1"),
             LowerError::Comptime(w) => write!(f, "comptime item references need F9 ({w})"),
             LowerError::Unsupported(k) => write!(f, "`{k}` is outside the F1 subset"),

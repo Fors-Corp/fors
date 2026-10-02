@@ -67,12 +67,27 @@ pub struct Program {
     /// Index into `fns` of the entry point.
     pub entry: usize,
     pub config: Config,
+    /// F3: the static type names ch02 R17's `render` reads, written by
+    /// lowering (`LoweredBuild::names`). Empty renders every nominal type
+    /// as `..`.
+    pub names: fors_fmir::names::TypeNames,
 }
 
 impl Program {
     /// The function implementing `main`, by name.
     pub fn entry_by_name(fns: Vec<ProgFn>, name: &str, config: Config) -> Option<Program> {
         let entry = fns.iter().position(|f| f.name == name)?;
-        Some(Program { fns, entry, config })
+        Some(Program {
+            fns,
+            entry,
+            config,
+            names: fors_fmir::names::TypeNames::default(),
+        })
+    }
+
+    /// The same program with lowering's render table attached (F3).
+    pub fn with_names(mut self, names: fors_fmir::names::TypeNames) -> Program {
+        self.names = names;
+        self
     }
 }

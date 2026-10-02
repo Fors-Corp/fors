@@ -23,6 +23,8 @@
 //! - [`reduce`] — the ONE normative statement of `reduce`'s tree shape
 //!   (design §3.9, ch03 R11/R11a/R12/R13), shared by `fors-lower`'s
 //!   explicit-tree emission and `fors-interp`'s execution.
+//! - [`names`] — the static type names ch02 R17's `render` reads (F3):
+//!   lowering writes them, the interpreter reads them back.
 //! - [`verify`] — the structural verifier, [`verify::verify`].
 //! - [`diag`] — [`diag::Diagnostic`], `verify()`'s output type.
 
@@ -37,6 +39,7 @@ pub mod exit;
 pub mod flags;
 pub mod ids;
 pub mod inst;
+pub mod names;
 pub mod op;
 pub mod parse;
 pub mod place;

@@ -35,10 +35,10 @@ pub enum Exit {
     /// Returned from the entry function.
     Return,
     /// An error left the entry function by a `raise` terminator — ch02 R17's
-    /// error exit, status 1. F4 needs this to have an ERROR EXIT at all
+    /// error exit, status 1. F4 needed this to have an ERROR EXIT at all
     /// (ch01 R23b: `errdefer` runs on error exits and never on normal ones);
-    /// `render`'s `error: ` line and `?`/`try_br` stay **F3's**, so the slot
-    /// the error was moved into is carried here and nothing formats it.
+    /// **F3** runs R17's five-step sequence on it ([`error_exit`]), whose
+    /// one `error: ` line is [`Outcome::stderr`].
     Raise,
     /// A program trap: one of ch02 R15's closed eight.
     Trap(TrapKind),
@@ -77,6 +77,13 @@ pub struct Outcome {
     /// "a backtrace on the trap path is illegal for any program in the
     /// differential corpus".
     pub backtrace: Vec<crate::trap::BacktraceFrame>,
+    /// F3: the bytes the RUNTIME wrote to the standard error descriptor —
+    /// ch02 R17(b)'s ONE `error: ` + `render(e)` + `\n` line on an error
+    /// exit of `main`, and nothing otherwise. Captured whether or not the
+    /// host write ([`crate::shim::HostEnv::stderr_fd`]) succeeded, because
+    /// R17(c) makes the status 1 either way and the conformance runner
+    /// compares this line (design §7.2a: `run-error`'s last stderr line).
+    pub stderr: Vec<u8>,
 }
 
 impl Outcome {
@@ -117,12 +124,17 @@ pub enum InterpError {
     /// deferred body that ran off the end of its own sub-CFG. A compiler
     /// bug, never a trap and never silently skipped.
     MalformedExitEdge(String),
-    /// A `raise` left a NON-entry frame and no `try_br` in the caller took
-    /// it. Propagating an error into a caller is `?`/`try_br`'s job, which
-    /// is F3's (design §3.6); until then the condition is REPORTED rather
-    /// than settled as if `main` had raised — which would skip the caller's
-    /// own pending bodies (ch01 R23a) and misreport ch02 R17's exit.
+    /// A `raise` left a NON-entry frame whose caller is not stopped at the
+    /// `try_br` naming that very call (design §3.6: a raising call is always
+    /// followed by `?` or `else |e| { }`, ch02 R1, and both lower to a
+    /// `try_br` on the call). REPORTED, never settled as if `main` had
+    /// raised — that would skip the caller's own pending bodies (ch01 R23a)
+    /// and misreport ch02 R17's exit.
     UnhandledRaise(String),
+    /// ch02 R17's `render` met a value its static type does not describe
+    /// (a dangling cell, a discriminant with no variant). A lowering bug,
+    /// never a trap, and never a silently truncated line.
+    Render(String),
     /// A quantity the interpreter's own representation cannot carry: an
     /// arena offset past the `u32` design §3.7's `RefVal` packs. Not a trap
     /// (ch02 R15's eight contain no such kind) and not silent truncation.
@@ -151,9 +163,10 @@ impl std::fmt::Display for InterpError {
             InterpError::MalformedExitEdge(m) => write!(f, "malformed exit edge: {m}"),
             InterpError::UnhandledRaise(func) => write!(
                 f,
-                "`{func}` raised into a caller with no `try_br`; error propagation into a \
-                 caller is F3's (design §3.6)"
+                "`{func}` raised into a caller that is not stopped at the `try_br` on that \
+                 call (design §3.6)"
             ),
+            InterpError::Render(m) => write!(f, "render: {m}"),
             InterpError::Unrepresentable(m) => write!(f, "unrepresentable: {m}"),
             InterpError::StepBudget => write!(f, "step budget exceeded"),
             InterpError::StackOverflow => write!(f, "call stack overflow"),
@@ -455,6 +468,15 @@ struct Frame {
     pc: u32,
     /// The scope exits this frame is in the middle of (innermost last).
     exits: Vec<ExitRun>,
+    /// F3: the call this frame made last RAISED instead of returning, so the
+    /// `try_br` right after it takes its `err` edge (design §3.6). Set by the
+    /// dispatch loop when a callee's `raise` reaches this frame, consumed by
+    /// that `try_br`.
+    raised: bool,
+    /// F3: the static type of the error this frame is raising — the
+    /// `raise` terminator's `ty` — which ch02 R17's `render` is defined on
+    /// when the frame is `main`'s.
+    raise_ty: fors_fir::ty::TyId,
 }
 
 impl<'a> Machine<'a> {
@@ -719,17 +741,30 @@ pub fn run_with_host(
             FrameStep::Raise(err) => {
                 // ch01 R23a: the operand was evaluated and moved into the
                 // result BEFORE the first body ran, so by here it is a live,
-                // initialised value — `render`ing it is F3's.
+                // initialised value, and every pending body of the frame
+                // being left has run.
                 debug_assert!(err.init && err.live);
-                // ch02 R17's error exit. Only `main` raising is modelled
-                // here: propagating an error INTO a caller is `try_br`'s
-                // job, which is F3's (design §3.6) — so a raise out of any
-                // OTHER frame is reported, not settled as if `main` had
-                // raised (that would skip the caller's own pending bodies).
                 if m.frames.len() > 1 {
+                    // Propagation into the caller (design §3.6): the caller
+                    // is stopped right after the call, at the `try_br` that
+                    // names it. The call's own result value carries the
+                    // error on the `err` edge — exactly one of `ok`/`err` is
+                    // live on each edge, so one `ValId` names whichever the
+                    // edge took.
                     let func = m.prog.fns[m.frames[fr].func].name.clone();
-                    return Err(InterpError::UnhandledRaise(func));
+                    pop_frame(&mut m);
+                    let dest = m.pending.pop().unwrap_or(None);
+                    let caller = m.frames.len() - 1;
+                    if !at_try_br(&m, caller) {
+                        return Err(InterpError::UnhandledRaise(func));
+                    }
+                    if let Some(d) = dest {
+                        m.define(caller, d, err);
+                    }
+                    m.frames[caller].raised = true;
+                    continue;
                 }
+                let ty = m.frames[fr].raise_ty;
                 let site = m
                     .frames
                     .last()
@@ -738,7 +773,7 @@ pub fn run_with_host(
                         decl.blocks.try_row(f.block).map(|b| b.term.site)
                     })
                     .map(|s| m.site_of(m.frames.len() - 1, s));
-                return Ok(settle(&mut m, Exit::Raise, site, None));
+                return error_exit(&mut m, err, ty, site);
             }
             FrameStep::Trap(kind, site) => {
                 let site = Some(m.site_of(fr, site));
@@ -772,15 +807,81 @@ fn settle(
         site,
         ub,
         backtrace,
+        stderr: Vec::new(),
+    }
+}
+
+/// ch02 R17: an error `e: E` left `main`. Design §5.4's five steps, in
+/// order, implemented here and nowhere else:
+///
+/// 1. the operand was evaluated and moved into the result (ch01 R23a) —
+///    done by the `raise` terminator before its exit edge began;
+/// 2. `main`'s pending `defer`/`errdefer` bodies ran, innermost first, the
+///    `errdefer`s included because this is an error exit (ch01 R23b, R23e) —
+///    done by that exit edge, which is why this runs only once the frame's
+///    exit sequence finished;
+/// 3. `Stdout` is flushed exactly as on a normal return, ignoring any
+///    failure (R17(a)). The interpreter's `Stdout` is UNBUFFERED: every
+///    `write_*` already reached the captured image (and, with
+///    [`crate::shim::HostEnv::stdout_fd`], the descriptor) when it ran, so
+///    the flush has no bytes left to move and cannot fail;
+/// 4. ONE line goes to the standard error descriptor, unbuffered: the bytes
+///    `error: `, then `render(e)`, then `\n` (R17(b)), rendered on the
+///    STATIC type `E` ([`crate::render`]). A failed write is not retried,
+///    not redirected and not a trap;
+/// 5. the exit status is 1 whether or not 3 or 4 succeeded (R17(c)) —
+///    [`Exit::Raise`], which [`crate::shim::entry_exit`] maps to 1.
+fn error_exit(
+    m: &mut Machine<'_>,
+    err: Slot,
+    ty: fors_fir::ty::TyId,
+    site: Option<(u32, u32)>,
+) -> Result<Outcome, InterpError> {
+    // Step 3: nothing is buffered (see above), so there is nothing to move.
+    // Step 4.
+    let line = crate::render::error_line(err, ty, m.tys, &m.prog.names, &*m)
+        .map_err(InterpError::Render)?;
+    if let Some(fd) = m.host.stderr_fd {
+        // R17: "MUST NOT retry, MUST NOT write the line anywhere else, MUST
+        // NOT trap, and MUST still exit with status 1".
+        let _ = crate::shim::host_write(fd, &line);
+    }
+    // Step 5.
+    let mut out = settle(m, Exit::Raise, site, None);
+    out.stderr = line;
+    Ok(out)
+}
+
+/// Is frame `fr` stopped right after a call whose block ends in the
+/// `try_br` naming that call (design §3.6)? Where a raising callee's error
+/// may land.
+fn at_try_br(m: &Machine<'_>, fr: usize) -> bool {
+    let f = &m.frames[fr];
+    let decl = &m.func(f.func).decl;
+    let Some(row) = decl.blocks.try_row(f.block) else {
+        return false;
+    };
+    row.term.op == Op::TryBr
+        && f.pc == row.inst_len
+        && row.inst_len > 0
+        && row.term.a == row.first_inst + row.inst_len - 1
+}
+
+impl crate::render::ValueSource for Machine<'_> {
+    fn cell(&self, handle: u64) -> Option<&[Slot]> {
+        self.cells.get(handle as usize).map(|c| c.slots.as_slice())
+    }
+    fn str_bytes(&self, handle: u64) -> Option<&[u8]> {
+        self.strs.get(handle as usize).map(|b| b.as_slice())
     }
 }
 
 enum FrameStep {
     Continue,
     Return(Slot),
-    /// ch02 R17: the entry function left by `raise`. The slot is the error
-    /// operand, already moved into the result by step 1 of the exit
-    /// sequence; `render`ing it is F3's.
+    /// A frame left by `raise`: the error operand, already moved into the
+    /// result by step 1 of the exit sequence. Into a caller it lands on the
+    /// caller's `try_br`; out of `main` it is ch02 R17's [`error_exit`].
     Raise(Slot),
     Trap(TrapKind, fors_fmir::ids::SiteId),
     Ub(crate::ub::UbReport),
@@ -828,6 +929,8 @@ fn call(
         block: entry,
         pc: 0,
         exits: Vec::new(),
+        raised: false,
+        raise_ty: fors_fir::ty::NO_TY,
     });
     Ok(())
 }
@@ -946,6 +1049,13 @@ fn exec_inst(fr: usize, inst: u32, inst_row: InstRow, m: &mut Machine<'_>) -> Re
         }
         Op::ConstUnit => {
             define(dest, m, fr, Slot::unit());
+        }
+        Op::ConstFn => {
+            // F3: a function item used as a VALUE (`E.wrapped(zero)`): the
+            // slot carries the callee's `DeclKeyId`. Nothing in M1 calls
+            // through it (`call_closure` is I9's), and ch02 R17 renders a
+            // `fn` type as `..`, so carrying the key is all a value needs.
+            define(dest, m, fr, Slot::val(u64::from(inst_row.a)));
         }
         Op::ConstStr => {
             let bytes = find_string(m, fr, inst_row.a)?.to_vec();
@@ -2438,6 +2548,16 @@ fn exec_term(
                 .unwrap_or(default);
             begin_exit_or_goto(fr, block, to, None, false, m)
         }
+        Op::TryBr => {
+            // design §3.6: `a` is the call this block ended with; `b` the
+            // edge taken when it returned, `c` when it raised. The dispatch
+            // loop set `raised` when the callee's `raise` landed here, and
+            // defined the call's value as the error. A call that cannot
+            // raise (an intrinsic) leaves it clear and takes `ok`.
+            let raised = std::mem::replace(&mut m.frames[fr].raised, false);
+            let to = BlockId(if raised { term.c } else { term.b });
+            begin_exit_or_goto(fr, block, to, None, false, m)
+        }
         Op::Ret | Op::Raise => {
             // Step 1 (ch01 R23a): the operand is evaluated and moved into
             // the result BEFORE any body runs. Made structural here by
@@ -2447,6 +2567,10 @@ fn exec_term(
             } else {
                 read_terminator_operand(m, fr, term.site, term.a)?
             };
+            if term.op == Op::Raise {
+                // F3: the static type ch02 R17's `render` is defined on.
+                m.frames[fr].raise_ty = term.ty;
+            }
             begin_exit_or_goto(fr, block, BlockId::NONE, Some(v), term.op == Op::Raise, m)
         }
         Op::Trap => {
