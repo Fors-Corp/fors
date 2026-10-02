@@ -22,12 +22,14 @@ pub mod call;
 pub mod defs;
 pub mod deps;
 pub mod diag;
+pub mod exhaust;
 pub mod expr;
 pub mod facts;
 pub mod lower;
 pub mod member;
 pub mod methods;
 pub mod normalise;
+pub mod pat;
 pub mod rules;
 pub mod show;
 pub mod tape;
@@ -122,6 +124,10 @@ pub struct Counters {
     /// size, which is what a `TraitWorldRevision` bump throws away.
     pub norm_budget_peak: u32,
     pub norm_memo_rows: u64,
+    /// R55's plain usefulness algorithm: every step charged across every
+    /// `match` this build typed (design §7.8; `exhaust.rs`'s own test
+    /// reads this directly rather than re-deriving it from diagnostics).
+    pub exhaust_steps: u64,
 }
 
 // MARC: design §4.2/§4.4 gives `check_build`'s signature as
@@ -297,6 +303,7 @@ fn check_build_inner(
             norm_match_steps: w.norm.match_steps,
             norm_budget_peak: w.norm.budget_peak,
             norm_memo_rows: w.norm.len() as u64,
+            exhaust_steps: w.exhaust_steps,
         };
         (
             c,

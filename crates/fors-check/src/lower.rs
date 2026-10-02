@@ -793,9 +793,92 @@ impl Lowerer<'_> {
                 }
             }
             NodeKind::TypeApp => self.type_app(cx, node, pos),
+            // R38(a)'s explicit generic arguments parse with the
+            // EXPRESSION grammar, so a NESTED type application
+            // (`id[Option[i64]]`) wraps `Option[i64]` as a `Bracket` (head
+            // + bracketed args) rather than a `TypeApp`: the I6 verifier's
+            // finding (side fix, I7) — this used to fall through to the
+            // `_` arm below and absorb silently.
+            NodeKind::Bracket => self.nested_type_app(cx, node, pos),
             NodeKind::Error => TY_ERROR,
             // A const argument in a type-argument slot, or a garbage node.
             _ => TY_ERROR,
+        }
+    }
+
+    /// A `Bracket`'s own shape as a type application: its first child is
+    /// the head expression (already a name-use node ch08 resolved), the
+    /// rest its generic arguments — the same four things `type_app`
+    /// decides from a `TypeApp`/`NameExpr` node's head and children, just
+    /// read from a different shape.
+    fn nested_type_app(&mut self, cx: &mut Cx, node: usize, pos: Pos) -> TyId {
+        let kids: Vec<usize> = cx.f.tree.children(node).collect();
+        let Some(&head_node) = kids.first() else {
+            return TY_ERROR;
+        };
+        let args = &kids[1..];
+        let range = cx.f.range(node);
+        match self.head_of(cx, head_node) {
+            Head::Silent | Head::Opaque => {
+                for &c in args {
+                    if is_type_node(cx.f.kind(c)) {
+                        self.ty(cx, c, Pos::OpaqueArg);
+                    }
+                }
+                TY_ERROR
+            }
+            Head::Value(r, s) => {
+                if pos == Pos::OpaqueArg {
+                    return TY_ERROR;
+                }
+                let n = String::from_utf8_lossy(self.names.resolve(s)).into_owned();
+                self.emit(cx, r, 11, 11, format!("`{n}` is a binding, not a type"));
+                TY_ERROR
+            }
+            Head::Prim(ty) => {
+                for &c in args {
+                    if is_type_node(cx.f.kind(c)) {
+                        self.ty(cx, c, Pos::Value);
+                    }
+                }
+                ty
+            }
+            Head::SelfTy => {
+                if cx.self_ty == NO_TY {
+                    TY_ERROR
+                } else {
+                    cx.self_ty
+                }
+            }
+            Head::GParam(owner, ord, k) => self.param_ty(cx, owner, ord, k),
+            Head::Trait(_) => {
+                if pos == Pos::Value {
+                    self.emit(
+                        cx,
+                        range,
+                        11,
+                        11,
+                        "a trait is a type only after `dyn`, in a bound or in an `impl` header"
+                            .to_string(),
+                    );
+                }
+                TY_ERROR
+            }
+            Head::Nominal(def) => match self.type_args(cx, args, def, range) {
+                Some(xs) => {
+                    if let Some(g) = self.prelude.generic_index(def) {
+                        use fors_fir::prelude::gty;
+                        if matches!(g, gty::ARRAY | gty::VECTOR | gty::ATOMIC) && !xs.is_empty() {
+                            let name = self.defs.get(def).and_then(|r| r.name).unwrap_or(Symbol(0));
+                            self.sites
+                                .elements
+                                .push((cx.home, cx.f.file, range, xs[0], name));
+                        }
+                    }
+                    self.fir.tys.nominal_of(def, &xs)
+                }
+                None => TY_ERROR,
+            },
         }
     }
 
@@ -967,7 +1050,8 @@ impl Lowerer<'_> {
                 TY_ERROR
             }
             Head::Nominal(def) => {
-                let args = self.type_args(cx, node, def, range);
+                let kids: Vec<usize> = cx.f.tree.children(node).collect();
+                let args = self.type_args(cx, &kids, def, range);
                 match args {
                     Some(xs) => {
                         // R11 (ch01 R22b): a CONCRETE `Array[X, N]`,
@@ -1015,13 +1099,12 @@ impl Lowerer<'_> {
     fn type_args(
         &mut self,
         cx: &mut Cx,
-        node: usize,
+        args: &[usize],
         def: DefId,
         range: (u32, u32),
     ) -> Option<Vec<TyId>> {
         let shapes = self.shapes;
         let kinds: &[GKind] = shapes.gkinds(def);
-        let args: Vec<usize> = cx.f.tree.children(node).collect();
         if args.len() > MAX_LIST || kinds.len() > MAX_LIST {
             // The head's own declaration carries the limit diagnostic.
             return None;
@@ -1060,7 +1143,7 @@ impl Lowerer<'_> {
                 }
                 return Some(out);
             }
-            for &c in &args {
+            for &c in args {
                 if is_type_node(cx.f.kind(c)) {
                     self.ty(cx, c, Pos::Value);
                 }
@@ -1084,7 +1167,7 @@ impl Lowerer<'_> {
                     args.len()
                 ),
             );
-            for &c in &args {
+            for &c in args {
                 if is_type_node(cx.f.kind(c)) {
                     self.ty(cx, c, Pos::Value);
                 }
@@ -1617,6 +1700,27 @@ fn is_type_node(k: NodeKind) -> bool {
             | NodeKind::DynType
             | NodeKind::ScopedType
     )
+}
+
+/// The bytes a string literal token denotes, as the checker identifies
+/// them: a `Str` token's text without its two `"` delimiters, a
+/// `MultilineStr`'s text as written. Shared by `const` lowering and
+/// `pat.rs`'s string patterns so a constant and an equal literal intern
+/// the SAME symbol (R53: "a constant and an equal literal are the same
+/// constructor") and so `exhaust.rs`'s witness candidates compare against
+/// the same form. Escape sequences are left as written: two spellings of
+/// one value stay two constructors (a conservative over-approximation of
+/// R53's "equal value", never an over-acceptance — distinct constructors
+/// only ever make a match LESS exhaustive).
+pub(crate) fn str_contents(kind: TokenKind, txt: &[u8]) -> &[u8] {
+    match kind {
+        TokenKind::Str
+            if txt.len() >= 2 && txt.first() == Some(&b'"') && txt.last() == Some(&b'"') =>
+        {
+            &txt[1..txt.len() - 1]
+        }
+        _ => txt,
+    }
 }
 
 /// The integer value of an `Int` token's text: decimal, `0x`/`0o`/`0b`, `_`
@@ -2614,11 +2718,37 @@ impl Lowerer<'_> {
             .unwrap_or(TY_ERROR);
         let val = kids
             .iter()
-            .find(|&&(_, k)| k == NodeKind::Literal)
-            .and_then(|&(c, _)| self.literal_value(cx, c))
+            .find_map(|&(c, k)| self.const_init_value(cx, c, k))
             .map(|v| self.fir.tys.intern_const(v))
             .unwrap_or(fors_fir::ty::NO_CONST);
         self.fir.sigs.set_const(def, ty, val);
+    }
+
+    /// A `const` declaration's comptime value (ch04): an integer, `bool`
+    /// or string literal, or a negated integer literal (`-1` parses as a
+    /// `UnaryExpr`, ch07 Disambiguation 8). Anything else has no value
+    /// here, and a pattern naming the constant then lowers to a wildcard
+    /// (I7 verifier: a `Str` or negative constant used to be exactly that,
+    /// so `match s { S => 1 }` was accepted as exhaustive — R53 says a
+    /// `const` pattern "covers exactly that one value").
+    fn const_init_value(&mut self, cx: &mut Cx, node: usize, kind: NodeKind) -> Option<ConstValue> {
+        match kind {
+            NodeKind::Literal => {
+                if let Some(v) = self.literal_value(cx, node) {
+                    return Some(v);
+                }
+                let (a, b) = cx.f.tree.token_range(node);
+                (a as usize..(b as usize).min(cx.f.tokens.kinds.len())).find_map(|i| {
+                    let k = cx.f.tokens.kinds[i];
+                    matches!(k, TokenKind::Str | TokenKind::MultilineStr).then(|| {
+                        let txt = cx.f.tokens.text(i, cx.f.source);
+                        ConstValue::S(self.names.intern(str_contents(k, txt)))
+                    })
+                })
+            }
+            NodeKind::UnaryExpr => self.negated_literal(cx, node),
+            _ => None,
+        }
     }
 }
 

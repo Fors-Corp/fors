@@ -115,17 +115,24 @@
 //   this is not one); the only §13 sentence that assigns a round-6
 //   `09-types` file is I8b's. The I3 tag was stale by the same argument
 //   that moved `adaptor-name-clash-two-traits-rejected` to I8b.
-const PENDING_09_MAX: usize = 34;
+// I7 (patterns and exhaustiveness) deleted the ELEVEN rows tagged `I7`
+// (`pat::check_pat`/`exhaust::check_match` now decide R50, R53, R54, R55
+// themselves) and retagged none: every remaining row was re-tested with
+// the list emptied and still fails for its own increment's reason. The
+// `linear-match-*` rows stay `I8` — R50's "linear components" clause
+// (ch01 R22d(ii)) is explicitly not this increment's (design §13 I7's
+// GATE names only R50 (4)/R51 (1)/R53 (6)/R54 (3)/R55 (2), none of them
+// the three `linear-match-*` files), so `pat.rs` does not inspect
+// linearity at all and these three still fail for I8's reason, unchanged.
+const PENDING_09_MAX: usize = 23;
 const PENDING_09: &[(&str, &str)] = &[
     ("adaptor-annotated-binding-mismatch-rejected", "I8b"),
     ("adaptor-map-closure-returns-linear-rejected", "I8b"),
     ("adaptor-name-clash-two-traits-rejected", "I8b"),
     ("adaptor-on-field-receiver-rejected", "I8"),
     ("adaptor-on-inout-receiver-rejected", "I8"),
-    ("arm-after-let-pattern-unreachable-rejected", "I7"),
     ("brand-param-as-value-type-rejected", "I8"),
     ("callable-bound-cannot-bind-result-rejected", "I8b"),
-    ("const-pattern-equal-to-literal-unreachable-rejected", "I7"),
     ("copy-without-copyable-rejected", "I8"),
     ("implicit-receiver-move-in-closure-rejected", "I8"),
     ("implicit-receiver-move-in-loop-rejected", "I8"),
@@ -137,18 +144,9 @@ const PENDING_09: &[(&str, &str)] = &[
     ("linear-match-literal-component-rejected", "I8"),
     ("linear-match-omitted-field-rejected", "I8"),
     ("linear-match-underscore-rejected", "I8"),
-    ("match-budget-exceeded-rejected", "I7"),
-    ("match-const-pattern-needs-wildcard-rejected", "I7"),
-    ("match-int-needs-wildcard-rejected", "I7"),
-    ("match-non-exhaustive-enum-rejected", "I7"),
     ("neutral-projection-drop-without-bound-rejected", "I8b"),
-    ("pattern-bare-fn-name-rejected", "I7"),
-    ("pattern-bare-prelude-type-rejected", "I7"),
-    ("pattern-bare-struct-name-rejected", "I7"),
-    ("pattern-float-literal-rejected", "I7"),
     ("qualified-call-sink-receiver-needs-move-rejected", "I8"),
     ("rigid-discard-without-droppable-rejected", "I8b"),
     ("rigid-drop-without-droppable-rejected", "I8b"),
     ("rigid-expression-statement-without-droppable-rejected", "I8b"),
-    ("unreachable-arm-rejected", "I7"),
 ];

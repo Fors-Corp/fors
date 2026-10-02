@@ -62,6 +62,85 @@ fn check_messages(src: &str) -> Vec<String> {
         .collect()
 }
 
+/// `check_source` with each diagnostic's 1-based LINE in the source as
+/// `check_source` builds it (its two header lines included), for a test
+/// whose expectation is WHICH arm a diagnostic lands on.
+fn check_source_lines(src: &str) -> Vec<(String, u32)> {
+    let mut interner = Interner::new();
+    let source = format!("module m;\nneeds {{ }};\n{src}");
+    let bytes = source.into_bytes();
+    let name: Segments = vec![interner.intern(b"m")];
+    let parsed = parse_file(&bytes);
+    assert!(
+        parsed.diags.is_empty(),
+        "probe must parse: {:?}\n{}",
+        parsed.diags,
+        String::from_utf8_lossy(&bytes)
+    );
+    let inputs = [FileInput {
+        tree: &parsed.tree,
+        tokens: &parsed.tokens,
+        source: &bytes,
+        name,
+    }];
+    let resolved = fors_resolve::resolve_in_package(&mut interner, &inputs, Some(0), Some(b"m"));
+    let out = fors_check::check_build(&inputs, &resolved, &mut interner);
+    out.diagnostics
+        .iter()
+        .map(|d| {
+            let line = bytes[..d.start as usize]
+                .iter()
+                .filter(|&&b| b == b'\n')
+                .count() as u32
+                + 1;
+            (d.code.as_string(), line)
+        })
+        .collect()
+}
+
+/// A multi-module build, `(module name, source)` in the order given, the
+/// first being the package root; `(code, module name)` per diagnostic.
+fn check_modules(files: &[(&str, &str)]) -> Vec<(String, String)> {
+    let mut interner = Interner::new();
+    let sources: Vec<Vec<u8>> = files
+        .iter()
+        .map(|(n, s)| format!("module {n};\n{s}").into_bytes())
+        .collect();
+    let names: Vec<Segments> = files
+        .iter()
+        .map(|(n, _)| vec![interner.intern(n.as_bytes())])
+        .collect();
+    let parsed: Vec<_> = sources.iter().map(|s| parse_file(s)).collect();
+    for (p, (n, _)) in parsed.iter().zip(files) {
+        assert!(p.diags.is_empty(), "module {n} must parse: {:?}", p.diags);
+    }
+    let inputs: Vec<FileInput> = parsed
+        .iter()
+        .zip(sources.iter())
+        .zip(names.iter())
+        .map(|((p, s), n)| FileInput {
+            tree: &p.tree,
+            tokens: &p.tokens,
+            source: s,
+            name: n.clone(),
+        })
+        .collect();
+    let resolved = fors_resolve::resolve_in_package(&mut interner, &inputs, Some(0), Some(b"pkg"));
+    let out = fors_check::check_build(&inputs, &resolved, &mut interner);
+    out.diagnostics
+        .iter()
+        .map(|d| {
+            (
+                d.code.as_string(),
+                files
+                    .get(d.file.index())
+                    .map(|(n, _)| (*n).to_string())
+                    .unwrap_or_default(),
+            )
+        })
+        .collect()
+}
+
 struct Probe {
     name: &'static str,
     want: &'static [&'static str],
@@ -251,6 +330,52 @@ const PROBES: &[Probe] = &[
         name: "never_first_array_element",
         want: &[],
         src: "fn die() -> never { while true { } }\nfn f() -> Array[i32, 2] { return [die(), 1]; }",
+    },
+    // ---------------------------------------------------------------- I7
+    Probe {
+        name: "r50_tuple_pattern_arity_mismatch_rejected",
+        want: &["T0050"],
+        src: "fn f(let p: (i32, i32)) -> i32 { match p { (let a, let b, let c) => a, } }",
+    },
+    Probe {
+        name: "r50_variant_tuple_payload_arity_mismatch_rejected",
+        want: &["T0050"],
+        src: "enum E70 { V(i32, i32) }\nfn f(let e: E70) -> i32 { match e { E70.V(let a) => a, } }",
+    },
+    Probe {
+        name: "r50_bool_literal_against_non_bool_rejected",
+        want: &["T0050"],
+        src: "fn f(let n: i32) -> i32 { match n { true => 1, _ => 0, } }",
+    },
+    Probe {
+        name: "r51_let_binding_type_is_the_variants_own_substituted_argument",
+        want: &["T0026"],
+        src: "enum Box70[T] { Full(T) }\nfn f(let b: Box70[i64]) -> bool { match b { Box70.Full(let v) => { return v; } } }",
+    },
+    Probe {
+        name: "r53_missing_payload_variant_names_the_gap_rejected",
+        want: &["T0053"],
+        src: "enum Shape70 { circle(f64), square(f64) }\nfn f(let s: Shape70) -> f64 { match s { .circle(let r) => r, } }",
+    },
+    Probe {
+        name: "r53_struct_pattern_itself_is_always_exhaustive_accepted",
+        want: &[],
+        src: "struct P70 { x: i32, y: i32 }\nfn f(let p: P70) -> i32 { match p { P70 { x: let x, y: let y } => x + y, } }",
+    },
+    Probe {
+        name: "r54_fully_wildcard_tuple_makes_a_later_concrete_arm_unreachable",
+        want: &["T0054"],
+        src: "fn f(let p: (bool, bool)) -> i32 { match p { (_, _) => 0, (true, true) => 1, } }",
+    },
+    Probe {
+        name: "nested_explicit_generic_argument_is_checked",
+        want: &["T0026"],
+        src: "fn id70[T](let x: T) -> T { return x; }\nfn f() -> bool { return id70[Option[i64]](true); }",
+    },
+    Probe {
+        name: "explicit_generic_argument_of_a_user_generic_struct_is_checked",
+        want: &["T0026"],
+        src: "struct Box71[T] { v: T }\nfn id71[T](let x: T) -> T { return x; }\nfn f(let b: Box71[i64]) -> bool { return id71[Box71[i64]](b); }",
     },
 ];
 
@@ -1527,5 +1652,798 @@ fn i6v_a_bound_on_a_subject_that_contains_a_neutral_projection_is_decided() {
         )
         .is_empty(),
         "the structural `Droppable` bound still holds on such a subject"
+    );
+}
+
+// ---------------------------------------------------------------- I7
+
+/// A corpus FILE's own text (already its own `module ...;`, unlike
+/// [`check_source`]'s snippets) plus the build's `exhaust_steps` counter
+/// (design §12; `exhaust.rs`'s own budget), for a test that must read the
+/// plain algorithm's own step count rather than just its diagnostics.
+fn check_file_steps(source: &[u8]) -> (Vec<String>, u64) {
+    let mut interner = Interner::new();
+    let name: Segments = vec![interner.intern(b"m")];
+    let parsed = parse_file(source);
+    assert!(
+        parsed.diags.is_empty(),
+        "corpus file must parse: {:?}",
+        parsed.diags
+    );
+    let inputs = [FileInput {
+        tree: &parsed.tree,
+        tokens: &parsed.tokens,
+        source,
+        name,
+    }];
+    let resolved = fors_resolve::resolve_in_package(&mut interner, &inputs, Some(0), Some(b"m"));
+    let out = fors_check::check_build(&inputs, &resolved, &mut interner);
+    (
+        out.diagnostics.iter().map(|d| d.code.as_string()).collect(),
+        out.counters.exhaust_steps,
+    )
+}
+
+/// R55's own paragraph: "the computation is charged one step per row ...
+/// with no memoisation and no early exit other than an empty matrix or an
+/// exhausted column list ... the count is that of the PLAIN algorithm, so
+/// that it is the same in every implementation". This re-derives that
+/// count a SECOND way — over a flat `Vec<Option<bool>>` row shape instead
+/// of `exhaust.rs`'s `PatStore`/`Ctor` — so a counting mistake in either
+/// coding is caught by the other, on the design's own two R55 corpus
+/// files. The 36-arm file's `node_count` is `arms * (columns + 1)` (one
+/// `PatStore` node per tuple pattern, plus one per leaf — `exhaust.rs`'s
+/// `pat::PatStore::pattern_node_count`), matching `exhaust.rs` exactly
+/// because both charge the TOP-level 1-column tuple matrix once before
+/// the N-column one its sole constructor specialises to, every time a
+/// query starts (see `ref_query` below).
+#[test]
+fn plain_step_count_matches_reference() {
+    type Row = Vec<Option<bool>>;
+
+    fn ref_usefulness(
+        rows: &[Row],
+        v: &[Option<bool>],
+        steps: &mut u64,
+        limit: u64,
+    ) -> Option<bool> {
+        *steps += rows.len() as u64;
+        if *steps > limit {
+            return None;
+        }
+        if v.is_empty() {
+            return Some(rows.is_empty());
+        }
+        match v[0] {
+            Some(b) => {
+                let spec: Vec<Row> = rows
+                    .iter()
+                    .filter_map(|r| match r[0] {
+                        Some(x) if x == b => Some(r[1..].to_vec()),
+                        None => Some(r[1..].to_vec()),
+                        _ => None,
+                    })
+                    .collect();
+                ref_usefulness(&spec, &v[1..], steps, limit)
+            }
+            None => {
+                let has_t = rows.iter().any(|r| r[0] == Some(true));
+                let has_f = rows.iter().any(|r| r[0] == Some(false));
+                if has_t && has_f {
+                    // Complete signature: both constructors, neither
+                    // early-exit (R55: every matrix the loop forms is
+                    // charged, win or lose).
+                    let mut any = false;
+                    for b in [false, true] {
+                        let spec: Vec<Row> = rows
+                            .iter()
+                            .filter_map(|r| match r[0] {
+                                Some(x) if x == b => Some(r[1..].to_vec()),
+                                None => Some(r[1..].to_vec()),
+                                _ => None,
+                            })
+                            .collect();
+                        let u = ref_usefulness(&spec, &v[1..], steps, limit)?;
+                        any = any || u;
+                    }
+                    Some(any)
+                } else {
+                    let def_rows: Vec<Row> = rows
+                        .iter()
+                        .filter(|r| r[0].is_none())
+                        .map(|r| r[1..].to_vec())
+                        .collect();
+                    ref_usefulness(&def_rows, &v[1..], steps, limit)
+                }
+            }
+        }
+    }
+
+    /// One usefulness query over the WHOLE match: the written column is
+    /// the tuple pattern itself (one column, the sole constructor of a
+    /// tuple type always matches), charged once before `ref_usefulness`
+    /// charges its own first call on the N-column matrix it specialises
+    /// to — the same two charges `exhaust.rs`'s "Some(c)" dispatch makes
+    /// for its caller's and callee's matrices.
+    fn ref_query(rows: &[Row], v: &[Option<bool>], steps: &mut u64, limit: u64) -> Option<bool> {
+        *steps += rows.len() as u64;
+        if *steps > limit {
+            return None;
+        }
+        ref_usefulness(rows, v, steps, limit)
+    }
+
+    fn ref_steps(arms: &[Row]) -> (u64, bool) {
+        let n = arms[0].len();
+        let node_count = arms.len() as u64 * (n as u64 + 1);
+        let limit = 256 * node_count;
+        let mut steps = 0u64;
+        for i in 0..arms.len() {
+            let rows: Vec<Row> = arms[..i].to_vec();
+            if ref_query(&rows, &arms[i], &mut steps, limit).is_none() {
+                return (steps, true);
+            }
+        }
+        let wildcard_row = vec![None; n];
+        if ref_query(arms, &wildcard_row, &mut steps, limit).is_none() {
+            return (steps, true);
+        }
+        (steps, false)
+    }
+
+    /// Each arm row `(true, _, false, ...) => N,` to `Vec<Option<bool>>`.
+    fn parse_arms(src: &str) -> Vec<Row> {
+        src.lines()
+            .map(str::trim)
+            .filter(|l| l.starts_with('('))
+            .map(|l| {
+                let close = l.find(')').expect("a closing paren");
+                l[1..close]
+                    .split(',')
+                    .map(|t| match t.trim() {
+                        "true" => Some(true),
+                        "false" => Some(false),
+                        "_" => None,
+                        other => panic!("unexpected pattern token {other:?}"),
+                    })
+                    .collect()
+            })
+            .collect()
+    }
+
+    let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .parent()
+        .unwrap()
+        .parent()
+        .unwrap()
+        .join("tests/conformance/09-types");
+    for (name, want_exceeded) in [
+        ("match-budget-exceeded-rejected", true),
+        ("match-budget-within-accepted", false),
+    ] {
+        let src = std::fs::read_to_string(root.join(format!("{name}.fors"))).unwrap();
+        let (diags, steps) = check_file_steps(src.as_bytes());
+        let arms = parse_arms(&src);
+        let (expected_steps, exceeded) = ref_steps(&arms);
+        assert_eq!(
+            exceeded, want_exceeded,
+            "{name}: reference exceeded mismatch"
+        );
+        assert_eq!(
+            steps, expected_steps,
+            "{name}: exhaust.rs's own step count ({steps}) disagrees with the independent reference ({expected_steps})"
+        );
+        if want_exceeded {
+            assert_eq!(diags, vec!["T0055".to_string()], "{name}");
+        } else {
+            assert!(diags.is_empty(), "{name}: expected check-ok, got {diags:?}");
+        }
+    }
+
+    // The design's "20 hand-built matrices": seeded random bool-tuple arm
+    // sets (3-6 columns, 2-8 arms, a third wildcards) written out the way
+    // the corpus files are, the plain count re-derived by the reference
+    // above and compared EXACTLY — along with whether the budget was
+    // exceeded, which `exhaust.rs` reports as T0055 and nothing else.
+    let mut seed = 0x1e57_ab1e_u64;
+    for k in 0..20 {
+        seed = fors_index::splitmix64(seed);
+        let n = 3 + (seed % 4) as usize;
+        let narms = 2 + ((seed >> 8) % 7) as usize;
+        let mut s = seed;
+        let arms: Vec<Row> = (0..narms)
+            .map(|_| {
+                (0..n)
+                    .map(|_| {
+                        s = fors_index::splitmix64(s);
+                        match s % 3 {
+                            0 => None,
+                            1 => Some(false),
+                            _ => Some(true),
+                        }
+                    })
+                    .collect()
+            })
+            .collect();
+        let params: Vec<String> = (0..n).map(|i| format!("let b{i}: bool")).collect();
+        let scrut: Vec<String> = (0..n).map(|i| format!("b{i}")).collect();
+        let body: String = arms
+            .iter()
+            .enumerate()
+            .map(|(i, r)| {
+                let cells: Vec<&str> = r
+                    .iter()
+                    .map(|c| match c {
+                        None => "_",
+                        Some(true) => "true",
+                        Some(false) => "false",
+                    })
+                    .collect();
+                format!("        ({}) => {i},\n", cells.join(", "))
+            })
+            .collect();
+        let src = format!(
+            "module m;\n\nfn f({}) -> i32 {{\n    match ({}) {{\n{body}    }}\n}}\n",
+            params.join(", "),
+            scrut.join(", ")
+        );
+        let (diags, steps) = check_file_steps(src.as_bytes());
+        let (expected_steps, exceeded) = ref_steps(&arms);
+        assert_eq!(
+            steps, expected_steps,
+            "hand-built matrix {k}: exhaust.rs's own step count ({steps}) disagrees with the independent reference ({expected_steps})\n{src}"
+        );
+        assert_eq!(
+            diags.contains(&"T0055".to_string()),
+            exceeded,
+            "hand-built matrix {k}: budget verdict\n{src}"
+        );
+    }
+}
+
+/// R53/R54's usefulness algorithm against brute-force enumeration of EVERY
+/// value of a random small finite domain (design §13's I7 GATE row: "≤3
+/// columns over enums ≤4 variants and bools, 10k random matrices"), seeded
+/// deterministically so a failure reproduces. Domains nest — `bool`, unit
+/// enums, tuples, structs matched by `{ }` payloads that omit fields, and
+/// `Option` — up to three levels deep (`Option[Option[bool]]`,
+/// `(Option[E3], bool)`), capped at 256 values so the enumeration stays
+/// cheap. Each case asserts the exact diagnostic list AND its line:
+/// `diag.rs`'s `PER_DECL_BUDGET` (design §10) caps a declaration at ONE
+/// diagnostic and `exhaust::check_match` charges it in the order it
+/// decides things — every unreachable arm in arm order, then the
+/// missing-value witness — so the expectation is the FIRST thing that
+/// order finds, at that arm's own line (T0054) or the `match`'s (T0053).
+#[test]
+fn usefulness_vs_brute_force_oracle() {
+    #[derive(Clone)]
+    enum Dom {
+        Bool,
+        /// `enum E<n> { V0, .. }`, `n` unit variants.
+        Enum(u32),
+        Tuple(Vec<Dom>),
+        /// `struct P<k> { pub f0: bool, .. }`, matched by a `{ }` payload
+        /// that may omit any field.
+        Struct(u32),
+        Opt(Box<Dom>),
+    }
+
+    #[derive(Clone)]
+    enum Pat {
+        Wild,
+        Bool(bool),
+        Variant(u32),
+        Tuple(Vec<Pat>),
+        /// One entry per field; `None` is an omitted field.
+        Struct(Vec<Option<Pat>>),
+        Some(Box<Pat>),
+        NoneV,
+    }
+
+    /// Values are numbered `0..size`: tuples mixed-radix (first component
+    /// least significant), structs bitwise, `Option` with `none` at 0 and
+    /// `some(x)` at `1 + x`.
+    fn size(d: &Dom) -> u64 {
+        match d {
+            Dom::Bool => 2,
+            Dom::Enum(n) => *n as u64,
+            Dom::Tuple(ds) => ds.iter().map(size).product(),
+            Dom::Struct(k) => 1u64 << k,
+            Dom::Opt(inner) => 1 + size(inner),
+        }
+    }
+
+    fn covers(pat: &Pat, dom: &Dom, v: u64) -> bool {
+        match (pat, dom) {
+            (Pat::Wild, _) => true,
+            (Pat::Bool(b), Dom::Bool) => (v == 1) == *b,
+            (Pat::Variant(i), Dom::Enum(_)) => v == *i as u64,
+            (Pat::Tuple(ps), Dom::Tuple(ds)) => {
+                let mut rest = v;
+                ps.iter().zip(ds).all(|(p, d)| {
+                    let s = size(d);
+                    let comp = rest % s;
+                    rest /= s;
+                    covers(p, d, comp)
+                })
+            }
+            (Pat::Struct(fs), Dom::Struct(_)) => fs.iter().enumerate().all(|(i, f)| match f {
+                None => true,
+                Some(p) => covers(p, &Dom::Bool, (v >> i) & 1),
+            }),
+            (Pat::Some(p), Dom::Opt(inner)) => v >= 1 && covers(p, inner, v - 1),
+            (Pat::NoneV, Dom::Opt(_)) => v == 0,
+            _ => panic!("pattern/domain shape mismatch"),
+        }
+    }
+
+    struct Rng(u64);
+    impl Rng {
+        fn next(&mut self) -> u64 {
+            self.0 = fors_index::splitmix64(self.0);
+            self.0
+        }
+        fn range(&mut self, n: u32) -> u32 {
+            (self.next() % n as u64) as u32
+        }
+        fn bool(&mut self) -> bool {
+            self.next() & 1 == 1
+        }
+    }
+
+    fn gen_dom(rng: &mut Rng, depth: u32) -> Dom {
+        match rng.range(if depth == 0 { 3 } else { 6 }) {
+            0 => Dom::Bool,
+            1 => Dom::Enum(2 + rng.range(3)),
+            2 => Dom::Struct(2 + rng.range(2)),
+            3 => Dom::Tuple(
+                (0..2 + rng.range(2))
+                    .map(|_| gen_dom(rng, depth - 1))
+                    .collect(),
+            ),
+            4 => Dom::Opt(Box::new(gen_dom(rng, depth - 1))),
+            // The design's "enums-in-tuples", at any depth.
+            _ => Dom::Tuple(vec![Dom::Enum(2 + rng.range(3)), Dom::Bool]),
+        }
+    }
+
+    fn gen_pat(rng: &mut Rng, dom: &Dom) -> Pat {
+        if rng.range(100) < 30 {
+            return Pat::Wild;
+        }
+        match dom {
+            Dom::Bool => Pat::Bool(rng.bool()),
+            Dom::Enum(n) => Pat::Variant(rng.range(*n)),
+            Dom::Tuple(ds) => Pat::Tuple(ds.iter().map(|d| gen_pat(rng, d)).collect()),
+            Dom::Struct(k) => {
+                let mut fs: Vec<Option<Pat>> = (0..*k)
+                    .map(|_| (rng.range(100) < 60).then(|| gen_pat(rng, &Dom::Bool)))
+                    .collect();
+                // ch07 has no empty `{ }` payload and a bare struct name
+                // is T0050 (R50), so at least one field is written.
+                if fs.iter().all(Option::is_none) {
+                    fs[0] = Some(Pat::Wild);
+                }
+                Pat::Struct(fs)
+            }
+            Dom::Opt(inner) => {
+                if rng.range(3) == 0 {
+                    Pat::NoneV
+                } else {
+                    Pat::Some(Box::new(gen_pat(rng, inner)))
+                }
+            }
+        }
+    }
+
+    fn ty_src(d: &Dom) -> String {
+        match d {
+            Dom::Bool => "bool".to_string(),
+            Dom::Enum(n) => format!("E{n}"),
+            Dom::Tuple(ds) => {
+                let parts: Vec<String> = ds.iter().map(ty_src).collect();
+                format!("({})", parts.join(", "))
+            }
+            Dom::Struct(k) => format!("P{k}"),
+            Dom::Opt(inner) => format!("Option[{}]", ty_src(inner)),
+        }
+    }
+
+    /// Every declaration `d` needs, deduplicated, one per line.
+    fn decls(d: &Dom, out: &mut Vec<String>) {
+        let line = match d {
+            Dom::Enum(n) => {
+                let vs: Vec<String> = (0..*n).map(|i| format!("V{i}")).collect();
+                Some(format!("enum E{n} {{ {} }}", vs.join(", ")))
+            }
+            Dom::Struct(k) => {
+                let fs: Vec<String> = (0..*k).map(|i| format!("pub f{i}: bool")).collect();
+                Some(format!("struct P{k} {{ {} }}", fs.join(", ")))
+            }
+            _ => None,
+        };
+        if let Some(l) = line
+            && !out.contains(&l)
+        {
+            out.push(l);
+        }
+        match d {
+            Dom::Tuple(ds) => ds.iter().for_each(|x| decls(x, out)),
+            Dom::Opt(inner) => decls(inner, out),
+            _ => {}
+        }
+    }
+
+    /// `names` numbers the `let` bindings so each is distinct; a wildcard
+    /// alternates between its two irrefutable spellings (design §7.8
+    /// treats `_` and `let n` alike).
+    fn pat_src(p: &Pat, dom: &Dom, names: &mut u32) -> String {
+        match (p, dom) {
+            (Pat::Wild, _) => {
+                *names += 1;
+                if names.is_multiple_of(2) {
+                    "_".to_string()
+                } else {
+                    format!("let w{names}")
+                }
+            }
+            (Pat::Bool(b), _) => b.to_string(),
+            (Pat::Variant(i), _) => format!(".V{i}"),
+            (Pat::Tuple(ps), Dom::Tuple(ds)) => {
+                let parts: Vec<String> = ps
+                    .iter()
+                    .zip(ds)
+                    .map(|(p, d)| pat_src(p, d, names))
+                    .collect();
+                format!("({})", parts.join(", "))
+            }
+            (Pat::Struct(fs), Dom::Struct(k)) => {
+                let parts: Vec<String> = fs
+                    .iter()
+                    .enumerate()
+                    .filter_map(|(i, f)| {
+                        f.as_ref()
+                            .map(|p| format!("f{i}: {}", pat_src(p, &Dom::Bool, names)))
+                    })
+                    .collect();
+                format!("P{k} {{ {} }}", parts.join(", "))
+            }
+            (Pat::Some(p), Dom::Opt(inner)) => format!("some({})", pat_src(p, inner, names)),
+            (Pat::NoneV, _) => "none".to_string(),
+            _ => panic!("pattern/domain shape mismatch"),
+        }
+    }
+
+    struct Case {
+        src: String,
+        dom: Dom,
+        arms: Vec<Pat>,
+        match_line: u32,
+        arm_lines: Vec<u32>,
+    }
+
+    /// The source, the domain and the arm patterns a random case decided,
+    /// plus the line each arm and the `match` land on once `check_source`
+    /// has prepended its two header lines.
+    fn gen_case(rng: &mut Rng) -> Case {
+        let dom = loop {
+            let d = gen_dom(rng, 2);
+            if size(&d) <= 256 {
+                break d;
+            }
+        };
+        let narms = 2 + rng.range(5) as usize;
+        let arms: Vec<Pat> = (0..narms).map(|_| gen_pat(rng, &dom)).collect();
+        let mut header = Vec::new();
+        decls(&dom, &mut header);
+        let mut line = 2 + header.len() as u32;
+        let mut src = header.join("\n");
+        if !header.is_empty() {
+            src.push('\n');
+        }
+        src.push_str(&format!("fn f(let x: {}) -> i32 {{\n", ty_src(&dom)));
+        line += 1;
+        src.push_str("    match x {\n");
+        line += 1;
+        let match_line = line;
+        let mut names = 0u32;
+        let mut arm_lines = Vec::with_capacity(narms);
+        for (i, p) in arms.iter().enumerate() {
+            line += 1;
+            arm_lines.push(line);
+            src.push_str(&format!(
+                "        {} => {i},\n",
+                pat_src(p, &dom, &mut names)
+            ));
+        }
+        src.push_str("    }\n}\n");
+        Case {
+            src,
+            dom,
+            arms,
+            match_line,
+            arm_lines,
+        }
+    }
+
+    /// Exhaustiveness and per-arm usefulness by enumerating every value of
+    /// the domain directly — the oracle `exhaust.rs`'s matrix algorithm is
+    /// checked against. Returns the exhaustiveness bit and, in arm order,
+    /// whether each arm is useful.
+    fn ground_truth(dom: &Dom, arms: &[Pat]) -> (bool, Vec<bool>) {
+        let n = size(dom);
+        let mut covered = vec![false; n as usize];
+        let mut useful = Vec::with_capacity(arms.len());
+        for pat in arms {
+            let mut arm_useful = false;
+            for v in 0..n {
+                if covers(pat, dom, v) && !covered[v as usize] {
+                    arm_useful = true;
+                    covered[v as usize] = true;
+                }
+            }
+            useful.push(arm_useful);
+        }
+        (covered.iter().all(|&c| c), useful)
+    }
+
+    const CASES: usize = 10_000;
+    let mut rng = Rng(0x5eed_c0de_1234_5678);
+    let mut failures = Vec::new();
+    let mut deepest = 0u32;
+    let mut saw_struct = false;
+    let mut saw_enum_in_tuple = false;
+    for case in 0..CASES {
+        let c = gen_case(&mut rng);
+        fn depth(d: &Dom) -> u32 {
+            match d {
+                Dom::Tuple(ds) => 1 + ds.iter().map(depth).max().unwrap_or(0),
+                Dom::Opt(inner) => 1 + depth(inner),
+                _ => 1,
+            }
+        }
+        deepest = deepest.max(depth(&c.dom));
+        saw_struct |= matches!(c.dom, Dom::Struct(_));
+        saw_enum_in_tuple |=
+            matches!(&c.dom, Dom::Tuple(ds) if ds.iter().any(|d| matches!(d, Dom::Enum(_))));
+        let (exhaustive, useful) = ground_truth(&c.dom, &c.arms);
+        let want: Vec<(String, u32)> = match useful.iter().position(|&u| !u) {
+            Some(i) => vec![("T0054".to_string(), c.arm_lines[i])],
+            None if !exhaustive => vec![("T0053".to_string(), c.match_line)],
+            None => Vec::new(),
+        };
+        let got = check_source_lines(&c.src);
+        if got != want {
+            failures.push(format!(
+                "case {case}: want {want:?}, got {got:?}\n{}",
+                c.src
+            ));
+        }
+        if failures.len() >= 5 {
+            break;
+        }
+    }
+    assert!(
+        failures.is_empty(),
+        "oracle failures ({}):\n{}",
+        failures.len(),
+        failures.join("\n")
+    );
+    assert!(deepest >= 3, "the generator never nested three levels deep");
+    assert!(
+        saw_struct && saw_enum_in_tuple,
+        "the generator skipped a required shape"
+    );
+}
+
+// ------------------------------------------------- I7 verification (2026-10-02)
+
+/// R53: "a `const` pattern is the literal constructor of the constant's
+/// comptime value ... covers exactly that one value". Before the repair
+/// `lower::lower_const` gave a `Str` or negated-integer constant no value
+/// at all, so `pat::check_pat_const` lowered it to a WILDCARD: `S => 1`
+/// alone was accepted as exhaustive, and a `_` after it drew T0054.
+#[test]
+fn i7v_str_and_negative_const_patterns_are_one_value_constructors() {
+    const S: &str = "const S: Str = \"x\";\n";
+    assert_eq!(
+        check_source(&format!(
+            "{S}fn f(let s: Str) -> i32 {{ match s {{ S => 1 }} }}"
+        )),
+        vec!["T0053"]
+    );
+    assert_eq!(
+        check_source(&format!(
+            "{S}fn f(let s: Str) -> i32 {{ match s {{ \"x\" => 1, S => 2, _ => 0 }} }}"
+        )),
+        vec!["T0054"],
+        "a constant and an equal literal are the same constructor"
+    );
+    assert!(
+        check_source(&format!(
+            "{S}fn f(let s: Str) -> i32 {{ match s {{ \"y\" => 1, S => 2, _ => 0 }} }}"
+        ))
+        .is_empty(),
+        "two different strings are two constructors and the `_` is still useful"
+    );
+    const N: &str = "const N: i32 = -1;\n";
+    assert_eq!(
+        check_source(&format!(
+            "{N}fn f(let n: i32) -> i32 {{ match n {{ N => 1 }} }}"
+        )),
+        vec!["T0053"]
+    );
+    assert_eq!(
+        check_source(&format!(
+            "{N}fn f(let n: i32) -> i32 {{ match n {{ N => 1, -1 => 2, _ => 0 }} }}"
+        )),
+        vec!["T0054"]
+    );
+    assert!(
+        check_source(&format!(
+            "{N}fn f(let n: i32) -> i32 {{ match n {{ N => 1, 1 => 2, _ => 0 }} }}"
+        ))
+        .is_empty()
+    );
+}
+
+/// R50's `const` clause compares the constant's type with the scrutinee's
+/// BARE type: an `imm i32` scrutinee matches an `i32` constant (before the
+/// repair the qualified `TyId` differed and drew a spurious T0050), while
+/// an `i64` constant against an `i32` scrutinee is still T0050.
+#[test]
+fn i7v_const_pattern_checks_against_the_bare_scrutinee_type() {
+    assert!(
+        check_source(
+            "const LIMIT: i32 = 10;\nfn f(let n: imm i32) -> i32 { match n { LIMIT => 1, _ => 0 } }"
+        )
+        .is_empty()
+    );
+    assert_eq!(
+        check_source(
+            "const LIMIT: i64 = 10;\nfn f(let n: i32) -> i32 { match n { LIMIT => 1, _ => 0 } }"
+        ),
+        vec!["T0050"]
+    );
+}
+
+/// R50: "a `{ }` payload names visible fields at most once each". A name
+/// that is no field, and a field named twice, are each T0050 at the
+/// `fpat` (before the repair both were silent — the unknown field even
+/// made the arm a wildcard, so a later arm drew T0054 instead).
+#[test]
+fn i7v_field_payload_names_visible_fields_at_most_once() {
+    const P: &str = "struct P { pub x: bool, pub y: bool }\n";
+    assert_eq!(
+        check_messages(&format!(
+            "{P}fn f(let p: P) -> i32 {{ match p {{ P {{ x: true, x: false }} => 1, _ => 0 }} }}"
+        )),
+        vec!["T0050: the field `x` is named twice in this pattern"]
+    );
+    assert_eq!(
+        check_messages(&format!(
+            "{P}fn f(let p: P) -> i32 {{ match p {{ P {{ z: let q }} => 1, _ => 0 }} }}"
+        )),
+        vec!["T0050: there is no field `z` to match here"]
+    );
+    assert_eq!(
+        check_messages(
+            "enum S { rect { w: i32, h: i32 }, e }\nfn f(let s: S) -> i32 { match s { .rect { q: let q } => 1, _ => 0 } }"
+        ),
+        vec!["T0050: there is no field `q` to match here"]
+    );
+    assert!(
+        check_source(&format!(
+            "{P}fn f(let p: P) -> i32 {{ match p {{ P {{ y: true }} => 1, P {{ x: _ }} => 0 }} }}"
+        ))
+        .is_empty(),
+        "omitted fields match anything; naming each once is fine"
+    );
+}
+
+/// R50's "VISIBLE fields": a struct field without `pub` named by a `{ }`
+/// pattern in another module is ch08 R11's N0011 — the same code and
+/// wording `member::member_of` gives `p.hid` (row 49: member visibility
+/// is ch08's code). In its own module the field is visible; a variant's
+/// record fields have no `pub` of their own and are as visible as the
+/// variant.
+#[test]
+fn i7v_private_field_pattern_across_modules_is_ch08_r11() {
+    const LIB: &str = "pub struct P { pub x: i32, hid: i32 }\npub enum E { r { w: i32 }, u }\n";
+    assert_eq!(
+        check_modules(&[
+            ("lib", LIB),
+            (
+                "main",
+                "use lib.P;\nfn f(let p: P) -> i32 { match p { P { hid: let s } => s } }"
+            ),
+        ]),
+        vec![("N0011".to_string(), "main".to_string())]
+    );
+    assert!(
+        check_modules(&[
+            ("lib", LIB),
+            (
+                "main",
+                "use lib.P;\nuse lib.E;\nfn f(let p: P) -> i32 { match p { P { x: let s } => s } }\n\
+                 fn g(let e: E) -> i32 { match e { .r { w: let w } => w, .u => 0 } }"
+            ),
+        ])
+        .is_empty()
+    );
+    assert!(
+        check_source(
+            "struct P { pub x: i32, hid: i32 }\nfn f(let p: P) -> i32 { match p { P { hid: let s } => s } }"
+        )
+        .is_empty(),
+        "visible in its own module"
+    );
+}
+
+/// R53: "the diagnostic names one uncovered VALUE". A struct's or record
+/// variant's witness is spelled field by field (before the repair a
+/// struct's was just its type name, `P`), and a `Str` column's witness is
+/// a string no arm already names (before the repair the candidates were
+/// compared in a different spelling from the patterns, so `"other0"` was
+/// offered as uncovered by a match whose first arm IS `"other0"`).
+#[test]
+fn i7v_witness_is_a_value_no_arm_covers() {
+    assert_eq!(
+        check_messages(
+            "struct P { pub x: bool, pub y: bool }\nfn f(let p: P) -> i32 { match p { P { x: true } => 1, P { y: false } => 2 } }"
+        ),
+        vec![
+            "T0053: the match is not exhaustive; for example, `P { x: false, y: true }` is not covered"
+        ]
+    );
+    assert_eq!(
+        check_messages(
+            "enum S { rect { w: bool, h: bool }, e }\nfn f(let s: S) -> i32 { match s { .rect { w: true } => 1, .e => 0 } }"
+        ),
+        vec![
+            "T0053: the match is not exhaustive; for example, `rect { w: false, h: false }` is not covered"
+        ]
+    );
+    assert_eq!(
+        check_messages("fn f(let s: Str) -> i32 { match s { \"other0\" => 1, \"other1\" => 2 } }"),
+        vec!["T0053: the match is not exhaustive; for example, `\"other2\"` is not covered"]
+    );
+    assert_eq!(
+        check_messages(
+            "fn f(let o: Option[Option[bool]]) -> i32 { match o { some(some(true)) => 1, some(none) => 2, none => 3 } }"
+        ),
+        vec!["T0053: the match is not exhaustive; for example, `some(some(false))` is not covered"]
+    );
+}
+
+/// Task D of I7 (the I6 verifier's finding): a NESTED explicit generic
+/// argument parses as a `Bracket`, which `lower::nested_type_app` now
+/// lowers like a `TypeApp` — one and two levels deep, in both directions.
+#[test]
+fn i7v_nested_explicit_generic_argument_lowers_at_every_depth() {
+    const ID: &str = "fn id[T](let t: T) -> T { return t; }\n";
+    assert_eq!(
+        check_source(&format!(
+            "{ID}fn f() -> Option[i64] {{ return id[Option[i64]](true); }}"
+        )),
+        vec!["T0026"]
+    );
+    assert!(
+        check_source(&format!(
+            "{ID}fn f() -> Option[i64] {{ return id[Option[i64]](some(1i64)); }}"
+        ))
+        .is_empty()
+    );
+    assert!(
+        check_source(&format!(
+            "{ID}fn f() -> Option[Option[i64]] {{ return id[Option[Option[i64]]](some(some(1i64))); }}"
+        ))
+        .is_empty()
+    );
+    assert_eq!(
+        check_source(&format!(
+            "{ID}fn f() -> Option[Option[i64]] {{ return id[Option[Option[i64]]](some(1i64)); }}"
+        )),
+        vec!["T0026"]
     );
 }
