@@ -17,3 +17,10 @@ updates:
       # Only `default-days`: Dependabot rejects `semver-major-days` for the
       # github-actions ecosystem, and that makes the whole config invalid.
       default-days: 7
+    # The three `github/codeql-action/*` uses must move together: a bump of
+    # `autobuild` or `analyze` alone leaves `init` on the old major and every
+    # analyze job fails (PRs #56 and #57 did exactly that).
+    groups:
+      codeql-action:
+        patterns:
+          - "github/codeql-action*"
