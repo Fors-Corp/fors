@@ -7,9 +7,11 @@
 //! latched -> status 0; `main` returned but `Stdout` carries a latched
 //! error -> status 2; a trap -> a signal status, never 0/1/2 (§5.3: the
 //! trap path has no flush and no error line, dominating everything else).
-//! Status 1 (`main` raised, ch02 R17) is F3's: [`exec::Exit`] has no
-//! `Raise` variant yet, so [`entry_exit`] cannot produce it — adding one is
-//! F3's job, not a gap F2 papers over.
+//! **F4** added status 1 (`main` raised, ch02 R17): `errdefer` runs on error
+//! exits and nowhere else (ch01 R23b), so F4 needed `Exit::Raise` to have an
+//! error exit to test at all. What stays F3's is the CONTENT of that exit —
+//! `render`'s `error: ` line and `?`/`try_br` — not the status.
+//! **F6** added the `ub:` row at status [`crate::ub::UB_EXIT_STATUS`].
 //!
 //! A 536-line spike at
 //! `/Users/marcfors/fors-wt/i35-i4/spikes/contracts/f2_contracts_shim.rs`
@@ -82,11 +84,18 @@ pub enum ExitStatus {
 /// | `Return` | `false` | `Status(0)` |
 /// | `Return` | `true` | `Status(2)` |
 ///
-/// Status 1 (an error raised out of `main`, ch02 R17) is F3's: it needs
-/// `Exit::Raise`, which does not exist until `raises`/`?` does.
+/// F4 adds the `raise` row (status 1, ch02 R17(c): "Exit status 1, whether
+/// or not 3 or 4 succeeded") because it needs an ERROR EXIT to run an
+/// `errdefer` on at all; `render`'s `error: ` line stays F3's. F6 adds the
+/// `ub:` row: design §5.2's "A `ub:` diagnostic exits with status
+/// [`crate::ub::UB_EXIT_STATUS`]", which is an ordinary exit code and
+/// deliberately NOT a new [`ExitStatus`] variant — ch02 R15's eight trap
+/// kinds stay the only non-code outcome (E4).
 pub fn entry_exit(outcome: &Outcome) -> ExitStatus {
     match outcome.exit {
         Exit::Trap(k) => ExitStatus::Trap(k),
+        Exit::Ub(_) => ExitStatus::Status(crate::ub::UB_EXIT_STATUS),
+        Exit::Raise => ExitStatus::Status(1),
         Exit::Return if outcome.stdout_latched => ExitStatus::Status(2),
         Exit::Return => ExitStatus::Status(0),
     }
@@ -145,6 +154,33 @@ mod tests {
             exit,
             stdout: Vec::new(),
             stdout_latched,
+            site: None,
+            ub: None,
+            backtrace: Vec::new(),
+        }
+    }
+
+    #[test]
+    fn a_raise_out_of_main_is_status_1() {
+        // ch02 R17(c), and F4's reason for needing an error exit at all.
+        assert_eq!(
+            entry_exit(&outcome(Exit::Raise, false)),
+            ExitStatus::Status(1)
+        );
+        assert_eq!(
+            entry_exit(&outcome(Exit::Raise, true)),
+            ExitStatus::Status(1)
+        );
+    }
+
+    #[test]
+    fn a_ub_report_is_status_70_and_never_a_trap() {
+        // design §5.2 / E4: "a compiler bug must not look like a program
+        // trap". There is no `ExitStatus::Trap` on this path for any class.
+        for class in crate::ub::UbClass::ALL {
+            let status = entry_exit(&outcome(Exit::Ub(class), false));
+            assert_eq!(status, ExitStatus::Status(crate::ub::UB_EXIT_STATUS));
+            assert!(!matches!(status, ExitStatus::Trap(_)));
         }
     }
 

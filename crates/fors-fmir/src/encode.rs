@@ -34,7 +34,7 @@ use crate::inst::{CallRow, Callee, InstRow, ReduceRow, SwitchArm, SwitchRow};
 use crate::op::Op;
 use crate::place::Seg;
 use crate::region::{CaptureRow, RegionKind, RegionRow};
-use crate::scope::{DeferKind, DeferRow, ScopeRow};
+use crate::scope::{DeferKind, DeferRow, Discharge, ScopeRow};
 use crate::site::SiteRow;
 use crate::value::ValRow;
 
@@ -377,7 +377,120 @@ pub fn to_bytes(d: &DeclFmir) -> Vec<u8> {
         w.u32(p.0);
     }
 
+    write_exit_pool(&mut w, d);
+
     w.into_bytes()
+}
+
+/// The exit-edge table (design §3.5, §3.8). Written last, so a decoder built
+/// against the pre-F4 layout stops cleanly at "unexpected end of input"
+/// rather than mis-reading a later pool.
+fn write_exit_pool(w: &mut Writer, d: &DeclFmir) {
+    w.u32(d.exits.len() as u32);
+    for (_, row) in d.exits.all_rows() {
+        w.u32(row.from.0);
+        w.u32(row.to.0);
+        w.u32(row.kind.as_u32());
+        w.range(row.scopes.clone());
+        w.range(row.pending.clone());
+        w.range(row.drops.clone());
+        w.range(row.discharges.clone());
+    }
+    let (scope_list, pending, drops, discharges) = d.exits.raw();
+    w.u32(scope_list.len() as u32);
+    for s in scope_list {
+        w.u32(s.0);
+    }
+    w.u32(pending.len() as u32);
+    for p in pending {
+        w.u32(p.0);
+    }
+    w.u32(drops.len() as u32);
+    for p in drops {
+        w.u32(p.0);
+    }
+    w.u32(discharges.len() as u32);
+    for row in discharges {
+        w.u32(row.place.0);
+        write_discharge(w, row.how);
+    }
+}
+
+/// design §3.5's `Discharge`: a 1-word tag plus its two payload words
+/// (`Returned` carries none, written as two zeros so every row is the same
+/// width — the same fixed-width-row philosophy §3.1 applies to the pools).
+fn write_discharge(w: &mut Writer, how: Discharge) {
+    let (tag, a, b) = match how {
+        Discharge::MovedTo(i) => (0u32, i.0, 0),
+        Discharge::DeferredBody(scope, body) => (1, scope.0, body.0),
+        Discharge::Raised(i) => (2, i.0, 0),
+        Discharge::Returned => (3, 0, 0),
+    };
+    w.u32(tag);
+    w.u32(a);
+    w.u32(b);
+}
+
+fn read_discharge(r: &mut Reader) -> Result<Discharge, DecodeError> {
+    let tag = r.u32()?;
+    let a = r.u32()?;
+    let b = r.u32()?;
+    Ok(match tag {
+        0 => Discharge::MovedTo(crate::ids::InstId(a)),
+        1 => Discharge::DeferredBody(crate::ids::ScopeId(a), BlockId(b)),
+        2 => Discharge::Raised(crate::ids::InstId(a)),
+        3 => Discharge::Returned,
+        _ => return Err(err("unknown Discharge tag")),
+    })
+}
+
+fn read_exit_pool(r: &mut Reader) -> Result<crate::exit::ExitEdgePool, DecodeError> {
+    let n = r.u32()?;
+    let mut rows = Vec::with_capacity(n as usize);
+    for _ in 0..n {
+        let from = BlockId(r.u32()?);
+        let to = BlockId(r.u32()?);
+        let kind =
+            crate::exit::ExitKind::from_u32(r.u32()?).ok_or_else(|| err("unknown ExitKind"))?;
+        let scopes = r.range()?;
+        let pending = r.range()?;
+        let drops = r.range()?;
+        let discharges = r.range()?;
+        rows.push(crate::exit::ExitEdgeRow {
+            from,
+            to,
+            kind,
+            scopes,
+            pending,
+            drops,
+            discharges,
+        });
+    }
+    let n_scopes = r.u32()?;
+    let mut scope_list = Vec::with_capacity(n_scopes as usize);
+    for _ in 0..n_scopes {
+        scope_list.push(crate::ids::ScopeId(r.u32()?));
+    }
+    let n_pending = r.u32()?;
+    let mut pending = Vec::with_capacity(n_pending as usize);
+    for _ in 0..n_pending {
+        pending.push(crate::ids::DeferId(r.u32()?));
+    }
+    let n_drops = r.u32()?;
+    let mut drops = Vec::with_capacity(n_drops as usize);
+    for _ in 0..n_drops {
+        drops.push(crate::ids::PlaceId(r.u32()?));
+    }
+    let n_disch = r.u32()?;
+    let mut discharges = Vec::with_capacity(n_disch as usize);
+    for _ in 0..n_disch {
+        let place = crate::ids::PlaceId(r.u32()?);
+        let how = read_discharge(r)?;
+        discharges.push(crate::exit::DischargeRow { place, how });
+    }
+    Ok(crate::exit::ExitEdgePool::from_raw(
+        rows, scope_list, pending, drops, discharges,
+    ))
 }
 
 fn write_const_pool(w: &mut Writer, d: &DeclFmir) {
@@ -715,6 +828,8 @@ pub fn from_bytes(bytes: &[u8]) -> Result<DeclFmir, DecodeError> {
     }
     let scoped_sources = crate::scope::PlaceListPool::from_raw(source_items);
 
+    let exits = read_exit_pool(&mut r)?;
+
     if r.pos != words.len() {
         return Err(err("trailing bytes after a complete decode"));
     }
@@ -733,6 +848,7 @@ pub fn from_bytes(bytes: &[u8]) -> Result<DeclFmir, DecodeError> {
         obligations,
         scoped_sources,
         defers,
+        exits,
         entry,
         is_unsafe_invariant,
         fingerprint: 0,
@@ -877,6 +993,14 @@ fn canonicalize(d: &DeclFmir) -> DeclFmir {
         new_defers.push(row);
     }
     out.defers = new_defers;
+
+    // Exit edges name blocks three ways: `from`, `to`, and a
+    // `Discharge::DeferredBody`'s body. `to == BlockId::NONE` is the absent
+    // sentinel and is left alone (`ExitEdgePool::remap_blocks`).
+    out.exits
+        .remap_blocks(|raw| safe_remap(&old_to_canonical, raw));
+    out.exits
+        .remap_discharge_blocks(|raw| safe_remap(&old_to_canonical, raw));
 
     out
 }

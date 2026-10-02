@@ -18,11 +18,17 @@ pub struct Slot {
     /// aggregate-typed values this is a handle into the machine's cell
     /// table; for `Str` a handle into the byte table.
     pub bits: u64,
-    /// Provenance tag. F6 owns real provenance; F1 carries the field so its
-    /// width is fixed from day one. Always zero.
+    /// Provenance: [`crate::mem::PROV_NONE`] for a non-pointer, else an index
+    /// into the machine's [`crate::mem::ProvRow`] table, which names what the
+    /// pointer points into and its borrow tag (design §5.1, §5.2).
     pub prov: u32,
     /// Miri bit: is this slot initialised?
     pub init: bool,
+    /// Miri bit (design §5.2's first row): is this place still LIVE, or was it
+    /// moved out of (`move_from`) or dropped at a scope exit? A read of a dead
+    /// slot is `ub: use-after-move`, distinct from reading an *uninitialised*
+    /// one, which is `ub: uninit-read`.
+    pub live: bool,
     /// ch05 R6, carried for the verifier and dumps.
     pub secret: bool,
 }
@@ -32,9 +38,32 @@ impl Slot {
     pub fn val(bits: u64) -> Slot {
         Slot {
             bits,
-            prov: 0,
+            prov: crate::mem::PROV_NONE,
             init: true,
+            live: true,
             secret: false,
+        }
+    }
+
+    /// A pointer: the same scalar plus the provenance row that names what it
+    /// points into (design §5.1).
+    pub fn ptr(bits: u64, prov: u32) -> Slot {
+        Slot {
+            bits,
+            prov,
+            init: true,
+            live: true,
+            secret: false,
+        }
+    }
+
+    /// The same slot with its `live` bit cleared: `move_from`'s effect on its
+    /// source place, and an exit edge's drop of a non-linear binding
+    /// (design §5.2, `type-checker.md` §13 I8b step 3).
+    pub fn moved_out(self) -> Slot {
+        Slot {
+            live: false,
+            ..self
         }
     }
 
@@ -43,15 +72,15 @@ impl Slot {
         Slot::val(0)
     }
 
-    /// An uninitialised slot: any read is `ub: uninit-read` (F6 owns the
-    /// report; F1 initialises every slot it creates, so this constructor
-    /// only exists for the entry shim's unused-parameter slots, which are
-    /// never read by lowered code).
+    /// An uninitialised slot: any read is `ub: uninit-read` (design §5.2,
+    /// F6's `ub_uninit_read_through_out`). It is LIVE but uninitialised —
+    /// `&out x` targets exactly such a slot (design §3.3's `borrow_out` row).
     pub fn uninit() -> Slot {
         Slot {
             bits: 0,
-            prov: 0,
+            prov: crate::mem::PROV_NONE,
             init: false,
+            live: true,
             secret: false,
         }
     }

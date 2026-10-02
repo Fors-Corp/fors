@@ -89,6 +89,12 @@ index_newtype!(
     /// explicit typed capture list (ch05 Rule 9).
     CaptureId
 );
+index_newtype!(
+    /// One row of [`crate::exit::ExitEdgePool`]: one scope-exit edge and the
+    /// pending bodies, drops and discharges it carries (design §3.5, §3.8;
+    /// `type-checker.md` §13 I8b's D7/D8).
+    ExitEdgeId
+);
 
 /// Sentinel for "no scope" / "no region" / "no brand" / "no arena-mediated
 /// caller" — every id type here is a bare `u32`, so `u32::MAX` is reserved as
@@ -99,6 +105,13 @@ pub const ABSENT: u32 = u32::MAX;
 
 impl ScopeId {
     pub const NONE: ScopeId = ScopeId(ABSENT);
+}
+impl BlockId {
+    /// "No successor block": an [`crate::exit::ExitEdgeRow::to`] of a
+    /// `ret`/`raise` function exit, and the target a deferred body's last
+    /// `br` names to end the body and resume the exit sequence
+    /// ([`crate::scope::BODY_END`]).
+    pub const NONE: BlockId = BlockId(ABSENT);
 }
 impl RegionId {
     pub const NONE: RegionId = RegionId(ABSENT);

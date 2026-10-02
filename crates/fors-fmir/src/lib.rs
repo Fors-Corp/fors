@@ -13,6 +13,9 @@
 //! - [`op`] — the 71-opcode [`op::Op`] enum and its classifications.
 //! - [`value`], [`place`], [`alias`], [`region`], [`scope`], [`site`],
 //!   [`constpool`], [`inst`], [`block`] — the pools design §3 names.
+//! - [`exit`] — scope-exit edges and what each one carries (design §3.5,
+//!   §3.8; `type-checker.md` §13 I8b's D7/D8), the data `verify()` asserts
+//!   and `fors-interp` executes instead of re-deriving.
 //! - [`decl`] — [`decl::DeclFmir`], one declaration's self-contained body.
 //! - [`encode`] — canonical byte encoding, decoding, and [`encode::fmir_hash`].
 //! - [`dump`] / [`parse`] — the textual form (see `dump.rs`'s module docs
@@ -30,6 +33,7 @@ pub mod decl;
 pub mod diag;
 pub mod dump;
 pub mod encode;
+pub mod exit;
 pub mod flags;
 pub mod ids;
 pub mod inst;

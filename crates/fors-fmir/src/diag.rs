@@ -51,6 +51,50 @@ pub enum DiagCode {
     SecretIntrinsicArg,
     /// ch05 Rule 6a: `declassify` outside `@unsafe(invariant: ...)`.
     DeclassifyRequiresUnsafe,
+    /// design §3.8: an exit edge whose pending-body SET differs from the
+    /// `defer`/`errdefer` rows of the scopes it leaves (ch01 R23a, R23b).
+    ExitEdgeWrongPendingMultiset,
+    /// design §3.8: the right multiset in the wrong ORDER — not innermost
+    /// scope first, or not one reverse `stmt_order` sequence per scope
+    /// (ch01 R23a, R23b; `type-checker.md` §13 I8b step 2).
+    ExitEdgeWrongPendingOrder,
+    /// ch02 R16: a `raise` edge marked `normal`, a `ret` edge marked
+    /// `error`, or a `try_br`'s ok/err edges marked the wrong way round.
+    ExitEdgeWrongKind,
+    /// `type-checker.md` §13 I8b step 2 / design §3.8: an exit edge's
+    /// `scopes` list is not the parent chain from the `from` block's own
+    /// scope outward (innermost FIRST, each entry the parent of the one
+    /// before it, ending at an ancestor of the `to` block's scope). The
+    /// pending order is derived from this list, so a list in the wrong
+    /// order would make an outer scope's bodies run before an inner's
+    /// with the per-scope check still passing.
+    ExitEdgeScopesNotAChain,
+    /// An exit edge whose `to` is not a successor of `from`'s terminator
+    /// (`BlockId::NONE` being the only legal `to` for `ret`/`raise`).
+    ExitEdgeNotASuccessor,
+    /// Two exit-edge rows for the same `(from, to)` pair: the interpreter's
+    /// lookup would be ambiguous.
+    ExitEdgeDuplicate,
+    /// ch01 R22h: an obligation of a scope being left with no `Discharge`
+    /// record on the edge. The interpreter reports this as
+    /// `ub: linear-leak`, never a trap (design §3.5, §5.2) — this is the
+    /// same condition found statically.
+    ExitEdgeMissingDischarge,
+    /// Two `Discharge` records for one obligation on one edge
+    /// (design §5.2's `ub: double-consume`, found statically).
+    ExitEdgeDuplicateDischarge,
+    /// A `Discharge` record for a place that is not an obligation of any
+    /// scope the edge leaves.
+    ExitEdgeUnknownDischarge,
+    /// ch01 R23f, R22d, ch02 R7: a `trap` is not an exit — it has no
+    /// successor, runs no body and discharges nothing, so no exit edge may
+    /// leave a `trap`-terminated block.
+    TrapHasExitEdge,
+    /// A `DeferRow.body` that names no block, that can reach a `ret`/
+    /// `raise`/`try_br` (ch01 R23c forbids all three inside a body), or
+    /// from which no `br BODY_END` is reachable (see
+    /// [`crate::scope::BODY_END`]).
+    DeferBodyMalformed,
     /// A defensive catch-all for structurally malformed pools (e.g. an
     /// out-of-range index) that none of the named checks above cover more
     /// specifically — never expected from this crate's own builder or

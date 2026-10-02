@@ -333,15 +333,24 @@ fn unknown_intrinsic_is_a_diagnostic() {
 }
 
 #[test]
-fn uninit_place_read_is_a_diagnostic() {
+fn uninit_place_read_is_a_ub_report_not_a_trap() {
+    // F1 reported this as an `InterpError`; **F6 promoted it** to design
+    // §5.2's row "Uninitialised read (incl. through `&out`) ->
+    // `ub: uninit-read`", which exits 70 with a machine-readable record and
+    // is still not a trap (ch02 R15's kind list is closed at eight, E4).
     let mut b = B::new();
     let i32 = b.ty(PrimKind::I32);
     let pid = b.decl.places.intern(0, &[], i32);
     let _ = b.emit(Op::CopyFrom, pid.0, NO_OPERAND, NO_OPERAND, i32);
     b.term(Op::Ret, NO_OPERAND, NO_OPERAND, NO_OPERAND);
     let (decl, tys) = b.finish();
-    let err = run(&prog_of(decl, vec![], vec![]), &tys).unwrap_err();
-    assert!(matches!(err, InterpError::UninitRead(_)), "{err:?}");
+    let out = run(&prog_of(decl, vec![], vec![]), &tys).expect("a ub: report, not an error");
+    assert_eq!(out.exit, Exit::Ub(fors_interp::UbClass::UninitRead));
+    assert!(!matches!(out.exit, Exit::Trap(_)));
+    assert_eq!(
+        fors_interp::entry_exit(&out),
+        fors_interp::ExitStatus::Status(fors_interp::UB_EXIT_STATUS)
+    );
 }
 
 #[test]

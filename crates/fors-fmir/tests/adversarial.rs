@@ -436,5 +436,9 @@ fn fmir_hash_of_a_fixed_declaration_is_a_constant() {
     assert_eq!(fmir_hash(&chain([0, 1, 2])), FIXED_CHAIN_HASH);
 }
 
-const FIXED_HASH: u128 = 232435784601953027257337958738078189704;
-const FIXED_CHAIN_HASH: u128 = 67825440428221145136381568856017431876;
+// Both constants moved when F4 added the exit-edge pool to `to_bytes`
+// (design §3.5, §3.8): the pin is cross-run DETERMINISM, not a stable wire
+// format — `encode.rs`'s own docs make the byte encoding an internal,
+// per-build artifact, and `fmir_hash` is a cache key, not a published id.
+const FIXED_HASH: u128 = 215378837925181180549108811392857412678;
+const FIXED_CHAIN_HASH: u128 = 333441995514437001502125268978957635740;

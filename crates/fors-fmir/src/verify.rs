@@ -26,7 +26,392 @@ pub fn verify(decl: &DeclFmir) -> Vec<Diagnostic> {
     check_reduce_shape(decl, &mut out);
     check_secret_propagation(decl, &mut out);
     check_secret_rejection(decl, &mut out);
+    check_defer_bodies(decl, &mut out);
+    check_exit_edges(decl, &mut out);
     out
+}
+
+/// Every `DeferRow.body` must be a real block whose own sub-CFG ends at
+/// [`crate::scope::BODY_END`] and contains no `ret`/`raise`/`try_br`
+/// (ch01 R23c: a body "MUST NOT contain `return`, `raise`, `?`"). A `trap`
+/// inside a body IS legal — R23c's own escape is "an `else |e| { }` handler
+/// that neither `raise`s nor `return`s: it yields the success value or
+/// traps".
+fn check_defer_bodies(decl: &DeclFmir, out: &mut Vec<Diagnostic>) {
+    let n_defers = decl.defers.len() as u32;
+    for (i, row) in decl.defers.get(0..n_defers).iter().enumerate() {
+        let body = row.body;
+        if decl.blocks.try_row(body).is_none() {
+            out.push(Diagnostic::new(
+                DiagCode::DeferBodyMalformed,
+                Anchor::Decl,
+                format!("defer row {i} names block {} which does not exist", body.0),
+            ));
+            continue;
+        }
+        // Walk the body's own blocks. `BODY_END` is the stop; anything else
+        // out of range, or a forbidden terminator, is a finding.
+        let mut seen = vec![false; decl.blocks.len()];
+        let mut stack = vec![body];
+        let mut reaches_end = false;
+        while let Some(b) = stack.pop() {
+            if b == crate::scope::BODY_END {
+                reaches_end = true;
+                continue;
+            }
+            let Some(blk) = decl.blocks.try_row(b) else {
+                out.push(Diagnostic::new(
+                    DiagCode::DeferBodyMalformed,
+                    Anchor::Block(body),
+                    format!("defer row {i}'s body branches to missing block {}", b.0),
+                ));
+                continue;
+            };
+            if seen[b.index()] {
+                continue;
+            }
+            seen[b.index()] = true;
+            match blk.term.op {
+                Op::Br => stack.push(crate::ids::BlockId(blk.term.a)),
+                Op::CondBr => {
+                    stack.push(crate::ids::BlockId(blk.term.b));
+                    stack.push(crate::ids::BlockId(blk.term.c));
+                }
+                Op::SwitchDiscr => {
+                    if let Some(sw) = decl.insts.switches.get(blk.term.a as usize) {
+                        stack.push(sw.default);
+                        let arms = &decl.insts.switch_arms[crate::inst::clamp_range(
+                            sw.arms.clone(),
+                            decl.insts.switch_arms.len(),
+                        )];
+                        for arm in arms {
+                            stack.push(arm.target);
+                        }
+                    }
+                }
+                // ch01 R23c: none of these may appear inside a body.
+                Op::Ret | Op::Raise | Op::TryBr => out.push(Diagnostic::new(
+                    DiagCode::DeferBodyMalformed,
+                    Anchor::Block(b),
+                    format!(
+                        "defer row {i}'s body reaches a `{:?}` terminator; ch01 R23c forbids \
+                         `return`, `raise` and `?` inside a deferred body",
+                        blk.term.op
+                    ),
+                )),
+                // `trap` ends the process (ch02 R7) and `unreachable` ends
+                // nothing: neither continues the body, and neither is a way
+                // out of it.
+                _ => {}
+            }
+        }
+        if !reaches_end {
+            out.push(Diagnostic::new(
+                DiagCode::DeferBodyMalformed,
+                Anchor::Block(body),
+                format!(
+                    "defer row {i}'s body never reaches `br BODY_END`, so the exit sequence \
+                     could not resume after it"
+                ),
+            ));
+        }
+    }
+}
+
+/// design §3.8's verifier job — "asserting every exit edge of a scope
+/// carries exactly the right multiset" — plus ch01 R22h's discharge records
+/// (design §3.5: the interpreter "does **not** re-derive this ... but it
+/// **asserts** it", and so does this).
+fn check_exit_edges(decl: &DeclFmir, out: &mut Vec<Diagnostic>) {
+    for (id, row) in decl.exits.all_rows() {
+        let Some(from) = decl.blocks.try_row(row.from) else {
+            out.push(Diagnostic::new(
+                DiagCode::Malformed,
+                Anchor::Decl,
+                format!("exit edge {} leaves missing block {}", id.0, row.from.0),
+            ));
+            continue;
+        };
+
+        // ch01 R23f / ch02 R7: a `trap` is not an exit.
+        if from.term.op == Op::Trap {
+            out.push(Diagnostic::new(
+                DiagCode::TrapHasExitEdge,
+                Anchor::Block(row.from),
+                format!(
+                    "exit edge {} leaves block {}, whose terminator is `trap`: a trap has no \
+                     successor, runs no deferred body and discharges nothing",
+                    id.0, row.from.0
+                ),
+            ));
+        }
+
+        // Exactly one row per `(from, to)`.
+        if decl
+            .exits
+            .all_rows()
+            .any(|(other, o)| other.0 < id.0 && o.from == row.from && o.to == row.to)
+        {
+            out.push(Diagnostic::new(
+                DiagCode::ExitEdgeDuplicate,
+                Anchor::Block(row.from),
+                format!(
+                    "two exit edges for ({} -> {})",
+                    row.from.0,
+                    if row.is_function_exit() {
+                        "<return>".to_string()
+                    } else {
+                        row.to.0.to_string()
+                    }
+                ),
+            ));
+        }
+
+        check_edge_shape(decl, id, &row, &from.term, out);
+        check_edge_scopes(decl, id, &row, from.scope, out);
+        check_edge_pending(decl, id, &row, out);
+        check_edge_discharges(decl, id, &row, out);
+    }
+}
+
+/// Is the edge's `scopes` list the chain `type-checker.md` §13 I8b step 2
+/// runs — innermost FIRST? [`crate::exit::expected_pending`] takes the list
+/// in the order carried, so without this an edge listing the scopes
+/// outer-first, with a pending list to match, would pass the per-scope
+/// multiset/order check and the interpreter would run the OUTER scope's
+/// bodies before the inner's. The chain must start at the `from` block's
+/// own scope, step to the parent each time, and (for a non-function exit)
+/// stop at an ancestor of the `to` block's scope, i.e. leave exactly the
+/// scopes between the two blocks.
+fn check_edge_scopes(
+    decl: &DeclFmir,
+    id: crate::ids::ExitEdgeId,
+    row: &crate::exit::ExitEdgeRow,
+    from_scope: crate::ids::ScopeId,
+    out: &mut Vec<Diagnostic>,
+) {
+    let leaving = decl.exits.scopes(row.scopes.clone());
+    let mut reject = |why: String| {
+        out.push(Diagnostic::new(
+            DiagCode::ExitEdgeScopesNotAChain,
+            Anchor::Block(row.from),
+            format!("exit edge {}: {why}", id.0),
+        ));
+    };
+    let Some(first) = leaving.first() else {
+        return;
+    };
+    if *first != from_scope {
+        reject(format!(
+            "the scopes list starts at scope {} but block {} is in scope {} (innermost first)",
+            first.0, row.from.0, from_scope.0
+        ));
+        return;
+    }
+    for pair in leaving.windows(2) {
+        let (inner, next) = (pair[0], pair[1]);
+        let parent = if inner.index() < decl.scopes.len() {
+            decl.scopes.row(inner).parent
+        } else {
+            reject(format!("scope {} does not exist", inner.0));
+            return;
+        };
+        if next != parent {
+            reject(format!(
+                "scope {} follows scope {} in the list but is not its parent ({}); the list must \
+                 be the parent chain, innermost first",
+                next.0, inner.0, parent.0
+            ));
+            return;
+        }
+    }
+    let last = *leaving.last().expect("non-empty");
+    if last.index() >= decl.scopes.len() {
+        reject(format!("scope {} does not exist", last.0));
+        return;
+    }
+    if row.is_function_exit() {
+        return;
+    }
+    // The first scope NOT left must contain `to`.
+    let stop = decl.scopes.row(last).parent;
+    let Some(to) = decl.blocks.try_row(row.to) else {
+        return; // `check_edge_shape` reports the missing successor.
+    };
+    let mut s = to.scope;
+    loop {
+        if s == stop {
+            return;
+        }
+        if s.index() >= decl.scopes.len() {
+            break;
+        }
+        s = decl.scopes.row(s).parent;
+    }
+    reject(format!(
+        "the list leaves scopes up to {} but block {} is in scope {}, which is not inside scope {}",
+        last.0,
+        row.to.0,
+        to.scope.0,
+        if stop.0 == crate::ids::ABSENT {
+            "<root>".to_string()
+        } else {
+            stop.0.to_string()
+        }
+    ));
+}
+
+/// Is `to` a successor of `from`'s terminator, and is the edge's `kind` the
+/// one ch02 R16 gives that successor?
+fn check_edge_shape(
+    decl: &DeclFmir,
+    id: crate::ids::ExitEdgeId,
+    row: &crate::exit::ExitEdgeRow,
+    term: &InstRow,
+    out: &mut Vec<Diagnostic>,
+) {
+    use crate::exit::ExitKind;
+    let function_exit = row.is_function_exit();
+    let (ok_successor, want_kind) = match term.op {
+        Op::Ret => (function_exit, Some(ExitKind::Normal)),
+        Op::Raise => (function_exit, Some(ExitKind::Error)),
+        Op::Br => (row.to.0 == term.a, Some(ExitKind::Normal)),
+        Op::CondBr => (row.to.0 == term.b || row.to.0 == term.c, None),
+        Op::TryBr if row.to.0 == term.b => (true, Some(ExitKind::Normal)),
+        Op::TryBr if row.to.0 == term.c => (true, Some(ExitKind::Error)),
+        Op::TryBr => (false, None),
+        Op::SwitchDiscr => {
+            let targets: Vec<u32> = match decl.insts.switches.get(term.a as usize) {
+                Some(sw) => {
+                    let arms = &decl.insts.switch_arms
+                        [crate::inst::clamp_range(sw.arms.clone(), decl.insts.switch_arms.len())];
+                    std::iter::once(sw.default.0)
+                        .chain(arms.iter().map(|a| a.target.0))
+                        .collect()
+                }
+                None => Vec::new(),
+            };
+            (targets.contains(&row.to.0), Some(ExitKind::Normal))
+        }
+        // `trap`/`unreachable` have no successors at all; the `trap` case is
+        // already reported with its own code.
+        _ => (false, None),
+    };
+    if !ok_successor && term.op != Op::Trap {
+        out.push(Diagnostic::new(
+            DiagCode::ExitEdgeNotASuccessor,
+            Anchor::Block(row.from),
+            format!(
+                "exit edge {} names a `to` that block {}'s `{:?}` terminator does not branch to",
+                id.0, row.from.0, term.op
+            ),
+        ));
+    }
+    if let Some(want) = want_kind
+        && row.kind != want
+        && ok_successor
+    {
+        out.push(Diagnostic::new(
+            DiagCode::ExitEdgeWrongKind,
+            Anchor::Block(row.from),
+            format!(
+                "exit edge {} is marked `{}` but a `{:?}` edge is a `{}` exit (ch02 R16)",
+                id.0,
+                row.kind.as_str(),
+                term.op,
+                want.as_str()
+            ),
+        ));
+    }
+}
+
+fn check_edge_pending(
+    decl: &DeclFmir,
+    id: crate::ids::ExitEdgeId,
+    row: &crate::exit::ExitEdgeRow,
+    out: &mut Vec<Diagnostic>,
+) {
+    let leaving = decl.exits.scopes(row.scopes.clone());
+    let want = crate::exit::expected_pending(&decl.scopes, &decl.defers, leaving, row.kind);
+    let got = decl.exits.pending(row.pending.clone()).to_vec();
+    if got == want {
+        return;
+    }
+    let mut want_sorted = want.clone();
+    let mut got_sorted = got.clone();
+    want_sorted.sort();
+    got_sorted.sort();
+    let code = if want_sorted == got_sorted {
+        DiagCode::ExitEdgeWrongPendingOrder
+    } else {
+        DiagCode::ExitEdgeWrongPendingMultiset
+    };
+    out.push(Diagnostic::new(
+        code,
+        Anchor::Block(row.from),
+        format!(
+            "exit edge {} carries pending bodies {:?} but the {} exit of scopes {:?} runs {:?} \
+             (ch01 R23a reverse textual order, R23b `errdefer` only on an error exit)",
+            id.0,
+            got.iter().map(|d| d.0).collect::<Vec<_>>(),
+            row.kind.as_str(),
+            leaving.iter().map(|s| s.0).collect::<Vec<_>>(),
+            want.iter().map(|d| d.0).collect::<Vec<_>>(),
+        ),
+    ));
+}
+
+fn check_edge_discharges(
+    decl: &DeclFmir,
+    id: crate::ids::ExitEdgeId,
+    row: &crate::exit::ExitEdgeRow,
+    out: &mut Vec<Diagnostic>,
+) {
+    let leaving = decl.exits.scopes(row.scopes.clone());
+    let mut obligations: Vec<crate::ids::PlaceId> = Vec::new();
+    for scope in leaving {
+        if scope.index() >= decl.scopes.len() {
+            continue;
+        }
+        obligations.extend_from_slice(decl.obligations.get(decl.scopes.row(*scope).obligations));
+    }
+    let discharges = decl.exits.discharges(row.discharges.clone());
+    for (i, d) in discharges.iter().enumerate() {
+        if !obligations.contains(&d.place) {
+            out.push(Diagnostic::new(
+                DiagCode::ExitEdgeUnknownDischarge,
+                Anchor::Block(row.from),
+                format!(
+                    "exit edge {}'s discharge {i} names place {}, which is not an obligation of \
+                     any scope this edge leaves",
+                    id.0, d.place.0
+                ),
+            ));
+        }
+        if discharges[..i].iter().any(|e| e.place == d.place) {
+            out.push(Diagnostic::new(
+                DiagCode::ExitEdgeDuplicateDischarge,
+                Anchor::Block(row.from),
+                format!(
+                    "exit edge {} discharges place {} twice (design §5.2's `ub: double-consume`)",
+                    id.0, d.place.0
+                ),
+            ));
+        }
+    }
+    for place in &obligations {
+        if !discharges.iter().any(|d| d.place == *place) {
+            out.push(Diagnostic::new(
+                DiagCode::ExitEdgeMissingDischarge,
+                Anchor::Block(row.from),
+                format!(
+                    "exit edge {} leaves place {} with an undischarged linear obligation (ch01 \
+                     R22h); the interpreter reports this as `ub: linear-leak`, never a trap",
+                    id.0, place.0
+                ),
+            ));
+        }
+    }
 }
 
 pub fn is_ok(decl: &DeclFmir) -> bool {
@@ -685,5 +1070,460 @@ mod tests {
             brand: crate::ids::BrandId::NONE,
         });
         assert!(is_ok(&decl), "{:?}", verify(&decl));
+    }
+    // -- F4/F6: exit edges, deferred bodies, obligations -------------------
+
+    /// A `DeclFmir` with: one scope holding `defer`(0), `errdefer`(1),
+    /// `defer`(2) whose bodies are blocks 1..=3, an entry block (0)
+    /// terminated `ret`, and one obligation on place 0.
+    fn with_defers_and_obligation() -> (DeclFmir, crate::ids::ScopeId, Vec<crate::ids::DeferId>) {
+        let mut decl = DeclFmir::empty(DeclKeyId(0), FnSigId(0));
+        let place = decl.places.intern(0, &[], TY_UNIT);
+        // Blocks: 0 = entry (`ret`), 1..=3 = bodies (`br BODY_END`).
+        let mut blocks = crate::block::BlockPool::new();
+        blocks.push(BlockRow {
+            first_inst: 0,
+            inst_len: 0,
+            term: plain(Op::Ret),
+            scope: crate::ids::ScopeId(1),
+        });
+        for _ in 0..3 {
+            let mut term = plain(Op::Br);
+            term.a = crate::scope::BODY_END.0;
+            blocks.push(BlockRow {
+                first_inst: 0,
+                inst_len: 0,
+                term,
+                scope: crate::ids::ScopeId(1),
+            });
+        }
+        decl.blocks = blocks;
+        decl.entry = crate::ids::BlockId(0);
+
+        let mut ids = Vec::new();
+        for (i, kind) in [
+            crate::scope::DeferKind::Defer,
+            crate::scope::DeferKind::ErrDefer,
+            crate::scope::DeferKind::Defer,
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            ids.push(decl.defers.push(crate::scope::DeferRow {
+                kind,
+                body: crate::ids::BlockId(1 + i as u32),
+                stmt_order: i as u16,
+            }));
+        }
+        let obligations = decl.obligations.push_list(&[place]);
+        let scope = decl.scopes.push(crate::scope::ScopeRow {
+            parent: crate::ids::ScopeId(0),
+            brand: crate::ids::BrandId::NONE,
+            defers: 0..3,
+            obligations,
+            region: crate::ids::RegionId::NONE,
+        });
+        assert_eq!(scope.0, 1);
+        (decl, scope, ids)
+    }
+
+    fn push_edge(
+        decl: &mut DeclFmir,
+        kind: crate::exit::ExitKind,
+        scope: crate::ids::ScopeId,
+        pending: &[crate::ids::DeferId],
+        discharges: &[crate::exit::DischargeRow],
+    ) {
+        let scopes = decl.exits.push_scopes(&[scope]);
+        let pending = decl.exits.push_pending(pending);
+        let discharges = decl.exits.push_discharges(discharges);
+        let mut row = crate::exit::ExitEdgeRow::plain(
+            crate::ids::BlockId(0),
+            crate::ids::BlockId::NONE,
+            kind,
+        );
+        row.scopes = scopes;
+        row.pending = pending;
+        row.discharges = discharges;
+        decl.exits.push(row);
+    }
+
+    fn returned(place: crate::ids::PlaceId) -> crate::exit::DischargeRow {
+        crate::exit::DischargeRow {
+            place,
+            how: crate::scope::Discharge::Returned,
+        }
+    }
+
+    #[test]
+    fn a_correct_exit_edge_is_accepted() {
+        // The multiset ch01 R23a/R23b require on a NORMAL exit: reverse
+        // statement order, the `errdefer` skipped.
+        let (mut decl, scope, ids) = with_defers_and_obligation();
+        let place = crate::ids::PlaceId(0);
+        push_edge(
+            &mut decl,
+            crate::exit::ExitKind::Normal,
+            scope,
+            &[ids[2], ids[0]],
+            &[returned(place)],
+        );
+        assert!(is_ok(&decl), "{:?}", verify(&decl));
+    }
+
+    #[test]
+    fn an_exit_edge_with_the_wrong_multiset_is_rejected() {
+        // The `errdefer` carried on a normal exit (ch01 R23b forbids it).
+        let (mut decl, scope, ids) = with_defers_and_obligation();
+        let place = crate::ids::PlaceId(0);
+        push_edge(
+            &mut decl,
+            crate::exit::ExitKind::Normal,
+            scope,
+            &[ids[2], ids[1], ids[0]],
+            &[returned(place)],
+        );
+        let diags = verify(&decl);
+        assert!(
+            diags
+                .iter()
+                .any(|d| d.code == DiagCode::ExitEdgeWrongPendingMultiset),
+            "{diags:?}"
+        );
+    }
+
+    #[test]
+    fn an_exit_edge_with_the_right_multiset_in_the_wrong_order_is_rejected() {
+        // ch01 R23a's reverse textual order is not a suggestion.
+        let (mut decl, scope, ids) = with_defers_and_obligation();
+        let place = crate::ids::PlaceId(0);
+        push_edge(
+            &mut decl,
+            crate::exit::ExitKind::Normal,
+            scope,
+            &[ids[0], ids[2]],
+            &[returned(place)],
+        );
+        let diags = verify(&decl);
+        assert!(
+            diags
+                .iter()
+                .any(|d| d.code == DiagCode::ExitEdgeWrongPendingOrder),
+            "{diags:?}"
+        );
+    }
+
+    #[test]
+    fn an_error_exit_interleaves_the_errdefer_in_one_reverse_sequence() {
+        let (mut decl, scope, ids) = with_defers_and_obligation();
+        let place = crate::ids::PlaceId(0);
+        // `raise`, so the edge really is an error exit (ch02 R16).
+        let mut blocks = crate::block::BlockPool::new();
+        for (i, row) in decl.blocks.all_rows() {
+            let mut row = row;
+            if i.0 == 0 {
+                row.term = plain(Op::Raise);
+            }
+            blocks.push(row);
+        }
+        decl.blocks = blocks;
+        push_edge(
+            &mut decl,
+            crate::exit::ExitKind::Error,
+            scope,
+            &[ids[2], ids[1], ids[0]],
+            &[returned(place)],
+        );
+        assert!(is_ok(&decl), "{:?}", verify(&decl));
+    }
+
+    #[test]
+    fn an_undischarged_obligation_on_an_exit_edge_is_rejected() {
+        // ch01 R22h, statically. The interpreter reports the same condition
+        // as `ub: linear-leak` (design §3.5, §5.2) — never a trap.
+        let (mut decl, scope, ids) = with_defers_and_obligation();
+        push_edge(
+            &mut decl,
+            crate::exit::ExitKind::Normal,
+            scope,
+            &[ids[2], ids[0]],
+            &[],
+        );
+        let diags = verify(&decl);
+        assert!(
+            diags
+                .iter()
+                .any(|d| d.code == DiagCode::ExitEdgeMissingDischarge),
+            "{diags:?}"
+        );
+    }
+
+    #[test]
+    fn discharging_one_obligation_twice_is_rejected() {
+        let (mut decl, scope, ids) = with_defers_and_obligation();
+        let place = crate::ids::PlaceId(0);
+        push_edge(
+            &mut decl,
+            crate::exit::ExitKind::Normal,
+            scope,
+            &[ids[2], ids[0]],
+            &[returned(place), returned(place)],
+        );
+        let diags = verify(&decl);
+        assert!(
+            diags
+                .iter()
+                .any(|d| d.code == DiagCode::ExitEdgeDuplicateDischarge),
+            "{diags:?}"
+        );
+    }
+
+    #[test]
+    fn a_discharge_for_a_place_no_scope_owes_is_rejected() {
+        let (mut decl, scope, ids) = with_defers_and_obligation();
+        push_edge(
+            &mut decl,
+            crate::exit::ExitKind::Normal,
+            scope,
+            &[ids[2], ids[0]],
+            &[
+                returned(crate::ids::PlaceId(0)),
+                returned(crate::ids::PlaceId(7)),
+            ],
+        );
+        let diags = verify(&decl);
+        assert!(
+            diags
+                .iter()
+                .any(|d| d.code == DiagCode::ExitEdgeUnknownDischarge),
+            "{diags:?}"
+        );
+    }
+
+    #[test]
+    fn a_trap_terminated_block_may_carry_no_exit_edge() {
+        // ch01 R23f, R22d, ch02 R7: a trap is NOT an exit — no successor, no
+        // body, no discharge.
+        let (mut decl, scope, _) = with_defers_and_obligation();
+        let mut blocks = crate::block::BlockPool::new();
+        for (i, row) in decl.blocks.all_rows() {
+            let mut row = row;
+            if i.0 == 0 {
+                row.term = plain(Op::Trap);
+            }
+            blocks.push(row);
+        }
+        decl.blocks = blocks;
+        push_edge(
+            &mut decl,
+            crate::exit::ExitKind::Normal,
+            scope,
+            &[],
+            &[returned(crate::ids::PlaceId(0))],
+        );
+        let diags = verify(&decl);
+        assert!(
+            diags.iter().any(|d| d.code == DiagCode::TrapHasExitEdge),
+            "{diags:?}"
+        );
+    }
+
+    #[test]
+    fn a_raise_edge_marked_normal_is_rejected() {
+        let (mut decl, scope, _) = with_defers_and_obligation();
+        let mut blocks = crate::block::BlockPool::new();
+        for (i, row) in decl.blocks.all_rows() {
+            let mut row = row;
+            if i.0 == 0 {
+                row.term = plain(Op::Raise);
+            }
+            blocks.push(row);
+        }
+        decl.blocks = blocks;
+        // An empty scope list keeps the pending check quiet, isolating the
+        // kind check.
+        let scopes = decl.exits.push_scopes(&[]);
+        let mut row = crate::exit::ExitEdgeRow::plain(
+            crate::ids::BlockId(0),
+            crate::ids::BlockId::NONE,
+            crate::exit::ExitKind::Normal,
+        );
+        row.scopes = scopes;
+        decl.exits.push(row);
+        let _ = scope;
+        let diags = verify(&decl);
+        assert!(
+            diags.iter().any(|d| d.code == DiagCode::ExitEdgeWrongKind),
+            "{diags:?}"
+        );
+    }
+
+    /// `type-checker.md` §13 I8b step 2's "innermost scope first" is a
+    /// property of the edge's `scopes` LIST, which `expected_pending` takes
+    /// as given — so it is asserted here: the list must start at the `from`
+    /// block's own scope and step to the parent each time.
+    #[test]
+    fn an_exit_edge_whose_scopes_are_not_the_innermost_first_chain_is_rejected() {
+        // Block 0 is in scope 1, whose parent is scope 0. Listing the parent
+        // first, or starting at the parent, is not the chain.
+        for scopes in [
+            vec![crate::ids::ScopeId(0), crate::ids::ScopeId(1)],
+            vec![crate::ids::ScopeId(0)],
+        ] {
+            let (mut decl, _, _) = with_defers_and_obligation();
+            let range = decl.exits.push_scopes(&scopes);
+            let mut row = crate::exit::ExitEdgeRow::plain(
+                crate::ids::BlockId(0),
+                crate::ids::BlockId::NONE,
+                crate::exit::ExitKind::Normal,
+            );
+            row.scopes = range;
+            decl.exits.push(row);
+            let diags = verify(&decl);
+            assert!(
+                diags
+                    .iter()
+                    .any(|d| d.code == DiagCode::ExitEdgeScopesNotAChain),
+                "{scopes:?}: {diags:?}"
+            );
+        }
+        // The chain itself is accepted by this check (the edge then fails
+        // only on its missing pending list and discharge).
+        let (mut decl, _, _) = with_defers_and_obligation();
+        let range = decl
+            .exits
+            .push_scopes(&[crate::ids::ScopeId(1), crate::ids::ScopeId(0)]);
+        let mut row = crate::exit::ExitEdgeRow::plain(
+            crate::ids::BlockId(0),
+            crate::ids::BlockId::NONE,
+            crate::exit::ExitKind::Normal,
+        );
+        row.scopes = range;
+        decl.exits.push(row);
+        let diags = verify(&decl);
+        assert!(
+            !diags
+                .iter()
+                .any(|d| d.code == DiagCode::ExitEdgeScopesNotAChain),
+            "{diags:?}"
+        );
+    }
+
+    #[test]
+    fn an_exit_edge_to_a_block_the_terminator_does_not_branch_to_is_rejected() {
+        let (mut decl, _, _) = with_defers_and_obligation();
+        let scopes = decl.exits.push_scopes(&[]);
+        let mut row = crate::exit::ExitEdgeRow::plain(
+            crate::ids::BlockId(0),
+            crate::ids::BlockId(2),
+            crate::exit::ExitKind::Normal,
+        );
+        row.scopes = scopes;
+        decl.exits.push(row);
+        let diags = verify(&decl);
+        assert!(
+            diags
+                .iter()
+                .any(|d| d.code == DiagCode::ExitEdgeNotASuccessor),
+            "{diags:?}"
+        );
+    }
+
+    #[test]
+    fn two_edges_for_one_from_to_pair_are_rejected() {
+        let (mut decl, _, _) = with_defers_and_obligation();
+        for _ in 0..2 {
+            let scopes = decl.exits.push_scopes(&[]);
+            let mut row = crate::exit::ExitEdgeRow::plain(
+                crate::ids::BlockId(0),
+                crate::ids::BlockId::NONE,
+                crate::exit::ExitKind::Normal,
+            );
+            row.scopes = scopes;
+            decl.exits.push(row);
+        }
+        let diags = verify(&decl);
+        assert!(
+            diags.iter().any(|d| d.code == DiagCode::ExitEdgeDuplicate),
+            "{diags:?}"
+        );
+    }
+
+    #[test]
+    fn a_deferred_body_that_never_reaches_body_end_is_rejected() {
+        let mut decl = DeclFmir::empty(DeclKeyId(0), FnSigId(0));
+        let mut blocks = crate::block::BlockPool::new();
+        blocks.push(BlockRow {
+            first_inst: 0,
+            inst_len: 0,
+            term: plain(Op::Ret),
+            scope: crate::ids::ScopeId(0),
+        });
+        // Block 1 is a "body" that falls into `unreachable` instead of
+        // jumping back: the exit sequence could never resume.
+        blocks.push(BlockRow {
+            first_inst: 0,
+            inst_len: 0,
+            term: plain(Op::Unreachable),
+            scope: crate::ids::ScopeId(0),
+        });
+        decl.blocks = blocks;
+        decl.defers.push(crate::scope::DeferRow {
+            kind: crate::scope::DeferKind::Defer,
+            body: crate::ids::BlockId(1),
+            stmt_order: 0,
+        });
+        let diags = verify(&decl);
+        assert!(
+            diags.iter().any(|d| d.code == DiagCode::DeferBodyMalformed),
+            "{diags:?}"
+        );
+    }
+
+    #[test]
+    fn a_deferred_body_containing_a_return_is_rejected() {
+        // ch01 R23c: "A body MUST NOT contain `return`, `raise`, `?` ..."
+        let mut decl = DeclFmir::empty(DeclKeyId(0), FnSigId(0));
+        let mut blocks = crate::block::BlockPool::new();
+        blocks.push(BlockRow {
+            first_inst: 0,
+            inst_len: 0,
+            term: plain(Op::Ret),
+            scope: crate::ids::ScopeId(0),
+        });
+        let mut back = plain(Op::Br);
+        back.a = crate::scope::BODY_END.0;
+        let mut cond = plain(Op::CondBr);
+        cond.b = 2;
+        cond.c = 3;
+        blocks.push(BlockRow {
+            first_inst: 0,
+            inst_len: 0,
+            term: cond,
+            scope: crate::ids::ScopeId(0),
+        });
+        blocks.push(BlockRow {
+            first_inst: 0,
+            inst_len: 0,
+            term: back,
+            scope: crate::ids::ScopeId(0),
+        });
+        blocks.push(BlockRow {
+            first_inst: 0,
+            inst_len: 0,
+            term: plain(Op::Ret),
+            scope: crate::ids::ScopeId(0),
+        });
+        decl.blocks = blocks;
+        decl.defers.push(crate::scope::DeferRow {
+            kind: crate::scope::DeferKind::Defer,
+            body: crate::ids::BlockId(1),
+            stmt_order: 0,
+        });
+        let diags = verify(&decl);
+        assert!(
+            diags.iter().any(|d| d.code == DiagCode::DeferBodyMalformed),
+            "{diags:?}"
+        );
     }
 }

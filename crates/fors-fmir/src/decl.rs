@@ -42,6 +42,10 @@ pub struct DeclFmir {
     /// A `SCOPED` value's `sources` ranges resolve here (design §3.4).
     pub scoped_sources: PlaceListPool,
     pub defers: crate::scope::DeferPool,
+    /// Every scope-exit edge and what it carries (design §3.5, §3.8;
+    /// `type-checker.md` §13 I8b's D7/D8). Built by `fors-lower`, asserted
+    /// by `verify()`, executed by `fors-interp` — never re-derived.
+    pub exits: crate::exit::ExitEdgePool,
     /// The declaration's entry block. Not named as a separate field by
     /// design §3.1 (which is silent on how a `DeclFmir` records its entry
     /// point at all), but a CFG needs one to define reachability, dominance
@@ -111,6 +115,7 @@ impl DeclFmir {
             obligations: PlaceListPool::new(),
             scoped_sources: PlaceListPool::new(),
             defers: crate::scope::DeferPool::new(),
+            exits: crate::exit::ExitEdgePool::new(),
             entry,
             is_unsafe_invariant: false,
             fingerprint: 0,
