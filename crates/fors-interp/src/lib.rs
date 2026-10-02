@@ -53,6 +53,7 @@
 
 pub mod arith;
 pub mod exec;
+pub mod host;
 pub mod mem;
 pub mod program;
 pub mod reduce;
@@ -63,10 +64,13 @@ pub mod ub;
 pub mod value;
 
 pub use arith::{FloatKind, IntKind};
-pub use exec::{Env, Exit, InterpError, Outcome, run, run_with_host};
+pub use exec::{Env, Exit, InterpError, Outcome, run, run_with_host, run_with_oracle};
+pub use host::{HostCounters, HostEvent, Oracle, OracleError};
 pub use mem::{AllocKind, AllocState, AllocatorId, ArenaId, ArenaVal, RefVal, next_generation};
 pub use program::{Config, Endian, ProgFn, Program};
-pub use shim::{ExitStatus, HostEnv, entry_exit, install_sigpipe_ignore};
+pub use shim::{
+    EntryArg, ExitStatus, HostEnv, entry_exit, install_sigpipe_ignore, plan_entry_args,
+};
 pub use trap::{BacktraceFrame, backtrace_enabled, report_trap, report_ub, trap_line};
 pub use ub::{UB_EXIT_STATUS, UbClass, UbReport};
 pub use value::Slot;

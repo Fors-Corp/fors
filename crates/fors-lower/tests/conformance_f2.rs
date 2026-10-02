@@ -35,10 +35,11 @@
 use std::fs;
 use std::path::{Path, PathBuf};
 
+use fors_fmir::caps::RootCap;
 use fors_fmir::op::TrapKind;
 use fors_index::{Interner, Segments, module::is_legal_segment};
 use fors_interp::shim::{ExitStatus, HostEnv, entry_exit};
-use fors_interp::{Config, Program, run_with_host};
+use fors_interp::{Config, Oracle, Program, run_with_oracle};
 use fors_resolve::FileInput;
 use fors_syntax::parse_file;
 
@@ -158,6 +159,9 @@ struct Run {
     /// F3: what the RUNTIME wrote to the standard error descriptor — ch02
     /// R17(b)'s one `error: ` line on an error exit of `main`.
     stderr: Vec<u8>,
+    /// F8: what the run asked of the host (clock reads, entropy draws, fs/
+    /// net door reaches) — `fs_name_validation_issues_no_syscall` reads it.
+    counters: fors_interp::HostCounters,
 }
 
 /// Builds `src` (plus `std/io.fors` when the source names `use std.io;` —
@@ -244,7 +248,9 @@ fn build_and_run(label: &str, stem: &str, src: &[u8], host: &HostEnv) -> Run {
     let prog = Program::entry_by_name(fns, "main", Config::v0_1())
         .expect("a main")
         .with_names(names);
-    let outcome = run_with_host(&prog, &tys, host).expect("a verified program runs");
+    let mut oracle = Oracle::live();
+    let outcome = run_with_oracle(&prog, &tys, host, &mut oracle).expect("a verified program runs");
+    let counters = oracle.counters();
     let written = outcome.stdout.clone();
     let stderr = outcome.stderr.clone();
     let observed = match entry_exit(&outcome) {
@@ -256,6 +262,7 @@ fn build_and_run(label: &str, stem: &str, src: &[u8], host: &HostEnv) -> Run {
         contract_checks,
         written,
         stderr,
+        counters,
     }
 }
 
@@ -470,7 +477,9 @@ fn build_and_run_with_std(label: &str, stem: &str, src: &[u8], host: &HostEnv) -
     let prog = Program::entry_by_name(fns, "main", Config::v0_1())
         .expect("a main")
         .with_names(names);
-    let outcome = run_with_host(&prog, &tys, host).expect("a verified program runs");
+    let mut oracle = Oracle::live();
+    let outcome = run_with_oracle(&prog, &tys, host, &mut oracle).expect("a verified program runs");
+    let counters = oracle.counters();
     let written = outcome.stdout.clone();
     let stderr = outcome.stderr.clone();
     let observed = match entry_exit(&outcome) {
@@ -482,6 +491,7 @@ fn build_and_run_with_std(label: &str, stem: &str, src: &[u8], host: &HostEnv) -
         contract_checks,
         written,
         stderr,
+        counters,
     }
 }
 
@@ -538,7 +548,7 @@ fn split_std_owner_conflicts<'a>(
     (rest, seen)
 }
 
-fn gate_test_std(rel: &str) {
+fn gate_test_std(rel: &str) -> Run {
     let path = repo_root().join("tests/conformance").join(rel);
     let src = fs::read_to_string(&path).expect("corpus file reads");
     let stem = path.file_stem().unwrap().to_string_lossy().into_owned();
@@ -574,6 +584,7 @@ fn gate_test_std(rel: &str) {
         "run-error" => assert_run_error(rel, &d, &run),
         other => panic!("{rel}: unhandled expect kind {other:?}"),
     }
+    run
 }
 
 /// F7 (a): "`std` must check clean ... and add a workspace test that
@@ -2273,4 +2284,280 @@ fn f3_latched_stdout_then_raise_exits_1_and_stdout_precedes_the_error_line() {
     assert_eq!(run.stderr, b"error: m.E.boom\n");
     drop(closed_w);
     fors_interp::shim::set_sigpipe(was);
+}
+
+// ---------------------------------------------------------------------------
+// F8 — the capability host surface (design §9 F8's GATE, §5.8, §5.9, §7.2).
+// Each corpus file runs end to end with the whole `std` package in the build
+// (its `main` takes `time.Clock`/`fs.Dir`/`net.Net`, which only the real
+// `std` sources declare), against its own directive's exact output and
+// status. The two `io`-only files run through the narrower F2 builder too.
+// ---------------------------------------------------------------------------
+
+#[test]
+fn gate_time_now_is_monotonic_run_ok() {
+    let run = gate_test_std("10-std/time-now-is-monotonic-run-ok.fors");
+    assert_eq!(run.counters.clock_reads, 2, "two `c.now()` reads");
+    assert_eq!(
+        run.counters.live_reads, 2,
+        "a live run reads the real clock"
+    );
+}
+
+#[test]
+fn gate_time_since_reversed_trap() {
+    gate_test_std("10-std/time-since-reversed-trap.fors");
+}
+
+#[test]
+fn gate_rand_bounded_zero_trap() {
+    let run = gate_test_std("10-std/rand-bounded-zero-trap.fors");
+    // `Pcg` is a pure value: no capability, no host read (ch10 R47).
+    assert_eq!(run.counters.entropy_draws, 0);
+    assert_eq!(run.counters.live_reads, 0);
+}
+
+#[test]
+fn gate_fs_name_dotdot_invalid_run_ok() {
+    gate_test_std("10-std/fs-name-dotdot-invalid-run-ok.fors");
+}
+
+#[test]
+fn gate_capability_value_from_narrowing_accepted_run_ok() {
+    gate_test_std("04-authority/capability-value-from-narrowing-accepted-run-ok.fors");
+}
+
+#[test]
+fn gate_main_signature_correct_accepted_run_ok() {
+    gate_test("04-authority/main-signature-correct-accepted-run-ok.fors");
+    gate_test_std("04-authority/main-signature-correct-accepted-run-ok.fors");
+}
+
+#[test]
+fn gate_needs_declared_accepted_run_ok() {
+    gate_test("04-authority/needs-declared-accepted-run-ok.fors");
+    gate_test_std("04-authority/needs-declared-accepted-run-ok.fors");
+}
+
+/// F8's intrinsic counter (design §9): ch10 R41's "a violation raises
+/// `Error.invalid_name` BEFORE any syscall", proved by the host's own count
+/// of `fs.Dir` door reaches — zero for `..` — and, so the zero is not
+/// vacuous, one for a VALID name, whose door reach is the interpreter's
+/// named refusal (the M1 host performs no file-system syscall at all).
+#[test]
+fn fs_name_validation_issues_no_syscall() {
+    let run = gate_test_std("10-std/fs-name-dotdot-invalid-run-ok.fors");
+    assert_eq!(run.counters.fs_host_calls, 0, "`..` reached the host");
+    for bad in ["", ".", "..", "a/b", "/", "nul\\0byte"] {
+        let src = format!(
+            "module app;\nneeds {{ fs.read, io.stdout }};\nuse std.fs, std.io;\n\
+             fn main(let d: fs.Dir, inout out: io.Stdout) {{\n\
+             var buf: Buffer[u8, 8] = Buffer.empty();\n\
+             let n: usize = d.read_into(\"{bad}\", &buf.data[0 ..< 8]) else |e| {{\n\
+             out.write_line(\"invalid\");\nreturn;\n}};\nout.write_line(\"read\");\n}}\n"
+        );
+        let run = build_and_run_with_std(bad, "app", src.as_bytes(), &HostEnv::default());
+        let Observed::Status(0, ref stdout) = run.observed else {
+            panic!("{bad:?}: {:?}", run.observed);
+        };
+        assert_eq!(stdout, b"invalid\n", "{bad:?}");
+        assert_eq!(run.counters.fs_host_calls, 0, "{bad:?} reached the host");
+    }
+}
+
+/// The non-vacuous half of the counter: a valid entry name passes
+/// validation and reaches the door exactly once, which refuses BY NAME.
+/// R41's rule is EXACTLY non-empty, no `/`, no NUL, not `.`/`..`: a
+/// backslash is an ordinary byte and no length is capped, so those names
+/// are valid and reach the door too (where a real host, not M1's, would
+/// answer `Error.other`/`ENAMETOOLONG`) — validation must not reject
+/// more than the rule says, or a program would be refused BEFORE the
+/// syscall the spec promises it.
+#[test]
+fn fs_valid_name_reaches_the_door_and_is_refused_by_name() {
+    let overlong = "n".repeat(300);
+    for (label, name) in [
+        ("plain", "data.txt"),
+        ("backslash", "back\\\\slash"),
+        ("dot-prefixed", ".hidden"),
+        ("dotdot-prefixed", "..x"),
+        ("overlong", overlong.as_str()),
+    ] {
+        let src = format!(
+            "module app;\nneeds {{ fs.read, io.stdout }};\nuse std.fs, std.io;\n\
+             fn main(let d: fs.Dir, inout out: io.Stdout) {{\n\
+             var buf: Buffer[u8, 8] = Buffer.empty();\n\
+             let n: usize = d.read_into(\"{name}\", &buf.data[0 ..< 8]) else |e| {{\n\
+             out.write_line(\"invalid\");\nreturn;\n}};\nout.write_line(\"read\");\n}}\n"
+        );
+        let err = build_and_run_with_std_err(label, src.as_bytes());
+        assert_eq!(
+            err,
+            fors_interp::InterpError::HostRefused("std.fs.Dir.read_into".into()),
+            "{label}"
+        );
+    }
+}
+
+/// Like [`build_and_run_with_std`], for a program whose run must END in an
+/// [`fors_interp::InterpError`] (a named host refusal): returns that error.
+fn build_and_run_with_std_err(label: &str, src: &[u8]) -> fors_interp::InterpError {
+    let (prog, tys) = build_std_program(label, src);
+    let mut oracle = Oracle::live();
+    let err = run_with_oracle(&prog, &tys, &HostEnv::default(), &mut oracle)
+        .expect_err("the run ends in a named interpreter error");
+    assert_eq!(
+        oracle.counters().fs_host_calls,
+        1,
+        "{label}: one door reach"
+    );
+    err
+}
+
+/// Design §7.2 at the library level: a live run's record, replayed, gives a
+/// byte-identical stdout and the same exit with ZERO real reads; a record
+/// the run diverges from is a named error. The program prints a clock
+/// reading and an entropy draw, so two LIVE runs differ and only the replay
+/// makes them equal.
+#[test]
+fn record_then_replay_is_byte_identical_and_reads_nothing_real() {
+    let src = b"module app;\nneeds { clock, rng, io.stdout };\nuse std.time, std.rand, std.io;\n\
+fn main(let c: time.Clock, inout r: rand.Rng, inout out: io.Stdout) {\n\
+    let a: time.Instant = c.now();\n\
+    out.write_uint(a.nanos);\n\
+    out.write_line(\"\");\n\
+    out.write_uint(r.u64());\n\
+    out.write_line(\"\");\n\
+    let b: time.Instant = c.now();\n\
+    let d: time.Duration = b.since(a);\n\
+    out.write_uint(d.nanos);\n\
+    out.write_line(\"\");\n\
+}\n";
+    let (prog, tys) = build_std_program("record-replay", src);
+    // ch04 R8: lowering recorded every `main` parameter's root identity —
+    // the `inout` ones included — so the shim supplies all three by type.
+    let mut caps: Vec<_> = prog.names.roots.iter().map(|(_, c)| *c).collect();
+    caps.sort();
+    assert_eq!(caps, [RootCap::Stdout, RootCap::Clock, RootCap::Rng]);
+    let mut live = Oracle::live();
+    let first = run_with_oracle(&prog, &tys, &HostEnv::default(), &mut live).expect("live run");
+    assert_eq!(live.counters().clock_reads, 2);
+    assert_eq!(live.counters().entropy_draws, 1);
+    let record = live.log_bytes();
+    for _ in 0..2 {
+        let mut re = Oracle::replay(&record).expect("a well-formed record");
+        let again = run_with_oracle(&prog, &tys, &HostEnv::default(), &mut re).expect("replay");
+        assert_eq!(again.stdout, first.stdout, "replayed stdout");
+        assert_eq!(entry_exit(&again), entry_exit(&first), "replayed exit");
+        assert_eq!(re.counters().live_reads, 0, "replay read the real host");
+        assert_eq!(re.log_bytes(), record, "the replay's own record");
+    }
+    // A record with one entry too few, one too many, or the wrong kind
+    // first: each a named `InterpError::Oracle`.
+    let text = String::from_utf8(record).unwrap();
+    let mut lines: Vec<&str> = text.lines().collect();
+    let short = format!("{}\n", lines[..lines.len() - 1].join("\n"));
+    // One entry too many: a `wall` (a trailing `mono 1` would be refused
+    // at parse as a clock that went backwards, before the run could report
+    // it unconsumed).
+    let long = format!("{text}wall 1\n");
+    lines.swap(1, 2);
+    let swapped = format!("{}\n", lines.join("\n"));
+    for (what, bad) in [("short", short), ("long", long), ("swapped", swapped)] {
+        let mut re = Oracle::replay(bad.as_bytes()).expect("well-formed");
+        let err = run_with_oracle(&prog, &tys, &HostEnv::default(), &mut re)
+            .expect_err("a diverging replay is an error");
+        assert!(
+            matches!(err, fors_interp::InterpError::Oracle(_)),
+            "{what}: {err:?}"
+        );
+        assert_eq!(
+            re.counters().live_reads,
+            0,
+            "{what}: replay read the real host"
+        );
+    }
+}
+
+/// Builds `src` with the whole `std` package and returns the runnable
+/// program and its type store.
+fn build_std_program(label: &str, src: &[u8]) -> (Program, fors_fir::ty::TyStore) {
+    let mut interner = Interner::new();
+    let mut sources: Vec<Vec<u8>> = vec![src.to_vec()];
+    let mut names: Vec<Segments> = vec![module_name_of("app", src, &mut interner)];
+    for (segs, s) in std_module_sources() {
+        names.push(
+            segs.iter()
+                .map(|b| interner.intern(b))
+                .collect::<Segments>(),
+        );
+        sources.push(s);
+    }
+    let parsed: Vec<_> = sources.iter().map(|s| parse_file(s)).collect();
+    let inputs: Vec<FileInput> = parsed
+        .iter()
+        .zip(sources.iter())
+        .zip(names.iter())
+        .map(|((p, s), n)| FileInput {
+            tree: &p.tree,
+            tokens: &p.tokens,
+            source: s,
+            name: n.clone(),
+        })
+        .collect();
+    let resolved = fors_resolve::resolve_in_package(&mut interner, &inputs, Some(0), None);
+    let out = fors_check::check_build(&inputs, &resolved, &mut interner);
+    let (check_diags, _) = split_std_owner_conflicts(&inputs, &interner, &out.diagnostics);
+    assert!(check_diags.is_empty(), "{label}: {check_diags:#?}");
+    let lowered = fors_lower::lower_build(&inputs, &out, &mut interner);
+    let fns: Vec<_> = lowered
+        .fns
+        .into_iter()
+        .map(|f| fors_interp::ProgFn {
+            name: f.name,
+            decl: f.decl,
+            strings: f.strings,
+            intrinsics: f.intrinsics,
+        })
+        .collect();
+    let prog = Program::entry_by_name(fns, "main", Config::v0_1())
+        .expect("a main")
+        .with_names(lowered.names);
+    (prog, lowered.tys)
+}
+
+/// ch10 R47: `Pcg` is a pure value with a fixed, documented algorithm —
+/// PCG "RXS M XS 64/64" with the reference seeding (`std/rand.fors`). The
+/// interpreter's run of the Fors body must equal this independent Rust
+/// statement of the same algorithm, and `bounded` stays below its bound.
+#[test]
+fn pcg_is_the_documented_algorithm_and_reads_no_host() {
+    const MUL: u64 = 6364136223846793005;
+    const INC: u64 = 0xda3e39cb94b95bdb;
+    let lcg = |s: u64| s.wrapping_mul(MUL).wrapping_add(INC);
+    let mut state = lcg(lcg(0).wrapping_add(42));
+    let mut next = || {
+        let old = state;
+        state = lcg(old);
+        let word = ((old >> ((old >> 59) + 5)) ^ old).wrapping_mul(12605985483714917081);
+        (word >> 43) ^ word
+    };
+    let want: Vec<u64> = (0..3).map(|_| next()).collect();
+    let src = b"module app;\nneeds { io.stdout };\nuse std.rand, std.io;\n\
+fn main(inout out: io.Stdout) {\n\
+    var g: rand.Pcg = rand.Pcg.seeded(42);\n\
+    out.write_uint(g.u64());\n    out.write_line(\"\");\n\
+    out.write_uint(g.u64());\n    out.write_line(\"\");\n\
+    out.write_uint(g.u64());\n    out.write_line(\"\");\n\
+    let b: u64 = g.bounded(10);\n\
+    if b < 10 {\n        out.write_line(\"bounded\");\n    }\n\
+}\n";
+    let run = build_and_run_with_std("pcg", "app", src, &HostEnv::default());
+    let Observed::Status(0, ref stdout) = run.observed else {
+        panic!("pcg: {:?}", run.observed);
+    };
+    let expected = format!("{}\n{}\n{}\nbounded\n", want[0], want[1], want[2]);
+    assert_eq!(String::from_utf8_lossy(stdout), expected);
+    assert_eq!(run.counters.live_reads, 0, "Pcg reads no host");
+    assert_eq!(run.counters.entropy_draws, 0, "Pcg draws no entropy");
 }

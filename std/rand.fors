@@ -1,5 +1,5 @@
 // std.rand — entropy and reproducibility are DIFFERENT types, and only the
-// first is authority. Surface: docs/spec/10-std.md Rule 47. Bodies are STUBS.
+// first is authority. Surface: docs/spec/10-std.md Rule 47. F8: real bodies.
 //
 // Every unpredictable byte in a program traces to a rand.Rng value, which
 // traces to a `main` parameter and the `rng` capability (ch04 R8, R21).
@@ -12,30 +12,88 @@ needs { syscall };
 pub struct Rng {}
 
 impl Rng {
-    pub fn fill(inout self: Self, inout into: Slice[u8]) {} // STUB, total
+    // F8: real bodies over the host entropy door. Total: the entry shim
+    // obtained a working entropy source before `main` ran, or `main` never
+    // started.
+    pub fn fill(inout self: Self, inout into: Slice[u8]) {
+        var w: u64 = 0;
+        for i in 0..<into.len {
+            if i % 8 == 0 {
+                w = self.u64();
+            }
+            into[i] = w.wrap_as[u8]();
+            w = w >> 8;
+        }
+    }
     pub fn u64(inout self: Self) -> u64 {
-        return 0;
-    } // STUB, total
+        return self.entropy_u64();
+    }
+
+    // The host door: lowering intercepts a method literally spelled this
+    // ON THIS IMPL (`std.rand.Rng`, ch04 R21) whose body is this
+    // self-recursive stand-in (same shape as `Str.str_byte_len`). Every
+    // draw is recorded and replayable (`--oracle-record`/`-replay`).
+    fn entropy_u64(let self: Self) -> u64 {
+        return self.entropy_u64();
+    }
 }
 
 // A pure value with a fixed, documented algorithm and NO capability: the
 // same seed gives the same sequence on every target and build mode (ch03
 // D1). Never seeded implicitly from entropy, the clock or an address.
 // Non-cryptographic; std ships no CSPRNG.
+//
+// The algorithm (F8) is O'Neill's PCG "RXS M XS 64/64" (pcg_setseq_64,
+// `pcg_output_rxs_m_xs_64_64`): a 64-bit LCG step with multiplier
+// 6364136223846793005 and the odd increment `inc`, output-permuted by a
+// random xorshift, a multiply by 12605985483714917081 and a fixed
+// xorshift by 43. Seeding is the reference `srandom_r`: state 0, step,
+// add the seed, step.
 pub struct Pcg { state: u64, inc: u64 }
 
 impl Pcg {
     pub fn seeded(let seed: u64) -> Pcg {
-        return Pcg { state: seed, inc: 0xda3e39cb94b95bdb };
+        let inc: u64 = 0xda3e39cb94b95bdb;
+        let s1: u64 = lcg(0, inc);
+        let s2: u64 = s1.wrap_add(seed);
+        return Pcg { state: lcg(s2, inc), inc: inc };
     }
     pub fn u64(inout self: Self) -> u64 {
-        return 0;
-    } // STUB
-    // Unbiased; traps (kind div-zero) iff n == 0.
+        let old: u64 = self.state;
+        self.state = lcg(old, self.inc);
+        let shift: u64 = (old >> 59) + 5;
+        let x: u64 = (old >> shift) ^ old;
+        let word: u64 = x.wrap_mul(12605985483714917081);
+        return (word >> 43) ^ word;
+    }
+    // Unbiased by rejection: draws below `threshold` (= 2^64 mod n) are
+    // discarded, so every residue is equally likely. Traps (kind contract)
+    // iff n == 0, at the `pre`, before any draw.
     pub fn bounded(inout self: Self, let n: u64) -> u64
         pre n > 0
     {
-        return self.u64() % n; // STUB: rejection sampling
+        let zero: u64 = 0;
+        let threshold: u64 = zero.wrap_sub(n) % n;
+        var r: u64 = self.u64();
+        while r < threshold {
+            r = self.u64();
+        }
+        return r % n;
     }
-    pub fn fill(inout self: Self, inout into: Slice[u8]) {} // STUB
+    pub fn fill(inout self: Self, inout into: Slice[u8]) {
+        var w: u64 = 0;
+        for i in 0..<into.len {
+            if i % 8 == 0 {
+                w = self.u64();
+            }
+            into[i] = w.wrap_as[u8]();
+            w = w >> 8;
+        }
+    }
+}
+
+// One PCG LCG step: `state * 6364136223846793005 + inc`, wrapping.
+fn lcg(let state: u64, let inc: u64) -> u64 {
+    let m: u64 = state.wrap_mul(6364136223846793005);
+    return m.wrap_add(inc);
 }

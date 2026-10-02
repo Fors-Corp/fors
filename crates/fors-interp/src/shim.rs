@@ -22,7 +22,61 @@
 //! fits the real crates, do not copy it in as a file".
 
 use crate::exec::{Exit, Outcome};
+use fors_fmir::caps::RootCap;
 use fors_fmir::op::TrapKind;
+
+/// One argument the entry shim hands `main` (F8, design §5.8 mechanism 3,
+/// §5.9).
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum EntryArg {
+    /// A fresh value of this root-capability type (ch04 R21), fabricated by
+    /// the shim from the host — the ONE place a root-capability value is
+    /// created (ch04 R7: "only the runtime entry shim, which is not Fors
+    /// source, creates the values it passes to `main`").
+    Root(RootCap),
+    /// Hand-assembled FMIR with no lowering side table at all (the
+    /// interpreter's own unit tests): the parameter gets `()`, as before F8.
+    Unit,
+}
+
+/// Decides `main`'s arguments from its parameters' root-capability
+/// identities (`params[i]`: what lowering recorded for parameter `i`'s
+/// type; ch04 R8: "the runtime supplies each argument by that nominal
+/// type"). `typed` is whether the program carries lowering's root table at
+/// all. Refusals are named, never a guessed value:
+///
+/// - a parameter whose type is not one of the twelve (with a root table
+///   present) — ch04 R8 makes that a compile error, so reaching here is a
+///   lowering/checker defect the shim will not paper over;
+/// - a root-capability type appearing twice — ch04 R8's "at most once", and
+///   design §5.9's "at most one live value per capability type", asserted.
+pub fn plan_entry_args(params: &[Option<RootCap>], typed: bool) -> Result<Vec<EntryArg>, String> {
+    let mut seen: Vec<RootCap> = Vec::new();
+    let mut out = Vec::with_capacity(params.len());
+    for (i, p) in params.iter().enumerate() {
+        match *p {
+            Some(cap) => {
+                if seen.contains(&cap) {
+                    return Err(format!(
+                        "`main` parameter {i} is a second `{}`: at most one live value per \
+                         root-capability type (ch04 R8, design §5.9)",
+                        cap.display()
+                    ));
+                }
+                seen.push(cap);
+                out.push(EntryArg::Root(cap));
+            }
+            None if !typed => out.push(EntryArg::Unit),
+            None => {
+                return Err(format!(
+                    "`main` parameter {i} is not one of ch04 R21's twelve root-capability \
+                     types, so the entry shim has no value to supply (ch04 R8)"
+                ));
+            }
+        }
+    }
+    Ok(out)
+}
 
 /// What the dispatch loop's host-effecting intrinsics see of the process
 /// environment. `Default` is the oracle's case: `Stdout` is captured
@@ -151,6 +205,43 @@ pub fn install_sigpipe_ignore() {
 #[cfg(not(unix))]
 pub fn install_sigpipe_ignore() {}
 
+/// `SIGTRAP`'s number (POSIX; the same on every platform this crate builds
+/// on).
+#[cfg(unix)]
+pub const SIGTRAP: i32 = 5;
+
+#[cfg(unix)]
+unsafe extern "C" {
+    /// The platform's own `raise(3)` (no `libc` crate: zero-dependency).
+    #[link_name = "raise"]
+    fn raise_signal(signum: i32) -> i32;
+}
+
+/// Ends the PROCESS the way design §5.3 says a trap ends it: by a signal
+/// status, never a 0/1/2 exit code. The trap line has already been written
+/// by [`crate::trap::report_trap`]; `Stdout` is not flushed and no deferred
+/// body runs. `SIGTRAP` gets its default disposition first, so a host that
+/// ignores it cannot turn a trap into a normal exit; `abort` is the
+/// fallback if the signal somehow returns.
+pub fn die_by_trap_signal() -> ! {
+    #[cfg(unix)]
+    {
+        set_signal(SIGTRAP, SIG_DFL);
+        // SAFETY: `raise(3)` with a valid signal number; no memory-safety
+        // preconditions.
+        unsafe {
+            raise_signal(SIGTRAP);
+        }
+    }
+    std::process::abort()
+}
+
+#[cfg(unix)]
+fn set_signal(signum: i32, handler: usize) -> usize {
+    // SAFETY: as `set_sigpipe`.
+    unsafe { signal(signum, handler) }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -239,6 +330,31 @@ mod tests {
             entry_exit(&outcome(Exit::Trap(TrapKind::Bounds), true)),
             ExitStatus::Trap(TrapKind::Bounds)
         );
+    }
+
+    // -- the root-capability construction plan (F8) ---------------------------
+
+    #[test]
+    fn every_one_of_the_twelve_is_supplied_by_its_type() {
+        let params: Vec<Option<RootCap>> = RootCap::ALL.iter().map(|c| Some(*c)).collect();
+        let plan = plan_entry_args(&params, true).expect("all twelve at once");
+        assert_eq!(
+            plan,
+            RootCap::ALL
+                .iter()
+                .map(|c| EntryArg::Root(*c))
+                .collect::<Vec<_>>()
+        );
+    }
+
+    #[test]
+    fn a_duplicate_or_a_non_root_parameter_is_refused_by_name() {
+        let dup = plan_entry_args(&[Some(RootCap::Clock), Some(RootCap::Clock)], true);
+        assert!(dup.unwrap_err().contains("second `std.time.Clock`"));
+        let non = plan_entry_args(&[Some(RootCap::Net), None], true);
+        assert!(non.unwrap_err().contains("parameter 1"));
+        // Hand-assembled FMIR (no table): the pre-F8 unit argument.
+        assert_eq!(plan_entry_args(&[None], false), Ok(vec![EntryArg::Unit]));
     }
 
     // -- SIGPIPE ------------------------------------------------------------

@@ -58,6 +58,12 @@ pub enum TypeName {
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct TypeNames {
     pub rows: Vec<(TyId, TypeName)>,
+    /// F8 (ch04 R7, R8, R21): the root-capability identity of every type a
+    /// `main` parameter is declared at, keyed by the UNQUALIFIED `TyId` —
+    /// what the entry shim reads to construct one value per parameter "by
+    /// that nominal type". A type with no row here is not a root
+    /// capability as far as the interpreter can tell.
+    pub roots: Vec<(TyId, crate::caps::RootCap)>,
 }
 
 impl TypeNames {
@@ -78,6 +84,23 @@ impl TypeNames {
     pub fn extend(&mut self, other: TypeNames) {
         for (t, n) in other.rows {
             self.insert(t, n);
+        }
+        for (t, c) in other.roots {
+            self.insert_root(t, c);
+        }
+    }
+
+    /// F8: the root-capability type `ty` (unqualified) is, if lowering
+    /// recorded one.
+    pub fn root_cap(&self, ty: TyId) -> Option<crate::caps::RootCap> {
+        self.roots.iter().find(|(t, _)| *t == ty).map(|(_, c)| *c)
+    }
+
+    /// F8: records that `ty` IS root-capability type `cap` (first writer
+    /// wins, as for [`TypeNames::insert`]).
+    pub fn insert_root(&mut self, ty: TyId, cap: crate::caps::RootCap) {
+        if self.root_cap(ty).is_none() {
+            self.roots.push((ty, cap));
         }
     }
 }

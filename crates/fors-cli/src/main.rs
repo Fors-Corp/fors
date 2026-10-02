@@ -13,6 +13,12 @@
 //! `tests/conformance/README.md`). Prints every diagnostic as
 //! `path:line:col: error[CODE]: message`, sorted by file then byte
 //! offset; exit 0 when every given path is clean.
+//!
+//! `fors run [--oracle-record <file> | --oracle-replay <file>] <file>`
+//! builds one program with `std`, lowers it and runs it under the FMIR
+//! interpreter; see [`run`].
+
+mod run;
 
 use std::io::Write;
 use std::path::{Path, PathBuf};
@@ -600,6 +606,7 @@ fn main() -> ExitCode {
         Some("parse") => run_parse(&args[1..]),
         Some("check") => run_check(&args[1..]),
         Some("explain") => run_explain(&args[1..]),
+        Some("run") => run::run_run(&args[1..]),
         // Two streams (CONTRIBUTING.md): the compiler's own version, and the
         // language version it implements.
         Some("--version" | "-V") => {
@@ -616,6 +623,7 @@ fn main() -> ExitCode {
                  \x20      fors check [--format json|text] [--count] [--stats] <path>...\n\
                  \x20      fors explain [--format json|text] <CODE>\n\
                  \x20      fors explain [--format json|text] --list\n\
+                 \x20      fors run [--oracle-record <file> | --oracle-replay <file>] <file>\n\
                  \x20      fors --version"
             );
             ExitCode::from(2)

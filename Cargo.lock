@@ -26,8 +26,11 @@ version = "0.18.0"
 dependencies = [
  "fors-check",
  "fors-diag",
+ "fors-fir",
  "fors-index",
+ "fors-interp",
  "fors-lex",
+ "fors-lower",
  "fors-lsp",
  "fors-query",
  "fors-resolve",

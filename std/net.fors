@@ -24,16 +24,30 @@ pub enum TimeoutError { timed_out }
 pub struct Net {}
 
 impl Net {
+    // F8: `Net` is a value the entry shim constructs and hands to `main`
+    // (ch04 R7, R21). The M1 host opens no socket: each operation reaches
+    // the host door, which is the interpreter's NAMED refusal, never a
+    // silent stub error.
     pub fn resolve_into(let self: Self, let host: Str, inout into: Slice[Addr]) -> usize
         raises Error
     {
-        raise Error.unreachable; // STUB
+        self.net_door("resolve_into");
+        raise Error.other; // unreachable: the M1 door never returns
     }
     pub fn connect(let self: Self, let a: Addr) -> Conn raises Error {
-        raise Error.refused; // STUB
+        self.net_door("connect");
+        raise Error.other; // unreachable: the M1 door never returns
     }
     pub fn listen(let self: Self, let a: Addr) -> Listener raises Error {
-        raise Error.in_use; // STUB
+        self.net_door("listen");
+        raise Error.other; // unreachable: the M1 door never returns
+    }
+
+    // The host door: lowering intercepts a method literally spelled this ON
+    // THIS IMPL (`std.net.Net`, ch04 R21) whose body is this self-recursive
+    // stand-in (same shape as `Str.str_byte_len`).
+    fn net_door(let self: Self, let op: Str) {
+        self.net_door(op);
     }
 }
 
