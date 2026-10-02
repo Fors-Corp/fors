@@ -7,7 +7,8 @@ commit history, which predates the Conventional Commits convention.
 
 | Language | Compiler | Meaning |
 |---|---|---|
-| `lang-v0.5.3` | `compiler-v0.18.0` | current |
+| `lang-v0.5.3` | `compiler-v0.19.0` | current |
+| `lang-v0.5.3` | `compiler-v0.18.0` | FMIR F3, failure lowering and the exit sequence |
 | `lang-v0.5.3` | `compiler-v0.17.0` | checker I10c, the prelude names bind to std |
 | `lang-v0.5.3` | `compiler-v0.16.0` | checker I10, the other chapters' obligations |
 | `lang-v0.5.3` | `compiler-v0.15.0` | checker I10b, the silent-TY_ERROR sweep gate |
@@ -105,6 +106,42 @@ measurement, the grammar, names and visibility), with a conformance corpus and
 an independent reference parser.
 
 ## Compiler
+
+### compiler-v0.19.0 — 2026-10-03
+
+FMIR increment **F8**, produced by one agent and independently verified
+by another. Implements `lang-v0.5.3`; still no code generator.
+
+- **The capability host surface.** `time.Clock`, `rand.Rng`/`Pcg`,
+  `fs.Dir` and `net.Net` have real bodies over six host intrinsics that
+  enter the interpreter's closed table by the documented route; `Pcg` is
+  pure Fors (checked against an independent implementation); file names
+  are validated in Fors per ch10 R41 before any door is reached, and in
+  M1 the fs/net doors are named refusals — no syscall is performed, and
+  counters prove it.
+- **Twelve roots, one constructor.** The entry shim alone builds `main`'s
+  root-capability values as opaque cells; nothing else in the
+  interpreter can, every host intrinsic checks its receiver is the
+  shim's value of the right type, and a field read of one is a named
+  error.
+- **Oracle record/replay.** `fors run --oracle-record F` /
+  `--oracle-replay F`: a strict line-oriented record of every clock
+  reading and entropy draw; replay reads nothing real (asserted) and is
+  byte-identical on stdout and exit status; any divergence, malformed
+  line or non-increasing clock is a named error at its line.
+- **Coverage.** The seven F8 gate rows run byte-exact; record/replay
+  tests in the library and through the CLI; 990 Rust tests (16 held out with a stated reason).
+- **Verification found and fixed before merge** (18 bypass programs):
+  a record with a backwards clock replayed silently; the host doors
+  defaulted a missing receiver to the shim's first capability cell;
+  valid-name coverage was one case.
+- **For the owner.** `main` taking `mem.Heap` is refused because the
+  checker types that parameter `TY_ERROR` silently (ch10 R17's
+  fresh-brand binding of `Heap[A]`); a root module naming itself
+  `std.time` passes the checker without `std` and is stopped only by
+  the run-time receiver check (design §5.9's verifier backstop is still
+  to do); `std/io.fors`'s `Stdout.check`/`clear_error` read fields of a
+  root value and are now named refusals.
 
 ### compiler-v0.18.0 — 2026-10-03
 
