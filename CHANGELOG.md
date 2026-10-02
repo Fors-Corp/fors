@@ -7,7 +7,8 @@ commit history, which predates the Conventional Commits convention.
 
 | Language | Compiler | Meaning |
 |---|---|---|
-| `lang-v0.5.3` | `compiler-v0.11.0` | current |
+| `lang-v0.5.3` | `compiler-v0.12.0` | current |
+| `lang-v0.5.3` | `compiler-v0.11.0` | checker I10a |
 | `lang-v0.5.3` | `compiler-v0.10.0` | FMIR F1-completion |
 | `lang-v0.5.3` | `compiler-v0.9.0` | checker I8b, the round-6 flow |
 | `lang-v0.5.2` | `compiler-v0.8.0` | FMIR F7 in part |
@@ -98,6 +99,56 @@ measurement, the grammar, names and visibility), with a conformance corpus and
 an independent reference parser.
 
 ## Compiler
+
+### compiler-v0.12.0 — 2026-10-02
+
+Type checker increment **I9**, `fors-query` and the M1 exit, produced by
+one agent and independently verified by another. Implements
+`lang-v0.5.3`; still no code generator.
+
+- **The engine (`fors-query`).** `QueryKey`, `Revision`, input vs derived
+  nodes with a value hash in SoA columns (no `Arc<dyn Any>`), dependency
+  recording by read-tracking, red-green verification with early cutoff,
+  an explicit in-flight stack with a caller-declared `on_cycle` value
+  that is never memoised, cancellation that writes nothing, `compact`,
+  `--stats`; `decl_fingerprint()` with the §14 Q4–Q6 fallbacks.
+- **The query DAG.** Design §9.1's node set over the checker, with
+  `check_body(k)` a real per-declaration node (`check_build` split into
+  signatures + bodies, one code path), stable content keys per
+  declaration, declaration-relative cached diagnostics re-rendered by a
+  printing walk in canonical order, and `fors check --stats`. Coarse by
+  design and stated so: whole-build resolve and signature phase (M2
+  makes them per-module), `name_uses` as a slice of the whole-build
+  resolve, `infinite_size()` the one whole-build query R14 asks for.
+- **M1 exit gates.** (a) a 105k-line corpus checks clean cold through the
+  DAG in ~0.3 s; (b) the counter gate — re-executions per edit class
+  identical at 30/60/120 declarations — and a wall slope of ≈1.02 over
+  13k→211k lines (release build, box load ≈4) against the ≤1.05 gate;
+  (c) every §9.2 row as a set equality of re-executed queries,
+  `adding_an_impl_invalidates_only_its_head_bucket`,
+  `assoc_type_def_edit_is_signature_level`, cold-vs-incremental output
+  byte-identical over an 8-edit script with a breaking edit and its
+  revert, determinism under file and declaration permutation, and a
+  deterministic oracle: 244 chapter-09 files, diagnostic for diagnostic,
+  DAG vs `check_build`.
+- **Three latent defects the oracle found.** An impl's key was derived
+  from token positions, so an insertion above it changed its canonical
+  `sig_hash` and every member's; impls with identical headers collapsed
+  to one key and printed twice; a quadratic bucket scan made the cold
+  slope super-linear.
+- **Coverage.** 863 Rust tests (18 held out with a stated reason).
+- **Verification found and fixed before merge.** Seven silent stale-output
+  defects, each proved by a cold-vs-incremental test that failed before
+  the repair: `impls_for` with no edge to its rows' signatures;
+  cross-module empty buckets never woken (ch08 R21); `impl_holds`
+  recording no bucket on its exact path; `signature_of(impl)` with no
+  edge to its trait; whole-head diagnostics cached without bucket edges;
+  R14 cached on the wrong node; prelude impl rows keyed by a renumbering
+  `DefId`. Also a panic on file removal and two sources of
+  nondeterminism across processes.
+- **Flagged, not changed.** A `const`'s comptime value is in no
+  fingerprint yet (Q4 implemented, not wired); a qualified path spelling
+  is over-hashed; design §9.1's `impls_for` row understates its reads.
 
 ### compiler-v0.11.0 — 2026-10-02
 
