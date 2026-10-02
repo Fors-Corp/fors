@@ -9,6 +9,14 @@
 //! walk serves both jobs, so there is exactly one diagnostic per pattern
 //! node (ch03 R25's CHECK position) and exhaustiveness never re-derives
 //! what typing already decided.
+//!
+//! I10a adds a third consumer to the same walk: the decision is PUBLISHED
+//! on [`BodyFacts::patterns`](crate::facts::BodyFacts::patterns) as a
+//! [`PatShape`] tree, so FMIR lowering reads which variant, which fields in
+//! which order, which literal and which binding an arm tests instead of
+//! re-deriving any of it. The two trees differ in one way on purpose: the
+//! [`PatStore`] shares one cached wildcard node for `_` and `let n`, which
+//! the usefulness walk may, and lowering may NOT.
 
 use fors_fir::constval::{ConstValue, fits};
 use fors_fir::{
@@ -22,9 +30,10 @@ use fors_resolve::target::{DeferReason, Entity, ResolvedTarget};
 use fors_syntax::NodeKind;
 
 use crate::body::{BodyCx, LocalKind};
+use crate::facts::PatShape;
 use crate::lower::{parse_int_literal, str_contents};
 use crate::wf::Wf;
-use fors_fir::sig::VIS_PRIVATE;
+use fors_fir::sig::{Conv, VIS_PRIVATE};
 use fors_index::diag::Code;
 
 /// One constructor a lowered pattern tests (design §7.8). A `const`
@@ -151,6 +160,24 @@ impl Wf<'_> {
         pat: usize,
         s: TyId,
     ) -> PatId {
+        // D5 (I10a): the same walk publishes the decision for lowering. The
+        // row is opened before the dispatch and closed after it, so every
+        // sub-pattern the dispatch visits registers itself as a child; its
+        // shape starts [`PatShape::Undecided`] and each judgement below
+        // sets its own, which leaves an error path honestly undecided.
+        cx.facts.patterns.open(pat as u32, s);
+        let id = self.check_pat_decided(cx, store, pat, s);
+        cx.facts.patterns.close();
+        id
+    }
+
+    fn check_pat_decided(
+        &mut self,
+        cx: &mut BodyCx,
+        store: &mut PatStore,
+        pat: usize,
+        s: TyId,
+    ) -> PatId {
         store.touch();
         // ch01 R22d(ii): destructuring discharges a linear obligation only
         // when the arm binds EVERY linear component with `let n`. A `_` or
@@ -180,9 +207,14 @@ impl Wf<'_> {
             return store.wild();
         }
         match cx.kind(pat) {
-            NodeKind::PatWild => store.wild(),
+            NodeKind::PatWild => {
+                cx.facts.patterns.shape(PatShape::Wild);
+                store.wild()
+            }
             NodeKind::PatLet => {
                 self.bind_let(cx, pat, s);
+                let shape = self.bind_shape(s);
+                cx.facts.patterns.shape(shape);
                 store.wild()
             }
             NodeKind::PatLit => self.check_pat_lit(cx, store, pat, s),
@@ -199,6 +231,24 @@ impl Wf<'_> {
     /// component is ch01's.
     pub fn bind_let(&mut self, cx: &mut BodyCx, pat: usize, s: TyId) {
         cx.bind(pat as u32, s, LocalKind::Value);
+    }
+
+    /// D5 (I10a): the shape a `let n` binding publishes. The convention is
+    /// the checker's own copy-or-move answer for the component type (ch01
+    /// R4/R22d(ii)), so lowering reads it instead of asking `Copyable`
+    /// again. A component whose type failed stays
+    /// [`PatShape::Undecided`]: a `Bind` row with no type is nothing
+    /// lowering could act on.
+    pub(crate) fn bind_shape(&mut self, s: TyId) -> PatShape {
+        if s == TY_ERROR || s == NO_TY {
+            return PatShape::Undecided;
+        }
+        let conv = if self.copyable(s) {
+            Conv::Let
+        } else {
+            Conv::Sink
+        };
+        PatShape::Bind { conv }
     }
 
     fn check_pat_lit(
@@ -254,6 +304,7 @@ impl Wf<'_> {
                         format!("a `bool` pattern does not check against `{w}`"),
                     );
                 }
+                cx.facts.patterns.shape(PatShape::Lit(ConstValue::B(v)));
                 store.ctor(Ctor::Bool(v), &[])
             }
             TokenKind::Str | TokenKind::MultilineStr => {
@@ -271,6 +322,7 @@ impl Wf<'_> {
                         format!("a string pattern does not check against `{w}`"),
                     );
                 }
+                cx.facts.patterns.shape(PatShape::Lit(ConstValue::S(sym)));
                 store.ctor(Ctor::Str(sym), &[])
             }
             TokenKind::Int => {
@@ -300,6 +352,7 @@ impl Wf<'_> {
                     }
                     _ => {}
                 }
+                cx.facts.patterns.shape(PatShape::Lit(ConstValue::I(v)));
                 store.ctor(Ctor::Int(v), &[])
             }
             _ => unreachable!(),
@@ -345,13 +398,23 @@ impl Wf<'_> {
                 .unwrap_or(TY_ERROR);
             let id = match kids.get(i) {
                 Some(&c) => self.check_pat(cx, store, c, t),
-                None => store.wild(),
+                None => {
+                    // D5: a component with no written pattern still gets a
+                    // child row, so the fact tree's children line up with
+                    // the type's components one for one.
+                    cx.facts.patterns.leaf(pat as u32, t, PatShape::Wild);
+                    store.wild()
+                }
             };
+            cx.facts.patterns.slot_last(i as u32);
             subs.push(id);
         }
         for &c in kids.iter().skip(arity) {
             self.check_pat(cx, store, c, TY_ERROR);
         }
+        cx.facts
+            .patterns
+            .shape(PatShape::Tuple { len: arity as u32 });
         store.ctor(Ctor::Tuple(arity as u32), &subs)
     }
 
@@ -470,6 +533,7 @@ impl Wf<'_> {
                 format!("this constant's type does not check against `{w}`"),
             );
         }
+        cx.facts.patterns.shape(PatShape::Lit(val));
         match val {
             ConstValue::I(n) => store.ctor(Ctor::Int(n), &[]),
             ConstValue::B(b) => store.ctor(Ctor::Bool(b), &[]),
@@ -497,6 +561,9 @@ impl Wf<'_> {
             return store.wild();
         };
         let subs = self.check_payload(cx, store, pat, payload, def, args, &m);
+        cx.facts
+            .patterns
+            .shape(PatShape::Variant { en: def, index });
         store.ctor(Ctor::Variant(def, index), &subs)
     }
 
@@ -548,6 +615,9 @@ impl Wf<'_> {
             return store.wild();
         };
         let subs = self.check_payload(cx, store, pat, payload, def, args, &m);
+        cx.facts
+            .patterns
+            .shape(PatShape::Variant { en: def, index });
         store.ctor(Ctor::Variant(def, index), &subs)
     }
 
@@ -575,6 +645,9 @@ impl Wf<'_> {
             return store.wild();
         };
         let subs = self.check_payload(cx, store, pat, payload, def, args, &m);
+        cx.facts
+            .patterns
+            .shape(PatShape::Variant { en: def, index });
         store.ctor(Ctor::Variant(def, index), &subs)
     }
 
@@ -622,6 +695,7 @@ impl Wf<'_> {
             Some(p) => self.check_field_payload(cx, store, p, &fields, Some(def)),
             None => fields.iter().map(|_| store.wild()).collect(),
         };
+        cx.facts.patterns.shape(PatShape::Struct { def });
         store.ctor(Ctor::Struct(def), &subs)
     }
 
@@ -679,9 +753,16 @@ impl Wf<'_> {
                         let subs: Vec<PatId> = tys
                             .iter()
                             .enumerate()
-                            .map(|(i, &t)| match kids.get(i) {
-                                Some(&c) => self.check_pat(cx, store, c, t),
-                                None => store.wild(),
+                            .map(|(i, &t)| {
+                                let id = match kids.get(i) {
+                                    Some(&c) => self.check_pat(cx, store, c, t),
+                                    None => {
+                                        cx.facts.patterns.leaf(pat as u32, t, PatShape::Wild);
+                                        store.wild()
+                                    }
+                                };
+                                cx.facts.patterns.slot_last(i as u32);
+                                id
                             })
                             .collect();
                         for &c in kids.iter().skip(tys.len()) {
@@ -783,8 +864,15 @@ impl Wf<'_> {
                 // as one pattern node, like a written `let x` would.
                 store.touch();
                 cx.bind(c as u32, ty, LocalKind::Value);
+                let shape = self.bind_shape(ty);
+                cx.facts.patterns.leaf(c as u32, ty, shape);
                 store.wild()
             };
+            // D5: the field index this child matches. An omitted field has
+            // no child at all (R50's "omitted fields match anything").
+            cx.facts
+                .patterns
+                .slot_last(slot.map(|k| k as u32).unwrap_or(crate::facts::NO_PAT_SLOT));
             if let Some(k) = slot
                 && subs[k].is_none()
             {
@@ -813,6 +901,7 @@ impl Wf<'_> {
             );
             break;
         }
+        cx.facts.patterns.sort_children();
         subs.into_iter()
             .map(|o| o.unwrap_or_else(|| store.wild()))
             .collect()

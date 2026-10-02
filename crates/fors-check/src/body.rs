@@ -928,14 +928,43 @@ impl Wf<'_> {
             }
         };
         self.bind_binding(cx, binding, ty);
+        // D5/D6 (I10a): a `let`/`var` destructuring is a one-arm,
+        // irrefutable match (R31/R52), and lowering needs its tree for the
+        // same reason it needs an arm's. Published whatever the binding's
+        // shape — a plain `let x` is a one-node tree.
+        if let Some(root) = cx.facts.patterns.last_root() {
+            cx.facts.patterns.arms.push(crate::facts::PatArmRow {
+                owner: node as u32,
+                order: 0,
+                pat: binding as u32,
+                root,
+            });
+            cx.facts
+                .patterns
+                .scrutinees
+                .push(crate::facts::ScrutineeRow {
+                    owner: node as u32,
+                    ty,
+                    exhaustive: true,
+                });
+        }
         TY_UNIT
     }
 
-    /// Binds a `Binding`/`TupleBinding` to `ty` (R31's tuple clause).
+    /// Binds a `Binding`/`TupleBinding` to `ty` (R31's tuple clause), and
+    /// publishes the same decision as a pattern tree (D5, I10a).
     fn bind_binding(&mut self, cx: &mut BodyCx, node: usize, ty: TyId) {
+        cx.facts.patterns.open(node as u32, ty);
+        self.bind_binding_inner(cx, node, ty);
+        cx.facts.patterns.close();
+    }
+
+    fn bind_binding_inner(&mut self, cx: &mut BodyCx, node: usize, ty: TyId) {
         match cx.kind(node) {
             NodeKind::Binding => {
                 cx.bind(node as u32, ty, LocalKind::Value);
+                let shape = self.bind_shape(ty);
+                cx.facts.patterns.shape(shape);
                 let p = cx.tape.intern(node as u32, &[]);
                 cx.tape.push(
                     node as u32,
@@ -981,7 +1010,11 @@ impl Wf<'_> {
                 }
                 for (i, &k) in kids.iter().enumerate() {
                     self.bind_binding(cx, k, parts.get(i).copied().unwrap_or(TY_ERROR));
+                    cx.facts.patterns.slot_last(i as u32);
                 }
+                cx.facts.patterns.shape(crate::facts::PatShape::Tuple {
+                    len: kids.len() as u32,
+                });
             }
             _ => {}
         }
