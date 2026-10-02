@@ -98,6 +98,7 @@ dependencies = [
  "fors-fmir",
  "fors-index",
  "fors-interp",
+ "fors-layout",
  "fors-lex",
  "fors-resolve",
  "fors-syntax",

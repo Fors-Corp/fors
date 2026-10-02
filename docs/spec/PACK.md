@@ -5,7 +5,7 @@ regenerate. Source: `docs/spec/*.md` (normative), `tests/conformance/`
 (corpus) and `std/**/*.fors` (standard library).
 
 Language version: 0.5.3 (`docs/spec/VERSION`)
-Inputs SHA-256: 1ee76389c906e207114c2e17604dcd7ecb59a281180705fbbaa7482ab215ecf8
+Inputs SHA-256: 5179f6fd8796beeee0cc7c36bbac69a1cf81e8b156a0d0471f2c5ab15f924fb6
 
 This pack exists because no model has seen Fors before: guessing from
 Rust/Zig/Swift/C is wrong more often than it is right. Read section 1 first.
@@ -1167,6 +1167,7 @@ impl[T: Droppable] Option[T] {
 pub struct Buffer[T, N: usize] { ... }
 impl[T, N: usize] Buffer[T, N] {
     pub fn empty() -> Buffer[T, N] { ... }
+    fn buffer_uninit_data() -> Array[T, N] { ... }
     pub fn cap(let self: Self) -> usize { ... }
     pub fn push(inout self: Self, sink v: T) -> Option[T] { ... }
     pub fn pop(inout self: Self) -> Option[T] { ... }

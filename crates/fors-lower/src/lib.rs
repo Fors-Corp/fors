@@ -17,8 +17,19 @@
 //! assembled by the caller (tests): this crate returns [`LoweredFn`] rows,
 //! so it never depends on the interpreter crate (design §2, "Why three").
 
+//! F-mono adds MONOMORPHISATION and PATTERN lowering to that scope. A call
+//! whose `BodyFacts::generic_args` row is non-empty lowers to an
+//! instantiation of its callee at those arguments: the body is lowered once
+//! per distinct `(callee, arguments)` pair ([`mono::Instances`]), with every
+//! substituted type interned in a store this crate OWNS (a clone of the
+//! checker's frozen one — see [`mono`]'s module docs). A `match`, and a
+//! `let`/`var` destructuring, lowers from `BodyFacts::patterns`: the
+//! checker's decided shapes, never re-derived here.
+
 pub mod diag;
 pub mod lower;
+pub mod mono;
 
 pub use diag::{LowerDiag, LowerError};
 pub use lower::{LoweredBuild, LoweredFn, lower_build};
+pub use mono::{Instance, Instances};
