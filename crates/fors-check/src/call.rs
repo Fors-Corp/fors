@@ -42,9 +42,11 @@ enum Callee {
     /// A function, generic or not: `arity > 0` makes its own parameters
     /// R38's slots.
     Fn(DefId),
-    /// A tuple variant: `(enum def, member index)`. The enum's own
-    /// parameters are R38's slots.
-    Variant(DefId, usize),
+    /// A tuple variant: `(enum def, member index, explicit head)`. The
+    /// enum's own parameters are R38's slots; the head is the WRITTEN
+    /// `Enum[args]` of R38(a)'s explicit form (`Opt2[i64].s(1)`), which
+    /// seeds them, or [`NO_TY`] for a bare `Opt2.s(1)` / `some(1)`.
+    Variant(DefId, usize, TyId),
     /// A value of `fn` or closure type (R7).
     Value(FnTyId),
     /// A resolved method (I4, R43-R46), with nothing to determine.
@@ -76,6 +78,14 @@ struct Shape {
     /// lists "a variant payload" beside "a struct-literal field" as a
     /// discharge of its own, with no marker).
     marked: bool,
+    /// I10b: slots R38(a) already knows, bound before step (a) runs —
+    /// `(owner, ordinal, type)`. The one producer is a method found through a
+    /// trait that declares parameters of its own: R38(b) binds the trait's
+    /// `Self` from the receiver and nothing else, so `Conv[T]`'s `T`,
+    /// `Index[I]`'s `I` and `Allocator[A]`'s `A` come from the impl that
+    /// answered the lookup (R19: at most one matches), carried here as
+    /// [`MethodHit::trait_args`].
+    seed: Vec<(DefId, u16, TyId)>,
 }
 
 impl Shape {
@@ -149,7 +159,7 @@ impl Wf<'_> {
             node as u32,
             match &callee {
                 Callee::Fn(def) => FactCallee::Direct(*def),
-                Callee::Variant(en, i) => FactCallee::Variant {
+                Callee::Variant(en, i, _) => FactCallee::Variant {
                     en: *en,
                     index: *i as u32,
                 },
@@ -174,6 +184,7 @@ impl Wf<'_> {
                         raises: NO_TY,
                         counted: false,
                         marked: true,
+                        seed: Vec::new(),
                     }
                 } else {
                     let n = self.fir.sigs.fn_sigs.count(sig);
@@ -195,10 +206,11 @@ impl Wf<'_> {
                         raises: self.fir.sigs.fn_sigs.raises(sig),
                         counted: true,
                         marked: true,
+                        seed: Vec::new(),
                     }
                 }
             }
-            Callee::Variant(def, i) => {
+            Callee::Variant(def, i, head) => {
                 let ms = self.fir.sigs.members(def);
                 let m = self.fir.sigs.member_store.get(ms, i);
                 let xs = self.fir.tys.args(m.args).to_vec();
@@ -218,6 +230,22 @@ impl Wf<'_> {
                     let xs = self.own_args(def);
                     self.fir.tys.nominal_of(def, &xs)
                 };
+                // R38(a)'s explicit form on the enum: `Opt2[i64].s(1)` binds
+                // the enum's slots from the written head before (c)/(d).
+                let seed: Vec<(DefId, u16, TyId)> = if head == NO_TY || arity == 0 {
+                    Vec::new()
+                } else {
+                    let bare = self.fir.tys.unqual(head);
+                    self.fir
+                        .tys
+                        .args(fors_fir::ty::ArgsId(self.fir.tys.b(bare)))
+                        .to_vec()
+                        .into_iter()
+                        .enumerate()
+                        .filter(|&(_, t)| t != TY_ERROR && t != NO_TY)
+                        .map(|(o, t)| (def, o as u16, t))
+                        .collect()
+                };
                 Shape {
                     owners,
                     gdef: def,
@@ -226,6 +254,7 @@ impl Wf<'_> {
                     raises: NO_TY,
                     counted: true,
                     marked: false,
+                    seed,
                 }
             }
             Callee::Value(id) => {
@@ -244,6 +273,7 @@ impl Wf<'_> {
                     raises: self.fir.tys.fn_tys().raises(id),
                     counted: true,
                     marked: true,
+                    seed: Vec::new(),
                 }
             }
             Callee::Undecided => {
@@ -265,6 +295,7 @@ impl Wf<'_> {
                         raises: NO_TY,
                         counted: false,
                         marked: true,
+                        seed: Vec::new(),
                     }
                 } else {
                     // I4 (D2/D3): the resolution lowering reads, recorded
@@ -290,6 +321,15 @@ impl Wf<'_> {
                         let p = self.fir.sigs.fn_sigs.param(sig, i);
                         ps.push((p.name, p.conv, p.ty));
                     }
+                    if hit.receiver_is_arg && hit.explicit_head {
+                        // R38(a)+(b) for R45's EXPLICIT head: the head was
+                        // written with its arguments, so the container's
+                        // parameters come from it and not from step (c).
+                        let own_self = self.fir.sigs.self_ty(hit.owner);
+                        if own_self != NO_TY && own_self != TY_ERROR {
+                            receiver = Some((own_self, hit.recv_ty));
+                        }
+                    }
                     if !hit.receiver_is_arg {
                         self.recv_use(cx, node, callee_node, &hit);
                         // R38(b): the receiver's type faces the declared
@@ -300,6 +340,24 @@ impl Wf<'_> {
                         let p = self.fir.sigs.fn_sigs.param(sig, hit.recv_slot as usize);
                         receiver = Some((p.ty, hit.recv_ty));
                     }
+                    // I10b (R38(a) on the container): a trait with
+                    // parameters of its own has no other source for them —
+                    // the receiver binds `Self` (ordinal 0) and nothing
+                    // else — so the impl that answered the lookup supplies
+                    // them, at ordinals 1.. of the trait's generics.
+                    let seed: Vec<(DefId, u16, TyId)> = if hit.trait_args == NO_ARGS {
+                        Vec::new()
+                    } else {
+                        self.fir
+                            .tys
+                            .args(hit.trait_args)
+                            .to_vec()
+                            .into_iter()
+                            .enumerate()
+                            .filter(|&(_, t)| t != TY_ERROR && t != NO_TY)
+                            .map(|(i, t)| (hit.owner, i as u16 + 1, t))
+                            .collect()
+                    };
                     Shape {
                         // I6 (design §7.4): the owner container's gparams
                         // (a trait's `Self` at ordinal 0) then the method's
@@ -313,6 +371,7 @@ impl Wf<'_> {
                         raises: self.fir.sigs.fn_sigs.raises(sig),
                         counted: true,
                         marked: true,
+                        seed,
                     }
                 }
             }
@@ -402,6 +461,12 @@ impl Wf<'_> {
         let slots = shape.slots();
         let mut b = Binding::new(&shape.owners);
         self.bindings_created += 1;
+        // I10b: the slots R38(a) already knows (see [`Shape::seed`]). Bound
+        // before step (a) so an explicit `[...]` argument list, the receiver
+        // and the arguments all see them.
+        for &(owner, ord, t) in &shape.seed {
+            b.bind(owner, ord, t);
+        }
         // One root cause per call: once a slot or a comparison has been
         // reported, the rest of the procedure runs for its side effects
         // (every argument is still visited) and says nothing more.
@@ -1325,8 +1390,30 @@ impl Wf<'_> {
                         return Callee::Undecided;
                     }
                     match self.variant_slot(def, index) {
-                        Some(i) => Callee::Variant(def, i),
-                        None => Callee::Undecided,
+                        Some(i) => Callee::Variant(def, i, NO_TY),
+                        None => {
+                            // R34: a unit variant is named by its path and a
+                            // struct-form one is a struct literal; calling
+                            // either is an error, never silence.
+                            let payload = self.variant_payload(def, index);
+                            let h = self.head_name(def);
+                            let n = crate::member::path_segments(cx, node);
+                            let v = self
+                                .segment_name(cx, node, n.saturating_sub(1))
+                                .map(|s| self.sym(s))
+                                .unwrap_or_default();
+                            let msg = if payload == Some(PayloadKind::None) {
+                                format!(
+                                    "`{h}.{v}` is a unit variant and takes no payload; write `{h}.{v}`"
+                                )
+                            } else {
+                                format!(
+                                    "`{h}.{v}` is a struct-form variant; construct it with a struct literal"
+                                )
+                            };
+                            self.bemit(cx, node, 34, 34, msg);
+                            Callee::Undecided
+                        }
                     }
                 }
                 // `some(x)`: `Option`'s tuple variant, whose `T` is R38's
@@ -1338,7 +1425,7 @@ impl Wf<'_> {
                     }
                     self.dep(def);
                     match self.variant_named(def, sym) {
-                        Some(i) => Callee::Variant(def, i),
+                        Some(i) => Callee::Variant(def, i, NO_TY),
                         None => Callee::Undecided,
                     }
                 }
@@ -1358,6 +1445,31 @@ impl Wf<'_> {
                 let Some(operand) = cx.f.tree.children(node).next() else {
                     return Callee::Undecided;
                 };
+                // I10b: R45's qualified form whose HEAD carries R38(a)'s
+                // explicit arguments — `Bag[i64].of(1)`. The operand is a
+                // TYPE, so it is not synthesised and the receiver arrives
+                // as args[0] exactly as in `Bag.of(1)`.
+                if let Some(head) = self.instantiated_type(cx, operand) {
+                    if head == TY_ERROR {
+                        // R11 already reported the bracket.
+                        return Callee::Undecided;
+                    }
+                    let Some(name) = self.field_name(cx, node) else {
+                        return Callee::Undecided;
+                    };
+                    // R34 before R45, as in `qualified_callee`: `Opt2[i64].s(1)`
+                    // and `Option[i64].some(1)` CONSTRUCT a variant.
+                    let bare = self.fir.tys.unqual(head);
+                    if self.fir.tys.tag(bare) == TyTag::Nominal {
+                        let def = DefId(self.fir.tys.a(bare));
+                        if self.fir.sigs.kind(def) == SigKind::Enum
+                            && let Some(c) = self.variant_callee(cx, node, def, name, head)
+                        {
+                            return c;
+                        }
+                    }
+                    return self.qualified_hit(cx, node, head, name, true);
+                }
                 let recv = self.synth(cx, operand);
                 if recv == TY_ERROR || recv == NO_TY {
                     return Callee::Undecided;
@@ -1429,6 +1541,17 @@ impl Wf<'_> {
         };
         let head_def = match target {
             ResolvedTarget::Entity(Entity::Item { file, decl }) => self.defs.def_of(file, decl),
+            // I10b (R45/R34): a PRELUDE head carrying a deferred tail.
+            // `Option.some(1)` is R34's "a tuple variant is constructed by
+            // calling its path" on the one enum no file declares, so the
+            // resolver leaves `some` to ch08 R22 and this function refused
+            // the head outright: the call node ended `TY_ERROR` with no
+            // diagnostic, while a user enum's `Opt2.s(1)` — which the
+            // resolver resolves whole — typed.
+            ResolvedTarget::Entity(Entity::PreludeType(sym)) => match self.prelude.lookup(sym) {
+                Some(fors_fir::prelude::PreludeEntity::Generic { def, .. }) => def,
+                _ => return Callee::Undecided,
+            },
             _ => return Callee::Undecided,
         };
         if head_def == fors_fir::NO_DEF
@@ -1440,6 +1563,15 @@ impl Wf<'_> {
             return Callee::Undecided;
         }
         self.dep(head_def);
+        // R34 before R45: a tuple variant of this head is CONSTRUCTED, not
+        // called as a method, and R38 determines the enum's parameters from
+        // the payload and the expected type exactly as for `Opt2.s(1)`.
+        if self.fir.sigs.kind(head_def) == SigKind::Enum
+            && let Some(name) = self.segment_name(cx, node, n - 1)
+            && let Some(c) = self.variant_callee(cx, node, head_def, name, NO_TY)
+        {
+            return c;
+        }
         let recv = if self.arity(head_def) == 0 {
             self.fir.tys.nominal(head_def, NO_ARGS)
         } else {
@@ -1449,8 +1581,25 @@ impl Wf<'_> {
         let Some(name) = self.segment_name(cx, node, n - 1) else {
             return Callee::Undecided;
         };
+        self.qualified_hit(cx, node, recv, name, false)
+    }
+
+    /// R45's lookup on a head type that is already known, and its R43/R44
+    /// reporting. Shared by the plain qualified path (`Bag.of(1)`) and
+    /// I10b's explicitly-instantiated one (`Bag[i64].of(1)`).
+    fn qualified_hit(
+        &mut self,
+        cx: &mut BodyCx,
+        node: usize,
+        recv: TyId,
+        name: Symbol,
+        explicit_head: bool,
+    ) -> Callee {
         match self.lookup_qualified(cx, node, recv, name) {
-            Ok(hit) => Callee::Method(hit),
+            Ok(mut hit) => {
+                hit.explicit_head = explicit_head;
+                Callee::Method(hit)
+            }
             Err(LookupError::Silent) => Callee::Undecided,
             Err(LookupError::None { recv, name }) => {
                 self.bemit(cx, node, 43, 43, format!("`{recv}` has no method `{name}`"));
@@ -1604,6 +1753,41 @@ impl Wf<'_> {
         self.lower_generic_arg(cx, node, def, slot)
     }
 
+    /// R34 for a variant named as a CALLEE on the enum's path (`Opt2.s(1)`,
+    /// `Option.some(1)`, `Opt2[i64].s(1)`): a tuple variant is constructed
+    /// and the enum's parameters are R38's slots (seeded from `head` when
+    /// the head was written with its arguments); a unit or struct-form
+    /// variant is never called, so naming one here is R34's error and the
+    /// call is `Undecided` after it. `None` when `name` is no variant of
+    /// `def` at all, so R45's lookup can answer.
+    fn variant_callee(
+        &mut self,
+        cx: &mut BodyCx,
+        node: usize,
+        def: DefId,
+        name: Symbol,
+        head: TyId,
+    ) -> Option<Callee> {
+        let ms = self.fir.sigs.members(def);
+        let i = (0..self.fir.sigs.member_store.count(ms)).find(|&i| {
+            let m = self.fir.sigs.member_store.get(ms, i);
+            m.kind == MemberKind::Variant && m.name == name
+        })?;
+        let payload = self.fir.sigs.member_store.get(ms, i).payload;
+        if payload == PayloadKind::Tuple {
+            return Some(Callee::Variant(def, i, head));
+        }
+        let h = self.head_name(def);
+        let v = self.sym(name);
+        let msg = if payload == PayloadKind::None {
+            format!("`{h}.{v}` is a unit variant and takes no payload; write `{h}.{v}`")
+        } else {
+            format!("`{h}.{v}` is a struct-form variant; construct it with a struct literal")
+        };
+        self.bemit(cx, node, 34, 34, msg);
+        Some(Callee::Undecided)
+    }
+
     /// The member index of an enum variant by NAME (the prelude values
     /// `some`/`none` reach `Option`'s members this way).
     fn variant_named(&mut self, def: DefId, name: Symbol) -> Option<usize> {
@@ -1616,6 +1800,24 @@ impl Wf<'_> {
 
     /// The member index of an enum's variant given the resolver's ordinal
     /// (which counts distinct variant NAMES, ch08's `Entity::Variant`).
+    /// The payload kind of an enum's variant given the resolver's ordinal
+    /// (`None` past the last variant).
+    pub(crate) fn variant_payload(&mut self, def: DefId, ordinal: u32) -> Option<PayloadKind> {
+        let ms = self.fir.sigs.members(def);
+        let mut seen = 0u32;
+        for i in 0..self.fir.sigs.member_store.count(ms) {
+            let m = self.fir.sigs.member_store.get(ms, i);
+            if m.kind != MemberKind::Variant {
+                continue;
+            }
+            if seen == ordinal {
+                return Some(m.payload);
+            }
+            seen += 1;
+        }
+        None
+    }
+
     fn variant_slot(&mut self, def: DefId, ordinal: u32) -> Option<usize> {
         let ms = self.fir.sigs.members(def);
         let mut seen = 0u32;
@@ -1890,6 +2092,38 @@ impl Wf<'_> {
                 (def != fors_fir::NO_DEF && self.fir.sigs.kind(def) == SigKind::Struct)
                     .then_some(def)
             }
+            // I10b (R34): `return Self { v: v };` inside an impl. ch09 is
+            // silent on the head's spelling — R34 says a struct literal names
+            // "the struct"'s fields and ch07 writes a path — so `Self` reads
+            // here exactly as it reads everywhere else in a body: the impl's
+            // own self type. Before this the head resolved to no `Entity` at
+            // all, the literal answered `TY_ERROR` and nothing was said.
+            ResolvedTarget::Local { node: intro } => {
+                let (snode, sty) = cx.lcx.self_binding()?;
+                if intro != snode {
+                    return None;
+                }
+                let bare = self.fir.tys.unqual(sty);
+                if self.fir.tys.tag(bare) == TyTag::Nominal {
+                    let def = DefId(self.fir.tys.a(bare));
+                    if self.fir.sigs.kind(def) == SigKind::Struct {
+                        return Some(def);
+                    }
+                }
+                // I10b verification: `Self { .. }` inside a trait's default
+                // body (a rigid `Self`) or an enum's impl names no struct,
+                // and R34's literal "MUST name each field of the struct" —
+                // reported, never absorbed.
+                let shown = self.show(bare);
+                self.bemit(
+                    cx,
+                    head,
+                    34,
+                    34,
+                    format!("`Self` here is `{shown}`, not a struct, so a struct literal cannot name its fields"),
+                );
+                None
+            }
             _ => None,
         }
     }
@@ -1998,8 +2232,36 @@ impl Wf<'_> {
                 if def != head {
                     return None;
                 }
-                let _ = index;
-                Some(want)
+                // Only a UNIT variant takes its enum from the expected type;
+                // a tuple variant named bare is R34's error, which SYNTH
+                // reports (`path_head`).
+                (self.variant_payload(def, index) == Some(PayloadKind::None)).then_some(want)
+            }
+            // `Option.none`: the resolver leaves the tail of a prelude head
+            // to ch08 R22, so the path is the head plus one deferred
+            // segment. A unit variant of that enum takes the expected type
+            // exactly as `none` does; anything else subsumes as before.
+            ResolvedTarget::Entity(Entity::PreludeType(sym)) => {
+                let def = match self.prelude.lookup(sym) {
+                    Some(fors_fir::prelude::PreludeEntity::Generic { def, .. }) => def,
+                    _ => return None,
+                };
+                if def != head || self.fir.sigs.kind(def) != SigKind::Enum {
+                    return None;
+                }
+                let n = crate::member::path_segments(cx, node);
+                if n != crate::member::path_consumed(cx, node).max(1) as usize + 1 {
+                    return None;
+                }
+                let name = self.segment_name(cx, node, n - 1)?;
+                let ms = self.fir.sigs.members(def);
+                let unit = (0..self.fir.sigs.member_store.count(ms)).any(|i| {
+                    let m = self.fir.sigs.member_store.get(ms, i);
+                    m.kind == MemberKind::Variant
+                        && m.name == name
+                        && m.payload == PayloadKind::None
+                });
+                unit.then_some(want)
             }
             _ => None,
         }

@@ -4196,3 +4196,617 @@ fn h() -> Layout9 { return Layout9.of[i64](); }
         "a wrong explicit count is R39's diagnostic"
     );
 }
+
+// ------------------------------------------------------------------- I10b
+
+/// I10b family (1), R43 tier (2) for a trait WITH parameters. `methods.rs`
+/// asked `holds` with NO trait arguments, so for `Conv[T]` R12 compared a
+/// one-argument impl row against a zero-argument question, answered `No`,
+/// and `scope_declares` turned the miss into `LookupError::Silent`: the call
+/// node carried `TY_ERROR` with no diagnostic. The impl head supplies the
+/// arguments (R19: at most one impl matches a given (trait, self type)), so
+/// the complete question is asked and R38 gets the trait's own slots too.
+///
+/// Both heads are probed: a concrete one (`impl Conv[i64] for S`) and a
+/// generic one (`impl[T: Copyable] Conv[T] for Bag9[T]`), which is the shape
+/// `std`'s five allocator impls use for `trait Allocator[A: brand]`.
+#[test]
+fn i10b_a_method_of_a_parameterised_trait_resolves_on_any_head() {
+    use fors_check::facts::FactCallee;
+    use fors_fir::ty::PrimKind;
+
+    const SRC: &str = "\
+trait Conv9[T] { fn conv9(let self: Self) -> T; }
+struct S9 { n: i64 }
+impl Conv9[i64] for S9 { fn conv9(let self: Self) -> i64 { return self.n; } }
+struct Bag9[T] { v: T }
+impl[T: Copyable] Conv9[T] for Bag9[T] { fn conv9(let self: Self) -> T { return self.v; } }
+fn f(let s: S9, let b: Bag9[i64]) -> i64 {
+    let a = s.conv9();
+    let c = b.conv9();
+    return a + c;
+}
+";
+    let mut c = checked10(SRC);
+    assert!(
+        c.codes().is_empty(),
+        "probe must check clean: {:?}",
+        c.codes()
+    );
+    let i64_ty = c.out.fir.tys.prim(PrimKind::I64);
+    let calls = c.garg_rows(fors_syntax::NodeKind::CallExpr);
+    assert_eq!(calls.len(), 2, "both method calls record a row: {calls:?}");
+    for (n, row) in &calls {
+        let f = c.facts_at(*n);
+        assert_eq!(
+            f.ty_of(*n),
+            i64_ty,
+            "`conv9()` at node {n} types `i64`, it is not absorbed"
+        );
+        assert!(
+            matches!(f.callee_of(*n), FactCallee::Method { .. }),
+            "node {n} names the trait method: {:?}",
+            f.callee_of(*n)
+        );
+        // R38(a)'s order: the container's slots (the trait's `Self` at
+        // ordinal 0, then its own `T`) and then the method's own (none).
+        assert_eq!(
+            row.len(),
+            2,
+            "the trait's `Self` and its own `T` are both determined: {row:?}"
+        );
+        assert_eq!(row[1], i64_ty, "the trait's `T` comes from the impl head");
+    }
+    assert_silent_free(&c);
+}
+
+/// Every node the build typed is either not `TY_ERROR` or sits in a body
+/// that spoke. A probe's fixtures check clean, so here it is the stronger
+/// statement: NOTHING is `TY_ERROR`.
+fn assert_silent_free(c: &Facts10) {
+    use fors_fir::ty::TY_ERROR;
+    for (_, f) in &c.out.facts {
+        let (s, e) = f.range();
+        for n in s..e.min(c.kinds.len() as u32) {
+            assert_ne!(
+                f.ty_of(n),
+                TY_ERROR,
+                "node {n} ({:?}) is TY_ERROR with no diagnostic",
+                c.kinds[n as usize]
+            );
+        }
+    }
+}
+/// I10b family (2), R38(a)'s EXPLICIT form on a TYPE path used as a value
+/// head (R45's `Type[args].name`, R34's variant). `member.rs::bracket`
+/// answered `TY_ERROR` for the whole `is_instantiation` branch, so
+/// `Opt2[i64].n`, `Option[i64].none` and `Bag[i64].of(1)` absorbed — and
+/// `std` carried `Option[alloc.Block[A]].none` as a documented workaround for
+/// the OTHER half of the same shape. The bracket is a TYPE now, not a value:
+/// it is never synthesised, and the projection or call above it types itself.
+#[test]
+fn i10b_explicit_type_arguments_on_a_value_head_type() {
+    use fors_check::facts::FactCallee;
+
+    const SRC: &str = "\
+enum Opt2[T] { s(T), n }
+struct Bag2[T] { v: T }
+impl[T: Copyable] Bag2[T] { pub fn of(let v: T) -> Bag2[T] { return Bag2 { v: v }; } }
+fn a() -> Opt2[i64] { return Opt2[i64].n; }
+fn b() -> Option[i64] { return Option[i64].none; }
+fn c() -> i64 { let x = Bag2[i64].of(1); return x.v; }
+fn d() -> i64 { let x: Bag2[i64] = Bag2.of(1); return x.v; }
+";
+    let c = checked10(SRC);
+    assert!(
+        c.codes().is_empty(),
+        "probe must check clean: {:?}",
+        c.codes()
+    );
+    assert_silent_free(&c);
+    // `Bag2[i64].of(1)`'s container slot comes from the WRITTEN head, not
+    // from an expected type it does not have: the binding is `i64`, so
+    // `x.v` is `i64` and the literal is checked against `i64`.
+    let calls = c.garg_rows(fors_syntax::NodeKind::CallExpr);
+    assert_eq!(calls.len(), 2, "both `of` calls record a row: {calls:?}");
+    assert_eq!(
+        calls[0].1, calls[1].1,
+        "the explicit head determines exactly what the expected type does"
+    );
+    for (n, _) in &calls {
+        assert!(
+            matches!(c.facts_at(*n).callee_of(*n), FactCallee::Method { .. }),
+            "node {n} names the associated function: {:?}",
+            c.facts_at(*n).callee_of(*n)
+        );
+    }
+    // A variant that takes a payload, named without one, is R34's error —
+    // reported, never absorbed.
+    assert_eq!(
+        check_source("enum Opt2[T] { s(T), n }\nfn a() -> Opt2[i64] { return Opt2[i64].s; }"),
+        vec!["T0034"],
+        "a tuple variant named without its payload is R34's diagnostic"
+    );
+}
+
+/// I10b family (3), R21/R61 inside an `impl IndexMut[I] for S`. `IndexMut`
+/// declares no `Output` of its own and `Self.Output` there denotes
+/// `Index[I]`'s; lowering only SILENCED R61's diagnostic for that shape and
+/// still answered `TY_ERROR`, so every `at_mut` body in `std` (`Buffer`'s,
+/// `Vec`'s, `Map`'s) was checked against an absorbing result type and its
+/// `[ ]` ended `TY_ERROR` with nothing said. R61(b) forbids a projection
+/// headed by a concrete type, so the answer is the `Index` impl's own
+/// definition, carried over into this impl's parameters.
+#[test]
+fn i10b_self_output_in_an_indexmut_impl_is_the_index_impls() {
+    const SRC: &str = "\
+struct Buf2[T, N: usize] { len: usize, data: Array[T, N] }
+impl[T, N: usize] Buf2[T, N] {
+    pub fn items(let self: Self) -> scoped(self) Slice[T] { return self.data[0 ..< self.len]; }
+    pub fn items_mut(inout self: Self) -> scoped(self) Slice[T] { return self.data[0 ..< self.len]; }
+}
+impl[T, N: usize] Index[usize] for Buf2[T, N] {
+    type Output = T;
+    fn at(let self: Self, let i: usize) -> scoped(self) Self.Output { return self.items()[i]; }
+}
+impl[T, N: usize] IndexMut[usize] for Buf2[T, N] {
+    fn at_mut(inout self: Self, let i: usize) -> scoped(self) Self.Output { return self.items_mut()[i]; }
+}
+";
+    let c = checked10(SRC);
+    assert!(
+        c.codes().is_empty(),
+        "probe must check clean: {:?}",
+        c.codes()
+    );
+    assert_silent_free(&c);
+    // And with no `Index` impl to read it from, R61 REPORTS instead of
+    // absorbing (R21's prerequisite is T0021's own business at the head).
+    let codes = check_source(
+        "struct G2 { c: Array[i64, 4] }\n\
+         impl IndexMut[usize] for G2 { fn at_mut(inout self: Self, let i: usize) -> scoped(self) Self.Output { return self.c[i]; } }",
+    );
+    assert!(
+        codes.contains(&"T0061".to_string()),
+        "a missing `Index` impl is reported, not absorbed: {codes:?}"
+    );
+}
+
+/// I10b family (4), R58: "A const parameter is a constant of its type in the
+/// body." Nothing read `LocalKind::ConstParam`, so SYNTH of `N` answered
+/// `TY_ERROR`. CHECK hid it — §7.10's absorbing `subsume` hands back the
+/// expected type, which is why `let k: usize = N;` and `return N;` already
+/// "worked" — but R30 SYNTHESISES a range's non-literal bound, so
+/// `a[0 ..< N]` absorbed the range, both its operands and the slice.
+#[test]
+fn i10b_a_const_parameter_is_a_value_of_its_type() {
+    use fors_fir::ty::{NO_TY, PrimKind};
+
+    const SRC: &str = "\
+fn sl3[N: usize](let a: Array[i64, N]) -> Slice[i64] { return a[0 ..< N]; }
+fn sl4[N: usize]() -> usize { let k: usize = N; return k + N; }
+fn sl5[N: u8]() -> u8 { return N; }
+";
+    let mut c = checked10(SRC);
+    assert!(
+        c.codes().is_empty(),
+        "probe must check clean: {:?}",
+        c.codes()
+    );
+    assert_silent_free(&c);
+    let usize_ty = c.out.fir.tys.prim(PrimKind::Usize);
+    let u8_ty = c.out.fir.tys.prim(PrimKind::U8);
+    // Every `N` read carries its DECLARED type, not a guess: `usize` in the
+    // first two bodies, `u8` in the third.
+    let mut seen = Vec::new();
+    for (_, f) in &c.out.facts {
+        let (s, e) = f.range();
+        for n in s..e.min(c.kinds.len() as u32) {
+            if c.kinds[n as usize] == fors_syntax::NodeKind::NameExpr && f.ty_of(n) != NO_TY {
+                seen.push(f.ty_of(n));
+            }
+        }
+    }
+    assert!(
+        seen.contains(&usize_ty),
+        "a `usize` const parameter reads usize"
+    );
+    assert!(seen.contains(&u8_ty), "a `u8` const parameter reads u8");
+    // A brand parameter stays silent: ch01 R15d gives it no operations and
+    // R58 says so, so this is the one kind the fix does not touch.
+    assert_eq!(
+        check_source("fn f[A: brand]() -> usize { return A; }"),
+        vec!["O0015"],
+        "a brand parameter in value position is still ch01 R15d's error"
+    );
+}
+
+/// I10b family (5), R34: a struct literal headed by `Self` inside an impl.
+/// ch09 is silent on the head's spelling — R34 says the literal names "the
+/// struct"'s fields and ch07 writes a path — so `Self` reads here exactly as
+/// it reads everywhere else in a body: the impl's own self type. Before this
+/// the head resolved to no `Entity`, the literal answered `TY_ERROR`, and
+/// nothing was said.
+#[test]
+fn i10b_a_struct_literal_headed_by_self_types() {
+    const SRC: &str = "\
+struct S5 { v: i64 }
+impl S5 { pub fn make(let v: i64) -> S5 { return Self { v: v }; } }
+struct Bag5[T] { v: T }
+impl[T] Bag5[T] { pub fn of(sink v: T) -> Bag5[T] { return Self { v: move v }; } }
+";
+    let c = checked10(SRC);
+    assert!(
+        c.codes().is_empty(),
+        "probe must check clean: {:?}",
+        c.codes()
+    );
+    assert_silent_free(&c);
+    // R34 is unchanged on the fields themselves: a missing one still reports
+    // through the `Self` head.
+    assert_eq!(
+        check_source(
+            "struct S5 { v: i64, w: i64 }\nimpl S5 { pub fn make() -> S5 { return Self { v: 1 }; } }"
+        ),
+        vec!["T0034"],
+        "a `Self` head is R34's literal like any other"
+    );
+}
+
+/// I10b family (6), R45/R34: a qualified path to a PRELUDE variant used as a
+/// callee. `Option.some(1)` is R34's "a tuple variant is constructed by
+/// calling its path" on the one enum no file declares, so the resolver leaves
+/// `some` to ch08 R22 and `qualified_callee` refused the head: the call node
+/// carried `TY_ERROR` with no diagnostic, while a user enum's `Opt2.s(1)` —
+/// which the resolver resolves whole — typed.
+#[test]
+fn i10b_a_qualified_prelude_variant_is_a_callee() {
+    use fors_check::facts::FactCallee;
+
+    const SRC: &str = "\
+enum Opt2[T] { s(T), n }
+fn a() -> Option[i64] { return Option.some(1); }
+fn b() -> Opt2[i64] { return Opt2.s(1); }
+fn c() -> Option[i64] { return some(1); }
+";
+    let c = checked10(SRC);
+    assert!(
+        c.codes().is_empty(),
+        "probe must check clean: {:?}",
+        c.codes()
+    );
+    assert_silent_free(&c);
+    let calls = c.garg_rows(fors_syntax::NodeKind::CallExpr);
+    assert_eq!(calls.len(), 3, "all three constructions record a row");
+    for (n, _) in &calls {
+        assert!(
+            matches!(c.facts_at(*n).callee_of(*n), FactCallee::Variant { .. }),
+            "node {n} is a variant construction: {:?}",
+            c.facts_at(*n).callee_of(*n)
+        );
+    }
+    // R34 is unchanged on the payload: a variant construction with the wrong
+    // arity is still R39's diagnostic through the prelude head too.
+    assert_eq!(
+        check_source("fn a() -> Option[i64] { return Option.some(1, 2); }"),
+        vec!["T0039"],
+        "the prelude variant's payload count is R39's, not absorbed"
+    );
+}
+
+// ------------------------------------------- I10b verification (repairs)
+
+/// R44 over a PARAMETERISED trait: `impl Conv[i64] for S` and `impl
+/// Conv[u8] for S` do not unify (R19 compares the trait arguments too), so
+/// both are legal and `s.conv()` has two candidates in tier (2). The first
+/// landing picked the earlier impl silently; R44 says the call MUST be an
+/// error listing them, never ranked.
+#[test]
+fn i10b_v_two_impls_of_a_parameterised_trait_are_ambiguous() {
+    let codes = check_source(
+        "trait Conv9[T] { fn conv9(let self: Self) -> T; }\n\
+         struct S9 { n: i64 }\n\
+         impl Conv9[i64] for S9 { fn conv9(let self: Self) -> i64 { return self.n; } }\n\
+         impl Conv9[u8] for S9 { fn conv9(let self: Self) -> u8 { return 1u8; } }\n\
+         fn f(let s: S9) -> i64 { let a = s.conv9(); return a; }\n\
+         fn g(let s: S9) -> u8 { let b: u8 = s.conv9(); return b; }",
+    );
+    assert_eq!(
+        codes,
+        vec!["T0044", "T0044"],
+        "both calls are R44's ambiguity: {codes:?}"
+    );
+    let msgs = check_messages(
+        "trait Conv9[T] { fn conv9(let self: Self) -> T; }\n\
+         struct S9 { n: i64 }\n\
+         impl Conv9[i64] for S9 { fn conv9(let self: Self) -> i64 { return self.n; } }\n\
+         impl Conv9[u8] for S9 { fn conv9(let self: Self) -> u8 { return 1u8; } }\n\
+         fn f(let s: S9) -> i64 { let a = s.conv9(); return a; }",
+    );
+    assert!(
+        msgs[0].contains("`Conv9[i64].conv9`") && msgs[0].contains("`Conv9[u8].conv9`"),
+        "the candidates are listed with their trait arguments: {msgs:?}"
+    );
+    // The arguments the impl head supplies are the call's: an argument of
+    // another type is R38(e)'s T0026, and a receiver no impl covers is R43's.
+    assert_eq!(
+        check_source(
+            "trait Put9[T] { fn put9(inout self: Self, let x: T) -> (); }\n\
+             struct S9 { n: i64 }\n\
+             impl Put9[i64] for S9 { fn put9(inout self: Self, let x: i64) -> () { self.n = x; } }\n\
+             fn bad(inout s: S9) -> () { s.put9(true); }"
+        ),
+        vec!["T0026"]
+    );
+    assert_eq!(
+        check_source(
+            "trait Conv9[T] { fn conv9(let self: Self) -> T; }\n\
+             struct Box9[T] { v: T }\n\
+             impl Conv9[i64] for Box9[i64] { fn conv9(let self: Self) -> i64 { return self.v; } }\n\
+             fn f(let b: Box9[i32]) -> i64 { return b.conv9(); }"
+        ),
+        vec!["T0043"]
+    );
+}
+
+/// R11 on R38(a)'s explicit form of a VALUE head: `Type[args].name` MUST
+/// supply exactly the head's parameters. A wrong count was `TY_ERROR` with
+/// nothing said (the bracket fell through to the old silent reading).
+#[test]
+fn i10b_v_explicit_value_head_with_the_wrong_count_is_r11() {
+    const DECLS: &str = "enum Opt2[T] { s(T), n }\n\
+         struct Bag2[T] { v: T }\n\
+         impl[T: Copyable] Bag2[T] { pub fn of(let v: T) -> Bag2[T] { return Bag2 { v: v }; } }\n\
+         struct P2 { x: i64 }\n\
+         impl P2 { pub fn mk() -> P2 { return P2 { x: 1 }; } }\n";
+    for (body, what) in [
+        (
+            "fn a() -> Opt2[i64] { return Opt2[i64, u8].n; }",
+            "two for one",
+        ),
+        (
+            "fn b() -> i64 { let x = Bag2[i64, u8].of(1); return x.v; }",
+            "two for one, callee",
+        ),
+        (
+            "fn c() -> i64 { let x = Bag2[].of(1); return x.v; }",
+            "none for one",
+        ),
+        (
+            "fn d() -> P2 { return P2[i64].mk(); }",
+            "one for none, callee",
+        ),
+        (
+            "fn e() -> i64 { return P2[i64].x; }",
+            "one for none, member",
+        ),
+    ] {
+        let codes = check_source(&format!("{DECLS}{body}"));
+        assert_eq!(codes, vec!["T0011"], "{what}: {codes:?}");
+    }
+    let c = checked10(&format!(
+        "{DECLS}fn a() -> Opt2[i64] {{ return Opt2[i64, u8].n; }}"
+    ));
+    assert_eq!(c.codes(), vec!["T0011"]);
+}
+
+/// R34 through R38(a)'s explicit head: `Opt2[i64].s(1)` and
+/// `Option[i64].some(1)` CONSTRUCT the variant with the enum's slot bound
+/// from the written head. The first landing answered "no method `s`" for the
+/// user enum and absorbed the prelude one.
+#[test]
+fn i10b_v_an_instantiated_enum_head_constructs_its_tuple_variant() {
+    use fors_check::facts::FactCallee;
+    const SRC: &str = "\
+enum Opt2[T] { s(T), n }
+fn a() -> Opt2[i64] { return Opt2[i64].s(1); }
+fn b() -> Opt2[i64] { let x = Opt2[i64].s(1); return x; }
+fn c() -> Option[i64] { return Option[i64].some(1); }
+fn d() -> Option[i64] { let x = Option[i64].some(1); return x; }
+";
+    let c = checked10(SRC);
+    assert!(c.codes().is_empty(), "{:?}", c.codes());
+    assert_silent_free(&c);
+    let calls = c.garg_rows(fors_syntax::NodeKind::CallExpr);
+    assert_eq!(
+        calls.len(),
+        4,
+        "every construction records its row: {calls:?}"
+    );
+    for (n, row) in &calls {
+        assert!(
+            matches!(c.facts_at(*n).callee_of(*n), FactCallee::Variant { .. }),
+            "node {n}: {:?}",
+            c.facts_at(*n).callee_of(*n)
+        );
+        assert_eq!(
+            row.len(),
+            1,
+            "the enum's one slot is bound from the head: {row:?}"
+        );
+    }
+    // The written head DECIDES the slot: the payload and the expected type
+    // are then compared against it, never used to revise it.
+    assert_eq!(
+        check_source("enum Opt2[T] { s(T), n }\nfn c() -> Opt2[i64] { return Opt2[i64].s(true); }"),
+        vec!["T0026"]
+    );
+    assert_eq!(
+        check_source("fn f() -> Option[i64] { return Option[u8].some(1); }"),
+        vec!["T0026"]
+    );
+    assert_eq!(
+        check_source("fn f() -> Option[i64] { return Option[i64].some(true); }"),
+        vec!["T0026"]
+    );
+}
+
+/// R34: a unit variant is named by its path and a struct-form variant is a
+/// struct literal; CALLING either is an error. The R34-before-R45 branch of
+/// the first landing turned `Opt2.n(1)` from R43's "no method" into silence,
+/// and `Option.none(1)` was silent all along.
+#[test]
+fn i10b_v_calling_a_unit_or_struct_form_variant_is_r34() {
+    for src in [
+        "enum Opt2[T] { s(T), n }\nfn b() -> Opt2[i64] { return Opt2.n(1); }",
+        "enum Opt2[T] { s(T), n }\nfn b() -> Opt2[i64] { return Opt2[i64].n(1); }",
+        "fn b() -> Option[i64] { return Option.none(1); }",
+        "fn b() -> Option[i64] { return Option[i64].none(1); }",
+        "enum Shape { circle(f64), rect { w: f64 } }\nfn e() -> Shape { return Shape.rect(1.0); }",
+        "enum Opt2[T] { s(T), r { v: T } }\nfn f() -> Opt2[i64] { return Opt2.r(1); }",
+        "enum Opt2[T] { s(T), r { v: T } }\nfn f() -> Opt2[i64] { return Opt2[i64].r(1); }",
+    ] {
+        assert_eq!(check_source(src), vec!["T0034"], "{src}");
+    }
+}
+
+/// R34/R28 on a variant named BARE: a tuple or struct-form variant is no
+/// value (`Shape.circle`, `Option.some`), and a generic unit variant in
+/// SYNTH mode with no arguments is T0039 (`Opt2.n`, `Option.none`), exactly
+/// like bare `none`. CHECK mode still takes the enum from the expected type.
+#[test]
+fn i10b_v_a_variant_named_bare_is_r34_or_r39() {
+    for (src, code) in [
+        (
+            "enum Shape { circle(f64), dot }\nfn a() -> Shape { return Shape.circle; }",
+            "T0034",
+        ),
+        (
+            "enum Shape { circle(f64), dot }\nfn b() -> i64 { let x = Shape.circle; return 1; }",
+            "T0034",
+        ),
+        (
+            "enum Shape { circle(f64), rect { w: f64 } }\nfn j() -> Shape { return Shape.rect; }",
+            "T0034",
+        ),
+        (
+            "enum Opt2[T] { s(T), n }\nfn i() -> Opt2[i64] { return Opt2.s; }",
+            "T0034",
+        ),
+        ("fn a() -> Option[i64] { return Option.some; }", "T0034"),
+        ("fn a() -> i64 { let x = Option.some; return 1; }", "T0034"),
+        (
+            "enum Opt2[T] { s(T), n }\nfn f() -> i64 { let x = Opt2.n; return 1; }",
+            "T0039",
+        ),
+        ("fn g() -> i64 { let x = Option.none; return 1; }", "T0039"),
+    ] {
+        assert_eq!(check_source(src), vec![code], "{src}");
+    }
+    let c = checked10(
+        "enum Shape { circle(f64), dot }\n\
+         enum Opt2[T] { s(T), n }\n\
+         fn c() -> Shape { return Shape.dot; }\n\
+         fn d() -> Shape { let x = Shape.dot; return x; }\n\
+         fn e() -> Opt2[i64] { return Opt2.n; }\n\
+         fn f() -> Opt2[i64] { let x: Opt2[i64] = Opt2.n; return x; }\n\
+         fn g() -> Option[i64] { let x: Option[i64] = Option.none; return x; }\n\
+         fn h() -> Option[i64] { return Option.none; }",
+    );
+    assert!(c.codes().is_empty(), "{:?}", c.codes());
+    assert_silent_free(&c);
+}
+
+/// R34 on a `Self { .. }` head that names no struct: a trait's default body
+/// (rigid `Self`) and an enum's inherent impl. Both were `TY_ERROR` with
+/// nothing said.
+#[test]
+fn i10b_v_a_self_literal_outside_a_struct_impl_is_r34() {
+    assert_eq!(
+        check_source(
+            "trait Mk { fn mk() -> Self { return Self { v: 1 }; } }\nstruct S { v: i64 }\nimpl Mk for S { }"
+        ),
+        vec!["T0034"]
+    );
+    assert_eq!(
+        check_source("enum E { a, b }\nimpl E { pub fn mk() -> E { return Self { v: 1 }; } }"),
+        vec!["T0034"]
+    );
+    // A trait IMPL for a struct is the struct's own `Self`.
+    let c = checked10(
+        "struct S { v: i64 }\ntrait Mk { fn mk() -> Self; }\nimpl Mk for S { fn mk() -> S { return Self { v: 1 }; } }",
+    );
+    assert!(c.codes().is_empty(), "{:?}", c.codes());
+    assert_silent_free(&c);
+}
+
+/// R28 "a path ending on a type, trait or module is not a value (ch08 Rule
+/// 16)": a struct, a prelude generic and a TYPE parameter named as values
+/// were `TY_ERROR` with nothing said; a qualified name stored instead of
+/// called is R42's "there are no method values".
+#[test]
+fn i10b_v_a_type_named_as_a_value_is_reported() {
+    for (src, code) in [
+        (
+            "struct S { v: i64 }\nfn a() -> i64 { let x = S; return 1; }",
+            "N0016",
+        ),
+        (
+            "fn b[T: Copyable]() -> i64 { let x = T; return 1; }",
+            "N0016",
+        ),
+        ("fn c[T: Copyable]() -> i64 { return T; }", "N0016"),
+        ("fn d() -> i64 { let x = Option; return 1; }", "N0016"),
+        (
+            "struct S { v: i64 }\nimpl S { pub fn mk() -> S { return S { v: 1 }; } }\nfn h() -> i64 { let g = S.mk; return 1; }",
+            "T0042",
+        ),
+    ] {
+        assert_eq!(check_source(src), vec![code], "{src}");
+    }
+    // A brand parameter keeps ch01 R15d's own code.
+    assert_eq!(
+        check_source("fn f[A: brand]() -> usize { return A; }"),
+        vec!["O0015"]
+    );
+}
+
+/// R21/R61(c) regardless of impl ORDER: every head is lowered before any
+/// `fn` signature, so an `impl IndexMut[I] for S` written before its
+/// `impl Index[I] for S` still reads the sibling's `Output`; the spec
+/// imposes no order on the two.
+#[test]
+fn i10b_v_indexmut_before_index_is_legal() {
+    let c = checked10(
+        "struct Grid { cells: Array[i64, 16] }\n\
+         impl IndexMut[usize] for Grid {\n\
+             fn at_mut(inout self: Self, let i: usize) -> scoped(self) Self.Output { return self.cells[i]; }\n\
+         }\n\
+         impl Index[usize] for Grid {\n\
+             type Output = i64;\n\
+             fn at(let self: Self, let i: usize) -> scoped(self) Self.Output { return self.cells[i]; }\n\
+         }\n\
+         fn f(inout g: Grid) -> i64 { g[2usize] = 5; return g[2usize]; }",
+    );
+    assert!(c.codes().is_empty(), "{:?}", c.codes());
+    assert_silent_free(&c);
+    // Two `Index` impls at different arguments: each `IndexMut` reads ITS
+    // sibling's `Output`.
+    let c = checked10(
+        "struct Key { k: usize }\n\
+         struct Grid { cells: Array[i64, 16], names: Array[bool, 16] }\n\
+         impl IndexMut[Key] for Grid {\n\
+             fn at_mut(inout self: Self, let i: Key) -> scoped(self) Self.Output { return self.names[i.k]; }\n\
+         }\n\
+         impl Index[usize] for Grid {\n\
+             type Output = i64;\n\
+             fn at(let self: Self, let i: usize) -> scoped(self) Self.Output { return self.cells[i]; }\n\
+         }\n\
+         impl Index[Key] for Grid {\n\
+             type Output = bool;\n\
+             fn at(let self: Self, let i: Key) -> scoped(self) Self.Output { return self.names[i.k]; }\n\
+         }\n\
+         fn f(inout g: Grid) -> bool { g[Key { k: 1 }] = true; return g[Key { k: 1 }]; }",
+    );
+    assert!(c.codes().is_empty(), "{:?}", c.codes());
+    assert_silent_free(&c);
+    // And a body that returns the OTHER impl's element type is R38(e)'s.
+    assert!(
+        check_source(
+            "struct Grid { cells: Array[i64, 16], flags: Array[bool, 16] }\n\
+             impl Index[usize] for Grid { type Output = i64; fn at(let self: Self, let i: usize) -> scoped(self) Self.Output { return self.cells[i]; } }\n\
+             impl IndexMut[usize] for Grid { fn at_mut(inout self: Self, let i: usize) -> scoped(self) Self.Output { return self.flags[i]; } }"
+        )
+        .contains(&"T0026".to_string())
+    );
+}
