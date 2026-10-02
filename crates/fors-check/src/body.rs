@@ -578,6 +578,7 @@ impl Wf<'_> {
             self.build_body_scope(&mut lcx, def, low);
             let mut cx = BodyCx::new(f, def, row.file, row.node, lcx);
             self.prepare_signature(&mut cx, decl);
+            self.check_contracts(&mut cx, decl);
             let want = cx.result;
             self.dep(def);
             self.cur_scope = def;
@@ -664,6 +665,34 @@ impl Wf<'_> {
             cx.tape
                 .push(p as u32, place, UseKind::Declare, Cause::Explicit(p as u32));
             i += 1;
+        }
+    }
+
+    /// Types every `pre`/`post`/`invariant` clause on `decl`'s `FnSig`
+    /// against `bool`, into the SAME [`BodyFacts`] table the body uses
+    /// (`FnSig`'s `Contract` children sit inside `decl`'s subtree, so the
+    /// table already has room — `bodies()` just never visited them before
+    /// this). This is ordinary I3 expression-checking, nothing contracts-
+    /// specific: policy (`.runtime`/`.off`), purity and `secret` rejection
+    /// are I10's (D10); F2 only needs a typed condition to lower
+    /// `check_pre`/`post`/`inv` from (design §3.6, §4.2's "CHECKER
+    /// DEPENDENCY: I3 + I4").
+    fn check_contracts(&mut self, cx: &mut BodyCx, decl: usize) {
+        let Some(sig) =
+            cx.f.tree
+                .children(decl)
+                .find(|&c| cx.f.tree.kinds[c] == NodeKind::FnSig)
+        else {
+            return;
+        };
+        let bool_ty = self.fir.tys.prim(PrimKind::Bool);
+        for clause in cx.f.tree.children(sig) {
+            if cx.f.tree.kinds[clause] != NodeKind::Contract {
+                continue;
+            }
+            if let Some(expr) = cx.f.tree.children(clause).next() {
+                self.check(cx, expr, bool_ty);
+            }
         }
     }
 }

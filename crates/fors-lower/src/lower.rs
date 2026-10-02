@@ -28,7 +28,7 @@
 //! to the caller. The copy/move distinction needs I8's flow data (D6) and
 //! arrives with it; F1 documents the sharing rather than guessing moves.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use fors_check::CheckOutput;
 use fors_check::defs::DefTable;
@@ -48,7 +48,7 @@ use fors_fmir::block::BlockRow;
 use fors_fmir::decl::DeclFmir;
 use fors_fmir::ids::{BlockId, PlaceId, ScopeId, SiteId, ValId};
 use fors_fmir::inst::{CallRow, Callee, InstRow};
-use fors_fmir::op::{ArithMode, CmpPred, NO_OPERAND, Op};
+use fors_fmir::op::{ArithMode, CmpPred, NO_OPERAND, Op, Policy};
 use fors_fmir::place::Seg;
 use fors_fmir::value::{ValDef, ValRow};
 
@@ -137,6 +137,41 @@ fn lower_one(
     Ok(fx.finish(def, name))
 }
 
+/// E11 (design §4.2, §11.2): until checker increment I10 lands D10
+/// (`ContractPolicy` per declaration), `fors-lower` reads the module
+/// header's `contracts:` clause itself. The corpus spells the value with a
+/// leading dot (`contracts: .runtime;` / `.off;` — see
+/// `02-failure/contract-off-no-check-run-ok.fors`), parsed by
+/// `fors-syntax` into one `ContractsClause` child of the file root holding
+/// a `DotLit`. Absent, or any spelling other than `.off`, defaults to
+/// `Runtime` (ch02 R9's default; also the lenient stand-in for a value I10
+/// will reject outright).
+fn module_contract_policy(file: &FileInput<'_>) -> Policy {
+    if file.tree.is_empty() {
+        return Policy::Runtime;
+    }
+    for child in file.tree.children(0) {
+        if file.tree.kinds[child] != NodeKind::ContractsClause {
+            continue;
+        }
+        for c2 in file.tree.children(child) {
+            if file.tree.kinds[c2] != NodeKind::DotLit {
+                continue;
+            }
+            let (a, b) = file.tree.token_range(c2);
+            for t in a..b {
+                if file.tokens.kinds[t as usize] == TokenKind::Ident {
+                    return match file.tokens.text(t as usize, file.source) {
+                        b"off" => Policy::Off,
+                        _ => Policy::Runtime,
+                    };
+                }
+            }
+        }
+    }
+    Policy::Runtime
+}
+
 /// The pre-walk rejections: type errors first (the checker speaks first),
 /// then the increments F1 waits on, then the open-type scan over the facts.
 fn prescan(
@@ -146,8 +181,22 @@ fn prescan(
     fir: &Fir,
 ) -> Result<(), LowerError> {
     let (start, end) = facts.range();
-    // A poisoned body never lowers: every later read would be garbage.
-    for n in start..end {
+    // A poisoned body never lowers: every later read would be garbage —
+    // EXCEPT the statement shapes `lower_let`/`lower_assign` special-case
+    // as the F2 "minimal intrinsic-backed stub" (§5.8) for `trap-bounds`:
+    // `Buffer`/`.slice` are ch10 R2 prelude-opaque without real `std`
+    // sources in the build, which poisons every node of those two
+    // statements with `TY_ERROR` even though nothing is actually wrong.
+    // Real `Buffer`/`Slice` bodies are F7's; this bypasses `facts`
+    // entirely for exactly those statements (see `buffer_stub_ranges`),
+    // never for anything else.
+    let stub_ranges = buffer_stub_ranges(file, decl_node);
+    'scan: for n in start..end {
+        for &(s, e) in &stub_ranges {
+            if n >= s && n < e {
+                continue 'scan;
+            }
+        }
         if facts.ty_of(n) == TY_ERROR {
             return Err(LowerError::CheckErrors);
         }
@@ -201,6 +250,94 @@ fn prescan(
         }
     }
     Ok(())
+}
+
+/// The node ranges of statements `prescan` must NOT reject for `TY_ERROR`:
+/// the two shapes `lower_let`/`lower_assign` lower as the `trap-bounds`
+/// stand-in (see the comment on the call site). Detected structurally,
+/// straight off the CST — the same two shapes those functions match —
+/// never by reading `facts` (which is exactly what is unreliable here).
+fn buffer_stub_ranges(file: &FileInput<'_>, decl_node: usize) -> Vec<(u32, u32)> {
+    let mut out = Vec::new();
+    if decl_node >= file.tree.len() {
+        return out;
+    }
+    let Some(block) = file
+        .tree
+        .children(decl_node)
+        .find(|&c| file.tree.kinds[c] == NodeKind::Block)
+    else {
+        return out;
+    };
+    for stmt in file.tree.children(block) {
+        if is_buffer_fixed_let(file, stmt) || is_buffer_slice_assign(file, stmt) {
+            out.push((stmt as u32, file.tree.subtree_end(stmt) as u32));
+        }
+    }
+    out
+}
+
+/// Significant `Ident` token texts `node` owns directly (not its
+/// children's) — a free-function twin of `FnLower::own_tokens`/
+/// `path_segments` for use where there is no `&mut Interner` (`prescan`
+/// runs before a function's `FnLower` exists).
+fn node_own_idents<'t>(file: &FileInput<'t>, node: usize) -> Vec<&'t [u8]> {
+    let (a, b) = file.tree.token_range(node);
+    let covered: Vec<(u32, u32)> = file
+        .tree
+        .children(node)
+        .map(|c| file.tree.token_range(c))
+        .collect();
+    let mut out = Vec::new();
+    for t in a..b {
+        if covered.iter().any(|&(x, y)| t >= x && t < y) {
+            continue;
+        }
+        if file.tokens.kinds[t as usize] == TokenKind::Ident {
+            out.push(file.tokens.text(t as usize, file.source));
+        }
+    }
+    out
+}
+
+/// `let <name>: Buffer[..] = Buffer.fixed(<n>);` — matched by shape, not by
+/// type (see `buffer_stub_ranges`).
+fn is_buffer_fixed_let(file: &FileInput<'_>, stmt: usize) -> bool {
+    if file.tree.kinds[stmt] != NodeKind::LetStmt {
+        return false;
+    }
+    for c in file.tree.children(stmt) {
+        if file.tree.kinds[c] != NodeKind::CallExpr {
+            continue;
+        }
+        if let Some(callee) = file.tree.children(c).next()
+            && node_own_idents(file, callee) == [b"Buffer".as_slice(), b"fixed".as_slice()]
+        {
+            return true;
+        }
+    }
+    false
+}
+
+/// `<name>.slice[<idx>] = <val>;` — matched by shape, not by type.
+fn is_buffer_slice_assign(file: &FileInput<'_>, stmt: usize) -> bool {
+    if file.tree.kinds[stmt] != NodeKind::AssignStmt {
+        return false;
+    }
+    let Some(lhs) = file.tree.children(stmt).next() else {
+        return false;
+    };
+    if file.tree.kinds[lhs] != NodeKind::Bracket {
+        return false;
+    }
+    let Some(base) = file.tree.children(lhs).next() else {
+        return false;
+    };
+    if file.tree.kinds[base] != NodeKind::NameExpr {
+        return false;
+    }
+    let idents = node_own_idents(file, base);
+    idents.len() == 2 && idents[1] == b"slice".as_slice()
 }
 
 /// Whether the `FnDecl` at `decl` declares generic parameters.
@@ -259,6 +396,30 @@ struct FnLower<'a> {
     next_root: u32,
     /// The file being lowered (for resolving struct heads).
     file_idx: u32,
+    /// The module's contract-checking policy (E11, design §4.2): resolved
+    /// once per file by `module_contract_policy`, carried unchanged
+    /// through every function it lowers.
+    policy: Policy,
+    /// `post`/`invariant` clauses pending at every exit of the CURRENT
+    /// function, in declaration order (`invariant` first, then `post`,
+    /// mirroring entry's `pre`-then-`invariant` order). Emitted by
+    /// `emit_exit_contracts` right before each `ret` this function builds.
+    exit_contracts: Vec<(ContractKind, usize)>,
+    /// Locals bound through the `Buffer.fixed(n)` stand-in (`lower_let`) —
+    /// consulted only by `lower_assign`'s matching `.slice[i] = v` stand-in,
+    /// so an unrelated `.slice[...]` on a real value still falls through to
+    /// the ordinary (and ordinarily unsupported) assignment path.
+    buffer_stub_locals: HashSet<Symbol>,
+}
+
+/// Which contract clause a `Contract` CST node spells — read off its own
+/// leading keyword token, never inferred (design §3.6: `check_pre`/
+/// `check_post`/`check_inv` are separate instructions).
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+enum ContractKind {
+    Pre,
+    Post,
+    Inv,
 }
 
 impl<'a> FnLower<'a> {
@@ -297,6 +458,12 @@ impl<'a> FnLower<'a> {
             scopes: vec![HashMap::new()],
             next_root: 0,
             file_idx,
+            // E11: the module's `contracts:` clause, read by `fors-lower`
+            // itself (once per function, off the file root — cheap) until
+            // I10's D10 supplies it per declaration.
+            policy: module_contract_policy(file),
+            exit_contracts: Vec::new(),
+            buffer_stub_locals: HashSet::new(),
         })
     }
 
@@ -578,25 +745,36 @@ impl<'a> FnLower<'a> {
 
     fn lower_fn(&mut self, decl_node: usize) -> Result<(), LowerError> {
         // Params: names from the CST in order, types from the signature in
-        // order. A mismatch is a diagnostic, never an index panic.
+        // order. A mismatch is a diagnostic, never an index panic. Contract
+        // clauses (`pre`/`post`/`invariant`) live on the same `FnSig`.
         let sig = self.fir.sigs.fn_sig(self.facts.owner);
         let nsig = self.fir.sigs.fn_sigs.count(sig);
         let mut params: Vec<(Symbol, usize)> = Vec::new();
+        let mut contracts: Vec<(ContractKind, usize)> = Vec::new();
         for c in self.kids(decl_node) {
             if self.kind(c) != NodeKind::FnSig {
                 continue;
             }
             for s in self.kids(c) {
-                if self.kind(s) != NodeKind::Params {
-                    continue;
-                }
-                for p in self.kids(s) {
-                    let name = self
-                        .own_tokens(p)
-                        .into_iter()
-                        .find(|&(_, k)| k == TokenKind::Ident)
-                        .map(|(t, _)| self.interner.intern(self.tokens.text(t, self.source)));
-                    params.push((name.unwrap_or(Symbol(0)), p));
+                match self.kind(s) {
+                    NodeKind::Params => {
+                        for p in self.kids(s) {
+                            let name = self
+                                .own_tokens(p)
+                                .into_iter()
+                                .find(|&(_, k)| k == TokenKind::Ident)
+                                .map(|(t, _)| {
+                                    self.interner.intern(self.tokens.text(t, self.source))
+                                });
+                            params.push((name.unwrap_or(Symbol(0)), p));
+                        }
+                    }
+                    NodeKind::Contract => {
+                        if let Some(expr) = self.kids(s).into_iter().next() {
+                            contracts.push((self.contract_kind(s), expr));
+                        }
+                    }
+                    _ => {}
                 }
             }
         }
@@ -611,6 +789,42 @@ impl<'a> FnLower<'a> {
             self.fresh_param(ty, i as u16);
             self.bind(*sym, ty);
         }
+        // Entry contracts (§3.6, §5.3): `pre` then an entry-time
+        // `invariant`, policy `Runtime` only — `Off` emits nothing at all
+        // (not even the condition), matching `contract-off-no-check-run-ok`
+        // and E8's closed-table spirit: a disabled check has zero cost and
+        // zero chance of a side effect of its own.
+        if self.policy == Policy::Runtime {
+            self.ensure_open();
+            for &(kind, expr) in &contracts {
+                if kind == ContractKind::Pre {
+                    let cond = self.lower_expr(expr)?;
+                    self.emit(
+                        Op::CheckPre(Policy::Runtime),
+                        cond.0,
+                        NO_OPERAND,
+                        NO_OPERAND,
+                        TY_UNIT,
+                    );
+                }
+            }
+            for &(kind, expr) in &contracts {
+                if kind == ContractKind::Inv {
+                    let cond = self.lower_expr(expr)?;
+                    self.emit(
+                        Op::CheckInv(Policy::Runtime),
+                        cond.0,
+                        NO_OPERAND,
+                        NO_OPERAND,
+                        TY_UNIT,
+                    );
+                }
+            }
+        }
+        self.exit_contracts = contracts
+            .into_iter()
+            .filter(|&(k, _)| k != ContractKind::Pre)
+            .collect();
         // The body block: the `Block` child of the `FnDecl`.
         let mut body = None;
         for c in self.kids(decl_node) {
@@ -623,8 +837,56 @@ impl<'a> FnLower<'a> {
         };
         self.lower_block_children(block)?;
         if self.is_open() {
+            self.emit_exit_contracts()?;
             let ret = self.term(Op::Ret, NO_OPERAND, NO_OPERAND, NO_OPERAND);
             self.seal(ret);
+        }
+        Ok(())
+    }
+
+    /// The keyword a `Contract` node's OWN first token spells (`contract()`
+    /// in `fors-syntax` bumps it as the node's first token, before the
+    /// condition expression child).
+    fn contract_kind(&self, node: usize) -> ContractKind {
+        let (a, _) = self.tree.token_range(node);
+        match self.tokens.text(a as usize, self.source) {
+            b"post" => ContractKind::Post,
+            b"invariant" => ContractKind::Inv,
+            _ => ContractKind::Pre,
+        }
+    }
+
+    /// `invariant` then `post`, at every exit this function builds (an
+    /// explicit `return` via `lower_return`, or the implicit fallthrough
+    /// `ret` `lower_fn` adds). Policy `Off`: nothing, same as entry.
+    fn emit_exit_contracts(&mut self) -> Result<(), LowerError> {
+        if self.policy != Policy::Runtime {
+            return Ok(());
+        }
+        self.ensure_open();
+        for &(kind, expr) in &self.exit_contracts.clone() {
+            if kind == ContractKind::Inv {
+                let cond = self.lower_expr(expr)?;
+                self.emit(
+                    Op::CheckInv(Policy::Runtime),
+                    cond.0,
+                    NO_OPERAND,
+                    NO_OPERAND,
+                    TY_UNIT,
+                );
+            }
+        }
+        for &(kind, expr) in &self.exit_contracts.clone() {
+            if kind == ContractKind::Post {
+                let cond = self.lower_expr(expr)?;
+                self.emit(
+                    Op::CheckPost(Policy::Runtime),
+                    cond.0,
+                    NO_OPERAND,
+                    NO_OPERAND,
+                    TY_UNIT,
+                );
+            }
         }
         Ok(())
     }
@@ -691,6 +953,31 @@ impl<'a> FnLower<'a> {
             .skip(1)
             .copied()
             .find(|&c| is_expr(self.kind(c)));
+        // F2 "minimal intrinsic-backed stub" (design §5.8) for
+        // `trap-bounds`, held out of real `Buffer`/`Slice` bodies (F7's):
+        // `Buffer` is ch10 R2 prelude-opaque without real `std` sources in
+        // the build, so `facts` is `TY_ERROR` throughout this statement
+        // (see `buffer_stub_ranges`, which keeps `prescan` from rejecting
+        // it first). Bypasses `facts`/`lower_expr` entirely: allocates an
+        // N-cell aggregate of inert zero slots via the SAME `agg_new`
+        // `fors-interp` already runs for a real struct literal.
+        if let Some(e) = init
+            && self.kind(e) == NodeKind::CallExpr
+            && let Some(len) = self.buffer_fixed_len(e)
+        {
+            let mut vals = Vec::with_capacity(len as usize);
+            for _ in 0..len {
+                let inst = self.emit(Op::ConstInt, 0, 0, NO_OPERAND, TY_UNIT);
+                vals.push(self.fresh(TY_UNIT, inst));
+            }
+            let range = self.decl.insts.push_plain_operands(&vals);
+            let agg = self.emit(Op::AggNew, range.start, range.end, NO_OPERAND, TY_UNIT);
+            let v = self.fresh(TY_UNIT, agg);
+            let root = self.bind(sym, TY_UNIT);
+            self.buffer_stub_locals.insert(sym);
+            self.write_place(root, &[], TY_UNIT, v);
+            return Ok(());
+        }
         // The `LetStmt` node itself is not a `synth`/`check` return, so its
         // facts entry is `NO_TY`: the binding's type is the initialiser's
         // (or the annotation's, when there is no initialiser — either way a
@@ -718,6 +1005,36 @@ impl<'a> FnLower<'a> {
             return Err(LowerError::Unsupported("assignment".into()));
         }
         let (lhs, rhs) = (kids[0], kids[1]);
+        // F2 stand-in (§5.8), the write half of `lower_let`'s
+        // `Buffer.fixed`: `<buf>.slice[<lit>] = <lit>;` against a local
+        // THIS function bound through that stand-in (`buffer_stub_locals`
+        // guards against hijacking an unrelated `.slice[...]`). Lowers
+        // straight to a runtime-bounds-checked `Seg::Index` place write;
+        // the trap itself is `fors-interp::exec`'s `write_place`, not
+        // anything decided here.
+        if self.kind(lhs) == NodeKind::Bracket
+            && let Some((root, idx)) = self.buffer_slice_index(lhs)
+            && let Some(val) = self.literal_int(rhs)
+        {
+            let idx_inst = self.emit(
+                Op::ConstInt,
+                idx as u32,
+                (idx >> 32) as u32,
+                NO_OPERAND,
+                TY_UNIT,
+            );
+            let idx_v = self.fresh(TY_UNIT, idx_inst);
+            let val_inst = self.emit(
+                Op::ConstInt,
+                val as u32,
+                (val >> 32) as u32,
+                NO_OPERAND,
+                TY_UNIT,
+            );
+            let val_v = self.fresh(TY_UNIT, val_inst);
+            self.write_place(root, &[Seg::Index(idx_v)], TY_UNIT, val_v);
+            return Ok(());
+        }
         let v = self.lower_expr(rhs)?;
         let rhs_ty = self.ty_of(rhs);
         // LHS places: a bare local, or one field of a local.
@@ -748,12 +1065,14 @@ impl<'a> FnLower<'a> {
     fn lower_return(&mut self, node: usize) -> Result<(), LowerError> {
         self.ensure_open();
         let kids = self.kids(node);
-        let ret = match kids.first() {
+        let value = match kids.first() {
+            None => None,
+            Some(&e) => Some(self.lower_expr(e)?),
+        };
+        self.emit_exit_contracts()?;
+        let ret = match value {
             None => self.term(Op::Ret, NO_OPERAND, NO_OPERAND, NO_OPERAND),
-            Some(&e) => {
-                let v = self.lower_expr(e)?;
-                self.term(Op::Ret, v.0, NO_OPERAND, NO_OPERAND)
-            }
+            Some(v) => self.term(Op::Ret, v.0, NO_OPERAND, NO_OPERAND),
         };
         self.seal(ret);
         Ok(())
@@ -1284,6 +1603,66 @@ impl<'a> FnLower<'a> {
         }
         Ok(order)
     }
+
+    // -- F2's `trap-bounds` stand-in (§5.8) -------------------------------
+
+    /// Matches `Buffer.fixed(<int literal>)`: a qualified call textually
+    /// spelled this way, regardless of what (if anything) it resolves to.
+    /// `None` on any other shape, including a literal that fails to parse
+    /// or a negative length.
+    fn buffer_fixed_len(&mut self, call_node: usize) -> Option<u64> {
+        let kids = self.kids(call_node);
+        let &callee = kids.first()?;
+        if self.kind(callee) != NodeKind::NameExpr {
+            return None;
+        }
+        let segs = self.path_segments(callee);
+        let &[a, b] = segs.as_slice() else {
+            return None;
+        };
+        if self.interner.resolve(a) != b"Buffer" || self.interner.resolve(b) != b"fixed" {
+            return None;
+        }
+        let &arg = kids.get(1)?;
+        self.literal_int(arg)
+    }
+
+    /// Matches `<name>.slice[<int literal>]` where `<name>` is a local
+    /// bound through [`FnLower::buffer_fixed_len`]'s stand-in. Returns the
+    /// local's root slot and the index.
+    fn buffer_slice_index(&mut self, bracket: usize) -> Option<(u32, u64)> {
+        let kids = self.kids(bracket);
+        let &[base, idx_node] = kids.as_slice() else {
+            return None;
+        };
+        if self.kind(base) != NodeKind::NameExpr {
+            return None;
+        }
+        let segs = self.path_segments(base);
+        let &[buf_sym, field] = segs.as_slice() else {
+            return None;
+        };
+        if self.interner.resolve(field) != b"slice" || !self.buffer_stub_locals.contains(&buf_sym) {
+            return None;
+        }
+        let (root, _) = self.resolve_name(buf_sym).ok()?;
+        let idx = self.literal_int(idx_node)?;
+        Some((root, idx))
+    }
+
+    /// A bare integer `Literal` node's value, as `u64` (`None` for anything
+    /// else, including a negative one).
+    fn literal_int(&mut self, node: usize) -> Option<u64> {
+        if self.kind(node) != NodeKind::Literal {
+            return None;
+        }
+        let (tk, text) = self.leaf_token(node)?;
+        if tk != TokenKind::Int {
+            return None;
+        }
+        let v = fors_check::lower::parse_int_literal(text)?;
+        u64::try_from(v).ok()
+    }
 }
 
 /// Numeric-kind view for casts (mirrors `fors-interp`'s classification;
@@ -1463,4 +1842,68 @@ fn is_expr(k: NodeKind) -> bool {
             | NodeKind::MatchExpr
             | NodeKind::ComptimeBlock
     )
+}
+
+#[cfg(test)]
+mod policy_reader_tests {
+    //! E11's policy reader (`module_contract_policy`), unit-tested directly
+    //! against `fors-syntax`'s real CST — the corpus spells the clause
+    //! `contracts: .runtime;` / `.off;` (leading dot, trailing `;`), which
+    //! is what `fors-syntax::parser::file`'s `ContractsClause` actually
+    //! parses, not the raw-text grammar a stand-in might invent.
+
+    use super::*;
+    use fors_index::{Interner, Segments};
+    use fors_syntax::parse_file;
+
+    fn policy_of(src: &[u8]) -> Policy {
+        let interner = &mut Interner::new();
+        let parsed = parse_file(src);
+        assert!(
+            parsed.diags.is_empty(),
+            "fixture must parse: {:?}",
+            parsed.diags
+        );
+        let name: Segments = vec![interner.intern(b"m")];
+        let file = FileInput {
+            tree: &parsed.tree,
+            tokens: &parsed.tokens,
+            source: src,
+            name,
+        };
+        module_contract_policy(&file)
+    }
+
+    #[test]
+    fn explicit_runtime() {
+        assert_eq!(
+            policy_of(b"module m;\ncontracts: .runtime;\nfn main() { }\n"),
+            Policy::Runtime
+        );
+    }
+
+    #[test]
+    fn explicit_off() {
+        assert_eq!(
+            policy_of(b"module m;\ncontracts: .off;\nfn main() { }\n"),
+            Policy::Off
+        );
+    }
+
+    #[test]
+    fn absent_clause_defaults_to_runtime() {
+        // ch02 R9: runtime-checked whenever the module's policy is
+        // `.runtime` (default).
+        assert_eq!(policy_of(b"fn main() { }\n"), Policy::Runtime);
+        assert_eq!(policy_of(b"module m;\nfn main() { }\n"), Policy::Runtime);
+    }
+
+    #[test]
+    fn policy_is_independent_of_module_path_shape() {
+        // A multi-segment module path before the clause changes nothing.
+        assert_eq!(
+            policy_of(b"module app.calc;\ncontracts: .off;\nfn main() { }\n"),
+            Policy::Off
+        );
+    }
 }

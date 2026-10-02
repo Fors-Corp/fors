@@ -25,9 +25,11 @@
 pub mod arith;
 pub mod exec;
 pub mod program;
+pub mod shim;
 pub mod value;
 
 pub use arith::{FloatKind, IntKind};
-pub use exec::{Env, Exit, InterpError, Outcome, run};
+pub use exec::{Env, Exit, InterpError, Outcome, run, run_with_host};
 pub use program::{Config, Endian, ProgFn, Program};
+pub use shim::{ExitStatus, HostEnv, entry_exit, install_sigpipe_ignore};
 pub use value::Slot;

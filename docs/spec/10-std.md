@@ -1965,6 +1965,8 @@ R35 `consumer-count-method-accepted`, `consumer-fold-method-accepted`,
 R40 `main-raises-exit-status-one-run-error` (ch02 R17),
 `main-returns-latched-stdout-exit-2`,
 `defer-not-run-on-trap` (`trap`; the marker goes to `Stderr`),
-`sigpipe-ignored-write-latches-run-ok`.
+`sigpipe-ignored-write-latches-run-error` (`run-error` with `status: 2`:
+the latched `io.Error.closed` on an otherwise normal return is Rule
+40(d)'s status 2, not 0 — owner decision, FMIR design Q8).
 
 Count: **57 rules (S0001-S0057, with sub-rules S0006a-d and S0011c), 159 test names from rounds 1-5 plus 55 from round 6, of which 82 have files (`tests/conformance/10-std/README.md` splits present from pending).**

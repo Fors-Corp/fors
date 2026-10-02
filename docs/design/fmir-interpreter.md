@@ -839,7 +839,7 @@ files under `tests/conformance/`; **GAP** means no runtime test exists.
 | 10 R26 | `Str` is bytes; UTF-8 boundary check raises (data, not a trap) | written in Fors | `str-index-is-bytes-run-ok`, `str-slice-non-boundary-raises-run-ok` |
 | 10 R23 | `Buffer` index past `len` | `index` → **trap `bounds`** | `buffer-index-past-len-trap` |
 | 10 R32-R35 | provided methods on `Iterator`; concrete adaptor structs | ordinary Fors code | `try-for-each-error-propagates-run-ok` |
-| 10 R39 | five total latching writers; `check` surfaces | sticky `latched` flag in the shim's stream state | `write-line-without-question-accepted-run-ok`, `sigpipe-ignored-write-latches-run-ok` |
+| 10 R39 | five total latching writers; `check` surfaces | sticky `latched` flag in the shim's stream state | `write-line-without-question-accepted-run-ok`, `sigpipe-ignored-write-latches-run-error` |
 | 10 R39, R40(a)-(c) | the five `write_*` written in Fors over `@fd_write` (§5.8); shim flush on normal return; nothing on trap | buffered bytes deterministically dropped on trap | `10-std/defer-not-run-on-trap` |
 | 10 R40(d) | exit-status table 0/1/2 | shim | `02-failure/main-returns-latched-stdout-exit-2`, every `run-ok` (status 0), every `run-error` (status 1) |
 | 10 R41 | name validation **before** any syscall | pure check in Fors | `fs-name-dotdot-invalid-run-ok` |
@@ -896,10 +896,11 @@ lowering of non-generic bodies, `Slot`/`Alloc`, `Target`, the dispatch loop, tra
 
 **F2 — contracts, entry shim, exit statuses, `Stderr` (sonnet; ~600 lines). CHECKER DEPENDENCY: I3 + I4; `fors-lower` reads the
 module `contracts:` line itself until I10 lands D10 (E11).** Builds `check_pre`/`post`/`inv` with the module policy, unbuffered
-`Stderr`, `SIGPIPE` → `SIG_IGN`, the 0/1/2 exit table, latching and `check`. GATE (7):
+`Stderr`, `SIGPIPE` → `SIG_IGN`, the 0/1/2 exit table, latching and `check`. GATE (8):
 `02-failure/{contract-runtime-violation-trap,contract-off-no-check-run-ok,main-returns-latched-stdout-exit-2,trap-bounds,trap-div-zero,trap-shift}`,
-`10-std/write-line-without-question-accepted-run-ok`. `10-std/sigpipe-ignored-write-latches-run-ok` is **held out** pending owner
-Q8.
+`10-std/write-line-without-question-accepted-run-ok`, and `10-std/sigpipe-ignored-write-latches-run-error` (the eighth, once
+owner Q8 was decided: the test became `run-error` + `status: 2`; the runner closes the read end of a real pipe before `main`
+runs, so the write latches through `SIG_IGN` instead of killing the process).
 
 **F3 — `raises`/`?`/`else` and `render` (opus for `render.rs`, sonnet for the edges; ~700 lines). CHECKER DEPENDENCY: I10 (ch02
 R1-R5), I4 for a trait-method callee.** Builds `try_br`, error edges, at most one `ErrorFrom` per edge, the handler form, and ch02
@@ -1023,7 +1024,7 @@ gate the type checker uses — a flat ratio is the claim, not a single number.
 | **Q5** | **May F0 add `tests/conformance/05-ir/`?** ch05 names 22 conformance tests and none exists as a file, so every ch05 rule in §8 is corpus-unverified — but adding them changes the counts the corpus README states (921 tests, 1010 files), and the corpus is ground truth | Yes, with the README's count line updated in the same commit. It is transcription plus the verifier, not design |
 | **Q6** | **A build-wide comptime budget.** ch04 R14 charges per *evaluation*; §10.1 allows ~3 × 10⁷ steps for a whole cold build, but 200 declarations at `2^20` is 2 × 10⁸ | Add `COMPTIME_BUILD_STEP_BUDGET = 2^28` to ch04 R14 beside the two existing constants |
 | **Q7** | **Backtraces on the trap path.** `compiler-architecture.md` §7 promises an FP-walking backtrace printer; ch05 R17 requires interp and both backends byte-identical "including which trap site fires", and a backtrace is host- and layout-dependent. Blocks M2's R17 gate | The trap handler prints exactly the one line §7.2a fixes; a backtrace is opt-in (`FORS_BACKTRACE=1`) and excluded from the differential corpus |
-| **Q8** | **Two corpus tests that look self-inconsistent.** `10-std/sigpipe-ignored-write-latches-run-ok` applies `else \|e\| { }` to `Stdout.write_line`, which ch10 R39 declares total and ch02 R5 therefore forbids `else` on; and it expects exit 0 with `(no output)` where ch10 R40(d) makes a latched `Stdout` error exit 2. Blocks F2's eighth gate test | **LEFT OPEN.** Either the test wants the `status: 2` form or R39 wants a `raises` writer; either way it is a corpus edit, not an interpreter behaviour |
+| **Q8** | **Two corpus tests that look self-inconsistent.** `10-std/sigpipe-ignored-write-latches-run-ok` applies `else \|e\| { }` to `Stdout.write_line`, which ch10 R39 declares total and ch02 R5 therefore forbids `else` on; and it expects exit 0 with `(no output)` where ch10 R40(d) makes a latched `Stdout` error exit 2. Blocked F2's eighth gate test | **DECIDED (owner, F2): the test takes the `status: 2` form.** Renamed `sigpipe-ignored-write-latches-run-error`, `expect: run-error`, `detail: status: 2`, the forbidden `else` removed; R39 keeps its total writer. A corpus edit, not an interpreter behaviour, and now F2's eighth gate test |
 
 ### 11.2 Engineering calls I made (no owner input needed)
 

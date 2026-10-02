@@ -532,9 +532,17 @@ fn resolve_fn_sig_and_body(ctx: &mut scope::BodyCtx, fn_node: usize) {
     }
     let saved = ctx.set_fn_params(param_syms);
     for &c in &sig_children {
-        if Some(c) == generics_node || c == params_node || tree.kinds[c] == NodeKind::Contract {
+        if Some(c) == generics_node || c == params_node {
             continue;
         }
+        // `pre`/`post`/`invariant` (`Contract`) clauses resolve names
+        // against the same param scope the rest of the signature and the
+        // body see (F2, design §3.6: `check_pre`/`post`/`inv` read a typed
+        // condition, which needs its names resolved like any other
+        // expression's). [decision: walked here rather than skipped —
+        // nothing downstream of the resolver treats a contract condition
+        // as special, so there is no reason its names should stay
+        // unresolved]
         ctx.walk(c);
     }
     ctx.set_fn_params(saved);
