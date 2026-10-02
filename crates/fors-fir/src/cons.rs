@@ -29,6 +29,13 @@ const EMPTY: u32 = u32::MAX;
 const LOAD_NUM: usize = 7;
 const LOAD_DEN: usize = 8;
 
+/// `Clone` is here for one caller: `fors-lower` clones the checker's FROZEN
+/// [`TyStore`](crate::ty::TyStore) into a store of its own before it interns
+/// a single instantiated type, so the checker's FIR, its `sig_hash`es and
+/// the query engine's content keys cannot move under it. A clone is a plain
+/// copy of the vectors — the hash-cons invariant travels with them, so the
+/// copy answers every `lookup` exactly as the original does.
+#[derive(Clone)]
 pub struct ConsTable {
     keys: Vec<u64>,
     vals: Vec<u32>,

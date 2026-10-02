@@ -240,7 +240,7 @@ impl BrandRow {
 /// allows it to be a `Param`). `closure` is set only on a body's local layer —
 /// a closure type equals no `fn` type (R7) but coerces to an equal one
 /// (R10(b)) — and never in a signature.
-#[derive(Default)]
+#[derive(Clone, Default)]
 pub struct FnTys {
     conv: Vec<Conv>,
     ty: Vec<TyId>,
@@ -288,6 +288,16 @@ const SALT_BRAND: u64 = 0x4252_4e44_4252_4e44;
 const SALT_CONST: u64 = 0x434f_4e53_544f_4e53;
 
 /// 20 bytes per distinct core type in parallel columns, plus the pools.
+///
+/// `Clone` exists for monomorphisation: `fors-lower` takes a clone of the
+/// checker's FROZEN store and interns every substituted type THERE, so the
+/// checker's own store, its signature hashes and the query engine's content
+/// keys are never touched by lowering ([`TyStore::digest`] is what the test
+/// asserting that compares). Interning in a clone is sound because the
+/// clone starts from the same rows and the same cons tables: a type the
+/// original already holds keeps its original `TyId`, and a new one gets the
+/// next row in the clone only.
+#[derive(Clone)]
 pub struct TyStore {
     tag: Vec<TyTag>,
     a: Vec<u32>,
@@ -380,6 +390,59 @@ impl TyStore {
 
     pub fn is_empty(&self) -> bool {
         self.tag.is_empty()
+    }
+
+    /// A content fingerprint of every row and every pool, for a test that
+    /// has to say "this store did not move". Two stores with equal digests
+    /// hold the same rows in the same order; interning ONE type changes it.
+    ///
+    /// Added for monomorphisation (`fors-lower` interns instantiated types
+    /// in a CLONE — see the type's own doc comment): the gate test takes a
+    /// digest of the checker's frozen store before lowering and asserts the
+    /// same digest after, which is the byte-identical claim this crate can
+    /// answer without exposing its private columns.
+    pub fn digest(&self) -> u128 {
+        use fors_index::fingerprint::splitmix64;
+        let mut lo: u64 = 0x5459_5354_4f52_4544; // "TYSTORED"
+        let mut hi: u64 = 0x4449_4745_5354_0000; // "DIGEST"
+        let mut mix = |v: u64| {
+            lo = splitmix64(lo ^ v);
+            hi = splitmix64(hi.wrapping_add(v).rotate_left(17));
+        };
+        mix(self.tag.len() as u64);
+        for i in 0..self.tag.len() {
+            mix(self.tag[i] as u64);
+            mix(((self.a[i] as u64) << 32) | self.b[i] as u64);
+            mix(((self.quals[i] as u64) << 32) | self.flags[i] as u64);
+            mix(((self.unqual[i].0 as u64) << 32) | self.copyable[i] as u64);
+        }
+        mix(self.args.len() as u64);
+        for t in &self.args {
+            mix(t.0 as u64);
+        }
+        mix(self.args_start.len() as u64);
+        for (s, l) in self.args_start.iter().zip(self.args_len.iter()) {
+            mix(((*s as u64) << 16) | *l as u64);
+        }
+        mix(self.trait_refs.len() as u64);
+        for (d, a) in &self.trait_refs {
+            mix(((d.0 as u64) << 32) | a.0 as u64);
+        }
+        mix(self.proj_keys.len() as u64);
+        for (tr, s) in &self.proj_keys {
+            mix(((tr.0 as u64) << 32) | s.0 as u64);
+        }
+        mix(self.fn_tys.len() as u64);
+        mix(self.brands.len() as u64);
+        mix(self.consts.len() as u64);
+        for c in &self.consts {
+            mix(match c {
+                ConstValue::I(v) => *v as u64,
+                ConstValue::B(b) => (*b as u64) ^ 0x22,
+                ConstValue::S(s) => (s.0 as u64) ^ 0x33,
+            });
+        }
+        ((hi as u128) << 64) | lo as u128
     }
 
     // ------------------------------------------------------------- accessors

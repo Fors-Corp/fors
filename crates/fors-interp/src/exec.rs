@@ -214,6 +214,30 @@ const INTRINSIC_STR_BYTE_SLICE: &str = "str_byte_slice";
 /// representation lands the descriptor's own window answers it.
 const INTRINSIC_SEQ_LEN: &str = "seq_len";
 
+/// `agg_uninit(n)`: an aggregate of `n` UNINITIALISED cells (design §5.8's
+/// "minimal intrinsic-backed stub", F-mono's third instance).
+///
+/// `Buffer[T, N].empty()` has to produce a `Buffer { len: 0, data: <N
+/// uninitialised cells of T> }`, and no Fors *expression* names an
+/// uninitialised aggregate — `[v; N]` needs a `v`, which needs `T:
+/// Copyable`, which `Buffer`'s own impl does not have. So the primitive is
+/// here, and it is a REAL primitive rather than a zero-filled stand-in: each
+/// cell is [`Slot::uninit`], so reading element `i` before `push` wrote it
+/// is `ub: uninit-read` with its site (design §5.2), not a silent zero.
+/// `Buffer.empty()`'s `len: 0` is what keeps a correct program from ever
+/// reading one — `Index`/`IndexMut` check against `len`, not `N` (ch10 S23).
+const INTRINSIC_AGG_UNINIT: &str = "agg_uninit";
+
+/// `str_eq(a, b) -> bool`: byte equality of two `Str` values.
+///
+/// What a `Str` LITERAL ARM of a `match` compares (R54's first-match test).
+/// It cannot be an `icmp`: a `Str` slot carries a HANDLE into the machine's
+/// byte table, and two equal strings interned from different sites have
+/// different handles, so comparing the slots would answer `false` for equal
+/// text. Same §5.8 stand-in family as `str_byte_len`; a real `Str` would
+/// compare `{ptr, len}` contents, which is what this does.
+const INTRINSIC_STR_EQ: &str = "str_eq";
+
 /// The bytes a `Str` handle names in the machine's byte table. A handle
 /// outside the table is a lowering bug (an intrinsic reached with a
 /// non-`Str` receiver), reported as [`InterpError::MissingString`] — never
@@ -290,6 +314,52 @@ fn seq_window(m: &Machine<'_>, v: Slot) -> Result<(usize, u64, u64), InterpError
             Ok((base.bits as usize, start.bits, len.bits))
         }
     }
+}
+
+/// One component of an aggregate cell, with design §5.2's two Miri bits
+/// checked exactly as [`root_slot`] checks them on a frame-local root: a DEAD
+/// component is `ub: use-after-move`, a live-but-UNINITIALISED one is `ub:
+/// uninit-read`.
+///
+/// Every read of a cell component goes through here — `field`, `index`,
+/// `discr`, `payload` and the `Seg::Field`/`Seg::Index` place paths — so the
+/// cells `agg_uninit` hands out cannot be read as zeroes anywhere.
+fn cell_slot(
+    m: &Machine<'_>,
+    fr: usize,
+    inst: u32,
+    site: fors_fmir::ids::SiteId,
+    cell: usize,
+    at: usize,
+    what: &str,
+) -> Result<Slot, Fault> {
+    let s = m
+        .cells
+        .get(cell)
+        .and_then(|c| c.slots.get(at))
+        .copied()
+        .ok_or_else(|| InterpError::TypeMismatch(format!("{what} out of range")))?;
+    if !s.live {
+        return Err(ub(
+            m,
+            fr,
+            inst,
+            site,
+            crate::ub::UbClass::UseAfterMove,
+            format!("{what} {at} was moved out of before this read"),
+        ));
+    }
+    if !s.init {
+        return Err(ub(
+            m,
+            fr,
+            inst,
+            site,
+            crate::ub::UbClass::UninitRead,
+            format!("{what} {at} is read before it is initialised"),
+        ));
+    }
+    Ok(s)
 }
 
 /// Which memory range a borrow stack belongs to (design §5.2).
@@ -1031,17 +1101,70 @@ fn exec_inst(fr: usize, inst: u32, inst_row: InstRow, m: &mut Machine<'_>) -> Re
         }
         Op::Field => {
             let base = val_operand(m, fr, inst, inst_row.site, inst_row.a)?;
-            let field = m
-                .cells
-                .get(base.bits as usize)
-                .ok_or_else(|| InterpError::TypeMismatch("field base is not an aggregate".into()))
-                .and_then(|cell| {
-                    cell.slots
-                        .get(inst_row.b as usize)
-                        .copied()
-                        .ok_or_else(|| InterpError::TypeMismatch("field index out of range".into()))
-                })?;
+            let field = cell_slot(
+                m,
+                fr,
+                inst,
+                inst_row.site,
+                base.bits as usize,
+                inst_row.b as usize,
+                "field",
+            )?;
             define(dest, m, fr, field);
+        }
+        Op::VariantNew => {
+            // F-mono's enum value: ONE aggregate cell whose slot 0 is the
+            // discriminant and whose slots `1..` are the payload components
+            // in declaration order. Lowering puts the discriminant in as the
+            // first operand (a `const_int` whose value `fors-layout`'s
+            // discriminant rule decided), so `verify`'s secret-propagation
+            // walk sees it like any other operand and no opcode field has to
+            // carry a bare number.
+            let args = {
+                let decl = &m.func(m.frames[fr].func).decl;
+                decl.insts.args(inst_row.a..inst_row.b).to_vec()
+            };
+            if args.is_empty() {
+                return Err(
+                    InterpError::TypeMismatch("variant_new without a discriminant".into()).into(),
+                );
+            }
+            let mut slots = Vec::with_capacity(args.len());
+            for v in args {
+                slots.push(m.slot(fr, inst, v)?);
+            }
+            let id = m.cells.len() as u64;
+            m.cells.push(Cells::agg(slots));
+            define(dest, m, fr, Slot::val(id));
+        }
+        Op::Discr => {
+            // Slot 0 of the variant cell: what `switch_discr` compares
+            // against the arm table lowering built from `fors-layout`.
+            let base = val_operand(m, fr, inst, inst_row.site, inst_row.a)?;
+            let d = cell_slot(
+                m,
+                fr,
+                inst,
+                inst_row.site,
+                base.bits as usize,
+                0,
+                "discriminant of",
+            )?;
+            define(dest, m, fr, d);
+        }
+        Op::Payload => {
+            // Payload component `b` of the variant cell: slot `1 + b`.
+            let base = val_operand(m, fr, inst, inst_row.site, inst_row.a)?;
+            let p = cell_slot(
+                m,
+                fr,
+                inst,
+                inst_row.site,
+                base.bits as usize,
+                inst_row.b as usize + 1,
+                "payload",
+            )?;
+            define(dest, m, fr, p);
         }
         Op::SliceRange => {
             // F5's `Slice[T]` stand-in (see `slice_parts`). `base` is the
@@ -1080,7 +1203,15 @@ fn exec_inst(fr: usize, inst: u32, inst_row: InstRow, m: &mut Machine<'_>) -> Re
             if idx.bits >= len {
                 return Err(Fault::Trap(TrapKind::Bounds));
             }
-            let s = m.cells[cell].slots[(start + idx.bits) as usize];
+            let s = cell_slot(
+                m,
+                fr,
+                inst,
+                inst_row.site,
+                cell,
+                (start + idx.bits) as usize,
+                "element",
+            )?;
             define(dest, m, fr, s);
         }
         Op::ReduceTree => {
@@ -1848,20 +1979,20 @@ fn read_place(
     let base = root_slot(m, fr, inst, site, root)?;
     match segs.as_slice() {
         [] => Ok(base),
-        [fors_fmir::place::Seg::Field(i)] => {
-            let cell = m.cells.get(base.bits as usize).ok_or_else(|| {
-                InterpError::TypeMismatch("place base is not an aggregate".into())
-            })?;
-            cell.slots
-                .get(*i as usize)
-                .copied()
-                .ok_or_else(|| InterpError::TypeMismatch("place field out of range".into()).into())
-        }
+        [fors_fmir::place::Seg::Field(i)] => cell_slot(
+            m,
+            fr,
+            inst,
+            site,
+            base.bits as usize,
+            *i as usize,
+            "place field",
+        ),
         [fors_fmir::place::Seg::Index(idx)] => {
             let idx = *idx;
             let (cell, start, len) = seq_window(m, base)?;
             let i = index_in_bounds(m, fr, inst, site, idx, len as usize)?;
-            Ok(m.cells[cell].slots[start as usize + i])
+            cell_slot(m, fr, inst, site, cell, start as usize + i, "place element")
         }
         // `self.data[i]`: one field, then one element of it. The only
         // two-segment path F1 lowering builds (`fors-lower::
@@ -1871,15 +2002,18 @@ fn read_place(
             fors_fmir::place::Seg::Index(idx),
         ] => {
             let (f, idx) = (*f, *idx);
-            let seq = m
-                .cells
-                .get(base.bits as usize)
-                .and_then(|c| c.slots.get(f as usize))
-                .copied()
-                .ok_or_else(|| InterpError::TypeMismatch("place field out of range".into()))?;
+            let seq = cell_slot(
+                m,
+                fr,
+                inst,
+                site,
+                base.bits as usize,
+                f as usize,
+                "place field",
+            )?;
             let (cell, start, len) = seq_window(m, seq)?;
             let i = index_in_bounds(m, fr, inst, site, idx, len as usize)?;
-            Ok(m.cells[cell].slots[start as usize + i])
+            cell_slot(m, fr, inst, site, cell, start as usize + i, "place element")
         }
         _ => Err(InterpError::TypeMismatch("place path outside the F1/F2 shapes".into()).into()),
     }
@@ -2213,6 +2347,27 @@ fn exec_intrinsic(
             let seq = args.first().copied().unwrap_or_else(Slot::unit);
             let (_, _, len) = seq_window(m, seq)?;
             define(dest, m, fr, Slot::val(len));
+            Ok(())
+        }
+        INTRINSIC_STR_EQ => {
+            // `str_eq(a, b)`: see `INTRINSIC_STR_EQ`. Total; no trap.
+            let a = args.first().copied().unwrap_or_else(Slot::unit);
+            let b = args.get(1).copied().unwrap_or_else(Slot::unit);
+            let eq = str_bytes(m, a)? == str_bytes(m, b)?;
+            define(dest, m, fr, Slot::val(eq as u64));
+            Ok(())
+        }
+        INTRINSIC_AGG_UNINIT => {
+            // `agg_uninit(n)`: see `INTRINSIC_AGG_UNINIT`. The cells are
+            // genuinely uninitialised, so `cell_slot` reports a read of one
+            // as `ub: uninit-read` rather than handing back a zero.
+            let n = args.first().copied().unwrap_or_else(Slot::unit).bits;
+            let n = usize::try_from(n).map_err(|_| {
+                InterpError::TypeMismatch("agg_uninit length does not fit the host".into())
+            })?;
+            let id = m.cells.len() as u64;
+            m.cells.push(Cells::agg(vec![Slot::uninit(); n]));
+            define(dest, m, fr, Slot::val(id));
             Ok(())
         }
         other => Err(InterpError::UnknownIntrinsic(other.to_string()).into()),

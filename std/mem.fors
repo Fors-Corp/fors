@@ -315,9 +315,27 @@ impl[T: Droppable] Option[T] {
 pub struct Buffer[T, N: usize] { pub len: usize, pub data: Array[T, N] }
 
 impl[T, N: usize] Buffer[T, N] {
+    // F-mono: a REAL body. `len: 0` is the whole safety story — Index and
+    // IndexMut are checked against len, not N (ch10 S23) — so the storage
+    // starts uninitialised and no correct program can read a cell of it
+    // before `push` writes one. `buffer_uninit_data` is the primitive that
+    // produces it (see below); a read before write is `ub: uninit-read`
+    // with its site, never a silent zero.
     pub fn empty() -> Buffer[T, N] {
-        return Buffer.empty();
-    } // STUB
+        return Buffer { len: 0, data: Buffer.buffer_uninit_data() };
+    }
+
+    // The uninitialised-aggregate primitive, in design §5.8's "minimal
+    // intrinsic-backed stub" shape (the same one `str_byte_len` uses, see
+    // `std/mem/text.fors`): lowering intercepts a call to a method of
+    // `Buffer`'s own impl spelled this and emits the `agg_uninit` intrinsic
+    // instead of compiling this body, which is therefore never reached.
+    // It cannot be written in Fors: `[v; N]` needs a `v`, which needs
+    // `T: Copyable`, which this impl deliberately does not require.
+    fn buffer_uninit_data() -> Array[T, N] {
+        return Buffer.buffer_uninit_data();
+    }
+
     pub fn cap(let self: Self) -> usize {
         return N;
     }

@@ -12,6 +12,11 @@ publish = false
 [dependencies]
 fors-fmir = { path = "../fors-fmir" }
 fors-fir = { path = "../fors-fir" }
+# F-mono: the enum discriminant rule (owner Q1). An enum `match` lowers to a
+# `switch_discr` whose arm table must agree with the layout the backend will
+# emit, so the mapping comes from the one crate that owns it rather than from
+# a number invented here.
+fors-layout = { path = "../fors-layout" }
 fors-check = { path = "../fors-check" }
 fors-syntax = { path = "../fors-syntax" }
 fors-resolve = { path = "../fors-resolve" }

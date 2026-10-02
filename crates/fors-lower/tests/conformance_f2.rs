@@ -192,6 +192,8 @@ fn build_and_run(label: &str, stem: &str, src: &[u8], host: &HostEnv) -> Run {
         .flat_map(|f| f.decl.insts.all_rows())
         .filter(|(_, row)| row.op.is_contract_check())
         .count();
+    // F-mono: an instantiated body's types live in the lowering-owned store.
+    let tys = lowered.tys;
     let fns: Vec<_> = lowered
         .fns
         .into_iter()
@@ -203,7 +205,7 @@ fn build_and_run(label: &str, stem: &str, src: &[u8], host: &HostEnv) -> Run {
         })
         .collect();
     let prog = Program::entry_by_name(fns, "main", Config::v0_1()).expect("a main");
-    let outcome = run_with_host(&prog, &out.fir.tys, host).expect("a verified program runs");
+    let outcome = run_with_host(&prog, &tys, host).expect("a verified program runs");
     let observed = match entry_exit(&outcome) {
         ExitStatus::Trap(k) => Observed::Trap(k),
         ExitStatus::Status(code) => Observed::Status(code, outcome.stdout),
@@ -383,6 +385,8 @@ fn build_and_run_with_std(label: &str, stem: &str, src: &[u8], host: &HostEnv) -
         .flat_map(|f| f.decl.insts.all_rows())
         .filter(|(_, row)| row.op.is_contract_check())
         .count();
+    // F-mono: an instantiated body's types live in the lowering-owned store.
+    let tys = lowered.tys;
     let fns: Vec<_> = lowered
         .fns
         .into_iter()
@@ -394,7 +398,7 @@ fn build_and_run_with_std(label: &str, stem: &str, src: &[u8], host: &HostEnv) -
         })
         .collect();
     let prog = Program::entry_by_name(fns, "main", Config::v0_1()).expect("a main");
-    let outcome = run_with_host(&prog, &out.fir.tys, host).expect("a verified program runs");
+    let outcome = run_with_host(&prog, &tys, host).expect("a verified program runs");
     let observed = match entry_exit(&outcome) {
         ExitStatus::Trap(k) => Observed::Trap(k),
         ExitStatus::Status(code) => Observed::Status(code, outcome.stdout),
@@ -645,35 +649,45 @@ fn gate_str_slice_non_boundary_raises_run_ok() {
 }
 
 #[test]
-#[ignore = "HELD OUT on MONOMORPHISATION, which this increment did not \
-            land. Both halves of the test are methods of GENERIC impls: \
-            `Buffer.empty()` is `impl[T, N: usize] Buffer[T, N]`'s, and \
-            `buf[10] = 1` goes through `impl[T, N: usize] IndexMut[usize] \
-            for Buffer[T, N]`'s `at_mut`. What the run shows TODAY (verified \
-            by un-ignoring): `main` lowers to `LowerError::CheckErrors` — \
-            the checker leaves BOTH nodes `TY_ERROR` with no diagnostic (a \
-            call to a generic impl's method is typed by I5 only as far as \
-            the call; `fn poke(inout buf: Buffer[i64, 4]) { buf[10] = 1; }` \
-            alone is `CheckErrors` too), so `prescan` refuses the body \
-            before any instantiation question is reached. Behind that: \
-            `fors-lower` instantiates no generic callee, and it has nothing \
-            to instantiate FROM — `BodyFacts`/`FactCallee` record no type \
-            arguments for a call site (facts.rs: `I5 adds the determined \
-            generic arguments` — not yet), and `fors-check` is a parallel \
-            increment's crate. \
-            Two further blockers, both named and both independent: \
-            `Buffer.empty`'s own body is the documented self-recursive \
-            stand-in `return Buffer.empty();`, which needs an \
-            uninitialised-aggregate primitive no Fors SYNTAX exposes (so \
-            it cannot be replaced by a real body, only by another lowering \
-            stand-in); and `IndexMut::at_mut` returns `scoped(self) \
-            Self.Output`, a PLACE, while all four FMIR call opcodes \
-            produce a value — `fors-lower::lower_index_assign` reports \
-            that case by name rather than dropping the store. What DOES \
-            lower now: scalar `a[i]` and `a[i] = v` on an `Array`/`Slice` \
-            (bounds-trapping), `a[i]` through a NON-generic resolved \
-            `Index::at` from (d)'s `MemberTarget::IndexImpl` fact, and \
-            `self.data[0 ..< self.len]` (Buffer.items/items_mut's shape)."]
+#[ignore = "HELD OUT, with the F-mono reasons REPLACED by two narrower ones \
+            (both verified by un-ignoring this test). Monomorphisation is no \
+            longer a blocker: F-mono instantiates generic callees, and with \
+            it `std`'s own generic bodies lower — `Buffer.empty`, \
+            `Buffer.push`, `Buffer.pop`, `Buffer.cap`, `Buffer.into_iter`, \
+            `Buffer`'s and `Vec`'s `Index`/`IndexMut` `at`/`at_mut`, \
+            `Option.is_some`/`unwrap_or`, `slice.fill`/`swap`/`sort`, \
+            `Vec.push`/`pop`/`deinit` and the rest no longer report at all \
+            (the std diagnostic list dropped from ~160 rows to the ~44 that \
+            are F3's `?`/`raise`). `Buffer.empty`'s self-recursive stand-in \
+            is GONE too: `std/mem.fors` now has a real body over the \
+            uninitialised-aggregate primitive `buffer_uninit_data`, which \
+            lowers to `fors-interp`'s `agg_uninit` (a read before write is \
+            `ub: uninit-read` with its site — see `gate.rs`'s \
+            `gate_buffer_empty_cells_are_uninitialised_not_zero`, and \
+            `gate_buffer_push_pop_index_at_two_instantiations` for \
+            push/pop/index on a `Buffer`-shaped type at `[i64, 4]` and \
+            `[Str, 2]`). \
+            What still blocks this test, both OUTSIDE this increment's \
+            editable crates: \
+            (1) `Buffer` is a ch08 R17 PRELUDE type name, so \
+            `fors-resolve` answers `Entity::PreludeType` for it, and \
+            `fors-check`'s R45 qualified-call path (`call.rs`'s \
+            `qualified_callee`) and its struct-literal path both require an \
+            `Entity::Item`. So `Buffer.empty()` is a silent `TY_ERROR` with \
+            NO diagnostic even though `std`'s declaration is in the build, \
+            and `prescan` refuses `main` with `CheckErrors` before any \
+            instantiation question is reached. Verified minimally: a \
+            fixture-declared `Vault[T, N]` of the same shape, reached as \
+            `Vault.empty()`, lowers and runs; renaming it to `Buffer` makes \
+            the same program `CheckErrors`. The fix is one arm in \
+            `fors-check`/`fors-resolve`, a parallel increment's crates. \
+            (2) `buf[10] = 1` goes through `IndexMut::at_mut`, which \
+            returns `scoped(self) Self.Output` — a PLACE — while all four \
+            FMIR call opcodes produce a value (design §3.10), so \
+            `fors-lower::lower_index_assign` still reports that case by \
+            name rather than dropping the store. That is an FMIR surface \
+            question (a place-returning call form), not a monomorphisation \
+            one."]
 fn gate_buffer_index_past_len_trap() {
     gate_test_std("10-std/buffer-index-past-len-trap.fors");
 }
@@ -690,25 +704,28 @@ fn gate_buffer_index_past_len_trap() {
             (`raise AllocError.out_of_memory` through `std.mem`) lowers to \
             `CheckErrors`, i.e. the checker leaves a node of it `TY_ERROR` \
             with no diagnostic (a user enum's `raise E.a` is a clean \
-            `Failure`, so this is the std path's typing); and \
-            `SliceIter.next`'s `Option` pattern match needs the pattern \
-            facts `BodyFacts` does not carry (see \
-            `FnLower::lower_match_stmt`)."]
+            `Failure`, so this is the std path's typing). The third fact in \
+            this note is GONE: `SliceIter.next`'s `Option` pattern match \
+            lowers as of F-mono, which reads `BodyFacts::patterns` (I10a's \
+            D5/D6) — re-verified by un-ignoring, where `main` and `slice` \
+            report exactly `Failure` and no `Match`."]
 fn gate_try_for_each_error_propagates_run_ok() {
     gate_test_std("10-std/try-for-each-error-propagates-run-ok.fors");
 }
 
 #[test]
-#[ignore = "HELD OUT for three independent reasons, all still true: \
-            `a.create(1)?`/`v.push(...)?` need `?`/`try_br` (F3, waiting \
-            on I10); `fill[A, L](..)` and `Vec[Own[i64, A], A]` need \
-            monomorphisation, which `fors-lower` does not do and has no \
-            recorded type arguments to do it from (see \
-            `gate_buffer_index_past_len_trap`; verified by un-ignoring: \
-            both `fill` and `main` lower to `CheckErrors`, the checker \
-            leaving their generic calls `TY_ERROR` without a diagnostic); \
-            and the allocator obligation machinery is F6's lowering half, \
-            which waits on I8b."]
+#[ignore = "HELD OUT, and its two STATED reasons were re-verified by \
+            un-ignoring after F-mono: `a.create(1)?`/`v.push(...)?` still \
+            need `?`/`try_br` (F3, waiting on I10 — every `std` body in the \
+            run's diagnostic list now reports exactly `Failure`), and the \
+            allocator obligation machinery is still F6's lowering half, \
+            waiting on I8b. The THIRD reason is gone: monomorphisation \
+            exists, and `Vec`'s and `Own`'s generic bodies lower. What the \
+            run shows today: `main` is `CheckErrors` — `Vec.new()` is R45's \
+            qualified form on the PRELUDE type name `Vec`, the same silent \
+            `TY_ERROR` described on `gate_buffer_index_past_len_trap` — and \
+            `fill(&v, &heap)` additionally needs the `&x` by-reference \
+            argument form, which `fors-lower::lower_call` reports by name."]
 fn gate_vec_deinit_empty_nonempty_trap() {
     gate_test_std("10-std/vec-deinit-empty-nonempty-trap.fors");
 }

@@ -4,9 +4,20 @@
 //! source checks clean with I3.5+I4a facts only, lowers without diagnostics,
 //! verifies clean under `fors-fmir::verify`, and runs to the pinned
 //! observable — `return` with exact stdout bytes, or a trap of the pinned
-//! kind. The rejection tests pin the F1 scope edge: generics, `defer`,
-//! projections-era syntax, loops, `match`, closures and const refs each
-//! produce a clean [`LowerError`](fors_lower::LowerError), never a panic.
+//! kind. The rejection tests pin the current scope edge: `defer`, the M3
+//! concurrency statements, `?`/`raise`, closures and const refs each produce a
+//! clean [`LowerError`](fors_lower::LowerError), never a panic.
+//!
+//! F-mono adds the monomorphisation and pattern rows at the end of the file:
+//! generic functions, generic structs and trait methods through a bound are
+//! INSTANTIATED rather than refused (so F1's `gate_reject_generic_fn`/
+//! `gate_reject_generic_call` became the positive tests
+//! `gate_generic_fn_has_no_fmir_of_its_own`/
+//! `gate_generic_call_lowers_to_an_instance`), enum/struct/tuple/literal
+//! patterns lower (so F1-completion's `gate_reject_enum_match_names_the_
+//! missing_fact` is deleted — the fact exists as of checker increment I10a),
+//! and `Buffer.empty`'s storage comes from a real uninitialised-aggregate
+//! primitive whose premature read is `ub: uninit-read`.
 
 use fors_index::{Interner, Segments};
 use fors_interp::{Config, Exit, Outcome, ProgFn, Program, run};
@@ -20,6 +31,51 @@ struct Built {
     outcome: Option<Outcome>,
     lower_diags: Vec<LowerDiag>,
     check_diags: Vec<String>,
+    /// Every lowered function's name, in lowering order. A monomorphised
+    /// instance is named `<callee>$<argument TyIds>` (`fors_lower::mono`).
+    instance_names: Vec<String>,
+    /// The lowered FMIR, so a test can assert on the lowering itself and not
+    /// only on the run.
+    decls: Vec<(String, fors_fmir::decl::DeclFmir)>,
+}
+
+impl Built {
+    /// Every `const_int` value the function named `name` holds, which is how
+    /// the discriminant test reads the comparison constants back out.
+    fn const_ints_of(&self, name: &str) -> Vec<u64> {
+        self.decls
+            .iter()
+            .filter(|(n, _)| n == name)
+            .flat_map(|(_, d)| d.insts.all_rows())
+            .filter(|(_, row)| row.op == fors_fmir::op::Op::ConstInt)
+            .map(|(_, row)| ((row.b as u64) << 32) | row.a as u64)
+            .collect()
+    }
+}
+
+/// The checker's frozen `TyStore` digest before and after lowering, plus
+/// whether the lowering-owned store is at least as large: the owner decision
+/// F-mono rests on, asserted rather than assumed.
+fn fir_digest_around_lowering(src: &str) -> (u128, u128, bool) {
+    let mut interner = Interner::new();
+    let source = format!("module m;\nneeds {{ }};\n{OUT_PRELUDE}{src}");
+    let bytes = source.into_bytes();
+    let name: Segments = vec![interner.intern(b"m")];
+    let parsed = parse_file(&bytes);
+    assert!(parsed.diags.is_empty(), "fixture must parse");
+    let inputs = [FileInput {
+        tree: &parsed.tree,
+        tokens: &parsed.tokens,
+        source: &bytes,
+        name,
+    }];
+    let resolved = fors_resolve::resolve_in_package(&mut interner, &inputs, Some(0), Some(b"m"));
+    let out = fors_check::check_build(&inputs, &resolved, &mut interner);
+    let before = out.fir.tys.digest();
+    let n_before = out.fir.tys.len();
+    let lowered = lower_build(&inputs, &out, &mut interner);
+    let after = out.fir.tys.digest();
+    (before, after, lowered.tys.len() >= n_before)
 }
 
 fn build(src: &str) -> Built {
@@ -43,11 +99,19 @@ fn build(src: &str) -> Built {
     let out = fors_check::check_build(&inputs, &resolved, &mut interner);
     let check_diags: Vec<String> = out.diagnostics.iter().map(|d| d.code.as_string()).collect();
     let lowered = lower_build(&inputs, &out, &mut interner);
+    let instance_names: Vec<String> = lowered.fns.iter().map(|f| f.name.clone()).collect();
+    let decls: Vec<(String, fors_fmir::decl::DeclFmir)> = lowered
+        .fns
+        .iter()
+        .map(|f| (f.name.clone(), f.decl.clone()))
+        .collect();
     if !check_diags.is_empty() || !lowered.diags.is_empty() {
         return Built {
             outcome: None,
             lower_diags: lowered.diags,
             check_diags,
+            instance_names,
+            decls,
         };
     }
     for f in &lowered.fns {
@@ -58,6 +122,9 @@ fn build(src: &str) -> Built {
             f.name
         );
     }
+    // F-mono: the program runs against the LOWERING-OWNED store, because an
+    // instantiated body's types were interned there (see `fors_lower::mono`).
+    let tys = lowered.tys;
     let fns: Vec<ProgFn> = lowered
         .fns
         .into_iter()
@@ -69,11 +136,13 @@ fn build(src: &str) -> Built {
         })
         .collect();
     let prog = Program::entry_by_name(fns, "main", Config::v0_1()).expect("a main");
-    let outcome = run(&prog, &out.fir.tys).expect("well-formed program runs");
+    let outcome = run(&prog, &tys).expect("well-formed program runs");
     Built {
         outcome: Some(outcome),
         lower_diags: Vec::new(),
         check_diags: Vec::new(),
+        instance_names,
+        decls,
     }
 }
 
@@ -418,25 +487,30 @@ fn gate_trap_min_rem_neg1_is_overflow() {
 // -- scope edges: clean diagnostics, never panics --------------------------------------
 
 #[test]
-fn gate_reject_generic_fn() {
-    // The `Copyable` bound is ch01 R3's, not this gate's: returning a
-    // `let` parameter of unbounded rigid type is a move out of a `let`
-    // parameter, which the checker's I8 flow pass now reports (ch09's
-    // `copy-without-copyable-rejected` is the same program). The gate
-    // here is that LOWERING refuses a generic `fn`, so the fixture has
-    // to be checked-clean first.
-    assert!(matches!(
-        lower_error("fn id[T: Copyable](let a: T) -> T { return a; }\nfn main() { }\n"),
-        LowerError::Generic(_)
-    ));
+fn gate_generic_fn_has_no_fmir_of_its_own() {
+    // F-mono replaces F1's `gate_reject_generic_fn`. A generic declaration
+    // still produces NO FMIR — its types are rigid — but that is a fact, not
+    // a diagnostic: ch03 R16-R18 give it one body per instantiation, and this
+    // program instantiates it nowhere, so nothing named `id` is lowered and
+    // nothing is reported.
+    let built = build_raw("fn id[T: Copyable](let a: T) -> T { return a; }\nfn main() { }\n");
+    assert!(
+        built.lower_diags.is_empty(),
+        "lower diags: {:?}",
+        built.lower_diags
+    );
+    assert!(
+        !built.instance_names.iter().any(|n| n.starts_with("id")),
+        "no instance without a call: {:?}",
+        built.instance_names
+    );
 }
 
 #[test]
-fn gate_reject_generic_call() {
-    // I5 TYPES the call, so the caller is checked-clean now; lowering
-    // still refuses it, because monomorphisation is ch03 R16-R18's and
-    // the generic callee itself answers `Generic` (see above), so there
-    // would be no body to call.
+fn gate_generic_call_lowers_to_an_instance() {
+    // F-mono: the caller lowers, and the generic callee is reached through
+    // its INSTANCE. (This replaces F1's `gate_reject_generic_call`, whose
+    // scope edge monomorphisation removed.)
     let built = build_raw(
         "fn g[T: Copyable](let a: T) -> T { return a; }\nfn f() -> i32 { var y: i32 = g(1); return y; }\nfn main() { }\n",
     );
@@ -445,15 +519,10 @@ fn gate_reject_generic_call() {
         "check diags: {:?}",
         built.check_diags
     );
-    let f = built
-        .lower_diags
-        .iter()
-        .find(|d| d.name == "f")
-        .expect("an f diag");
     assert!(
-        matches!(f.error, LowerError::Generic(_)),
-        "got {:?}",
-        f.error
+        !built.lower_diags.iter().any(|d| d.name == "f"),
+        "f must lower now: {:?}",
+        built.lower_diags
     );
 }
 
@@ -475,19 +544,10 @@ fn gate_reject_parallel_for() {
     ));
 }
 
-#[test]
-fn gate_reject_enum_match_names_the_missing_fact() {
-    // The GRAMMAR decides a `PatLit`/`PatWild` arm on a scalar; everything
-    // else needs I7's decisions, which `BodyFacts` does not carry (see
-    // `FnLower::lower_match_stmt`). A clean `LowerError::Match`, never a
-    // guess at what a one-segment pattern path meant.
-    assert!(matches!(
-        lower_error(
-            "enum E { a, b }\nfn f(let e: E) -> i64 { match e { E.a => { return 1; } E.b => { return 2; } } }\n"
-        ),
-        LowerError::Match
-    ));
-}
+// F1-completion's `gate_reject_enum_match_names_the_missing_fact` is DELETED:
+// the fact it named (`BodyFacts::patterns`) exists as of checker increment
+// I10a, and an enum `match` now lowers. `gate_match_enum_unit_variants` below
+// is the same program, run.
 
 // -- `match` on a scalar: `switch_discr` ------------------------------------
 
@@ -897,4 +957,398 @@ fn gate_exact_f64_to_f32_as_is_accepted() {
     run_ok(
         "fn main(inout out: Out) { var x: f64 = 0.5; var y: f32 = x as f32; if y == 0.5f32 { out.write_line(\"ok\"); } }\n",
     );
+}
+
+// -- F-mono: monomorphisation ------------------------------------------------
+
+#[test]
+fn gate_generic_fn_instantiated_at_two_types_in_one_body() {
+    // ch03 R16-R18: one generic declaration, two instances, both reached from
+    // the SAME body. Each instance's body is lowered once, at its own
+    // arguments, and the two do not share a declaration key.
+    run_ok(
+        "fn id[T: Copyable](let a: T) -> T { return a; }\n\
+         fn main(inout out: Out) { var i: i64 = id(7); var b: bool = id(true); if i == 7 and b { out.write_line(\"ok\"); } }\n",
+    );
+}
+
+#[test]
+fn gate_generic_fn_instantiated_twice_at_the_same_type_is_one_instance() {
+    // The instantiation cache: two calls at the same arguments are ONE
+    // lowered body, which is what "lower the body once per distinct (callee,
+    // args)" means.
+    let built = build_raw(
+        "fn id[T: Copyable](let a: T) -> T { return a; }\n\
+         fn main(inout out: Out) { var i: i64 = id(1); var j: i64 = id(2); if i + j == 3 { out.write_line(\"ok\"); } }\n",
+    );
+    assert!(
+        built.lower_diags.iter().all(|d| d.name != "main"),
+        "lower diags: {:?}",
+        built.lower_diags
+    );
+    assert_eq!(
+        built
+            .instance_names
+            .iter()
+            .filter(|n| n.starts_with("id$"))
+            .count(),
+        1,
+        "one instance for two calls at the same type: {:?}",
+        built.instance_names
+    );
+}
+
+#[test]
+fn gate_generic_struct_method_at_two_instantiations() {
+    // The container's parameters come FIRST in the determined-argument row
+    // (R38(a)), so a method of `impl[T] Box[T]` is instantiated by the
+    // receiver's own argument.
+    run_ok(
+        "struct Box[T] { v: T }\n\
+         impl[T: Copyable] Box[T] { fn get(let self: Self) -> T { return self.v; } }\n\
+         fn main(inout out: Out) { var a: Box[i64] = Box { v: 5 }; var b: Box[bool] = Box { v: true }; if a.get() == 5 and b.get() { out.write_line(\"ok\"); } }\n",
+    );
+}
+
+#[test]
+fn gate_trait_method_through_a_bound() {
+    // `x.m()` where the receiver is a rigid `T: Tr`: the trait declaration
+    // has no body, so lowering selects the IMPL from the `Self` the call
+    // determined and instantiates the impl's item.
+    run_ok(
+        "trait Tr { fn two(let self: Self) -> i64; }\n\
+         struct S { n: i64 }\n\
+         impl Tr for S { fn two(let self: Self) -> i64 { return self.n * 2; } }\n\
+         fn twice[T: Tr](let x: T) -> i64 { return x.two(); }\n\
+         fn main(inout out: Out) { var s: S = S { n: 21 }; if twice(s) == 42 { out.write_line(\"ok\"); } }\n",
+    );
+}
+
+#[test]
+fn gate_two_instances_of_one_callee_are_two_lowered_bodies() {
+    let built = build_raw(
+        "fn id[T: Copyable](let a: T) -> T { return a; }\n\
+         fn main(inout out: Out) { var i: i64 = id(7); var b: bool = id(true); if i == 7 and b { out.write_line(\"ok\"); } }\n",
+    );
+    assert!(
+        built.lower_diags.is_empty(),
+        "lower diags: {:?}",
+        built.lower_diags
+    );
+    let n = built
+        .instance_names
+        .iter()
+        .filter(|n| n.starts_with("id$"))
+        .count();
+    assert_eq!(n, 2, "two distinct instances: {:?}", built.instance_names);
+}
+
+// -- F-mono: pattern lowering ------------------------------------------------
+
+#[test]
+fn gate_match_enum_unit_variants() {
+    run_ok(
+        "enum E { a, b }\n\
+         fn pick(let e: E) -> i64 { match e { E.a => { return 1; } E.b => { return 2; } } }\n\
+         fn main(inout out: Out) { if pick(E.a) == 1 and pick(E.b) == 2 { out.write_line(\"ok\"); } }\n",
+    );
+}
+
+#[test]
+fn gate_match_enum_payload_binding_and_a_nested_pattern() {
+    // One arm binds a payload component; another tests a NESTED literal
+    // inside the payload, and R54 makes the first matching arm win.
+    run_ok(
+        "enum E { one(i64), two(i64, i64) }\n\
+         fn score(let e: E) -> i64 { match e { E.two(1, let b) => { return 100 + b; } E.two(let a, let b) => { return a + b; } E.one(let v) => { return v; } } }\n\
+         fn main(inout out: Out) { if score(E.one(7)) == 7 and score(E.two(1, 5)) == 105 and score(E.two(2, 5)) == 7 { out.write_line(\"ok\"); } }\n",
+    );
+}
+
+#[test]
+fn gate_match_tuple_pattern() {
+    run_ok(
+        "fn pick(let p: (i64, i64)) -> i64 { match p { (0, let b) => { return b; } (let a, let b) => { return a * b; } } }\n\
+         fn main(inout out: Out) { if pick((0, 9)) == 9 and pick((3, 4)) == 12 { out.write_line(\"ok\"); } }\n",
+    );
+}
+
+#[test]
+fn gate_match_literal_arm_with_a_negative() {
+    // The decided `ConstValue` is compared, narrowed to the faced type, so a
+    // negative literal arm matches the zero-extended slot the interpreter
+    // holds. The arm list is not all-literal (there is a `Str` sibling
+    // nowhere here, but the enum shape forces the chain path in the test
+    // below), so this one pins the scalar chain's own negative handling.
+    run_ok(
+        "enum W { v(i64) }\n\
+         fn pick(let w: W) -> i64 { match w { W.v(-1) => { return 5; } W.v(let n) => { return n; } } }\n\
+         fn main(inout out: Out) { if pick(W.v(-1)) == 5 and pick(W.v(3)) == 3 { out.write_line(\"ok\"); } }\n",
+    );
+}
+
+#[test]
+fn gate_match_str_literal_arm_compares_bytes() {
+    run_ok(
+        "enum M { s(Str) }\n\
+         fn pick(let m: M) -> i64 { match m { M.s(\"hi\") => { return 1; } M.s(_) => { return 2; } } }\n\
+         fn main(inout out: Out) { if pick(M.s(\"hi\")) == 1 and pick(M.s(\"no\")) == 2 { out.write_line(\"ok\"); } }\n",
+    );
+}
+
+#[test]
+fn gate_struct_destructuring_moves_a_non_copyable_field() {
+    // ch01 R22d(ii): the binding's copy-or-move is the CHECKER's published
+    // conv. A moving destructuring takes the scrutinee apart, so the
+    // scrutinee place is moved out of once the components are bound — and
+    // that is asserted on the FMIR, not only on the run: a `move_from` on the
+    // scrutinee place is what makes a later read of it `ub: use-after-move`.
+    const SRC: &str = "struct Inner { n: i64 }\n\
+         struct Outer { a: Inner, b: i64 }\n\
+         fn take(let o: Outer) -> i64 { match o { Outer { a: let a, b: let b } => { return a.n + b; } } }\n\
+         fn main(inout out: Out) { var o: Outer = Outer { a: Inner { n: 40 }, b: 2 }; if take(o) == 42 { out.write_line(\"ok\"); } }\n";
+    run_ok(SRC);
+    let built = build_raw(SRC);
+    let moves = built
+        .decls
+        .iter()
+        .filter(|(n, _)| n == "take")
+        .flat_map(|(_, d)| d.insts.all_rows())
+        .filter(|(_, row)| row.op == fors_fmir::op::Op::MoveFrom)
+        .count();
+    assert_eq!(
+        moves, 1,
+        "the destructuring takes the scrutinee place apart exactly once"
+    );
+}
+
+#[test]
+fn gate_let_tuple_destructuring() {
+    run_ok(
+        "fn main(inout out: Out) { let (a, b) = (17, 25); if a + b == 42 { out.write_line(\"ok\"); } }\n",
+    );
+}
+
+// -- F-mono: the discriminant mapping and the frozen store -------------------
+
+#[test]
+fn gate_enum_discriminants_come_from_fors_layout() {
+    // The MUTATION guard. The arm table a `match` on an enum builds must hold
+    // exactly the discriminants `fors-layout`'s rule (owner Q1) decides. The
+    // second assertion is the mutation: an `index + 1` mapping would produce
+    // a different table, so breaking `FnLower::discriminant_of` fails here and
+    // in `gate_match_enum_unit_variants`, which runs the same program.
+    // The arm bodies return 10/20/30 so the discriminant constants (0/1/2)
+    // and the body constants cannot be confused for one another.
+    let built = build_raw(
+        "enum E { a, b, c }\n\
+         fn pick(let e: E) -> i64 { match e { E.a => { return 10; } E.b => { return 20; } E.c => { return 30; } } }\n\
+         fn main(inout out: Out) { if pick(E.c) == 30 { out.write_line(\"ok\"); } }\n",
+    );
+    let want: Vec<u64> = (0..3u32)
+        .map(|i| {
+            let bytes = fors_layout::encode_discriminant(i, 3).expect("in range");
+            fors_layout::decode_discriminant(&bytes, 3).expect("round trip") as u64
+        })
+        .collect();
+    assert_eq!(want, vec![0, 1, 2], "the layout rule numbers variants 0..n");
+    let mutated: Vec<u64> = want.iter().map(|v| v + 1).collect();
+    let seen = built.const_ints_of("pick");
+    for w in &want {
+        assert!(
+            seen.contains(w),
+            "the lowered `pick` must compare against the layout discriminant {w}: {seen:?}"
+        );
+    }
+    assert_ne!(want, mutated, "the mutation must differ from the rule");
+    assert!(
+        !mutated.iter().all(|m| seen.contains(m)),
+        "an `index + 1` mapping must NOT be what was lowered: {seen:?}"
+    );
+}
+
+#[test]
+fn gate_lowering_leaves_the_frozen_fir_type_store_byte_identical() {
+    // The owner decision F-mono rests on: instantiated types are interned in
+    // a store `fors-lower` OWNS, so the checker's frozen store — which backs
+    // every `sig_hash` and every query content key — does not move.
+    let (before, after, grew) = fir_digest_around_lowering(
+        "struct Box[T] { v: T }\n\
+         impl[T: Copyable] Box[T] { fn get(let self: Self) -> T { return self.v; } }\n\
+         fn main(inout out: Out) { var a: Box[i64] = Box[i64] { v: 5 }; if a.get() == 5 { out.write_line(\"ok\"); } }\n",
+    );
+    assert_eq!(before, after, "the checker's TyStore must not move");
+    assert!(
+        grew,
+        "the lowering-owned store must be at least as large as the checker's"
+    );
+}
+
+// -- F-mono: the uninitialised-aggregate primitive ---------------------------
+
+/// A `Buffer`-shaped fixed-capacity container, declared in the fixture so the
+/// gate runs WITHOUT `std` in the build: the same two fields `std/mem.fors`'s
+/// `Buffer[T, N]` has, the same `empty()` over the uninitialised-aggregate
+/// primitive `buffer_uninit_data`, and `push`/`pop`/indexing checked against
+/// `len` rather than `N` (ch10 S23).
+///
+/// Why a fixture copy and not `std`'s own `Buffer`: `Buffer` is a ch08 R17
+/// PRELUDE type name, and `fors-resolve` answers `Entity::PreludeType` for it,
+/// which `fors-check`'s R45 qualified-call and struct-literal paths both
+/// require to be an `Entity::Item` — so `Buffer.empty()` and `Buffer { .. }`
+/// are silently `TY_ERROR` even with the real `std` sources in the build (see
+/// the hold-out note on `conformance_f2.rs`'s
+/// `gate_buffer_index_past_len_trap`). The primitive, the instantiation and
+/// the `ub: uninit-read` are all exercised here regardless.
+const VAULT: &str = "struct Vault[T, N: usize] { len: usize, data: Array[T, N] }\n\
+impl[T: Copyable, N: usize] Vault[T, N] {\n\
+  fn empty() -> Vault[T, N] { return Vault { len: 0, data: Vault.buffer_uninit_data() }; }\n\
+  fn buffer_uninit_data() -> Array[T, N] { return Vault.buffer_uninit_data(); }\n\
+  fn cap(let self: Self) -> usize { return N; }\n\
+  fn push(inout self: Self, let v: T) -> bool { if self.len == N { return false; } self.data[self.len] = v; self.len = self.len + 1; return true; }\n\
+  fn pop(inout self: Self) -> T { self.len = self.len - 1; return self.data[self.len]; }\n\
+  fn at(let self: Self, let i: usize) -> T { return self.data[i]; }\n\
+}\n";
+
+#[test]
+fn gate_buffer_push_pop_index_at_two_instantiations() {
+    // `Vault[i64, 4]` and `Vault[Str, 2]`: every method is instantiated once
+    // per argument row, and `N` is read as a VALUE out of the instantiation
+    // (`cap`'s `return N;`).
+    let src = format!(
+        "{VAULT}fn main(inout out: Out) {{          var b: Vault[i64, 4] = Vault.empty();          var ok1: bool = b.push(11);          var x: i64 = b.at(0);          var y: i64 = b.pop();          var s: Vault[Str, 2] = Vault.empty();          var ok2: bool = s.push(\"hi\");          if ok1 and ok2 and x == 11 and y == 11 and b.cap() == 4 and s.cap() == 2 {{ out.write_line(\"ok\"); }} }}\n"
+    );
+    run_ok(&src);
+    let built = build_raw(&src);
+    for stem in ["empty$", "push$", "cap$"] {
+        assert_eq!(
+            built
+                .instance_names
+                .iter()
+                .filter(|n| n.starts_with(stem))
+                .count(),
+            2,
+            "two instances of `{stem}`: {:?}",
+            built.instance_names
+        );
+    }
+}
+
+#[test]
+fn gate_buffer_empty_cells_are_uninitialised_not_zero() {
+    // `agg_uninit` is a REAL primitive: reading a cell before `push` wrote it
+    // is `ub: uninit-read` with its site, never a silent zero. This is what
+    // makes `empty()`'s `len: 0` the safety story rather than a formality.
+    let src = format!(
+        "{VAULT}fn main(inout out: Out) {{          var b: Vault[i64, 4] = Vault.empty();          var x: i64 = b.at(0);          if x == 0 {{ out.write_line(\"ok\"); }} }}\n"
+    );
+    let out = run_main(&src);
+    assert_eq!(
+        out.exit,
+        Exit::Ub(fors_interp::UbClass::UninitRead),
+        "stdout was {:?}",
+        String::from_utf8_lossy(&out.stdout)
+    );
+    let report = out.ub.expect("a ub record");
+    assert!(
+        report.detail.contains("initialised"),
+        "the record names the uninitialised read: {:?}",
+        report
+    );
+}
+
+// -- F-mono verification repairs ---------------------------------------------
+//
+// Each test below pins a defect the adversarial verification of F-mono found
+// and repaired; the comment names the observable the producer's own tests
+// missed.
+
+#[test]
+fn gate_assoc_type_through_a_bound_normalises_at_the_instance() {
+    // `fn pull[T: Src](x: T) -> T.Out`: at `T := A` the return type is the
+    // projection `A.Out`, which only `impl Src for A { type Out = i64; }`
+    // answers. Lowering substituted with NO projection solver, so every
+    // instance reported "a projection no normalisation collapsed".
+    run_ok(
+        "trait Src { type Out: Copyable; fn get(let self: Self) -> Self.Out; }\n\
+         struct A { n: i64 }\n\
+         struct B { f: bool }\n\
+         impl Src for A { type Out = i64; fn get(let self: Self) -> Self.Out { return self.n; } }\n\
+         impl Src for B { type Out = bool; fn get(let self: Self) -> Self.Out { return self.f; } }\n\
+         fn pull[T: Src](let x: T) -> T.Out { return x.get(); }\n\
+         fn main(inout out: Out) { var a: A = A { n: 4 }; var b: B = B { f: true }; var r: i64 = pull(a); var q: bool = pull(b); if r == 4 and q { out.write_line(\"ok\"); } }\n",
+    );
+}
+
+#[test]
+fn gate_trait_arguments_select_the_impl() {
+    // `impl Conv[i64] for S` and `impl Conv[bool] for S` are two impls of
+    // one trait for one type. A call through `T: Conv[i64]` names the
+    // first; impl selection that matched on the trait alone reported
+    // "2 impls match" and refused both instances.
+    run_ok(
+        "trait Conv[U] { fn conv(let self: Self) -> U; }\n\
+         struct S { n: i64 }\n\
+         impl Conv[i64] for S { fn conv(let self: Self) -> i64 { return self.n; } }\n\
+         impl Conv[bool] for S { fn conv(let self: Self) -> bool { return self.n > 0; } }\n\
+         fn to_i[T: Conv[i64]](let x: T) -> i64 { return x.conv(); }\n\
+         fn to_b[T: Conv[bool]](let x: T) -> bool { return x.conv(); }\n\
+         fn main(inout out: Out) { var s: S = S { n: 5 }; if to_i(s) == 5 and to_b(s) { out.write_line(\"ok\"); } }\n",
+    );
+}
+
+#[test]
+fn gate_a_user_method_sharing_the_primitives_spelling_keeps_its_body() {
+    // The `buffer_uninit_data` interception is scoped to the self-recursive
+    // stand-in SHAPE. A user method of that name with a body of its own was
+    // swallowed by the `agg_uninit` intrinsic, so its caller read
+    // `ub: uninit-read` instead of the `7` the body wrote.
+    run_ok(
+        "struct Mine { d: Array[i64, 2] }\n\
+         impl Mine { fn buffer_uninit_data() -> Array[i64, 2] { return [7, 7]; } fn make() -> Mine { return Mine { d: Mine.buffer_uninit_data() }; } }\n\
+         fn main(inout out: Out) { var m: Mine = Mine.make(); if m.d[0] == 7 { out.write_line(\"ok\"); } }\n",
+    );
+}
+
+#[test]
+fn gate_trait_method_on_a_parameter_free_impl_is_not_an_instance() {
+    // The impl's item has nothing to instantiate: it lowers once, as a root
+    // body, under its own key. Minting a `$`-instance with an empty row
+    // lowered it twice and gave two impls' items one name.
+    let built = build_raw(
+        "trait Tr { fn two(let self: Self) -> i64; }\n\
+         struct S { n: i64 }\n\
+         struct U { n: i64 }\n\
+         impl Tr for S { fn two(let self: Self) -> i64 { return self.n * 2; } }\n\
+         impl Tr for U { fn two(let self: Self) -> i64 { return self.n * 3; } }\n\
+         fn twice[T: Tr](let x: T) -> i64 { return x.two(); }\n\
+         fn main(inout out: Out) { var s: S = S { n: 21 }; var u: U = U { n: 1 }; if twice(s) + twice(u) == 45 { out.write_line(\"ok\"); } }\n",
+    );
+    assert!(built.lower_diags.is_empty(), "{:?}", built.lower_diags);
+    assert_eq!(
+        built.instance_names.iter().filter(|n| *n == "two").count(),
+        2,
+        "both impl items lower once each, as themselves: {:?}",
+        built.instance_names
+    );
+    assert!(
+        !built.instance_names.iter().any(|n| n.starts_with("two$")),
+        "no `$`-instance for a parameter-free impl item: {:?}",
+        built.instance_names
+    );
+    assert_eq!(built.outcome.expect("ran").stdout, b"ok\n");
+}
+
+#[test]
+fn gate_two_instances_differ_in_trap_behaviour() {
+    // `Arr[i64, 4].third()` reads element 2 and returns; `Arr[i64, 2].third()`
+    // is the SAME body at another `N` and traps bounds. One lowered body per
+    // instance is what makes the two outcomes differ.
+    let out = run_main(
+        "struct Arr[T, N: usize] { d: Array[T, N] }\n\
+         impl[T: Copyable, N: usize] Arr[T, N] { fn third(let self: Self) -> T { var k: usize = 2; return self.d[k]; } }\n\
+         fn main(inout out: Out) { var a: Arr[i64, 4] = Arr { d: [0, 0, 0, 0] }; var b: Arr[i64, 2] = Arr { d: [0, 0] }; if a.third() == 0 { out.write_line(\"four\"); } if b.third() == 0 { out.write_line(\"two\"); } }\n",
+    );
+    assert_eq!(out.exit, Exit::Trap(fors_fmir::op::TrapKind::Bounds));
+    assert_eq!(out.stdout, b"four\n");
 }

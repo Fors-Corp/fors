@@ -35,21 +35,46 @@
 //! bindings). A `for`'s induction advance lives in its LATCH block, which
 //! is also `continue`'s target, so `continue` advances exactly once.
 //!
+//! **F-mono** adds two things to this walk, both still reading and never
+//! re-deriving:
+//! - MONOMORPHISATION. A call whose `generic_args` row is non-empty names an
+//!   INSTANCE of its callee ([`FnLower::callee_key`]), and `lower_build`'s
+//!   worklist lowers each distinct `(callee, arguments)` body once. Every
+//!   substituted type is interned in a store this crate owns — a clone of the
+//!   checker's frozen one, so the checker's FIR cannot move under the query
+//!   engine (see [`crate::mono`]). A generic declaration itself has no FMIR.
+//! - PATTERNS. `match`, and `let`/`var` destructuring, lower from
+//!   `BodyFacts::patterns` (I10a's D5/D6): the decided shape of every pattern
+//!   node, each binding's published copy-or-move convention, R54's arm order
+//!   and R53's exhaustiveness answer. Enum arms switch on the discriminant
+//!   `fors-layout` decided and project payloads; struct and tuple arms project
+//!   fields. A `match` in VALUE position, and an arm with a guard, are still
+//!   named [`LowerError::Match`]s — a value `match` needs a result slot and a
+//!   guard needs a reachability fact no column carries.
+//!
 //! Three families are lowered by SPELLING rather than from a checker fact,
 //! each because the checker does not type them yet and each confined and
 //! named: `Buffer.fixed`/`<buf>.slice[i] = v` (F2's §5.8 stand-in),
 //! `reduce` ([HOLE-7], F5), and ch03 Rules 4 and 6's language-known numeric
 //! methods (`CH03_ARITH_OPS`). Only the last is the FINAL lowering — the
-//! other two are stand-ins for bodies that will exist.
+//! other two are stand-ins for bodies that will exist. F-mono adds a fourth,
+//! `buffer_uninit_data` (the uninitialised-aggregate primitive behind
+//! `Buffer.empty`, `std/mem.fors`), which is a real primitive rather than a
+//! stand-in: no Fors EXPRESSION names an uninitialised aggregate, because
+//! `[v; N]` needs a `v` and therefore `T: Copyable`.
 
 use std::collections::{HashMap, HashSet};
 
 use fors_check::CheckOutput;
 use fors_check::defs::DefTable;
-use fors_check::facts::{BodyFacts, FactCallee, MemberTarget};
+use fors_check::facts::{BodyFacts, FactCallee, MemberTarget, PatFactRow, PatShape};
+use fors_fir::ConstValue;
 use fors_fir::Fir;
 use fors_fir::sig::Conv;
-use fors_fir::ty::{ArgsId, ConstId, NO_TY, PrimKind, TY_ERROR, TY_UNIT, TyId, TyTag};
+use fors_fir::subst::Binding;
+use fors_fir::ty::{
+    ArgsId, ConstId, NO_TY, PrimKind, ProjKeyId, TY_ERROR, TY_UNIT, TyId, TyStore, TyTag,
+};
 use fors_index::decl::DeclKind;
 use fors_index::ids::DefId;
 use fors_index::{Interner, Symbol};
@@ -67,6 +92,7 @@ use fors_fmir::place::Seg;
 use fors_fmir::value::{ValDef, ValRow};
 
 use crate::diag::{LowerDiag, LowerError};
+use crate::mono::Instances;
 
 /// One lowered function: FMIR plus the side tables the interpreter needs
 /// alongside it (string bytes, intrinsic names). The caller assembles these
@@ -82,31 +108,112 @@ pub struct LoweredFn {
     pub intrinsics: Vec<(u32, String)>,
 }
 
-/// The whole build: lowered functions plus one diagnostic per skipped body.
-#[derive(Debug, Default)]
+/// The whole build: lowered functions plus one diagnostic per skipped body,
+/// plus the type store lowering OWNS.
+#[derive(Default)]
 pub struct LoweredBuild {
     pub fns: Vec<LoweredFn>,
     pub diags: Vec<LowerDiag>,
+    /// The lowering-owned [`TyStore`]: a clone of the checker's frozen store
+    /// (which is therefore untouched — see [`crate::mono`]) plus every type
+    /// monomorphisation interned. This is the store the INTERPRETER must be
+    /// handed: an instantiated body's types only exist here.
+    pub tys: TyStore,
 }
 
-/// Lowers every checked body in `out.facts`. Total: bodies outside the F1
-/// subset become [`LowerDiag`] rows, never panics.
+/// `TyStore` is not `Debug` (it is a dozen parallel columns), and a build's
+/// interesting content is its functions and its diagnostics, so the store is
+/// summarised by its row count.
+impl std::fmt::Debug for LoweredBuild {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("LoweredBuild")
+            .field("fns", &self.fns)
+            .field("diags", &self.diags)
+            .field("tys_len", &self.tys.len())
+            .finish()
+    }
+}
+
+/// The build's read-only inputs, which every body's lowering needs all of.
+/// Grouped so the per-body entry points keep a signature a reader can hold in
+/// their head (and so no `too_many_arguments` waiver is needed).
+struct Env<'a> {
+    inputs: &'a [FileInput<'a>],
+    fir: &'a Fir,
+    defs: &'a DefTable,
+    /// Every checked body's facts (`CheckOutput::facts`): what lets one
+    /// body ask a question about ANOTHER declaration's body — today only
+    /// "is this method the §5.8 self-recursive stand-in?"
+    /// ([`FnLower::is_self_recursive_stub`]).
+    facts_all: &'a [(DefId, BodyFacts)],
+}
+
+/// The build's MUTABLE state, shared across every body: the interner, the
+/// lowering-owned type store, and the instance table. Passed by value as a
+/// bundle of `&mut`s, so one body's lowering holds exactly one borrow of each.
+struct Shared<'a> {
+    interner: &'a mut Interner,
+    tys: &'a mut TyStore,
+    mono: &'a mut Instances,
+}
+
+/// Lowers every checked body in `out.facts`. Total: bodies outside the
+/// lowerable subset become [`LowerDiag`] rows, never panics.
+///
+/// Two phases (F-mono). First every body that has nothing to instantiate —
+/// no generic parameter of its own and none from its container — lowers as
+/// itself; a generic declaration is NOT lowered as itself (it has no FMIR:
+/// its types are rigid) and records `Generic`, naming the shape. Each such
+/// body's generic call sites request instances. Then the worklist drains:
+/// every requested `(callee, arguments)` pair lowers the callee's body once,
+/// under a substitution, and may request further instances. The queue is
+/// FIFO, so the function order of the output is a deterministic function of
+/// the input.
 pub fn lower_build(
     inputs: &[FileInput<'_>],
     out: &CheckOutput,
     interner: &mut Interner,
 ) -> LoweredBuild {
-    let mut build = LoweredBuild::default();
+    let mut build = LoweredBuild {
+        fns: Vec::new(),
+        diags: Vec::new(),
+        // The clone the whole increment rests on: the checker's store is
+        // frozen and must stay byte-identical, so instantiation interns here.
+        tys: out.fir.tys.clone(),
+    };
     let Some(defs) = out.defs.as_ref() else {
         return build;
     };
-    for (def, facts) in &out.facts {
-        let row = defs.get(*def);
-        let name = row
+    let mut insts = Instances::new(out.fir.keys.len());
+    let name_of = |def: DefId, interner: &Interner| -> String {
+        defs.get(def)
             .and_then(|r| r.name)
             .map(|s| String::from_utf8_lossy(interner.resolve(s)).into_owned())
-            .unwrap_or_else(|| format!("def{}", def.0));
-        match lower_one(inputs, &out.fir, defs, *def, &name, facts, interner) {
+            .unwrap_or_else(|| format!("def{}", def.0))
+    };
+    for (def, facts) in &out.facts {
+        // A GENERIC declaration has no FMIR of its own: its types are rigid,
+        // and ch03 R16-R18 give it one body per instantiation. That is a fact,
+        // not an error, so it is skipped SILENTLY — reporting it would make
+        // every program that declares a generic function carry a diagnostic.
+        // The instances come from the worklist below.
+        if !generic_owners(&out.fir, defs, *def).is_empty() {
+            continue;
+        }
+        let name = name_of(*def, interner);
+        let env = Env {
+            inputs,
+            fir: &out.fir,
+            defs,
+            facts_all: &out.facts,
+        };
+        let shared = Shared {
+            interner,
+            tys: &mut build.tys,
+            mono: &mut insts,
+        };
+        let res = lower_one(&env, shared, *def, &name, facts, Binding::new(&[]), None);
+        match res {
             Ok(f) => build.fns.push(f),
             Err(error) => build.diags.push(LowerDiag {
                 def: *def,
@@ -115,23 +222,294 @@ pub fn lower_build(
             }),
         }
     }
+    // The worklist. A body that cannot be instantiated is one diagnostic
+    // against the CALLEE's def, exactly like a root body's.
+    while let Some(inst) = insts.pop_pending() {
+        let Some((_, facts)) = out.facts.iter().find(|(d, _)| *d == inst.callee) else {
+            build.diags.push(LowerDiag {
+                def: inst.callee,
+                name: inst.name.clone(),
+                error: LowerError::Unresolved(format!(
+                    "no checked body for the instantiated callee def{}",
+                    inst.callee.0
+                )),
+            });
+            continue;
+        };
+        let binding = match binding_for(&out.fir, defs, inst.callee, &inst.args) {
+            Ok(b) => b,
+            Err(error) => {
+                build.diags.push(LowerDiag {
+                    def: inst.callee,
+                    name: inst.name.clone(),
+                    error,
+                });
+                continue;
+            }
+        };
+        let env = Env {
+            inputs,
+            fir: &out.fir,
+            defs,
+            facts_all: &out.facts,
+        };
+        let shared = Shared {
+            interner,
+            tys: &mut build.tys,
+            mono: &mut insts,
+        };
+        let res = lower_one(
+            &env,
+            shared,
+            inst.callee,
+            &inst.name,
+            facts,
+            binding,
+            Some(inst.key),
+        );
+        match res {
+            Ok(f) => build.fns.push(f),
+            Err(error) => build.diags.push(LowerDiag {
+                def: inst.callee,
+                name: inst.name.clone(),
+                error,
+            }),
+        }
+    }
     build
 }
 
-fn lower_one(
-    inputs: &[FileInput<'_>],
+/// The generic parameter slots one declaration's body sees, in R38(a)'s
+/// order: the CONTAINER's (an `impl`'s parameters, a `trait`'s including its
+/// `Self`) and then the declaration's own. An owner with no parameters is
+/// omitted, so this list is the same shape `fors-check::methods::call_owners`
+/// builds — which is what makes a `generic_args` row index into it.
+fn generic_owners(fir: &Fir, defs: &DefTable, def: DefId) -> Vec<(DefId, u16)> {
+    let mut out: Vec<(DefId, u16)> = Vec::new();
+    if let Some(parent) = defs.get(def).map(|r| r.parent)
+        && parent != fors_fir::NO_DEF
+    {
+        let n = fir.sigs.generics_store.count(fir.sigs.generics(parent));
+        if n > 0 {
+            out.push((parent, n as u16));
+        }
+    }
+    let own = fir.sigs.generics_store.count(fir.sigs.generics(def));
+    if own > 0 {
+        out.push((def, own as u16));
+    }
+    out
+}
+
+/// F-mono's projection solver: §7.5's `normalise_proj` over the declaration
+/// table. `T.Out` in a generic body is rigid; at `T := A` it becomes
+/// `A.Out`, a projection on a CONCRETE head, which only the impl of the
+/// trait for `A` can answer (`type Out = i64;`). The checker's `Normaliser`
+/// does this over its `ImplIndex`; that index is not on `CheckOutput`, so
+/// this one scans `DeclKind::Impl` rows through [`impl_candidates`] — the
+/// same walk [`FnLower::select_impl`] uses — and answers only when exactly
+/// one impl matches (R19). Without it every substituted type that mentions
+/// a bound's associated type was "a projection no normalisation collapsed"
+/// (verification: `fn pull[T: Src](x: T) -> T.Out` lowered to a
+/// `LowerError::Generic` at every instantiation).
+struct LowerSolver<'a> {
+    fir: &'a Fir,
+    defs: &'a DefTable,
+    /// The recursion is on a strict subterm of the head (R18 plus R61(d)),
+    /// so it descends; the cap only catches a violated premise.
+    depth: u32,
+}
+
+const LOWER_SOLVER_DEPTH_MAX: u32 = 64;
+
+impl fors_fir::subst::ProjSolver for LowerSolver<'_> {
+    fn solve(&mut self, store: &mut TyStore, head: TyId, key: ProjKeyId) -> Option<TyId> {
+        if head == NO_TY || head == TY_ERROR || self.depth >= LOWER_SOLVER_DEPTH_MAX {
+            return None;
+        }
+        let (tref, name) = store.proj_key(key);
+        let (trait_def, want_args) = store.trait_ref(tref);
+        let want = store.args_vec(want_args);
+        let mut hits = impl_candidates(store, self.fir, self.defs, trait_def, &want, head);
+        if hits.len() != 1 {
+            return None;
+        }
+        let (imp, b) = hits.remove(0);
+        let a = self.fir.sigs.assoc(imp);
+        let rhs = (0..self.fir.sigs.assocs.count(a))
+            .map(|i| self.fir.sigs.assocs.get(a, i))
+            .find(|r| r.name == name)
+            .map(|r| r.rhs)?;
+        if rhs == NO_TY || rhs == TY_ERROR {
+            return None;
+        }
+        self.depth += 1;
+        let out = fors_fir::subst::subst_norm_with(store, rhs, &b, self);
+        self.depth -= 1;
+        out
+    }
+}
+
+/// Every impl of `trait_def` whose `self_ty` one-way matches `head` AND whose
+/// trait arguments match `want_args` pairwise, each with its own parameters
+/// determined — design §7.6's `impl_lookup` run over the declaration table
+/// rather than an impl index. Deterministic in `DefId` order.
+///
+/// The trait arguments are part of the key: `impl Conv[i64] for S` and
+/// `impl Conv[bool] for S` are two different impls of one trait for one
+/// type, and a call through `T: Conv[i64]` names the first (verification:
+/// matching on the trait alone reported "2 impls match" for it).
+fn impl_candidates(
+    store: &mut TyStore,
+    fir: &Fir,
+    defs: &DefTable,
+    trait_def: DefId,
+    want_args: &[TyId],
+    head: TyId,
+) -> Vec<(DefId, Binding)> {
+    let candidates: Vec<(DefId, ArgsId)> = defs
+        .user_defs()
+        .filter(|(_, r)| r.kind == DeclKind::Impl)
+        .map(|(d, _)| d)
+        .filter_map(|d| {
+            let tr = fir.sigs.trait_ref(d);
+            if tr == fors_fir::NO_TRAIT_REF {
+                return None;
+            }
+            let (td, args) = store.trait_ref(tr);
+            (td == trait_def).then_some((d, args))
+        })
+        .collect();
+    let mut hits: Vec<(DefId, Binding)> = Vec::new();
+    for (d, args) in candidates {
+        let n = fir.sigs.generics_store.count(fir.sigs.generics(d));
+        let mut b = Binding::new(&[(d, n as u16)]);
+        let decl_self = fir.sigs.self_ty(d);
+        if decl_self == NO_TY {
+            continue;
+        }
+        if !fors_fir::subst::one_way_match(store, decl_self, head, &mut b) {
+            continue;
+        }
+        let row_args = store.args_vec(args);
+        if row_args.len() != want_args.len() {
+            continue;
+        }
+        if !row_args
+            .iter()
+            .zip(want_args)
+            .all(|(x, y)| fors_fir::subst::one_way_match(store, *x, *y, &mut b))
+        {
+            continue;
+        }
+        if !b.is_complete() {
+            continue;
+        }
+        hits.push((d, b));
+    }
+    hits
+}
+
+/// The [`Binding`] one instantiation is: `args` laid over
+/// [`generic_owners`]'s slots in order. A length disagreement, or an
+/// undetermined slot, is a named error — never a default (R39: an
+/// undetermined parameter is the checker's `T0026`, and lowering must not
+/// invent one).
+fn binding_for(
     fir: &Fir,
     defs: &DefTable,
     def: DefId,
+    args: &[TyId],
+) -> Result<Binding, LowerError> {
+    let owners = generic_owners(fir, defs, def);
+    let want: usize = owners.iter().map(|&(_, n)| n as usize).sum();
+    if want != args.len() {
+        return Err(LowerError::Generic(format!(
+            "def{} has {want} generic parameter slot(s) but the call determined {}",
+            def.0,
+            args.len()
+        )));
+    }
+    let mut b = Binding::new(&owners);
+    let mut at = 0usize;
+    for &(owner, n) in &owners {
+        for ordinal in 0..n {
+            let ty = args[at];
+            at += 1;
+            if ty == NO_TY {
+                return Err(LowerError::Generic(format!(
+                    "generic parameter {ordinal} of def{} is undetermined at this \
+                     instantiation",
+                    owner.0
+                )));
+            }
+            if !b.bind(owner, ordinal, ty) {
+                return Err(LowerError::Generic(format!(
+                    "generic parameter {ordinal} of def{} was bound twice and \
+                     disagreed",
+                    owner.0
+                )));
+            }
+        }
+    }
+    Ok(b)
+}
+
+/// The body's per-node type column with `b` applied: `BodyFacts::ty_of` seen
+/// through the instantiation. Computed once, so the walk's `ty_of` stays a
+/// bounds-checked load and the substitution happens exactly once per node.
+///
+/// An EMPTY binding is the identity (`subst_norm` returns a monomorphic type
+/// unchanged and leaves a parameter whose owner the binding does not own
+/// alone), so a root body takes the same path as an instance and no
+/// `Option` fork is needed.
+fn substituted_node_tys(
+    env: &Env<'_>,
+    tys: &mut TyStore,
+    facts: &BodyFacts,
+    b: &Binding,
+) -> Result<Vec<TyId>, LowerError> {
+    let (start, end) = facts.range();
+    let mut out = Vec::with_capacity((end - start) as usize);
+    let mut solver = LowerSolver {
+        fir: env.fir,
+        defs: env.defs,
+        depth: 0,
+    };
+    for n in start..end {
+        let t = facts.ty_of(n);
+        if t == NO_TY || t == TY_ERROR || tys.is_monomorphic(t) {
+            out.push(t);
+            continue;
+        }
+        out.push(
+            fors_fir::subst::subst_norm_with(tys, t, b, &mut solver).ok_or_else(|| {
+                LowerError::Generic(format!(
+                    "a type of node {n} could not be instantiated at this \
+                 substitution (an undetermined slot, or a projection no \
+                 normalisation collapsed)"
+                ))
+            })?,
+        );
+    }
+    Ok(out)
+}
+
+fn lower_one(
+    env: &Env<'_>,
+    shared: Shared<'_>,
+    def: DefId,
     name: &str,
     facts: &BodyFacts,
-    interner: &mut Interner,
+    subst: Binding,
+    instance: Option<fors_fir::DeclKeyId>,
 ) -> Result<LoweredFn, LowerError> {
-    let row = defs
+    let row = env
+        .defs
         .get(def)
         .ok_or_else(|| LowerError::Unresolved(format!("def{}", def.0)))?;
-    // Only `fn` bodies lower in F1. `const` bodies are comptime (F9);
-    // anything else with facts is still diagnosed, never panicked on.
+    // Only `fn` bodies lower. `const` bodies are comptime (F9); anything
+    // else with facts is still diagnosed, never panicked on.
     match row.kind {
         DeclKind::Fn => {}
         DeclKind::Const => {
@@ -141,14 +519,23 @@ fn lower_one(
         }
         _ => return Err(LowerError::Unsupported("non-function body".into())),
     }
-    let file = inputs
+    let file = env
+        .inputs
         .get(row.file.0 as usize)
         .ok_or_else(|| LowerError::Unresolved(format!("file{}", row.file.0)))?;
     let decl_node = row.node as usize;
-    prescan(file, decl_node, facts, fir)?;
-    let mut fx = FnLower::new(fir, defs, facts, file, row.file.0, def, interner)?;
+    let node_ty = substituted_node_tys(env, shared.tys, facts, &subst)?;
+    prescan(
+        file,
+        decl_node,
+        facts,
+        shared.tys,
+        &node_ty,
+        instance.is_some(),
+    )?;
+    let mut fx = FnLower::new(env, shared, facts, file, def, subst, node_ty)?;
     fx.lower_fn(decl_node)?;
-    Ok(fx.finish(def, name))
+    Ok(fx.finish(def, name, instance))
 }
 
 /// E11 (design §4.2, §11.2): until checker increment I10 lands D10
@@ -192,7 +579,9 @@ fn prescan(
     file: &FileInput<'_>,
     decl_node: usize,
     facts: &BodyFacts,
-    fir: &Fir,
+    tys: &TyStore,
+    node_ty: &[TyId],
+    instance: bool,
 ) -> Result<(), LowerError> {
     let (start, end) = facts.range();
     // A poisoned body never lowers: every later read would be garbage —
@@ -213,7 +602,7 @@ fn prescan(
                 continue 'scan;
             }
         }
-        if facts.ty_of(n) == TY_ERROR {
+        if node_ty[(n - start) as usize] == TY_ERROR {
             return Err(LowerError::CheckErrors);
         }
     }
@@ -241,17 +630,22 @@ fn prescan(
             }
         }
     }
-    // A generic declaration is I5's, however it is used.
-    if has_generic_params(file, decl_node) {
+    // A generic declaration has no FMIR of its own: it lowers once per
+    // instantiation, which is what `instance` says this call is.
+    if !instance && has_generic_params(file, decl_node) {
         return Err(LowerError::Generic("generic function".into()));
     }
-    // Open types in the facts: rigid/projection/brand/dyn/fn/const.
+    // Open types in the SUBSTITUTED facts: rigid/projection/brand/dyn/fn/
+    // const. After instantiation a rigid parameter is a concrete type, so
+    // what survives here is genuinely open — a parameter of an enclosing
+    // declaration the binding does not own, or a projection no normalisation
+    // collapsed.
     for n in start..end {
-        let t = facts.ty_of(n);
+        let t = node_ty[(n - start) as usize];
         if t == NO_TY || t == TY_ERROR {
             continue;
         }
-        match fir.tys.tag(fir.tys.unqual(t)) {
+        match tys.tag(tys.unqual(t)) {
             TyTag::Param => return Err(LowerError::Generic("rigid parameter type".into())),
             TyTag::Proj => return Err(LowerError::Projection),
             TyTag::Dyn => return Err(LowerError::Unsupported("dyn type".into())),
@@ -590,8 +984,26 @@ const SITE: SiteId = SiteId(0);
 /// Per-function lowering state.
 struct FnLower<'a> {
     fir: &'a Fir,
+    /// The LOWERING-OWNED type store (never `fir.tys`: see [`crate::mono`]).
+    /// Every type question this walk asks goes here, and every instantiated
+    /// type it interns lands here.
+    tys: &'a mut TyStore,
+    /// The instance table: a generic call site requests, never lowers.
+    mono: &'a mut Instances,
+    /// This body's substitution. Empty for a body with nothing to
+    /// instantiate; otherwise R38(a)'s slots bound to the call's arguments.
+    subst: Binding,
+    /// The owners [`FnLower::subst`]'s slots belong to, in R38(a)'s order:
+    /// what turns a generic parameter's NAME back into its slot (`N` in
+    /// `impl[T, N: usize] Buffer[T, N]`, read as a value).
+    owners: Vec<(DefId, u16)>,
+    /// `BodyFacts::ty_of` with [`FnLower::subst`] applied, indexed by
+    /// `node - facts.range().0`.
+    node_ty: Vec<TyId>,
     defs: &'a DefTable,
     facts: &'a BodyFacts,
+    /// See [`Env::facts_all`].
+    facts_all: &'a [(DefId, BodyFacts)],
     tree: &'a Tree,
     tokens: &'a Tokens,
     source: &'a [u8],
@@ -649,6 +1061,23 @@ struct FnLower<'a> {
     unsafe_decl: bool,
 }
 
+/// One binding a pattern decided (D5): the local to introduce, the component
+/// value it takes, and the CHECKER's copy-or-move answer (ch01 R22d(ii)).
+struct PatBind {
+    sym: Symbol,
+    ty: TyId,
+    val: ValId,
+    conv: Conv,
+}
+
+/// How a pattern reaches its components: an enum variant's payload, or a
+/// struct's/tuple's fields.
+#[derive(Clone, Copy)]
+enum Projection {
+    Field,
+    Payload,
+}
+
 /// One enclosing loop's two edges: where `continue` goes (the latch, which
 /// is what advances a `for`'s induction variable) and where `break` goes.
 #[derive(Clone, Copy)]
@@ -686,26 +1115,39 @@ enum ContractKind {
 
 impl<'a> FnLower<'a> {
     fn new(
-        fir: &'a Fir,
-        defs: &'a DefTable,
+        env: &Env<'a>,
+        shared: Shared<'a>,
         facts: &'a BodyFacts,
         file: &FileInput<'a>,
-        file_idx: u32,
         def: DefId,
-        interner: &'a mut Interner,
+        subst: Binding,
+        node_ty: Vec<TyId>,
     ) -> Result<FnLower<'a>, LowerError> {
-        let decl_key = defs
+        let (fir, defs) = (env.fir, env.defs);
+        let row = defs
             .get(def)
-            .map(|r| r.key)
             .ok_or_else(|| LowerError::Unresolved(format!("def{}", def.0)))?;
+        let (decl_key, file_idx) = (row.key, row.file.0);
         let sig = fir.sigs.fn_sig(def);
         if sig == fors_fir::NO_FN_SIG {
             return Err(LowerError::CheckErrors);
         }
+        let owners = generic_owners(fir, defs, def);
+        let Shared {
+            interner,
+            tys,
+            mono,
+        } = shared;
         Ok(FnLower {
             fir,
+            tys,
+            mono,
+            subst,
+            owners,
+            node_ty,
             defs,
             facts,
+            facts_all: env.facts_all,
             tree: file.tree,
             tokens: file.tokens,
             source: file.source,
@@ -736,7 +1178,23 @@ impl<'a> FnLower<'a> {
         })
     }
 
-    fn finish(mut self, def: DefId, name: &str) -> LoweredFn {
+    /// `instance` is the fresh [`DeclKeyId`](fors_fir::DeclKeyId) an
+    /// INSTANTIATED body carries instead of the declaration's own, so every
+    /// `call_direct` naming that instance finds this FMIR and not the generic
+    /// declaration's.
+    fn finish(
+        mut self,
+        def: DefId,
+        name: &str,
+        instance: Option<fors_fir::DeclKeyId>,
+    ) -> LoweredFn {
+        if let Some(key) = instance {
+            self.decl.decl = key;
+        }
+        self.finish_inner(def, name)
+    }
+
+    fn finish_inner(mut self, def: DefId, name: &str) -> LoweredFn {
         for (row, seed) in std::mem::take(&mut self.insts) {
             self.decl.push_inst(row, seed);
         }
@@ -785,8 +1243,37 @@ impl<'a> FnLower<'a> {
         self.tree.kinds[node]
     }
 
+    /// The checker's type for `node`, with this body's instantiation applied
+    /// (D1 read through [`FnLower::subst`], never re-derived).
     fn ty_of(&self, node: usize) -> TyId {
-        self.facts.ty_of(node as u32)
+        let (start, _) = self.facts.range();
+        if node < start as usize {
+            return NO_TY;
+        }
+        self.node_ty
+            .get(node - start as usize)
+            .copied()
+            .unwrap_or(NO_TY)
+    }
+
+    /// One type of the CHECKER's (a signature's parameter, a member's
+    /// declared type, a `generic_args` row entry, a pattern fact's faced
+    /// type) through this body's instantiation. The result lives in the
+    /// lowering-owned store.
+    fn subst_ty(&mut self, t: TyId, what: &str) -> Result<TyId, LowerError> {
+        if t == NO_TY || t == TY_ERROR || self.tys.is_monomorphic(t) {
+            return Ok(t);
+        }
+        let mut solver = LowerSolver {
+            fir: self.fir,
+            defs: self.defs,
+            depth: 0,
+        };
+        fors_fir::subst::subst_norm_with(self.tys, t, &self.subst, &mut solver).ok_or_else(|| {
+            LowerError::Generic(format!(
+                "{what} could not be instantiated at this substitution"
+            ))
+        })
     }
 
     /// Significant tokens owned directly by `node` (its range minus its
@@ -863,11 +1350,11 @@ impl<'a> FnLower<'a> {
     }
 
     fn prim_of(&self, ty: TyId) -> Option<PrimKind> {
-        let bare = self.fir.tys.unqual(ty);
-        if self.fir.tys.tag(bare) != TyTag::Prim {
+        let bare = self.tys.unqual(ty);
+        if self.tys.tag(bare) != TyTag::Prim {
             return None;
         }
-        PrimKind::from_u8(self.fir.tys.a(bare) as u8)
+        PrimKind::from_u8(self.tys.a(bare) as u8)
     }
 
     fn is_float_ty(&self, ty: TyId) -> bool {
@@ -891,10 +1378,10 @@ impl<'a> FnLower<'a> {
     /// is NOT interned the caller reports (a named `LowerError`), never
     /// substitutes a wrong width.
     fn prim_ty(&self, k: PrimKind) -> Option<TyId> {
-        (0..self.fir.tys.len() as u32).map(TyId).find(|&t| {
-            self.fir.tys.tag(t) == TyTag::Prim
-                && self.fir.tys.quals(t) == fors_fir::ty::Quals::NONE
-                && self.fir.tys.a(t) == k as u32
+        (0..self.tys.len() as u32).map(TyId).find(|&t| {
+            self.tys.tag(t) == TyTag::Prim
+                && self.tys.quals(t) == fors_fir::ty::Quals::NONE
+                && self.tys.a(t) == k as u32
         })
     }
 
@@ -1301,8 +1788,10 @@ impl<'a> FnLower<'a> {
         let Some(&binding) = kids.first() else {
             return Ok(());
         };
+        // F-mono: a `let`/`var` DESTRUCTURING is a one-arm, irrefutable match
+        // (R31/R52), and the checker published its tree exactly like an arm's.
         if self.kind(binding) != NodeKind::Binding {
-            return Err(LowerError::Unsupported("tuple binding".into()));
+            return self.lower_let_destructure(node, binding);
         }
         let sym = self
             .leaf_token(binding)
@@ -1359,6 +1848,45 @@ impl<'a> FnLower<'a> {
             let v = self.lower_expr(e)?;
             self.write_place(root, &[], bind_ty, v);
         }
+        Ok(())
+    }
+
+    /// `let (a, b) = p;` and the other destructuring binding forms: ONE arm
+    /// of [`FnLower::lower_pat`]'s machinery, with no scrutinee to switch on
+    /// because R31/R52 make a `let` pattern irrefutable. The `fail` edge is
+    /// still built and is `unreachable`: an irrefutable pattern emits no test
+    /// at all, so reaching it would be a compiler bug and is reported as one
+    /// rather than silently falling through.
+    fn lower_let_destructure(&mut self, node: usize, binding: usize) -> Result<(), LowerError> {
+        let arm = self
+            .facts
+            .patterns
+            .arms_of(node as u32)
+            .find(|a| a.pat == binding as u32)
+            .copied()
+            .ok_or_else(|| {
+                LowerError::Unresolved(
+                    "a destructuring `let` whose pattern the checker published no tree for".into(),
+                )
+            })?;
+        let init = self
+            .kids(node)
+            .into_iter()
+            .skip(1)
+            .find(|&c| is_expr(self.kind(c)))
+            .ok_or_else(|| {
+                LowerError::Unsupported("a destructuring `let` with no initialiser".into())
+            })?;
+        let scrut_place = self.scrutinee_place(init);
+        let v = self.lower_expr(init)?;
+        let dead = self.reserve_block();
+        let mut binds = Vec::new();
+        self.lower_pat(arm.root, v, dead, &mut binds)?;
+        self.bind_pattern(&binds, scrut_place);
+        // `dead` is left unsealed on purpose: `finish` gives an unsealed block
+        // `unreachable`, and sealing it HERE would hand it the instructions
+        // just emitted into the live block (seal order is emission order).
+        let _ = dead;
         Ok(())
     }
 
@@ -1506,7 +2034,7 @@ impl<'a> FnLower<'a> {
                 (root, t, Vec::new())
             }
             [base, _field] => {
-                let (root, _) = self.resolve_name(*base)?;
+                let (root, outer_ty) = self.resolve_name(*base)?;
                 let MemberTarget::Field { head, index } = self.facts.member_of(*base_node as u32)
                 else {
                     return Err(LowerError::Unresolved("index assignment base".into()));
@@ -1515,7 +2043,7 @@ impl<'a> FnLower<'a> {
                 // type (`self.data` here is `NO_TY`; only the whole
                 // `Bracket` is typed), so the field's type is read from the
                 // declaration, never from `facts`.
-                let field_ty = self.field_ty(head, index)?;
+                let field_ty = self.field_ty(outer_ty, head, index)?;
                 (root, field_ty, vec![Seg::Field(index as u16)])
             }
             _ => return Err(LowerError::Unsupported("long projection".into())),
@@ -1536,9 +2064,15 @@ impl<'a> FnLower<'a> {
     /// FIR member table — the same row `fors-check::member` resolved the
     /// [`MemberTarget::Field`] fact from. Used where the CST node naming
     /// the field has no checker type of its own (an assignment target's
-    /// path). A field whose type still mentions a parameter belongs to a
-    /// generic struct, which is I5's instantiation, not F1's.
-    fn field_ty(&self, head: DefId, index: u32) -> Result<TyId, LowerError> {
+    /// path).
+    ///
+    /// F-mono: a field of a GENERIC struct has a declared type mentioning the
+    /// struct's own parameters (`Buffer[T, N]`'s `data: Array[T, N]`), and
+    /// `outer` — the value's own instantiated type — carries the arguments
+    /// that close it. The binding is the struct's parameters against `outer`'s
+    /// argument list, which R51 is the same reading a pattern's component type
+    /// gets.
+    fn field_ty(&mut self, outer: TyId, head: DefId, index: u32) -> Result<TyId, LowerError> {
         let ms = self.fir.sigs.members(head);
         if index as usize >= self.fir.sigs.member_store.count(ms) {
             return Err(LowerError::Unresolved(format!(
@@ -1550,10 +2084,52 @@ impl<'a> FnLower<'a> {
         if m.kind != fors_fir::sig::MemberKind::Field {
             return Err(LowerError::Unresolved("field member".into()));
         }
-        if !self.fir.tys.is_monomorphic(m.ty) {
-            return Err(LowerError::Generic("field of a generic struct".into()));
+        if self.tys.is_monomorphic(m.ty) {
+            return Ok(m.ty);
         }
-        Ok(m.ty)
+        let n = self
+            .fir
+            .sigs
+            .generics_store
+            .count(self.fir.sigs.generics(head));
+        let bare = if outer == NO_TY || outer == TY_ERROR {
+            return Err(LowerError::Generic(
+                "a field of a generic struct whose own arguments this site does not \
+                 determine"
+                    .into(),
+            ));
+        } else {
+            self.tys.unqual(outer)
+        };
+        if self.tys.tag(bare) != TyTag::Nominal || DefId(self.tys.a(bare)) != head {
+            return Err(LowerError::Generic(format!(
+                "the value's type does not name def{} as its struct head, so its \
+                 field types cannot be closed",
+                head.0
+            )));
+        }
+        let args = self.tys.args(ArgsId(self.tys.b(bare))).to_vec();
+        if args.len() != n {
+            return Err(LowerError::Generic(format!(
+                "def{} has {n} parameter(s) but the value's type carries {} argument(s)",
+                head.0,
+                args.len()
+            )));
+        }
+        let mut b = Binding::new(&[(head, n as u16)]);
+        for (i, a) in args.iter().enumerate() {
+            if !b.bind(head, i as u16, *a) {
+                return Err(LowerError::Generic("a struct argument disagreed".into()));
+            }
+        }
+        let mut solver = LowerSolver {
+            fir: self.fir,
+            defs: self.defs,
+            depth: 0,
+        };
+        fors_fir::subst::subst_norm_with(self.tys, m.ty, &b, &mut solver).ok_or_else(|| {
+            LowerError::Generic("a field of a generic struct could not be closed".into())
+        })
     }
 
     fn lower_return(&mut self, node: usize) -> Result<(), LowerError> {
@@ -1618,33 +2194,48 @@ impl<'a> FnLower<'a> {
 
     // -- `match` --------------------------------------------------------------
 
-    /// `match <scalar> { <literal> => { .. } ... _ => { .. } }` in statement
-    /// position, lowered to one `switch_discr` over the scrutinee's own bits
-    /// (design §3.10's terminator table).
+    /// `match` in statement position. Two lowerings, and which one applies is
+    /// decided by the CHECKER's published pattern shapes (D5/D6), never by the
+    /// CST:
     ///
-    /// **Scope, and why it stops here.** §4.2's contract is that lowering
-    /// READS the checker's decisions and never remakes them, and I7 made
-    /// every decision a general `match` lowering needs: which constructor a
-    /// `PatPath` names, which component each binding takes, whether an arm
-    /// is reachable. Those decisions live in `fors-check`'s own `PatStore`
-    /// and are DISCARDED when `check_build` returns — `CheckOutput` carries
-    /// `BodyFacts`, which has a per-node type, callee, receiver convention
-    /// and member column and NO pattern column, so there is nothing for
-    /// lowering to read. Deriving them again from the CST here would be the
-    /// one thing §4.2 forbids, and on the ambiguous case it would be a
-    /// guess: a single-segment `PatPath` is a fresh BINDING or a unit
-    /// variant/`const` name depending on resolution, and nothing in the
-    /// grammar tells the two apart.
+    /// 1. every arm a scalar literal or `_` — one `switch_discr` over the
+    ///    scrutinee's own bits (design §3.10's terminator table). This is
+    ///    F1-completion's path, kept because a dense scalar `match` deserves a
+    ///    jump table rather than a chain.
+    /// 2. anything else — [`FnLower::lower_pattern_match`]'s chain of tests in
+    ///    R54's arm order, which covers enums (a `discr` switch on the
+    ///    discriminant `fors-layout` decided, then `payload` extraction),
+    ///    structs (field projection), tuples, nesting, `Str` and negative
+    ///    literals, and bindings with the published copy-or-move convention.
     ///
-    /// So this lowers exactly the subset the GRAMMAR decides on its own — a
-    /// scalar scrutinee with literal and wildcard arms, where `PatLit` is a
-    /// literal and `PatWild` is "everything else" whatever resolution says
-    /// — and every other pattern form is [`LowerError::Match`], naming the
-    /// missing fact. Enum and struct patterns (and `match` in value
-    /// position) land with the `fors-check` increment that records the
-    /// pattern facts in `BodyFacts`; the `switch_discr` machinery they need
-    /// is here and executed.
+    /// R53's exhaustiveness answer is READ (`ScrutineeRow::exhaustive`), never
+    /// recomputed and never worked around: an inexhaustive `match` is the
+    /// checker's error, so lowering asserts the fact and adds no default arm.
     fn lower_match_stmt(&mut self, node: usize) -> Result<(), LowerError> {
+        // Phase 1: is this the scalar-switch shape? Decided from the shapes,
+        // so a one-segment `PatPath` that resolution made a unit VARIANT can
+        // never be read as a literal here.
+        let scalarish = {
+            let sty = self.ty_of(self.kids(node).first().copied().unwrap_or(node));
+            let scalar = self.is_int_ty(sty) || self.prim_of(sty) == Some(PrimKind::Bool);
+            scalar
+                && self.facts.patterns.arms_of(node as u32).all(|a| {
+                    match self.facts.patterns.nodes[a.root as usize].shape {
+                        PatShape::Wild => true,
+                        PatShape::Lit(v) => matches!(v, ConstValue::I(_) | ConstValue::B(_)),
+                        _ => false,
+                    }
+                })
+        };
+        if scalarish {
+            return self.lower_scalar_match_switch(node);
+        }
+        self.lower_pattern_match(node)
+    }
+
+    /// Path (1) of [`FnLower::lower_match_stmt`]: `match <scalar> { <literal>
+    /// => { .. } ... _ => { .. } }` as one `switch_discr`.
+    fn lower_scalar_match_switch(&mut self, node: usize) -> Result<(), LowerError> {
         self.ensure_open();
         let kids = self.kids(node);
         let Some((&scrut, arms)) = kids.split_first() else {
@@ -1766,6 +2357,340 @@ impl<'a> FnLower<'a> {
             }
         }
         Err(LowerError::Match)
+    }
+
+    // -- F-mono: general pattern lowering (D5/D6) -------------------------
+
+    /// One row of [`PatternFacts::nodes`].
+    fn pat_row(&self, idx: u32) -> Result<PatFactRow, LowerError> {
+        self.facts
+            .patterns
+            .nodes
+            .get(idx as usize)
+            .copied()
+            .ok_or(LowerError::Match)
+    }
+
+    /// Reserves a block id WITHOUT making it current, so a test can branch
+    /// forward to a block whose instructions are emitted later. Sealing stays
+    /// in emission order, which is the invariant [`BlockDraft`] documents.
+    fn reserve_block(&mut self) -> BlockId {
+        let save = self.cur;
+        let id = self.new_block();
+        self.cur = save;
+        id
+    }
+
+    /// Ends the current block with `cond_br cond -> <fresh>, fail` and makes
+    /// the fresh block current: one conjunct of a pattern's test, short
+    /// circuiting, which is what keeps a `payload` projection from ever
+    /// running on the wrong variant.
+    fn branch_on(&mut self, cond: ValId, fail: BlockId) {
+        let src = self.cur;
+        let cont = self.new_block();
+        self.cur = src;
+        self.seal(self.term(Op::CondBr, cond.0, cont.0, fail.0));
+        self.cur = cont.0 as usize;
+    }
+
+    /// Path (2) of [`FnLower::lower_match_stmt`]: the arms as a chain of
+    /// tests in R54's source order — the FIRST arm whose pattern matches
+    /// runs, which is exactly what a chain gives and what a jump table could
+    /// not express for a pattern with structure.
+    fn lower_pattern_match(&mut self, node: usize) -> Result<(), LowerError> {
+        self.ensure_open();
+        let kids = self.kids(node);
+        let Some((&scrut, arm_nodes)) = kids.split_first() else {
+            return Err(LowerError::Match);
+        };
+        // R53: READ the checker's answer. No row at all means the checker
+        // could not decide (R55's budget, a scrutinee that failed to type),
+        // and lowering refuses rather than guessing.
+        let row = self
+            .facts
+            .patterns
+            .scrutinee_of(node as u32)
+            .copied()
+            .ok_or(LowerError::Match)?;
+        if !row.exhaustive {
+            // An inexhaustive `match` is the checker's own diagnostic; a body
+            // carrying one never reaches lowering clean, so this is an
+            // assertion on the fact, not a recovery path — and NOT a reason
+            // to invent a default arm.
+            return Err(LowerError::Match);
+        }
+        let arms: Vec<fors_check::facts::PatArmRow> = {
+            let mut v: Vec<_> = self
+                .facts
+                .patterns
+                .arms_of(node as u32)
+                .copied()
+                .collect::<Vec<_>>();
+            v.sort_by_key(|a| a.order);
+            v
+        };
+        if arms.is_empty() || arms.len() != arm_nodes.len() {
+            return Err(LowerError::Match);
+        }
+        // Bodies, read before any block is built: one unsupported shape must
+        // leave no half-built CFG behind.
+        let mut bodies: Vec<usize> = Vec::with_capacity(arms.len());
+        for &arm in arm_nodes {
+            if self.kind(arm) != NodeKind::Arm {
+                return Err(LowerError::Match);
+            }
+            let akids = self.kids(arm);
+            // A guard is a third child: ch09's guard reachability is the
+            // checker's and no fact carries it.
+            let [_pat, body] = akids.as_slice() else {
+                return Err(LowerError::Match);
+            };
+            if self.kind(*body) != NodeKind::Block {
+                return Err(LowerError::Match);
+            }
+            bodies.push(*body);
+        }
+        // The scrutinee, once. A bare local is also a PLACE, which is what a
+        // `sink` binding's move has to be taken out of (R22d(ii)).
+        let scrut_place = self.scrutinee_place(scrut);
+        let scrut_val = self.lower_expr(scrut)?;
+        let join = self.reserve_block();
+        // Arm `i > 0` starts in its own test block; arm 0 starts here.
+        let tests: Vec<BlockId> = (1..arms.len()).map(|_| self.reserve_block()).collect();
+        // Exhaustive (asserted above), so falling off the last arm's test is
+        // a compiler bug, which `unreachable` reports as one.
+        let dead = self.reserve_block();
+        for (i, arm) in arms.iter().enumerate() {
+            if i > 0 {
+                self.cur = tests[i - 1].0 as usize;
+            }
+            let fail = if i + 1 < arms.len() { tests[i] } else { dead };
+            self.scopes.push(HashMap::new());
+            let r = self.lower_arm(arm.root, scrut_val, scrut_place, fail, bodies[i]);
+            self.scopes.pop();
+            r?;
+            if self.is_open() {
+                self.seal(self.term(Op::Br, join.0, NO_OPERAND, NO_OPERAND));
+            }
+        }
+        self.cur = dead.0 as usize;
+        self.seal(self.term(Op::Unreachable, NO_OPERAND, NO_OPERAND, NO_OPERAND));
+        self.cur = join.0 as usize;
+        Ok(())
+    }
+
+    /// One arm: its tests, then its bindings, then its body.
+    fn lower_arm(
+        &mut self,
+        root: u32,
+        scrut_val: ValId,
+        scrut_place: Option<(u32, TyId)>,
+        fail: BlockId,
+        body: usize,
+    ) -> Result<(), LowerError> {
+        let mut binds = Vec::new();
+        self.lower_pat(root, scrut_val, fail, &mut binds)?;
+        self.bind_pattern(&binds, scrut_place);
+        self.lower_block_children(body)
+    }
+
+    /// `(root slot, type)` when the scrutinee expression is a bare local,
+    /// which is the only shape a `sink` binding can move OUT of.
+    fn scrutinee_place(&mut self, scrut: usize) -> Option<(u32, TyId)> {
+        if self.kind(scrut) != NodeKind::NameExpr {
+            return None;
+        }
+        let segs = self.path_segments(scrut);
+        let [sym] = segs.as_slice() else { return None };
+        self.lookup(*sym)
+    }
+
+    /// Materialises an arm's (or a destructuring's) bindings.
+    ///
+    /// ch01 R22d(ii): the copy-or-move answer is the CHECKER's, published as
+    /// each `Bind`'s `conv` — [`Conv::Let`] is a copy, anything else a move.
+    /// A moving destructuring takes the whole scrutinee apart, so when the
+    /// scrutinee is a place the place is moved out of once the components are
+    /// bound: a later read of it is then `ub: use-after-move`, which is
+    /// exactly what R22d(ii) means by "the value is taken apart". When the
+    /// scrutinee is a temporary there is nothing to invalidate and the
+    /// components are simply bound.
+    fn bind_pattern(&mut self, binds: &[PatBind], scrut_place: Option<(u32, TyId)>) {
+        let moved = binds.iter().any(|b| b.conv != Conv::Let);
+        for b in binds {
+            let root = self.bind(b.sym, b.ty);
+            self.write_place(root, &[], b.ty, b.val);
+        }
+        if moved && let Some((root, ty)) = scrut_place {
+            let pid = self.intern_place(root, &[], ty);
+            let inst = self.emit(Op::MoveFrom, pid.0, NO_OPERAND, NO_OPERAND, ty);
+            self.fresh(ty, inst);
+        }
+    }
+
+    /// Emits pattern `idx`'s tests against the value `val`, branching to
+    /// `fail` on any mismatch, and collects the bindings it decides. Every
+    /// decision here is READ from [`PatShape`] — which constructor, which
+    /// component, copy or move — and none is re-derived from the CST.
+    fn lower_pat(
+        &mut self,
+        idx: u32,
+        val: ValId,
+        fail: BlockId,
+        binds: &mut Vec<PatBind>,
+    ) -> Result<(), LowerError> {
+        let row = self.pat_row(idx)?;
+        let faced = self.subst_ty(row.ty, "a pattern's faced type")?;
+        match row.shape {
+            // Absorbing, exactly like `FactCallee::Undecided`: the checker
+            // visited this pattern and decided nothing, so there is nothing
+            // to read and reading it as a wildcard would change the program.
+            PatShape::Undecided => Err(LowerError::Match),
+            PatShape::Wild => Ok(()),
+            PatShape::Bind { conv } => {
+                let sym = self.pat_binding_symbol(row.node as usize)?;
+                binds.push(PatBind {
+                    sym,
+                    ty: faced,
+                    val,
+                    conv,
+                });
+                Ok(())
+            }
+            PatShape::Lit(v) => self.lower_pat_lit(v, val, faced, fail),
+            PatShape::Variant { en, index } => {
+                let count = self.variant_count(en);
+                let want = self.discriminant_of(index, count)?;
+                let ity = self.index_ty()?;
+                let dinst = self.emit(Op::Discr, val.0, NO_OPERAND, NO_OPERAND, ity);
+                let d = self.fresh(ity, dinst);
+                let kinst = self.emit(
+                    Op::ConstInt,
+                    want as u32,
+                    (want >> 32) as u32,
+                    NO_OPERAND,
+                    ity,
+                );
+                let k = self.fresh(ity, kinst);
+                let bty = self.bool_ty();
+                let cinst = self.emit(Op::Icmp(CmpPred::Eq), d.0, k.0, NO_OPERAND, bty);
+                let cond = self.fresh(bty, cinst);
+                self.branch_on(cond, fail);
+                self.lower_pat_children(idx, val, fail, binds, Projection::Payload)
+            }
+            // No test of its own: a struct pattern's constructor is the type,
+            // which the checker already decided. Only its components test.
+            PatShape::Struct { .. } => {
+                self.lower_pat_children(idx, val, fail, binds, Projection::Field)
+            }
+            PatShape::Tuple { .. } => {
+                self.lower_pat_children(idx, val, fail, binds, Projection::Field)
+            }
+        }
+    }
+
+    /// The children of pattern `idx`, each against its own projection of
+    /// `val`. The component index is the child's own `slot` — the checker's
+    /// answer (field index, payload ordinal or tuple position), which is why
+    /// an out-of-field name in a struct pattern is an error here and not a
+    /// silent position.
+    fn lower_pat_children(
+        &mut self,
+        idx: u32,
+        val: ValId,
+        fail: BlockId,
+        binds: &mut Vec<PatBind>,
+        proj: Projection,
+    ) -> Result<(), LowerError> {
+        let kids: Vec<u32> = self.facts.patterns.subs_of(idx).to_vec();
+        for child in kids {
+            let crow = self.pat_row(child)?;
+            if crow.slot == fors_check::facts::NO_PAT_SLOT {
+                return Err(LowerError::Unresolved(
+                    "a pattern component the checker gave no position".into(),
+                ));
+            }
+            let cty = self.subst_ty(crow.ty, "a pattern component's type")?;
+            let op = match proj {
+                Projection::Field => Op::Field,
+                Projection::Payload => Op::Payload,
+            };
+            let inst = self.emit(op, val.0, crow.slot, NO_OPERAND, cty);
+            let cv = self.fresh(cty, inst);
+            self.lower_pat(child, cv, fail, binds)?;
+        }
+        Ok(())
+    }
+
+    /// A literal (or `const`) pattern's test. R53/R54 make an equal constant
+    /// and literal the same constructor, so the comparison is on the decided
+    /// VALUE row, never on the source text.
+    fn lower_pat_lit(
+        &mut self,
+        v: ConstValue,
+        val: ValId,
+        faced: TyId,
+        fail: BlockId,
+    ) -> Result<(), LowerError> {
+        let bty = self.bool_ty();
+        let cond = match v {
+            ConstValue::I(n) => {
+                let bits = narrow_int(n, self.prim_of(faced));
+                let kinst = self.emit(
+                    Op::ConstInt,
+                    bits as u32,
+                    (bits >> 32) as u32,
+                    NO_OPERAND,
+                    faced,
+                );
+                let k = self.fresh(faced, kinst);
+                let cinst = self.emit(Op::Icmp(CmpPred::Eq), val.0, k.0, NO_OPERAND, bty);
+                self.fresh(bty, cinst)
+            }
+            ConstValue::B(b) => {
+                let kinst = self.emit(Op::ConstBool, b as u32, NO_OPERAND, NO_OPERAND, faced);
+                let k = self.fresh(faced, kinst);
+                let cinst = self.emit(Op::Icmp(CmpPred::Eq), val.0, k.0, NO_OPERAND, bty);
+                self.fresh(bty, cinst)
+            }
+            // A `Str` arm compares BYTES: a `Str` slot is a handle, and two
+            // equal strings from different sites are different handles (see
+            // `fors-interp`'s `str_eq`).
+            ConstValue::S(sym) => {
+                let bytes = self.interner.resolve(sym).to_vec();
+                let id = self.strings.len() as u32;
+                self.strings.push((id, bytes));
+                let kinst = self.emit(Op::ConstStr, id, NO_OPERAND, NO_OPERAND, faced);
+                let k = self.fresh(faced, kinst);
+                let name = "str_eq";
+                let s = self.interner.intern(name.as_bytes());
+                if !self.intrinsics.iter().any(|(i, _)| *i == s.0) {
+                    self.intrinsics.push((s.0, name.to_string()));
+                }
+                self.emit_call(
+                    Callee::Intrinsic(s),
+                    vec![val, k],
+                    vec![Conv::Let, Conv::Let],
+                    bty,
+                )
+            }
+        };
+        self.branch_on(cond, fail);
+        Ok(())
+    }
+
+    /// The name a `PatLet`/`Binding` node introduces: its own first `Ident`
+    /// token (`PatLet` owns the `let` keyword too, so `leaf_token` is not
+    /// enough).
+    fn pat_binding_symbol(&mut self, node: usize) -> Result<Symbol, LowerError> {
+        let t = self
+            .own_tokens(node)
+            .into_iter()
+            .find(|&(_, k)| k == TokenKind::Ident)
+            .map(|(t, _)| t)
+            .ok_or_else(|| LowerError::Unresolved("a pattern binding with no name".into()))?;
+        let bytes = self.tokens.text(t, self.source).to_vec();
+        Ok(self.interner.intern(&bytes))
     }
 
     // -- attribute blocks, loops ---------------------------------------------
@@ -2158,10 +3083,24 @@ impl<'a> FnLower<'a> {
             NodeKind::StructLit => self.lower_struct_lit(node, ty),
             NodeKind::TupleOrParen => {
                 let kids = self.kids(node);
-                let &[x] = kids.as_slice() else {
-                    return Err(LowerError::Unsupported("tuple".into()));
-                };
-                self.lower_expr(x)
+                // `(e)` is just `e`; `(a, b)` is a TUPLE, one `tuple_new` over
+                // its components in position order (F-mono: a tuple pattern
+                // projects the same positions back out with `field`).
+                if let &[x] = kids.as_slice()
+                    && !self
+                        .own_tokens(node)
+                        .iter()
+                        .any(|&(_, k)| k == TokenKind::Comma)
+                {
+                    return self.lower_expr(x);
+                }
+                let mut vals = Vec::with_capacity(kids.len());
+                for &c in &kids {
+                    vals.push(self.lower_expr(c)?);
+                }
+                let range = self.decl.insts.push_plain_operands(&vals);
+                let inst = self.emit(Op::TupleNew, range.start, range.end, NO_OPERAND, ty);
+                Ok(self.fresh(ty, inst))
             }
             NodeKind::IfExpr => Err(LowerError::Unsupported("value if".into())),
             NodeKind::MatchExpr => Err(LowerError::Match),
@@ -2185,11 +3124,11 @@ impl<'a> FnLower<'a> {
         if ty == NO_TY || ty == TY_ERROR {
             return None;
         }
-        let bare = self.fir.tys.unqual(ty);
-        if self.fir.tys.tag(bare) != TyTag::Nominal {
+        let bare = self.tys.unqual(ty);
+        if self.tys.tag(bare) != TyTag::Nominal {
             return None;
         }
-        let args = self.fir.tys.args(ArgsId(self.fir.tys.b(bare)));
+        let args = self.tys.args(ArgsId(self.tys.b(bare)));
         args.first().copied()
     }
 
@@ -2201,20 +3140,16 @@ impl<'a> FnLower<'a> {
         if ty == NO_TY || ty == TY_ERROR {
             return None;
         }
-        let bare = self.fir.tys.unqual(ty);
-        if self.fir.tys.tag(bare) != TyTag::Nominal {
+        let bare = self.tys.unqual(ty);
+        if self.tys.tag(bare) != TyTag::Nominal {
             return None;
         }
-        let args = self.fir.tys.args(ArgsId(self.fir.tys.b(bare)));
+        let args = self.tys.args(ArgsId(self.tys.b(bare)));
         let c = *args.get(1)?;
-        if self.fir.tys.tag(c) != TyTag::ConstVal {
+        if self.tys.tag(c) != TyTag::ConstVal {
             return None;
         }
-        let v = self
-            .fir
-            .tys
-            .const_value(ConstId(self.fir.tys.a(c)))
-            .as_int()?;
+        let v = self.fir.tys.const_value(ConstId(self.tys.a(c))).as_int()?;
         u32::try_from(v).ok()
     }
 
@@ -2303,6 +3238,12 @@ impl<'a> FnLower<'a> {
                 .get(at)
                 .and_then(|r| r.name)
                 .ok_or_else(|| LowerError::Unresolved(format!("def{}", at.0)))?;
+            // The receiver's own type decides the impl's parameters: this
+            // fact is recorded on a `Bracket`, which is not a call, so there
+            // is no `generic_args` row to read and the binding is determined
+            // from the receiver (see `container_key`).
+            let recv_ty = self.ty_of(base_node);
+            let key = self.container_key(at, recv_ty)?;
             let recv = self.lower_expr(base_node)?;
             let idx = self.lower_expr(idx_node)?;
             let recv_conv = self.facts.recv_conv_of(node as u32).unwrap_or(Conv::Let);
@@ -2312,6 +3253,7 @@ impl<'a> FnLower<'a> {
                 vec![recv, idx],
                 vec![recv_conv, Conv::Let],
                 ty,
+                key,
             );
         }
         // The base's type and value. A path under a `Bracket` (`self.data`
@@ -2329,7 +3271,9 @@ impl<'a> FnLower<'a> {
             let MemberTarget::Field { head, index } = self.facts.member_of(base_node as u32) else {
                 return Err(LowerError::Unresolved("index base".into()));
             };
-            Some((*base_sym, head, index, self.field_ty(head, index)?))
+            let base_sym = *base_sym;
+            let (_, outer_ty) = self.resolve_name(base_sym)?;
+            Some((base_sym, head, index, self.field_ty(outer_ty, head, index)?))
         } else {
             None
         };
@@ -2678,8 +3622,34 @@ impl<'a> FnLower<'a> {
 
     fn lower_path(&mut self, node: usize, ty: TyId) -> Result<ValId, LowerError> {
         let segs = self.path_segments(node);
+        // A UNIT variant in value position (`E.a`, and R28/R34's bare `.a`
+        // whose enum came from the expected type). The checker types the node
+        // and records no member fact for it — there is nothing ambiguous to
+        // record: the node's own TYPE names the enum, so the variant is the
+        // last segment of the path, found in the declaration's member list
+        // exactly as `struct_field_order` finds a field.
+        if let Some(&last) = segs.last()
+            && let Some(index) = self.variant_index(ty, last)
+        {
+            return self.emit_variant_new(
+                self.enum_head(ty).expect("a variant's enum"),
+                index,
+                Vec::new(),
+                ty,
+            );
+        }
         match segs.as_slice() {
             [base] => {
+                // A CONST generic parameter in value position (`return N;` in
+                // `impl[T, N: usize] Buffer[T, N]`). R13 makes `N` a closed
+                // const argument, and this body's instantiation bound it: the
+                // value is the slot's own `ConstVal` row, read, never guessed.
+                if self.lookup(*base).is_none()
+                    && let Some(v) = self.const_param_value(*base)
+                {
+                    let inst = self.emit(Op::ConstInt, v as u32, (v >> 32) as u32, NO_OPERAND, ty);
+                    return Ok(self.fresh(ty, inst));
+                }
                 let (root, base_ty) = self.resolve_name(*base)?;
                 Ok(self.read_root(root, base_ty, ty))
             }
@@ -3108,25 +4078,9 @@ impl<'a> FnLower<'a> {
                 {
                     return Err(LowerError::Unresolved("call target".into()));
                 }
-                // I5 TYPES a call to a generic function, so the body is
-                // checked-clean and reaches here; monomorphisation (ch03
-                // R16-R18) is still not F1's, and the callee itself was
-                // refused above as "generic function", so there would be
-                // no body to call.
-                if self
-                    .fir
-                    .sigs
-                    .generics_store
-                    .count(self.fir.sigs.generics(def))
-                    > 0
-                {
-                    return Err(LowerError::Generic("call to a generic function".into()));
-                }
-                let key = self
-                    .defs
-                    .get(def)
-                    .map(|r| r.key)
-                    .ok_or_else(|| LowerError::Unresolved(format!("def{}", def.0)))?;
+                // F-mono (ch03 R16-R18): a generic callee becomes the key of
+                // its INSTANCE at this site's determined arguments.
+                let key = self.callee_key(def, node)?;
                 Ok(self.emit_call(Callee::Direct(key), argv, convs, ty))
             }
             FactCallee::Method { def, owner: _ } => {
@@ -3152,7 +4106,23 @@ impl<'a> FnLower<'a> {
                     let mut full_convs =
                         vec![self.facts.recv_conv_of(node as u32).unwrap_or(Conv::Let)];
                     full_convs.extend(convs.iter().copied());
-                    return self.emit_method_call(def, method, full_args, full_convs, ty);
+                    return {
+                        let key = self.callee_key(def, node)?;
+                        self.emit_method_call(def, method, full_args, full_convs, ty, key)
+                    };
+                }
+                // F-mono: an ASSOCIATED function in R45's qualified form
+                // (`Box.make(x)`, `Buffer.empty()`) has no receiver at all —
+                // its signature declares no receiver slot — so every argument
+                // is an ordinary one and there is no receiver convention to
+                // put in front. Told apart from a broken receiver by the
+                // SIGNATURE, not by the argument count.
+                let sig = self.fir.sigs.fn_sig(def);
+                let assoc = sig != fors_fir::NO_FN_SIG
+                    && self.fir.sigs.fn_sigs.receiver(sig) == fors_fir::sig::NO_SLOT;
+                if assoc {
+                    let key = self.callee_key(def, node)?;
+                    return self.emit_method_call(def, method, argv, convs, ty, key);
                 }
                 if argv.is_empty() {
                     return Err(LowerError::Unresolved(display_sym(
@@ -3163,13 +4133,363 @@ impl<'a> FnLower<'a> {
                 let mut full_convs =
                     vec![self.facts.recv_conv_of(node as u32).unwrap_or(Conv::Let)];
                 full_convs.extend(convs.iter().skip(1).copied());
-                self.emit_method_call(def, method, argv, full_convs, ty)
+                let key = self.callee_key(def, node)?;
+                self.emit_method_call(def, method, argv, full_convs, ty, key)
             }
-            FactCallee::Variant { .. } => Err(LowerError::Unsupported("enum construction".into())),
+            FactCallee::Variant { en, index } => self.emit_variant_new(en, index, argv, ty),
             FactCallee::ValueFn => Err(LowerError::Closure),
             FactCallee::Undecided => Err(LowerError::Generic("unresolved call".into())),
             FactCallee::None => Err(LowerError::Unresolved("call".into())),
         }
+    }
+
+    // -- F-mono: instances, variants, discriminants -----------------------
+
+    /// The declaration key a call to `def` at `node` must name: `def`'s own
+    /// when nothing is generic, and otherwise the key of its INSTANCE at this
+    /// site's determined arguments (ch03 R16-R18).
+    ///
+    /// The arguments come from `BodyFacts::generic_args` — R38(a)'s order,
+    /// the container's slots then the callee's own, which is exactly
+    /// [`generic_owners`]'s layout — each put through THIS body's own
+    /// substitution first, because a generic caller's row names the caller's
+    /// parameters (`fn f[T](x: T) { g(x) }` records `g`'s argument as `f`'s
+    /// `T`). [`NO_TY`] in the row is R39's undetermined slot: a named error
+    /// at this call, never a default.
+    fn callee_key(&mut self, def: DefId, node: usize) -> Result<fors_fir::DeclKeyId, LowerError> {
+        let owners = generic_owners(self.fir, self.defs, def);
+        let want: usize = owners.iter().map(|&(_, n)| n as usize).sum();
+        let own_key = || {
+            self.defs
+                .get(def)
+                .map(|r| r.key)
+                .ok_or_else(|| LowerError::Unresolved(format!("def{}", def.0)))
+        };
+        if want == 0 {
+            return own_key();
+        }
+        let args = self.determined_args(def, node, want)?;
+        // A trait item has no body to instantiate: the IMPL's item is what
+        // runs. Resolve it from the concrete `Self` the row determined.
+        if self.defs.get(def).map(|r| r.parent).is_some_and(|p| {
+            p != fors_fir::NO_DEF && self.defs.get(p).map(|r| r.kind) == Some(DeclKind::Trait)
+        }) {
+            return self.trait_instance(def, &args, &owners);
+        }
+        let base = self.def_name(def);
+        Ok(self.mono.request(def, &args, &base))
+    }
+
+    /// The key for a method whose only generic slots are its CONTAINER's, at
+    /// a site that is not a call and therefore has no `generic_args` row:
+    /// F7's `MemberTarget::IndexImpl` on a `Bracket`. The impl's parameters
+    /// are determined from the receiver type, exactly as `select_impl` does
+    /// it for a trait method.
+    fn container_key(
+        &mut self,
+        def: DefId,
+        recv_ty: TyId,
+    ) -> Result<fors_fir::DeclKeyId, LowerError> {
+        let owners = generic_owners(self.fir, self.defs, def);
+        let want: usize = owners.iter().map(|&(_, n)| n as usize).sum();
+        if want == 0 {
+            return self
+                .defs
+                .get(def)
+                .map(|r| r.key)
+                .ok_or_else(|| LowerError::Unresolved(format!("def{}", def.0)));
+        }
+        let [(container, n)] = owners.as_slice() else {
+            return Err(LowerError::Generic(format!(
+                "def{} has generic parameters of its own, which an `Index`/\
+                 `IndexMut` method must not (ch09 R29 names no explicit \
+                 arguments at `a[i]`)",
+                def.0
+            )));
+        };
+        let (container, n) = (*container, *n);
+        let decl_self = self.fir.sigs.self_ty(container);
+        if decl_self == NO_TY || recv_ty == NO_TY || recv_ty == TY_ERROR {
+            return Err(LowerError::Generic(format!(
+                "the receiver type at this `a[i]` does not determine def{}'s \
+                 impl parameters",
+                def.0
+            )));
+        }
+        let mut b = Binding::new(&[(container, n)]);
+        if !fors_fir::subst::one_way_match(self.tys, decl_self, recv_ty, &mut b) || !b.is_complete()
+        {
+            return Err(LowerError::Generic(format!(
+                "def{}'s impl self type does not match the receiver at this `a[i]`",
+                container.0
+            )));
+        }
+        let args = b.slots().to_vec();
+        let base = self.def_name(def);
+        Ok(self.mono.request(def, &args, &base))
+    }
+
+    /// `BodyFacts::generic_args` for `node`, substituted through this body and
+    /// checked against the `want` slots [`generic_owners`] counted.
+    fn determined_args(
+        &mut self,
+        def: DefId,
+        node: usize,
+        want: usize,
+    ) -> Result<Vec<TyId>, LowerError> {
+        let row: Vec<TyId> = self.facts.generic_args_of(node as u32).to_vec();
+        if row.len() != want {
+            return Err(LowerError::Generic(format!(
+                "the call to def{} has {want} generic parameter slot(s) but the \
+                 checker recorded {} determined argument(s)",
+                def.0,
+                row.len()
+            )));
+        }
+        let mut args = Vec::with_capacity(row.len());
+        for (i, &a) in row.iter().enumerate() {
+            if a == NO_TY {
+                return Err(LowerError::Generic(format!(
+                    "generic argument {i} of the call to def{} is undetermined \
+                     (R39): lowering names the call rather than choosing a default",
+                    def.0
+                )));
+            }
+            args.push(self.subst_ty(a, "a determined generic argument")?);
+        }
+        Ok(args)
+    }
+
+    /// A method reached as a TRAIT item (`x.m()` behind `T: Tr`): the trait's
+    /// declaration has no body to run, so lowering selects the impl.
+    ///
+    /// `owners[0]` is the trait, whose slot 0 is `Self` (R38(a)), so the
+    /// concrete receiver type is `args[0]`. The impl is the one whose
+    /// `trait_ref` names this trait and whose `self_ty` one-way matches that
+    /// receiver — the same `Binding` machinery design §7.6's `impl_lookup`
+    /// uses, run here over the declaration table rather than over an impl
+    /// index this crate does not hold. Ambiguity (two matching impls) and
+    /// absence are both named errors, never a guess.
+    fn trait_instance(
+        &mut self,
+        def: DefId,
+        args: &[TyId],
+        owners: &[(DefId, u16)],
+    ) -> Result<fors_fir::DeclKeyId, LowerError> {
+        let &(trait_def, tn) = owners.first().expect("want > 0 implies an owner");
+        let self_ty = *args.first().expect("a trait owner has Self at slot 0");
+        let name = self
+            .defs
+            .get(def)
+            .and_then(|r| r.name)
+            .ok_or_else(|| LowerError::Unresolved(format!("def{}", def.0)))?;
+        // The trait's own arguments are slots `1..tn` of the row (slot 0 is
+        // `Self`): `T: Conv[i64]` determines `U := i64`, and the impl that
+        // runs is the one whose `trait_ref` carries those arguments.
+        let trait_args: Vec<TyId> = args[1..tn as usize].to_vec();
+        let (impl_def, impl_args) = self.select_impl(trait_def, &trait_args, self_ty)?;
+        let item = self.impl_item(impl_def, name).ok_or_else(|| {
+            LowerError::Unresolved(format!(
+                "impl def{} has no item named `{}` to run for this trait method",
+                impl_def.0,
+                display_sym(&*self.interner, name)
+            ))
+        })?;
+        // The instance's own arguments: the IMPL's determined parameters,
+        // then the method's own (the tail of the row after the trait's slots).
+        let mut inst_args = impl_args;
+        inst_args.extend_from_slice(&args[tn as usize..]);
+        if inst_args.is_empty() {
+            // Nothing to instantiate: a parameter-free impl's item lowers as
+            // itself (it is a root body), and its own key is the one every
+            // call must name. Minting a `$`-instance here lowered the body
+            // twice and gave two impls' items one name (verification).
+            return self
+                .defs
+                .get(item)
+                .map(|r| r.key)
+                .ok_or_else(|| LowerError::Unresolved(format!("def{}", item.0)));
+        }
+        let base = self.def_name(item);
+        Ok(self.mono.request(item, &inst_args, &base))
+    }
+
+    /// The impl of `trait_def` at `trait_args` for `self_ty`, with its own
+    /// parameters determined ([`impl_candidates`]). Exactly one must match.
+    fn select_impl(
+        &mut self,
+        trait_def: DefId,
+        trait_args: &[TyId],
+        self_ty: TyId,
+    ) -> Result<(DefId, Vec<TyId>), LowerError> {
+        let mut hits: Vec<(DefId, Vec<TyId>)> = impl_candidates(
+            self.tys, self.fir, self.defs, trait_def, trait_args, self_ty,
+        )
+        .into_iter()
+        .map(|(d, b)| (d, b.slots().to_vec()))
+        .collect();
+        match hits.len() {
+            1 => Ok(hits.remove(0)),
+            0 => Err(LowerError::Generic(format!(
+                "no impl of def{} matches the receiver type this call determined",
+                trait_def.0
+            ))),
+            n => Err(LowerError::Generic(format!(
+                "{n} impls of def{} match the receiver type this call determined; \
+                 R19's overlap answer is the checker's, and lowering will not pick",
+                trait_def.0
+            ))),
+        }
+    }
+
+    /// The `DefId` of the item named `name` directly inside the impl `def`.
+    fn impl_item(&self, def: DefId, name: Symbol) -> Option<DefId> {
+        let ms = self.fir.sigs.members(def);
+        let n = self.fir.sigs.member_store.count(ms);
+        (0..n)
+            .map(|i| self.fir.sigs.member_store.get(ms, i))
+            .find(|m| m.kind == fors_fir::sig::MemberKind::Item && m.name == name)
+            .map(|m| m.def)
+    }
+
+    /// Is `def`'s own body the §5.8 self-recursive stand-in — a body whose
+    /// only call is to `def` itself (`fn buffer_uninit_data() -> Array[T,
+    /// N] { return Buffer.buffer_uninit_data(); }`)? That spelling is the
+    /// primitive's declaration shape; it would recurse forever if it ran,
+    /// which is why lowering replaces the call with the intrinsic. A method
+    /// with a body of its own never matches, whatever its name.
+    fn is_self_recursive_stub(&self, def: DefId) -> bool {
+        let Some((_, facts)) = self.facts_all.iter().find(|(d, _)| *d == def) else {
+            return false;
+        };
+        let (start, end) = facts.range();
+        (start..end).any(|n| {
+            matches!(
+                facts.callee_of(n),
+                FactCallee::Direct(d) | FactCallee::Method { def: d, .. } if d == def
+            )
+        })
+    }
+
+    fn def_name(&self, def: DefId) -> String {
+        self.defs
+            .get(def)
+            .and_then(|r| r.name)
+            .map(|s| String::from_utf8_lossy(self.interner.resolve(s)).into_owned())
+            .unwrap_or_else(|| format!("def{}", def.0))
+    }
+
+    /// The discriminant value `fors-layout`'s rule (owner Q1) gives variant
+    /// `index` of an enum with `count` variants, as the integer a
+    /// `switch_discr` arm compares.
+    ///
+    /// Routed through `fors-layout`'s own `encode_discriminant`/
+    /// `decode_discriminant` rather than written as `index` here, so the arm
+    /// table and the bytes a backend will emit cannot drift apart: changing
+    /// the rule in that crate changes this mapping, and the gate test that
+    /// pins the arm table against it fails if either side moves alone.
+    fn discriminant_of(&self, index: u32, count: usize) -> Result<u64, LowerError> {
+        let bytes = fors_layout::encode_discriminant(index, count).ok_or_else(|| {
+            LowerError::Unsupported(format!(
+                "variant {index} is out of range for an enum with {count} variants"
+            ))
+        })?;
+        let v = fors_layout::decode_discriminant(&bytes, count).ok_or_else(|| {
+            LowerError::Unsupported("the enum discriminant does not round-trip".into())
+        })?;
+        Ok(v as u64)
+    }
+
+    /// The enum `ty` names, when it is a nominal enum.
+    fn enum_head(&self, ty: TyId) -> Option<DefId> {
+        if ty == NO_TY || ty == TY_ERROR {
+            return None;
+        }
+        let bare = self.tys.unqual(ty);
+        if self.tys.tag(bare) != TyTag::Nominal {
+            return None;
+        }
+        let head = DefId(self.tys.a(bare));
+        (self.fir.sigs.kind(head) == fors_fir::sig::SigKind::Enum).then_some(head)
+    }
+
+    /// The variant index `name` has in the enum `ty`, in DECLARATION order
+    /// (which is the order `fors-layout`'s discriminant rule numbers).
+    fn variant_index(&self, ty: TyId, name: Symbol) -> Option<u32> {
+        let en = self.enum_head(ty)?;
+        let ms = self.fir.sigs.members(en);
+        let n = self.fir.sigs.member_store.count(ms);
+        let mut at = 0u32;
+        for i in 0..n {
+            let m = self.fir.sigs.member_store.get(ms, i);
+            if m.kind != fors_fir::sig::MemberKind::Variant {
+                continue;
+            }
+            if m.name == name {
+                return Some(at);
+            }
+            at += 1;
+        }
+        None
+    }
+
+    /// The value of the CONST generic parameter named `sym`, when this body's
+    /// instantiation bound one. `None` for a name that is no generic
+    /// parameter of this body, and for a TYPE parameter (which has no value).
+    fn const_param_value(&self, sym: Symbol) -> Option<u64> {
+        for &(owner, n) in &self.owners {
+            let g = self.fir.sigs.generics(owner);
+            for ordinal in 0..n {
+                if self.fir.sigs.generics_store.param(g, ordinal as usize).name != sym {
+                    continue;
+                }
+                let slot = self.subst.slot(owner, ordinal);
+                if slot == NO_TY {
+                    return None;
+                }
+                if self.tys.tag(slot) != TyTag::ConstVal {
+                    return None;
+                }
+                // A negative const argument keeps its two's-complement bits,
+                // which is what `const_int` carries and `icmp` compares.
+                let v = self.tys.const_value(ConstId(self.tys.a(slot))).as_int()?;
+                return Some(v as u64);
+            }
+        }
+        None
+    }
+
+    /// How many variants the enum `en` declares.
+    fn variant_count(&self, en: DefId) -> usize {
+        let ms = self.fir.sigs.members(en);
+        let n = self.fir.sigs.member_store.count(ms);
+        (0..n)
+            .filter(|&i| {
+                self.fir.sigs.member_store.get(ms, i).kind == fors_fir::sig::MemberKind::Variant
+            })
+            .count()
+    }
+
+    /// `E.v(x, y)` and the unit form `E.v`: one `variant_new` whose first
+    /// operand is the discriminant and whose rest are the payload values in
+    /// declaration order (the representation `fors-interp`'s `variant_new`/
+    /// `discr`/`payload` triple reads back).
+    fn emit_variant_new(
+        &mut self,
+        en: DefId,
+        index: u32,
+        payload: Vec<ValId>,
+        ty: TyId,
+    ) -> Result<ValId, LowerError> {
+        let count = self.variant_count(en);
+        let d = self.discriminant_of(index, count)?;
+        let dinst = self.emit(Op::ConstInt, d as u32, (d >> 32) as u32, NO_OPERAND, ty);
+        let dval = self.fresh(ty, dinst);
+        let mut vals = vec![dval];
+        vals.extend(payload);
+        let range = self.decl.insts.push_plain_operands(&vals);
+        let inst = self.emit(Op::VariantNew, range.start, range.end, NO_OPERAND, ty);
+        Ok(self.fresh(ty, inst))
     }
 
     fn emit_method_call(
@@ -3179,7 +4499,48 @@ impl<'a> FnLower<'a> {
         args: Vec<ValId>,
         convs: Vec<Conv>,
         ty: TyId,
+        key: fors_fir::DeclKeyId,
     ) -> Result<ValId, LowerError> {
+        // F-mono's §5.8 stand-in: `Buffer`'s own `buffer_uninit_data()` is the
+        // uninitialised-aggregate primitive (`std/mem.fors`). It takes no
+        // arguments and its LENGTH comes from the result type — after
+        // instantiation `Array[T, N]` is a concrete `Array[i64, 4]`, so `N` is
+        // the array type's own const argument, read the same way a repeat
+        // literal reads it. Scoped to the stand-in's own SHAPE — a body that
+        // is the self-recursive stub `return X.buffer_uninit_data();` — so a
+        // user method that merely shares the spelling and has a body of its
+        // own keeps that body (verification: `fn buffer_uninit_data() ->
+        // Array[i64, 2] { return [7, 7]; }` was swallowed by the intrinsic
+        // and its caller read `ub: uninit-read`). The owner cannot be the
+        // scope: the gate fixture declares the primitive on its own
+        // `Vault`, because `Buffer` is a prelude name the checker cannot
+        // yet call through (see `gate.rs`'s `VAULT`).
+        if self.interner.resolve(method) == b"buffer_uninit_data"
+            && self.is_self_recursive_stub(def)
+        {
+            if !args.is_empty() {
+                return Err(LowerError::Unsupported(
+                    "`buffer_uninit_data` is the uninitialised-aggregate primitive and \
+                     takes no arguments"
+                        .into(),
+                ));
+            }
+            let n = self.seq_const_len(ty).ok_or_else(|| {
+                LowerError::Comptime(
+                    "`buffer_uninit_data`'s result is not an `Array[T, N]` with a \
+                     comptime-known `N` at this instantiation"
+                        .into(),
+                )
+            })?;
+            let ninst = self.emit(Op::ConstInt, n, 0, NO_OPERAND, ty);
+            let nval = self.fresh(ty, ninst);
+            let name = "agg_uninit";
+            let sym = self.interner.intern(name.as_bytes());
+            if !self.intrinsics.iter().any(|(id, _)| *id == sym.0) {
+                self.intrinsics.push((sym.0, name.to_string()));
+            }
+            return Ok(self.emit_call(Callee::Intrinsic(sym), vec![nval], vec![Conv::Let], ty));
+        }
         // The §5.8 stand-in: any method spelled one of these names is the
         // matching writer, whatever its owner — `write_line` is F1's;
         // `write_uint` is F7's (needed by `str-index-is-bytes-run-ok`,
@@ -3218,11 +4579,8 @@ impl<'a> FnLower<'a> {
             }
             Ok(self.emit_call(Callee::Intrinsic(sym), args, convs, ty))
         } else {
-            let key = self
-                .defs
-                .get(def)
-                .map(|r| r.key)
-                .ok_or_else(|| LowerError::Unresolved(format!("def{}", def.0)))?;
+            // F-mono: `key` is the declaration's own when nothing is generic
+            // and its INSTANCE's otherwise (see `callee_key`).
             Ok(self.emit_call(Callee::Direct(key), args, convs, ty))
         }
     }
@@ -3287,11 +4645,11 @@ impl<'a> FnLower<'a> {
     /// order, read from the `StructDecl` CST. Cross-file heads are a later
     /// increment (every F1 gate test is single-file).
     fn struct_field_order(&mut self, ty: TyId) -> Result<Vec<Symbol>, LowerError> {
-        let bare = self.fir.tys.unqual(ty);
-        if self.fir.tys.tag(bare) != TyTag::Nominal {
+        let bare = self.tys.unqual(ty);
+        if self.tys.tag(bare) != TyTag::Nominal {
             return Err(LowerError::Unsupported("struct literal".into()));
         }
-        let head = DefId(self.fir.tys.a(bare));
+        let head = DefId(self.tys.a(bare));
         let (file, snode) = {
             let row = self
                 .defs
