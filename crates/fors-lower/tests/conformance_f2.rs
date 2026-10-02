@@ -1,5 +1,6 @@
-//! F2 gate tests, driven end to end against the REAL conformance corpus
-//! files (design §9's F2 paragraph; GATE list is the acceptance criterion),
+//! F1, F2, F5 and F7 gate tests, driven end to end against the REAL
+//! conformance corpus files (design §9's per-increment GATE lists are the
+//! acceptance criteria),
 //! through the full pipeline a `fors build`/`fors run` would use: parse ->
 //! resolve -> check -> lower -> verify -> interpret. §7.2a owns what the
 //! runner compares for each of the four runtime expectation kinds; this is
@@ -644,51 +645,70 @@ fn gate_str_slice_non_boundary_raises_run_ok() {
 }
 
 #[test]
-#[ignore = "HELD OUT: `Buffer.empty()` (std/mem.fors) must produce a \
-            Buffer[T, N] for an UNBOUNDED T, which needs an \
-            uninitialised-aggregate construction primitive no Fors \
-            syntax or FMIR op exposes today (no `T::default`, no \
-            `@memset` call surface, no `rawptr` accessor to target one \
-            manually — the same rawptr-read gap `SliceIter.load`/\
-            `Scalars.decode` document). Separately, `fors-lower`'s \
-            general `Bracket` path only lowers a RANGE index \
-            (`lower_slice_range` rejects a bare scalar index with \
-            `LowerError::Unsupported(\"indexing\")`), so `buf[10] = 1` \
-            has no general lowering to read (d)'s new `BodyFacts::\
-            IndexImpl` fact from yet, for ANY receiver, not only a user \
-            nominal one. Both are pre-existing lowering-engine gaps \
-            bigger than F7's named scope; (d) itself is done and \
-            probed (`crates/fors-check/tests/probes.rs::\
-            f7_user_index_records_its_resolved_impl`)."]
+#[ignore = "HELD OUT on MONOMORPHISATION, which this increment did not \
+            land. Both halves of the test are methods of GENERIC impls: \
+            `Buffer.empty()` is `impl[T, N: usize] Buffer[T, N]`'s, and \
+            `buf[10] = 1` goes through `impl[T, N: usize] IndexMut[usize] \
+            for Buffer[T, N]`'s `at_mut`. What the run shows TODAY (verified \
+            by un-ignoring): `main` lowers to `LowerError::CheckErrors` — \
+            the checker leaves BOTH nodes `TY_ERROR` with no diagnostic (a \
+            call to a generic impl's method is typed by I5 only as far as \
+            the call; `fn poke(inout buf: Buffer[i64, 4]) { buf[10] = 1; }` \
+            alone is `CheckErrors` too), so `prescan` refuses the body \
+            before any instantiation question is reached. Behind that: \
+            `fors-lower` instantiates no generic callee, and it has nothing \
+            to instantiate FROM — `BodyFacts`/`FactCallee` record no type \
+            arguments for a call site (facts.rs: `I5 adds the determined \
+            generic arguments` — not yet), and `fors-check` is a parallel \
+            increment's crate. \
+            Two further blockers, both named and both independent: \
+            `Buffer.empty`'s own body is the documented self-recursive \
+            stand-in `return Buffer.empty();`, which needs an \
+            uninitialised-aggregate primitive no Fors SYNTAX exposes (so \
+            it cannot be replaced by a real body, only by another lowering \
+            stand-in); and `IndexMut::at_mut` returns `scoped(self) \
+            Self.Output`, a PLACE, while all four FMIR call opcodes \
+            produce a value — `fors-lower::lower_index_assign` reports \
+            that case by name rather than dropping the store. What DOES \
+            lower now: scalar `a[i]` and `a[i] = v` on an `Array`/`Slice` \
+            (bounds-trapping), `a[i]` through a NON-generic resolved \
+            `Index::at` from (d)'s `MemberTarget::IndexImpl` fact, and \
+            `self.data[0 ..< self.len]` (Buffer.items/items_mut's shape)."]
 fn gate_buffer_index_past_len_trap() {
     gate_test_std("10-std/buffer-index-past-len-trap.fors");
 }
 
 #[test]
-#[ignore = "HELD OUT: needs the `else |e| { ... }` handler (F3's try_br, \
-            not lowered today — see `gate_str_slice_non_boundary_raises_\
-            run_ok`'s note) AND `for`/`while` loops in a std body \
-            (`SliceIter.next` iterates; any `for`/`while` statement \
-            anywhere in a function's subtree is `LowerError::Loop` in \
-            `fors-lower` today, a pre-existing, undocumented-in-F7 gap \
-            bigger than this increment: NONE of F1's own 19-test gate \
-            exercises a loop body either, despite the design doc listing \
-            `plain-for-accumulator-accepted-run-ok`, which has no #[test] \
-            wiring it up)."]
+#[ignore = "HELD OUT on F3. `try_for_each`'s body is `?`/`else |e| \
+            { ... }` over a fallible step, which needs `try_br` and the \
+            handler form — `fors-lower` answers `LowerError::Failure` for \
+            `NodeKind::Handler`/`TryExpr`/`RaiseStmt`, and F3 waits on \
+            I10 (verified by un-ignoring: `main` is `Failure`). The loop \
+            half of this hold-out is GONE: `for`/`while`/`break`/\
+            `continue` lower as of F1-completion. Two further facts the \
+            same run shows, so F3 alone will not turn this green: `step` \
+            (`raise AllocError.out_of_memory` through `std.mem`) lowers to \
+            `CheckErrors`, i.e. the checker leaves a node of it `TY_ERROR` \
+            with no diagnostic (a user enum's `raise E.a` is a clean \
+            `Failure`, so this is the std path's typing); and \
+            `SliceIter.next`'s `Option` pattern match needs the pattern \
+            facts `BodyFacts` does not carry (see \
+            `FnLower::lower_match_stmt`)."]
 fn gate_try_for_each_error_propagates_run_ok() {
     gate_test_std("10-std/try-for-each-error-propagates-run-ok.fors");
 }
 
 #[test]
-#[ignore = "HELD OUT, for three independent reasons named in the task \
-            brief and confirmed empirically: `a.create(1)?`/`v.push(...)\
-            ?` need `?`/try_br (F3, not lowered); `fill[A, L](...)` and \
-            `Vec[Own[i64, A], A]` are generic (fors-lower refuses a call \
-            to, or a body with, an unresolved generic — see `gate_\
-            buffer_index_past_len_trap`'s note on the same monomorphisation \
-            gap); and the allocator obligation machinery is F6's lowering \
-            half, which the task brief explicitly permits holding out \
-            pending I8b."]
+#[ignore = "HELD OUT for three independent reasons, all still true: \
+            `a.create(1)?`/`v.push(...)?` need `?`/`try_br` (F3, waiting \
+            on I10); `fill[A, L](..)` and `Vec[Own[i64, A], A]` need \
+            monomorphisation, which `fors-lower` does not do and has no \
+            recorded type arguments to do it from (see \
+            `gate_buffer_index_past_len_trap`; verified by un-ignoring: \
+            both `fill` and `main` lower to `CheckErrors`, the checker \
+            leaving their generic calls `TY_ERROR` without a diagnostic); \
+            and the allocator obligation machinery is F6's lowering half, \
+            which waits on I8b."]
 fn gate_vec_deinit_empty_nonempty_trap() {
     gate_test_std("10-std/vec-deinit-empty-nonempty-trap.fors");
 }
@@ -1218,4 +1238,120 @@ fn probe_nested_if_in_then_branch_runs_the_inner_then() {
         NESTED_IF_IN_THEN,
         &HostEnv::default(),
     );
+}
+
+// ---- F1's gate (design §9, the "F1" paragraph) ---------------------------
+//
+// The F1 increment's acceptance criterion is a named list of 19 corpus
+// tests. Eighteen of them run here through the same `gate_test` runner F2
+// and F5 use; the nineteenth is held out with its reason on the `#[ignore]`.
+// Until this increment they had no `#[test]` wiring them up at all: only
+// `float-default-no-fma-run-ok` and `02-failure/trap-overflow` existed
+// anywhere, as inline-source probes in `crates/fors-lower/tests/gate.rs`.
+
+#[test]
+fn gate_overflow_trap_add() {
+    gate_test("03-numerics/overflow-trap-add.fors");
+}
+
+#[test]
+fn gate_overflow_trap_sub() {
+    gate_test("03-numerics/overflow-trap-sub.fors");
+}
+
+#[test]
+fn gate_overflow_trap_mul() {
+    gate_test("03-numerics/overflow-trap-mul.fors");
+}
+
+#[test]
+fn gate_div_zero_trap() {
+    gate_test("03-numerics/div-zero-trap.fors");
+}
+
+#[test]
+fn gate_shift_width_trap() {
+    gate_test("03-numerics/shift-width-trap.fors");
+}
+
+#[test]
+fn gate_checked_as_exact_accepted_run_ok() {
+    gate_test("03-numerics/checked-as-exact-accepted-run-ok.fors");
+}
+
+#[test]
+fn gate_checked_as_lossy_trap() {
+    gate_test("03-numerics/checked-as-lossy-trap.fors");
+}
+
+#[test]
+fn gate_wrap_add_no_trap_run_ok() {
+    gate_test("03-numerics/wrap-add-no-trap-run-ok.fors");
+}
+
+#[test]
+fn gate_sat_add_saturates_run_ok() {
+    gate_test("03-numerics/sat-add-saturates-run-ok.fors");
+}
+
+#[test]
+fn gate_wrap_as_truncates_run_ok() {
+    gate_test("03-numerics/wrap-as-truncates-run-ok.fors");
+}
+
+#[test]
+fn gate_sat_as_clamps_run_ok() {
+    gate_test("03-numerics/sat-as-clamps-run-ok.fors");
+}
+
+#[test]
+fn gate_trunc_as_truncates_run_ok() {
+    gate_test("03-numerics/trunc-as-truncates-run-ok.fors");
+}
+
+#[test]
+fn gate_implicit_widen_with_as_accepted() {
+    gate_test("03-numerics/implicit-widen-with-as-accepted.fors");
+}
+
+#[test]
+fn gate_int_fixed_width_i64_accepted_run_ok() {
+    gate_test("03-numerics/int-fixed-width-i64-accepted-run-ok.fors");
+}
+
+#[test]
+#[ignore = "HELD OUT: `const N: comptime_int = 5;` does not RESOLVE in this \
+            build — `fors-resolve` reports N0014 (ch08 R14, unresolved \
+            name) on the type name `comptime_int`, which no crate in the \
+            workspace knows (`grep -r comptime_int crates/` finds only \
+            `fors-lower`'s own `TyTag::ConstVal` message). The failure is \
+            therefore BEFORE check and before lowering, and no lowering \
+            stand-in can reach it: ch03 R9's comptime-integer surface is \
+            I10's, the same increment `fors-check`'s methods.rs names for \
+            ch03 R4/R6, and reading a named `const`'s VALUE additionally \
+            needs F9's comptime evaluator (`fors-lower` answers \
+            `LowerError::Comptime` for a `const` reference by design). \
+            Every other F1 gate test passes."]
+fn gate_comptime_int_explicit_conversion_accepted() {
+    gate_test("03-numerics/comptime-int-explicit-conversion-accepted.fors");
+}
+
+#[test]
+fn gate_float_default_no_fma_run_ok() {
+    gate_test("03-numerics/float-default-no-fma-run-ok.fors");
+}
+
+#[test]
+fn gate_fastmath_scope_ends_run_ok() {
+    gate_test("03-numerics/fastmath-scope-ends-run-ok.fors");
+}
+
+#[test]
+fn gate_plain_for_accumulator_accepted_run_ok() {
+    gate_test("03-numerics/plain-for-accumulator-accepted-run-ok.fors");
+}
+
+#[test]
+fn gate_trap_overflow() {
+    gate_test("02-failure/trap-overflow.fors");
 }

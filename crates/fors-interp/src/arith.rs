@@ -504,8 +504,24 @@ pub fn sat_rem(a: u64, b: u64, k: IntKind) -> Result<u64, TrapKind> {
     }
 }
 
+/// Saturating left shift: the count rule is the same as every shift's
+/// (`count >= width` traps, design §11.1 Q4), and the TRUE result
+/// `a × 2^count` is clamped to the type's bounds (design §5.5: "`sat_*`
+/// clamps to the type's bounds"), so `7i32.sat_shl(31)` is `i32::MAX` and
+/// `128u8.sat_shl(1)` is `255` — never the wrapped low bits. The true
+/// result fits the host width: `|a| < 2^64` and `count < 64`.
 pub fn sat_shl(a: u64, count: u64, k: IntKind) -> Result<u64, TrapKind> {
-    trap_shl(a, count, k)
+    let w = k.width();
+    if count >= w as u64 {
+        return Err(TrapKind::Shift);
+    }
+    if k.signed() {
+        Ok(sat_clamp(k.as_signed(a) << count, k))
+    } else {
+        let (_, hi) = k.bounds();
+        let v = k.as_unsigned(a) << count;
+        Ok(k.narrow(v.min(hi as u128)))
+    }
 }
 
 pub fn sat_shr(a: u64, count: u64, k: IntKind) -> Result<u64, TrapKind> {
@@ -540,6 +556,7 @@ pub fn int_binop(op: &str, mode: ArithMode, a: u64, b: u64, k: IntKind) -> Resul
         ("rem", ArithMode::Trap) => trap_rem(a, b, k),
         ("rem", ArithMode::Wrap) | ("rem", ArithMode::Unchecked) => wrap_rem(a, b, k),
         ("rem", ArithMode::Sat) => sat_rem(a, b, k),
+        ("shl", ArithMode::Sat) => sat_shl(a, b, k),
         ("shl", _) => trap_shl(a, b, k),
         ("shr", _) => trap_shr(a, b, k),
         _ => Err(TrapKind::Overflow),
@@ -838,8 +855,15 @@ pub fn conv_checked(src_bits: u64, from: NumKind, to: NumKind) -> Result<u64, Tr
             let v = fk.from_bits(src_bits);
             match (fk, tk) {
                 (FloatKind::F64, FloatKind::F32) => {
+                    // ch03 Rule 6: `as` traps unless the value is EXACTLY
+                    // representable. Round-tripping through `f32` is that
+                    // test for every finite value (`0.1f64 as f32` loses
+                    // bits and traps; `0.5` does not), and it also catches
+                    // a finite value that overflows to infinity. NaN is
+                    // the one value with no "exact" image: it converts to
+                    // the canonical `f32` NaN rather than trapping.
                     let r = v as f32;
-                    if v.is_finite() && r.is_infinite() {
+                    if !v.is_nan() && f64::from(r) != v {
                         return Err(TrapKind::CheckedConversion);
                     }
                     Ok(canon_f32(r))
@@ -886,8 +910,17 @@ fn float_bits_in_int_range(v: f64, tk: IntKind) -> Option<u64> {
 pub fn conv_wrap(src_bits: u64, from: NumKind, to: NumKind) -> u64 {
     match (from, to) {
         (NumKind::Int(fk), NumKind::Int(tk)) => {
+            // Two's-complement truncation of the source VALUE modulo
+            // `2^w`: a signed source is sign-extended first, so a
+            // negative value widened (`(-1i8).wrap_as[i32]()` is `-1`,
+            // `(-1i32).wrap_as[u64]()` is `2^64 - 1`) keeps its value's
+            // residue, exactly as narrowing keeps the low bits.
             let w = tk.width();
-            let v = fk.as_unsigned(src_bits) & mask128(64);
+            let v: u128 = if fk.signed() {
+                fk.as_signed(src_bits) as u128
+            } else {
+                fk.as_unsigned(src_bits)
+            };
             tk.narrow(v & mask128(w))
         }
         (NumKind::Int(fk), NumKind::Float(tk)) => {
