@@ -235,12 +235,23 @@ const PENDING_04: &[(u16, &str)] = &[
     ),
 ];
 
-/// Ch08 tests this phase does not decide: Rule 11 explicitly says
-/// "because finding the member needs the type, the checker enforces
+/// Ch08 tests no phase decides yet. Empty from increment I4 on (design
+/// §11: "`PENDING_08` empties at I4"): its one entry moved to
+/// [`CHECKER_DECIDED_08`] when `fors-check` started reporting it.
+const PENDING_08: &[&str] = &[];
+
+/// Ch08 tests the CHECKER decides, not this phase: Rule 11 explicitly
+/// says "because finding the member needs the type, the checker enforces
 /// this clause" for cross-module *member* access (as opposed to this
 /// rule's syntactic parts — `pub` on a variant field, `pub` on a
 /// trait-impl method — which this crate does implement and does assert).
-const PENDING_08: &[&str] = &["private_field_cross_module_rejected"];
+/// Here the obligation is therefore SILENCE, and the positive assertion
+/// is `fors-check`'s `private_field_cross_module_rejected`, which this
+/// crate cannot make without depending on the checker.
+const CHECKER_DECIDED_08: &[(&str, &str)] = &[(
+    "private_field_cross_module_rejected",
+    "ch09 R48/R49 report it with ch08 R11's own code, at the member access, once the field's type is known",
+)];
 
 #[test]
 fn ch08_names_corpus() {
@@ -262,6 +273,19 @@ fn ch08_names_corpus() {
             continue;
         }
         let diags = resolve_target(target);
+        if let Some(&(_, why)) = CHECKER_DECIDED_08
+            .iter()
+            .find(|&&(n, _)| n == case.name.as_str())
+        {
+            if !diags.is_empty() {
+                failures.push(format!(
+                    "{}: the checker decides this one ({why}); this phase must stay silent, got {:?}",
+                    case.name,
+                    diags.iter().map(|d| d.code.as_string()).collect::<Vec<_>>()
+                ));
+            }
+            continue;
+        }
         match case.expect.as_str() {
             "check-ok" => {
                 if !diags.is_empty() {

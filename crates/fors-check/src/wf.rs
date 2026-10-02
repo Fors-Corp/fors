@@ -650,7 +650,8 @@ impl<'a> Wf<'a> {
 
     /// A `TraitRef` with the match substitution applied (R17's remainder):
     /// each argument through `subst_norm`; `None` while a slot is unbound.
-    fn subst_trait_ref(&mut self, tref: TraitRefId, b: &Binding) -> Option<TraitRefId> {
+    /// `pub(crate)` for R12's use side in `call.rs`.
+    pub(crate) fn subst_trait_ref(&mut self, tref: TraitRefId, b: &Binding) -> Option<TraitRefId> {
         let (def, args) = self.fir.tys.trait_ref(tref);
         if args == NO_ARGS {
             return Some(tref);

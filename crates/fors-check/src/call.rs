@@ -3,8 +3,10 @@
 //! I3 lands the half of R38 with NOTHING to determine: a call to a
 //! non-generic function, a struct literal of a non-generic struct, a
 //! non-generic variant construction, and a call of a value of `fn` or
-//! closure type. Every other callee is [`Callee::Undecided`]: silent,
-//! absorbing, and left to I4 (methods) and I5 (generic calls).
+//! closure type. I4 adds [`Callee::Method`] (R43-R46) and, for a generic
+//! callee, R12's bounds at the call ([`Wf::check_bounds`]) WITHOUT
+//! typing it. Every other callee is [`Callee::Undecided`]: silent,
+//! absorbing, and left to I5 (generic calls) and I6 (projections).
 
 use fors_fir::sig::{Conv, MemberKind, PayloadKind, SigKind, VIS_PRIVATE};
 use fors_fir::ty::{ArgsId, FnTyId, NO_ARGS, NO_TY, TY_ERROR, TY_UNIT, TyId, TyTag};
@@ -32,6 +34,10 @@ enum Callee {
     Value(FnTyId),
     /// A resolved method (I4, R43-R46).
     Method(MethodHit),
+    /// A generic function: I5 TYPES the call (R38-R39), but its bounds are
+    /// R12's and I4 checks them here ([`Wf::check_bounds`]). Absorbing
+    /// and silent in every other respect, exactly like [`Callee::Undecided`].
+    Generic(DefId),
     Undecided,
 }
 
@@ -98,7 +104,7 @@ impl Wf<'_> {
                     def: hit.def,
                     owner: hit.owner,
                 },
-                Callee::Undecided => FactCallee::Undecided,
+                Callee::Generic(_) | Callee::Undecided => FactCallee::Undecided,
             },
         );
         let (params, result, raises) = match callee {
@@ -143,6 +149,15 @@ impl Wf<'_> {
             }
             Callee::Undecided => {
                 self.undecided_args(cx, &args);
+                self.handler(cx, handler, TY_ERROR, TY_ERROR, false);
+                return TY_ERROR;
+            }
+            Callee::Generic(def) => {
+                // R12's use side (I4). The arguments are synthesised exactly
+                // once — here — and their types are what determines the
+                // callee's parameters for the bound check below.
+                let seen = self.undecided_args_typed(cx, &args);
+                self.check_bounds(cx, def, &seen);
                 self.handler(cx, handler, TY_ERROR, TY_ERROR, false);
                 return TY_ERROR;
             }
@@ -306,15 +321,140 @@ impl Wf<'_> {
     /// (`closure`, `bare_op`, `dot_lit`), which would produce their own
     /// rule's diagnostic for a call the checker simply has not reached.
     fn undecided_args(&mut self, cx: &mut BodyCx, args: &[usize]) {
+        self.undecided_args_typed(cx, args);
+    }
+
+    /// [`Self::undecided_args`] that also reports, per argument, the value
+    /// node and the type synthesis gave it (`None` for the three forms that
+    /// are legal only against an expected type, which stay unvisited).
+    fn undecided_args_typed(
+        &mut self,
+        cx: &mut BodyCx,
+        args: &[usize],
+    ) -> Vec<(usize, Option<TyId>)> {
+        let mut out = Vec::with_capacity(args.len());
         for &a in args {
             let v = self.arg_value(cx, a);
             if matches!(
                 cx.kind(v),
                 NodeKind::Closure | NodeKind::BareOp | NodeKind::DotLit
             ) {
+                out.push((v, None));
                 continue;
             }
-            self.synth(cx, v);
+            let t = self.synth(cx, v);
+            out.push((v, Some(t)));
+        }
+        out
+    }
+
+    /// R12's use side at a call to a generic function (increment I4).
+    ///
+    /// R12 says bounds MUST hold "at every use", and a call is a use. The
+    /// *typing* of such a call is R38-R39's and is I5's, so this check
+    /// neither types the call nor records a callee: it only determines the
+    /// callee's parameters from the argument positions where a DECLARED
+    /// parameter type is a bare generic parameter — the one binding shape
+    /// that needs none of R38's machinery — and then asks [`Wf::holds`].
+    ///
+    /// Everything undetermined, or whose subject this increment does not
+    /// decide, stays silent: a bounded parameter no argument position binds
+    /// (R38 would get it from the expected type — I5), a projection or brand
+    /// subject (I6/I5), a bound whose trait arguments are still open, and an
+    /// argument count R39 would reject. One root cause: the first bound that
+    /// definitely fails is reported and the walk stops.
+    pub fn check_bounds(&mut self, cx: &mut BodyCx, def: DefId, args: &[(usize, Option<TyId>)]) {
+        use crate::wf::Holds;
+        use fors_fir::sig::GParamKind;
+        use fors_fir::subst::Binding;
+
+        if self.container_arity(def) > 0 {
+            return;
+        }
+        let g = self.fir.sigs.generics(def);
+        let n = self.fir.sigs.generics_store.count(g);
+        if n == 0 {
+            return;
+        }
+        // A `const`, brand or callable parameter is R13/R40/R41's to
+        // determine, and any of them makes the whole instantiation I5's.
+        for o in 0..n {
+            if self.fir.sigs.generics_store.param(g, o).kind != GParamKind::Type {
+                return;
+            }
+        }
+        let sig = self.fir.sigs.fn_sig(def);
+        if sig == fors_fir::NO_FN_SIG || self.fir.sigs.fn_sigs.count(sig) != args.len() {
+            return;
+        }
+        self.dep(def);
+        let mut b = Binding::new(&[(def, n as u16)]);
+        // Which argument bound each slot, for the diagnostic's position.
+        let mut witness = vec![usize::MAX; n];
+        for (i, &(node, ty)) in args.iter().enumerate() {
+            let Some(arg) = ty else { continue };
+            if arg == TY_ERROR || arg == NO_TY {
+                return;
+            }
+            let p = self.fir.sigs.fn_sigs.param(sig, i).ty;
+            if self.fir.tys.tag(p) != TyTag::Param || DefId(self.fir.tys.a(p)) != def {
+                continue;
+            }
+            let o = self.fir.tys.b(p) as usize;
+            if o >= n {
+                return;
+            }
+            let arg = self.fir.tys.unqual(arg);
+            if !b.bind(def, o as u16, arg) {
+                // R38's "a binding is never revised": the disagreement is
+                // T0026 at that argument, and reporting it is I5's.
+                return;
+            }
+            if witness[o] == usize::MAX {
+                witness[o] = node;
+            }
+        }
+        for (o, &at) in witness.iter().enumerate() {
+            let bounds = {
+                let p = self.fir.sigs.generics_store.param(g, o);
+                self.fir.sigs.bounds.get(p.bounds).to_vec()
+            };
+            if bounds.is_empty() {
+                continue;
+            }
+            let x = b.slot(def, o as u16);
+            if x == NO_TY || x == TY_ERROR || at == usize::MAX {
+                continue;
+            }
+            // Projection and brand subjects are I6's and I5's.
+            if matches!(self.fir.tys.tag(x), TyTag::Proj | TyTag::Brand)
+                || fors_fir::impls::contains_proj(&self.fir.tys, x)
+            {
+                continue;
+            }
+            for want in bounds {
+                let Some(want) = self.subst_trait_ref(want, &b) else {
+                    continue;
+                };
+                if self.holds(x, want) != Holds::No {
+                    continue;
+                }
+                let subject = self.show(x);
+                let (tdef, _) = self.fir.tys.trait_ref(want);
+                let tr = self.head_name(tdef);
+                let pname = self.sym(self.fir.sigs.generics_store.param(g, o).name);
+                let f = self.head_name(def);
+                self.bemit(
+                    cx,
+                    at,
+                    12,
+                    12,
+                    format!(
+                        "`{subject}` does not implement `{tr}`, which `{f}`'s parameter `{pname}` requires"
+                    ),
+                );
+                return;
+            }
         }
     }
 
@@ -384,8 +524,12 @@ impl Wf<'_> {
                     // R38's "parameters to determine": the container's, then
                     // the callee's own. Zero of both is this increment's.
                     self.dep(def);
-                    if self.arity(def) > 0 || self.container_arity(def) > 0 {
+                    if self.container_arity(def) > 0 {
                         return Callee::Undecided;
+                    }
+                    if self.arity(def) > 0 {
+                        // I5 types it; R12's bounds are still checked (I4).
+                        return Callee::Generic(def);
                     }
                     Callee::Fn(def)
                 }

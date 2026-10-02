@@ -1,9 +1,11 @@
 //! Method-call resolution: ch09 R43-R46, I4's typing side (design §13).
 //!
 //! I4 owns the half that needs no trait search over projections and no
-//! inference: the receiver's head is a concrete nominal type or a rigid
-//! parameter, and every candidate method is non-generic (methods with
-//! parameters to determine stay [`LookupError::Silent`] for I5).
+//! inference: the receiver's head is a concrete nominal type, a PRIMITIVE
+//! (R43 says "`S`'s head", and a primitive carries inherent impls and
+//! prelude-trait impls like any other head) or a rigid parameter, and
+//! every candidate method is non-generic (methods with parameters to
+//! determine stay [`LookupError::Silent`] for I5).
 //!
 //! Tiers (R43): (1) receiver methods in the head's inherent impls whose
 //! self type matches; (2) receiver methods of each candidate trait the
@@ -15,10 +17,11 @@
 //! like required ones (R43: `Iterator`'s adaptors need no blanket impl).
 //!
 //! Silence contract: anything this increment does not own — a projection
-//! or non-nominal receiver, a generic method, a qualified head that is
-//! not a nominal type — answers [`LookupError::Silent`], never a
-//! diagnostic, so pending rows stay quiet until their increment deletes
-//! them.
+//! receiver, a generic method, a qualified head that is not a nominal
+//! type, or a primitive head whose table this build does not have (see
+//! [`Wf::prim_table_incomplete`]) — answers [`LookupError::Silent`],
+//! never a diagnostic, so pending rows stay quiet until their increment
+//! deletes them.
 
 use fors_fir::sig::{Conv, SigKind};
 use fors_fir::subst::{Binding, one_way_match};
@@ -30,6 +33,42 @@ use fors_index::ids::{DefId, ModuleId};
 use crate::body::BodyCx;
 use crate::facts::MemberTarget;
 use crate::wf::{Holds, Wf};
+
+/// ch03's language-known methods of the numeric primitives, declared by no
+/// file: Rule 4's `wrap_`/`sat_`/`unchecked_` counterpart of each of Rule
+/// 2's trapping operators (`+ - * / %`, both shifts, and unary `-`), plus
+/// Rule 6's three lossy conversions. The stand-in for ch03's surface until
+/// I10 declares it ([`Wf::prim_table_incomplete`]); a name outside this
+/// list is an ordinary R43 miss on a primitive.
+const CH03_PRIM_METHODS: &[&[u8]] = &[
+    b"wrap_add",
+    b"wrap_sub",
+    b"wrap_mul",
+    b"wrap_div",
+    b"wrap_rem",
+    b"wrap_shl",
+    b"wrap_shr",
+    b"wrap_neg",
+    b"sat_add",
+    b"sat_sub",
+    b"sat_mul",
+    b"sat_div",
+    b"sat_rem",
+    b"sat_shl",
+    b"sat_shr",
+    b"sat_neg",
+    b"unchecked_add",
+    b"unchecked_sub",
+    b"unchecked_mul",
+    b"unchecked_div",
+    b"unchecked_rem",
+    b"unchecked_shl",
+    b"unchecked_shr",
+    b"unchecked_neg",
+    b"wrap_as",
+    b"sat_as",
+    b"trunc_as",
+];
 
 /// A resolved method call: the method, where it was found, and the
 /// receiver convention R46 reads.
@@ -104,7 +143,13 @@ impl Wf<'_> {
             return cached;
         }
         let ans = match self.fir.tys.tag(bare) {
-            TyTag::Nominal => self.lookup_on_head(cx, node, bare, name, true),
+            // A primitive head carries a method table exactly like a
+            // nominal one (R43 says "`S`'s head", not "`S`'s declaration"):
+            // `impl Str { pub fn len(let self) }` is an inherent impl whose
+            // head key is `HeadKey::Prim(Str)`, and the prelude traits are
+            // tier (2) for it as for any other head. R43's `.count()` on
+            // the `usize` that an inherent `take` re-routed to is this case.
+            TyTag::Nominal | TyTag::Prim => self.lookup_on_head(cx, node, bare, name, true),
             TyTag::Param => self.lookup_on_param(cx, node, bare, name),
             // Projections are I6's; anything else has no method table this
             // increment owns. Silent.
@@ -133,9 +178,10 @@ impl Wf<'_> {
         }
     }
 
-    /// Tier (1)+(2) for a concrete nominal receiver. `method_position`
-    /// is false for R45's qualified form, where associated functions
-    /// answer too and every parameter is an ordinary argument.
+    /// Tier (1)+(2) for a concrete nominal or primitive receiver.
+    /// `method_position` is false for R45's qualified form, where
+    /// associated functions answer too and every parameter is an
+    /// ordinary argument.
     fn lookup_on_head(
         &mut self,
         cx: &mut BodyCx,
@@ -144,8 +190,13 @@ impl Wf<'_> {
         name: Symbol,
         method_position: bool,
     ) -> Result<MethodHit, LookupError> {
-        let head = DefId(self.fir.tys.a(recv));
-        self.dep(head);
+        // A primitive head has no declaration in this build: nothing to
+        // depend on, and no DEFINING module, so R43's module scope for it
+        // is the current module and its direct edges only (ch08 R7).
+        let head = (self.fir.tys.tag(recv) == TyTag::Nominal).then(|| DefId(self.fir.tys.a(recv)));
+        if let Some(h) = head {
+            self.dep(h);
+        }
         let key = self.fir.tys.head_key(recv);
         let mut tier1: Vec<Candidate> = Vec::new();
         for r in self.impls.inherent(key) {
@@ -186,7 +237,7 @@ impl Wf<'_> {
                 &mut saw_generic,
             );
         }
-        let head_mod = self.module_of(head);
+        let head_mod = head.map(|h| self.module_of(h));
         let cur_mod = self.module_of(cx.owner);
         let edges = self.edges_from(cur_mod);
         for r in 0..self.impls.len() {
@@ -198,7 +249,7 @@ impl Wf<'_> {
                 continue;
             }
             let impl_mod = self.module_of(row.def);
-            if impl_mod != head_mod && impl_mod != cur_mod && !edges.contains(&impl_mod) {
+            if Some(impl_mod) != head_mod && impl_mod != cur_mod && !edges.contains(&impl_mod) {
                 continue;
             }
             seen.push(row.trait_def);
@@ -219,7 +270,10 @@ impl Wf<'_> {
             // a projection normalization could reveal: I5/I6 own the
             // call, so no tier answers and there is nothing to report.
             // Otherwise the table is complete and R43 reports.
-            if saw_generic || self.recv_hides_projection(recv) {
+            if saw_generic
+                || self.recv_hides_projection(recv)
+                || self.prim_table_incomplete(recv, name)
+            {
                 return Err(LookupError::Silent);
             }
             return Err(LookupError::None {
@@ -300,6 +354,47 @@ impl Wf<'_> {
             return Err(LookupError::Silent);
         }
         Self::answer(self, name, tier)
+    }
+
+    /// Whether a MISS on a primitive head is an artifact of a surface this
+    /// increment does not model, rather than R43's "no candidate".
+    ///
+    /// A primitive's method table has three contributors, and only one of
+    /// them is in a checker build: the prelude traits and the in-scope
+    /// trait impls (tier (2), consulted above). The other two are not:
+    ///
+    /// - **ch03 Rules 4 and 6's family.** `wrap_<op>`, `sat_<op>` and
+    ///   `unchecked_<op>` for each of Rule 2's trapping operators, and
+    ///   Rule 6's `wrap_as`/`sat_as`/`trunc_as`, are LANGUAGE-known
+    ///   methods of every numeric primitive, declared by no file at all;
+    ///   §13 reaches ch03 at I10. The family is FINITE and listed in
+    ///   [`CH03_PRIM_METHODS`]: exactly those names are an absence this
+    ///   increment cannot prove (`03-numerics/{sat-add-saturates,wrap-add-
+    ///   no-trap}` call them in a build with no `std`); `wrap_foo` is not
+    ///   in the family and reports like any other miss. I10 replaces the
+    ///   table with the real declarations.
+    /// - **`std`'s inherent impls.** Of the 15 primitives only `Str`
+    ///   carries one in `std` (`impl Str`, `std/mem/text.fors`, ch10 Rule
+    ///   26), and a build without `std` sources does not have it
+    ///   (`10-std/str-{index-is-bytes,slice-non-boundary-raises}`). The
+    ///   carve-out is therefore by EVIDENCE, not by receiver: `Str` and
+    ///   `rawptr` (whose accessors no file declares either) are silent
+    ///   only while the build has NO inherent impl for that head; once
+    ///   `impl Str` is in the build the tiers above are the whole table
+    ///   and R43 reports. Every other primitive has no inherent impl
+    ///   anywhere, so for those the tiers always are the whole table.
+    fn prim_table_incomplete(&self, recv: TyId, name: Symbol) -> bool {
+        use fors_fir::ty::PrimKind;
+        if self.fir.tys.tag(recv) != TyTag::Prim {
+            return false;
+        }
+        let kind = PrimKind::from_u8(self.fir.tys.a(recv) as u8);
+        if matches!(kind, Some(PrimKind::Str) | Some(PrimKind::RawPtr) | None) {
+            let key = self.fir.tys.head_key(recv);
+            return self.impls.inherent(key).is_empty();
+        }
+        let n = self.names.resolve(name);
+        CH03_PRIM_METHODS.contains(&n)
     }
 
     /// Whether `recv` mentions a projection anywhere in its arguments: a

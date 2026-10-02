@@ -695,3 +695,127 @@ fn every_body_records_its_dep_set() {
         "only {with_deps} bodies read another declaration's signature"
     );
 }
+
+// ------------------------------------------------- increment I4's gate
+
+/// ch08 Rule 11's own carve-out: "because finding the member needs the
+/// type, the checker enforces this clause". `fors-resolve`'s harness
+/// listed `private_field_cross_module_rejected` in `PENDING_08` until
+/// this increment; design §11 says "`PENDING_08` empties at I4", and
+/// this is where the positive assertion lands, since only this crate has
+/// the checker.
+#[test]
+fn private_field_cross_module_rejected() {
+    let target = repo_root().join("tests/conformance/08-names/private-field-cross-module-rejected");
+    assert!(
+        target.is_dir(),
+        "the ch08 target is a multi-module directory"
+    );
+    let case = parse_directives(&directive_source(&target));
+    assert_eq!(case.name, "private_field_cross_module_rejected");
+    let (checker, resolver) = check_target(&target);
+    assert!(
+        resolver.is_empty(),
+        "the resolver defers this one to the checker, so it must stay clean: {resolver:?}"
+    );
+    // ch09 R49 reports ch08's code, not one of its own (design §10).
+    assert_eq!(checker, vec!["N0011"]);
+}
+
+/// design §11, "member coverage": every name-use node ch08 Rule 22
+/// DEFERRED to the checker ([`DeferReason::Member`]) is decided by it —
+/// given a type, a member target or a callee — inside every body the
+/// checker typed. A body whose declaration produced a diagnostic is
+/// exempt: the per-declaration budget stops the walk at the root cause
+/// (design §10), and the nodes after it are not "undecided", they are
+/// unvisited on purpose.
+#[test]
+fn every_deferred_node_is_decided() {
+    use fors_check::facts::{FactCallee, MemberTarget};
+    use fors_fir::ty::NO_TY;
+    use fors_resolve::target::{DeferReason, ResolvedTarget};
+
+    let dir = repo_root().join("tests/conformance/09-types");
+    let mut deferred = 0usize;
+    let mut decided = 0usize;
+    let mut failures = Vec::new();
+    for target in corpus_targets(&dir) {
+        // One tree per build, so a node index is unambiguous.
+        if target.is_dir() {
+            continue;
+        }
+        let case = parse_directives(&directive_source(&target));
+        let key = case.name.replace('_', "-");
+        let src = fs::read(&target).unwrap();
+        let mut interner = Interner::new();
+        let name = header_name(&src, &mut interner).unwrap_or_else(|| vec![interner.intern(b"m")]);
+        let p = parse_file(&src);
+        let inputs = [FileInput {
+            tree: &p.tree,
+            tokens: &p.tokens,
+            source: &src,
+            name,
+        }];
+        let resolved =
+            fors_resolve::resolve_in_package(&mut interner, &inputs, Some(0), Some(b"m"));
+        let out = fors_check::check_build(&inputs, &resolved, &mut interner);
+        let uses = &resolved.files[0].name_uses;
+        // Rule 22 leaves a member tail to the checker in two shapes: a
+        // whole path that is nothing but the tail (`DeferReason::Member`),
+        // and a multi-segment path whose head resolved and whose
+        // remaining segments did not (`consumed` below the path's segment
+        // count). Both are this assertion's subject.
+        let mut tails: Vec<u32> = Vec::new();
+        for (i, &n) in uses.node.iter().enumerate() {
+            let segs = fors_resolve::paths::own_span(&p.tree, n as usize);
+            let segs = (segs.0 as usize..(segs.1 as usize).min(p.tokens.kinds.len()))
+                .filter(|&t| p.tokens.kinds[t] == fors_lex::TokenKind::Ident)
+                .count();
+            let member = matches!(
+                uses.target[i],
+                ResolvedTarget::Deferred {
+                    reason: DeferReason::Member
+                }
+            );
+            if member || (segs > 0 && (uses.consumed[i] as usize) < segs) {
+                tails.push(n);
+            }
+        }
+        tails.sort_unstable();
+        // The budget is one diagnostic per DECLARATION and the corpus's
+        // `check-error` tests yield exactly one for the whole file, so
+        // "this file spoke" and "this body's declaration spoke" coincide
+        // over this corpus; the coarser test needs no byte arithmetic.
+        let spoke = !out.diagnostics.is_empty();
+        for (_, facts) in &out.facts {
+            let (start, end) = facts.range();
+            for n in start..end.min(p.tree.kinds.len() as u32) {
+                if tails.binary_search(&n).is_err() {
+                    continue;
+                }
+                deferred += 1;
+                if facts.ty_of(n) != NO_TY
+                    || facts.member_of(n) != MemberTarget::None
+                    || !matches!(facts.callee_of(n), FactCallee::Undecided)
+                {
+                    decided += 1;
+                } else if !spoke {
+                    failures.push(format!(
+                        "{key}: node {n} is a deferred member nobody decided"
+                    ));
+                }
+            }
+        }
+    }
+    eprintln!("deferred member nodes: {decided}/{deferred} decided");
+    assert!(
+        deferred > 250,
+        "only {deferred} deferred member nodes over the ch09 corpus: the probe found nothing"
+    );
+    assert!(
+        failures.is_empty(),
+        "undecided deferred nodes ({}):\n{}",
+        failures.len(),
+        failures.join("\n")
+    );
+}

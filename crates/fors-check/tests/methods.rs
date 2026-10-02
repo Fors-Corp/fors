@@ -40,6 +40,50 @@ fn check_source(src: &str) -> Checked {
     Checked { out, kinds }
 }
 
+/// A multi-module build: `(module name, source)` in the order given. The
+/// package root is the first file. Returns `(code, module name)` per
+/// diagnostic, so a test can say WHICH module spoke.
+fn check_modules(files: &[(&str, &str)]) -> Vec<(String, String)> {
+    let mut interner = Interner::new();
+    let sources: Vec<Vec<u8>> = files
+        .iter()
+        .map(|(n, s)| format!("module {n};\nneeds {{ }};\n{s}").into_bytes())
+        .collect();
+    let names: Vec<Segments> = files
+        .iter()
+        .map(|(n, _)| vec![interner.intern(n.as_bytes())])
+        .collect();
+    let parsed: Vec<_> = sources.iter().map(|s| parse_file(s)).collect();
+    for (p, (n, _)) in parsed.iter().zip(files) {
+        assert!(p.diags.is_empty(), "module {n} must parse: {:?}", p.diags);
+    }
+    let inputs: Vec<FileInput> = parsed
+        .iter()
+        .zip(sources.iter())
+        .zip(names.iter())
+        .map(|((p, s), n)| FileInput {
+            tree: &p.tree,
+            tokens: &p.tokens,
+            source: s,
+            name: n.clone(),
+        })
+        .collect();
+    let resolved = fors_resolve::resolve_in_package(&mut interner, &inputs, Some(0), Some(b"pkg"));
+    let out = fors_check::check_build(&inputs, &resolved, &mut interner);
+    out.diagnostics
+        .iter()
+        .map(|d| {
+            (
+                d.code.as_string(),
+                files
+                    .get(d.file.index())
+                    .map(|(n, _)| (*n).to_string())
+                    .unwrap_or_default(),
+            )
+        })
+        .collect()
+}
+
 fn codes(c: &Checked) -> Vec<String> {
     c.out
         .diagnostics
@@ -236,4 +280,42 @@ fn explicit_and_implicit_receiver_moves_match() {
         shape(fm),
         "tapes must match between `x.m()` and `(move x).m()`"
     );
+}
+
+// ------------------------------------------- increment I4's gate (design §11)
+
+/// design §11, "Fidelity's risk 2": R43's candidate traits come from the
+/// MODULE GRAPH (ch08 R7), so the same `(receiver, method name)` resolves
+/// differently in different modules of one build. The lookup memo is
+/// therefore keyed by the requesting module, and this is the assertion
+/// from outside: a three-module build in which `b` lacks the edge `a` has
+/// must report in `b` and only in `b`, checked twice in one process and
+/// with the modules presented in both orders.
+#[test]
+fn method_lookup_memo_is_module_keyed() {
+    const LIB: &str = "pub struct W { pub n: i64 }";
+    const T: &str = "use lib.W;\n\
+         pub trait Tagged { fn tag(let self) -> i64; }\n\
+         impl Tagged for W { fn tag(let self: W) -> i64 { return self.n; } }";
+    // `a` has a direct edge to `t`, so `t`'s impl is a candidate there.
+    const A: &str = "use lib.W;\nuse t.Tagged;\n\
+         pub fn f(let w: W) -> i64 { return w.tag(); }";
+    // `b` does not, so for `b` the table is complete without it: T0043.
+    const B: &str = "use lib.W;\npub fn g(let w: W) -> i64 { return w.tag(); }";
+
+    let forward = [("lib", LIB), ("t", T), ("a", A), ("b", B)];
+    let reverse = [("lib", LIB), ("b", B), ("a", A), ("t", T)];
+    let want = vec![("T0043".to_string(), "b".to_string())];
+    for (label, files) in [("forward", &forward), ("reverse", &reverse)] {
+        // Twice in one process: the second check must not inherit the
+        // first's answer either.
+        for pass in 1..=2 {
+            let got = check_modules(files);
+            assert_eq!(
+                got, want,
+                "{label} order, pass {pass}: the module without the edge must be \
+                 the only one that reports (ch08 R7)"
+            );
+        }
+    }
 }
