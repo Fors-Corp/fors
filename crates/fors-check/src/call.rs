@@ -24,6 +24,7 @@ use fors_fir::ty::{ArgsId, FnTyId, NO_ARGS, NO_TY, TY_ERROR, TY_NEVER, TY_UNIT, 
 use fors_index::Symbol;
 use fors_index::diag::Code;
 use fors_index::ids::DefId;
+use fors_lex::TokenKind;
 use fors_resolve::target::{Entity, ResolvedTarget};
 use fors_syntax::NodeKind;
 
@@ -67,6 +68,13 @@ struct Shape {
     /// row is the whole truth (not a method whose receiver was removed,
     /// and not a signature that failed to lower).
     counted: bool,
+    /// Whether ch01 Rule 2's markers apply to the arguments. They apply
+    /// to a call whose callee DECLARES conventions — a `fn`, a method, a
+    /// value of `fn` type — and not to a variant construction, whose
+    /// payload slots have no written convention at all (ch01 Rule 22d(i)
+    /// lists "a variant payload" beside "a struct-literal field" as a
+    /// discharge of its own, with no marker).
+    marked: bool,
 }
 
 impl Shape {
@@ -164,6 +172,7 @@ impl Wf<'_> {
                         result: TY_ERROR,
                         raises: NO_TY,
                         counted: false,
+                        marked: true,
                     }
                 } else {
                     let n = self.fir.sigs.fn_sigs.count(sig);
@@ -184,6 +193,7 @@ impl Wf<'_> {
                         result: self.fir.sigs.fn_sigs.result(sig),
                         raises: self.fir.sigs.fn_sigs.raises(sig),
                         counted: true,
+                        marked: true,
                     }
                 }
             }
@@ -214,6 +224,7 @@ impl Wf<'_> {
                     result,
                     raises: NO_TY,
                     counted: true,
+                    marked: false,
                 }
             }
             Callee::Value(id) => {
@@ -231,6 +242,7 @@ impl Wf<'_> {
                     result: self.fir.tys.fn_tys().result(id),
                     raises: self.fir.tys.fn_tys().raises(id),
                     counted: true,
+                    marked: true,
                 }
             }
             Callee::Undecided => {
@@ -251,6 +263,7 @@ impl Wf<'_> {
                         result: TY_ERROR,
                         raises: NO_TY,
                         counted: false,
+                        marked: true,
                     }
                 } else {
                     // I4 (D2/D3): the resolution lowering reads, recorded
@@ -298,6 +311,7 @@ impl Wf<'_> {
                         result: self.fir.sigs.fn_sigs.result(sig),
                         raises: self.fir.sigs.fn_sigs.raises(sig),
                         counted: true,
+                        marked: true,
                     }
                 }
             }
@@ -474,7 +488,7 @@ impl Wf<'_> {
             // R41: a closure argument for a `fn`-shaped or callable
             // parameter takes its parameter types from that signature.
             if slots > 0 && cx.kind(value) == NodeKind::Closure {
-                match self.closure_argument(cx, node, value, (i, conv, p), &mut b) {
+                match self.closure_argument(cx, node, value, (i, conv, p), &mut b, shape.marked) {
                     Some(true) => continue,
                     Some(false) => {
                         // The signature needs R20's normalisation (I6).
@@ -490,7 +504,7 @@ impl Wf<'_> {
                 Some(t) => {
                     cx.site(NodeKind::CallExpr, Slot::Argument);
                     self.check(cx, value, t);
-                    self.arg_tape(cx, node, value, conv, t, i);
+                    self.arg_tape(cx, node, value, (i, conv, t), shape.marked);
                 }
                 None => {
                     if first_unbound(&self.fir.tys, p, &b).is_none() {
@@ -554,7 +568,7 @@ impl Wf<'_> {
                     if got == TY_ERROR && t != TY_ERROR {
                         bad = true;
                     } else {
-                        self.arg_tape(cx, node, value, shape.params[i].1, t, i);
+                        self.arg_tape(cx, node, value, (i, shape.params[i].1, t), shape.marked);
                     }
                 }
                 None => match first_unbound(&self.fir.tys, p, &b) {
@@ -688,8 +702,18 @@ impl Wf<'_> {
         false
     }
 
-    /// The tape event an argument's convention produces (design §7.9).
-    fn arg_tape(
+    /// ch01 Rule 2 at a call site (design §8's inherited-obligation row
+    /// "ch01 R2 | convention markers at call sites (`&x`, `move x`,
+    /// `&out x`); receiver exception | `call::conv_marker` (O0002)" — the
+    /// half I5 left behind when it took R39's three T0039 sites).
+    ///
+    /// A non-`let` argument MUST carry its marker and a `let` one MUST
+    /// NOT. The single exception is the RECEIVER of a method call, which
+    /// never reaches here: `recv_use` records it instead (ch09 Rule 46).
+    /// In the qualified form `T.m(move x)` the receiver IS an ordinary
+    /// argument and is checked like any other, which is exactly what
+    /// `qualified-call-sink-receiver-needs-move-rejected` asserts.
+    fn conv_marker(
         &mut self,
         cx: &mut BodyCx,
         call: usize,
@@ -698,6 +722,71 @@ impl Wf<'_> {
         ty: TyId,
         i: usize,
     ) {
+        let arg = match arg_node(cx, call, i) {
+            Some(a) => a,
+            None => value,
+        };
+        let written = marker_of(cx, arg, value);
+        let want = match conv {
+            Conv::Let => None,
+            Conv::Inout => Some(Marker::Inout),
+            Conv::Set => Some(Marker::Set),
+            Conv::Sink => Some(Marker::Move),
+        };
+        if written == want {
+            return;
+        }
+        // R2: "`move` marks a place expression (binding or projection
+        // path); an rvalue argument (literal, call result) to a `sink`
+        // parameter carries no marker." A `Copyable` place is copied and
+        // never moved (ch01 R4a's last sentence, ch09 R23), so there is
+        // no move for `move` to mark either —
+        // `bracket-instantiates-method-accepted` passes `a[1]` of type
+        // `i32` to a `sink x: T`. The carve-out is `sink`'s alone: `&`
+        // and `&out` mark a BORROW, which a `Copyable` type still needs.
+        if conv == Conv::Sink
+            && written.is_none()
+            && (self.copyable(ty) || self.place_of(cx, value).is_none())
+        {
+            return;
+        }
+        let msg = match (want, written) {
+            (Some(w), None) => format!(
+                "the parameter is `{}`, so this argument must be written `{}` (ch01 R2)",
+                conv_word(conv),
+                w.spelled()
+            ),
+            (None, Some(g)) => format!(
+                "the parameter is `let`, so this argument carries no marker; remove the `{}` \
+                 (ch01 R2)",
+                g.text()
+            ),
+            (Some(w), Some(g)) => format!(
+                "the parameter is `{}`, so this argument must be written `{}`, not `{}` \
+                 (ch01 R2)",
+                conv_word(conv),
+                w.spelled(),
+                g.spelled()
+            ),
+            (None, None) => return,
+        };
+        self.bemit_code(cx, arg, Code::O(2), 39, msg);
+    }
+
+    /// The tape event an argument's convention produces (design §7.9),
+    /// plus ch01 Rule 2's marker check at the same point. `slot` is the
+    /// parameter the argument fills: its ordinal, convention and type.
+    fn arg_tape(
+        &mut self,
+        cx: &mut BodyCx,
+        call: usize,
+        value: usize,
+        (i, conv, ty): (usize, Conv, TyId),
+        marked: bool,
+    ) {
+        if marked {
+            self.conv_marker(cx, call, value, conv, ty, i);
+        }
         let Some(p) = self.place_of(cx, value) else {
             return;
         };
@@ -751,6 +840,7 @@ impl Wf<'_> {
         value: usize,
         (i, conv, p): (usize, Conv, TyId),
         b: &mut Binding,
+        marked: bool,
     ) -> Option<bool> {
         let (slot, sig) = self.callable_signature(p, b)?;
         let id = FnTyId(self.fir.tys.a(self.fir.tys.unqual(sig)));
@@ -808,7 +898,7 @@ impl Wf<'_> {
             // binding is the same whichever form the argument took.
             b.bind(owner, ord, ft);
         }
-        self.arg_tape(cx, call, value, conv, ft, i);
+        self.arg_tape(cx, call, value, (i, conv, ft), marked);
         Some(true)
     }
 
@@ -1865,6 +1955,77 @@ impl Wf<'_> {
     pub fn tcode(n: u16) -> Code {
         t(n)
     }
+}
+
+/// The three convention markers ch01 Rule 2 spells out.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+enum Marker {
+    Inout,
+    Set,
+    Move,
+}
+
+impl Marker {
+    fn text(self) -> &'static str {
+        match self {
+            Marker::Inout => "&",
+            Marker::Set => "&out",
+            Marker::Move => "move",
+        }
+    }
+
+    /// The marker on an argument, as ch01 Rule 2 spells it.
+    fn spelled(self) -> &'static str {
+        match self {
+            Marker::Inout => "&x",
+            Marker::Set => "&out x",
+            Marker::Move => "move x",
+        }
+    }
+}
+
+fn conv_word(c: Conv) -> &'static str {
+    match c {
+        Conv::Let => "let",
+        Conv::Inout => "inout",
+        Conv::Sink => "sink",
+        Conv::Set => "set",
+    }
+}
+
+/// The marker a call site wrote on one argument, if any. `&x`/`&out x`
+/// are their own nodes (possibly inside a `NamedArg`); `move x` is a
+/// unary expression and so is the argument's value itself.
+fn marker_of(cx: &BodyCx, arg: usize, value: usize) -> Option<Marker> {
+    let outer = if cx.kind(arg) == NodeKind::NamedArg {
+        cx.f.tree.children(arg).next().unwrap_or(arg)
+    } else {
+        arg
+    };
+    for n in [outer, value] {
+        match cx.kind(n) {
+            NodeKind::InoutArg => return Some(Marker::Inout),
+            NodeKind::SetArg => return Some(Marker::Set),
+            NodeKind::UnaryExpr if crate::body::own_first(cx, n) == Some(TokenKind::KwMove) => {
+                return Some(Marker::Move);
+            }
+            _ => {}
+        }
+    }
+    None
+}
+
+/// The `i`th written argument of a call, as `call_expr_inner` counts them
+/// (the callee is child 0 and a `Handler` is not an argument).
+fn arg_node(cx: &BodyCx, call: usize, i: usize) -> Option<usize> {
+    if cx.kind(call) != NodeKind::CallExpr {
+        return None;
+    }
+    cx.f.tree
+        .children(call)
+        .skip(1)
+        .filter(|&c| cx.f.tree.kinds[c] != NodeKind::Handler)
+        .nth(i)
 }
 
 /// R38's "nothing survives the call": a `Binding` is a stack local of

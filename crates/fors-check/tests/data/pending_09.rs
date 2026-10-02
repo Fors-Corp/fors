@@ -124,29 +124,78 @@
 // GATE names only R50 (4)/R51 (1)/R53 (6)/R54 (3)/R55 (2), none of them
 // the three `linear-match-*` files), so `pat.rs` does not inspect
 // linearity at all and these three still fail for I8's reason, unchanged.
-const PENDING_09_MAX: usize = 23;
+// I8 (the flow pass) deleted the NINE rows that are the design §13 I8
+// GATE's "9 ch01-coded ch09 tests" — and they are exactly the nine
+// pending files that pre-date round 6, which is the same GATE's other
+// half ("`PENDING_09` empty over the **186** pre-round-6 ch09 tests").
+// `git log --diff-filter=A` dates every pending row: these nine arrived
+// with 9dcfbb4 ("Round-4 ... 186 chapter-09 tests") and the other
+// fourteen with ede5dad ("Round 6 ... 191 new corpus tests").
+//
+//   brand-param-as-value-type-rejected                (ch01 R15d, O0015)
+//   copy-without-copyable-rejected                    (ch01 R3,   O0003)
+//   implicit-receiver-move-in-closure-rejected        (ch01 R4a(e))
+//   implicit-receiver-move-in-loop-rejected           (ch01 R4a(b))
+//   implicit-receiver-move-of-field-rejected          (ch01 R4a(c))
+//   implicit-receiver-move-of-inout-param-rejected    (ch01 R4a(d))
+//   implicit-receiver-move-of-let-param-rejected      (ch01 R3)
+//   implicit-receiver-move-then-use-rejected          (ch01 R4a(a))
+//   qualified-call-sink-receiver-needs-move-rejected  (ch01 R2,   O0002)
+//
+// It RETAGGED the five rows that still carried `I8` although they are
+// round-6 files, which §13's I8 paragraph assigns elsewhere in so many
+// words ("Round 6 added 58 more files to `09-types` (244 now) ...; they
+// stay `Pending(I8b)` here"). The reasons, once, here:
+//
+// - `adaptor-on-field-receiver-rejected`,
+//   `adaptor-on-inout-receiver-rejected` I8 -> I8b. Both arrived in
+//   ede5dad, and both need `Iterator`'s PROVIDED `take`, which exists
+//   only in `std/mem/seq.fors`: in the ch09 harness, where each file is
+//   checked alone, `Iterator` is the prelude row declaring `next` and
+//   nothing else, so `it.take(2)` does not resolve and there is no
+//   receiver move for the flow pass to judge. This is the argument I4b
+//   already applied to `adaptor-name-clash-two-traits-rejected`.
+// - `linear-match-literal-component-rejected`,
+//   `linear-match-omitted-field-rejected`,
+//   `linear-match-underscore-rejected` I8 -> I8b. All three arrived in
+//   ede5dad and all three cite ch01 R22d(ii), which §8's "ch01
+//   R22d-R22g" row assigns to I8b (`flow::linear` over I8's tape plus
+//   `pat::binds_every_linear` for (ii)). §16 amendment 10 states I8's
+//   scope as "R3/R4a/R8/R46 only", so linearity was never this
+//   increment's; I7's note that they "stay `I8`" read the tag rather
+//   than §8's row.
+//
+// After I8 every remaining row is tagged `I8b`.
+const PENDING_09_MAX: usize = 14;
 const PENDING_09: &[(&str, &str)] = &[
     ("adaptor-annotated-binding-mismatch-rejected", "I8b"),
     ("adaptor-map-closure-returns-linear-rejected", "I8b"),
     ("adaptor-name-clash-two-traits-rejected", "I8b"),
-    ("adaptor-on-field-receiver-rejected", "I8"),
-    ("adaptor-on-inout-receiver-rejected", "I8"),
-    ("brand-param-as-value-type-rejected", "I8"),
+    ("adaptor-on-field-receiver-rejected", "I8b"),
+    ("adaptor-on-inout-receiver-rejected", "I8b"),
     ("callable-bound-cannot-bind-result-rejected", "I8b"),
-    ("copy-without-copyable-rejected", "I8"),
-    ("implicit-receiver-move-in-closure-rejected", "I8"),
-    ("implicit-receiver-move-in-loop-rejected", "I8"),
-    ("implicit-receiver-move-of-field-rejected", "I8"),
-    ("implicit-receiver-move-of-inout-param-rejected", "I8"),
-    ("implicit-receiver-move-of-let-param-rejected", "I8"),
-    ("implicit-receiver-move-then-use-rejected", "I8"),
     ("linear-bound-adds-no-operation-rejected", "I8b"),
-    ("linear-match-literal-component-rejected", "I8"),
-    ("linear-match-omitted-field-rejected", "I8"),
-    ("linear-match-underscore-rejected", "I8"),
+    ("linear-match-literal-component-rejected", "I8b"),
+    ("linear-match-omitted-field-rejected", "I8b"),
+    ("linear-match-underscore-rejected", "I8b"),
     ("neutral-projection-drop-without-bound-rejected", "I8b"),
-    ("qualified-call-sink-receiver-needs-move-rejected", "I8"),
     ("rigid-discard-without-droppable-rejected", "I8b"),
     ("rigid-drop-without-droppable-rejected", "I8b"),
     ("rigid-expression-statement-without-droppable-rejected", "I8b"),
 ];
+
+/// A pending test on which the checker nonetheless SPEAKS, because a
+/// declaration OTHER than the one the test is about violates a rule this
+/// increment did reach. The default for a pending row is silence — an
+/// increment that has not reached a rule must not guess at it — and this
+/// list is the explicit, asserted-live exception: the diagnostic must be
+/// real and must NOT be the code the test expects, so a row cannot be
+/// parked here to hide a wrong answer about its own rule.
+const PENDING_SPEAKS: &[(&str, &str)] = &[(
+    "rigid-expression-statement-without-droppable-rejected",
+    "its helper `fn make[T](let t: T) -> T { return t; }` moves a non-`Copyable` rigid value out of a \
+     `let` parameter, which is ch01 R3 — the very violation the sibling test \
+     `copy-without-copyable-rejected` asserts, in a file whose own subject (an expression statement \
+     dropping a rigid value, T0057) is I8b's. The O0003 is correct and is charged to `make`, not to \
+     `f`; the file's own T0057 is still unreported, which is what this list asserts.",
+)];

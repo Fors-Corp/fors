@@ -246,10 +246,31 @@ fn ch09_types_corpus_checker_view() {
         if PENDING_09.iter().any(|&(n, _)| n == key) {
             pending += 1;
             // A pending test must still be SILENT: an increment that has not
-            // reached a rule must not guess at it.
+            // reached a rule must not guess at it. The one exception is a
+            // file whose OTHER declarations break a rule the checker has
+            // reached, listed with its reason in `PENDING_SPEAKS`; there the
+            // obligation is that the test's OWN code is still unreported.
             let (got, _) = check_target(target);
-            if !got.is_empty() {
-                failures.push(format!("{key}: PENDING, but the checker spoke: {got:?}"));
+            let want = expected_code(&case.detail).map(|(c, n)| format!("{c}{n:04}"));
+            match PENDING_SPEAKS.iter().find(|&&(n, _)| n == key) {
+                Some(_) => {
+                    if got.is_empty() {
+                        failures.push(format!(
+                            "{key}: listed in PENDING_SPEAKS, but the checker is silent on it now"
+                        ));
+                    } else if let Some(w) = want
+                        && got.contains(&w)
+                    {
+                        failures.push(format!(
+                            "{key}: PENDING, but the checker already reports its own code {w}: {got:?}"
+                        ));
+                    }
+                }
+                None => {
+                    if !got.is_empty() {
+                        failures.push(format!("{key}: PENDING, but the checker spoke: {got:?}"));
+                    }
+                }
             }
             continue;
         }
@@ -438,13 +459,15 @@ const CROSS_CHAPTER: &[(&str, &str)] = &[
     ),
 ];
 
-/// A `std` declaration ch09 rejects: each entry is a declaration whose
-/// single diagnostic is a forward reference to a method `std` has not
-/// written yet (a `// STUB` at the call site). The three known R48
-/// conflicts (`Block.align`, `Addr.v6`, `Addr.port`) were fixed by
-/// renaming, so every entry below is an undeclared-method stub, not a
-/// rule dispute. An entry whose call resolves must be deleted here, not
-/// left to excuse a regression (the count assertion below enforces it).
+/// A `std` declaration ch09 rejects: each entry is a declaration `std`
+/// itself marks `// STUB` — three forward references to a method `std`
+/// has not written yet, and (since I8 reads the use tape) one partial
+/// move `std` annotates with the very clause that rejects it. The three
+/// known R48 conflicts (`Block.align`, `Addr.v6`, `Addr.port`) were fixed
+/// by renaming, so no entry below is a rule dispute. An entry whose call
+/// resolves, or whose move stops being a partial one, must be deleted
+/// here, not left to excuse a regression (the count assertion below
+/// enforces it).
 const STD_CONFLICTS: &[(&str, &str)] = &[
     (
         "BufferIter::next",
@@ -457,6 +480,10 @@ const STD_CONFLICTS: &[(&str, &str)] = &[
     (
         "Scalars::next",
         "std/mem/text.fors: `self.decode()` is a // STUB: no trait or impl declares `decode`, so ch09 R43 reports T0043 until the helper exists",
+    ),
+    (
+        "Buffer::into_iter",
+        "std/mem.fors: `data: move self.data` is a // STUB the source itself annotates `a partial move, ch01 R4a(c)`; I8's flow pass now reads the tape and reports O0004 until `std` writes the destructuring form",
     ),
 ];
 
@@ -916,4 +943,242 @@ fn every_deferred_node_is_decided() {
         failures.len(),
         failures.join("\n")
     );
+}
+
+// ------------------------------------------------- increment I8's gate
+
+/// The nine ch01-coded ch09 tests design §11 names ("The 9 ch01-coded
+/// tests assert `Code::O(rule)` plus the clause letter in the message"),
+/// with the code each one must carry. They are exactly the nine files
+/// that were pending before I8 and pre-date round 6 — the other half of
+/// §13's I8 GATE, "`PENDING_09` empty over the **186** pre-round-6 ch09
+/// tests".
+const CH01_CODED_09: &[(&str, &str)] = &[
+    ("brand-param-as-value-type-rejected", "O0015"),
+    ("copy-without-copyable-rejected", "O0003"),
+    ("implicit-receiver-move-in-closure-rejected", "O0004"),
+    ("implicit-receiver-move-in-loop-rejected", "O0004"),
+    ("implicit-receiver-move-of-field-rejected", "O0004"),
+    ("implicit-receiver-move-of-inout-param-rejected", "O0004"),
+    ("implicit-receiver-move-of-let-param-rejected", "O0003"),
+    ("implicit-receiver-move-then-use-rejected", "O0004"),
+    ("qualified-call-sink-receiver-needs-move-rejected", "O0002"),
+];
+
+/// One corpus target's diagnostics as `(code, message)`.
+fn check_target_messages(path: &Path) -> Vec<(String, String)> {
+    let (_, _, out) = check_target_full(path);
+    out.diagnostics
+        .iter()
+        .map(|d| (d.code.as_string(), d.message.clone()))
+        .collect()
+}
+
+fn target_named(dir: &str, name: &str) -> PathBuf {
+    let d = repo_root().join("tests/conformance").join(dir);
+    corpus_targets(&d)
+        .into_iter()
+        .find(|t| {
+            parse_directives(&directive_source(t))
+                .name
+                .replace('_', "-")
+                == name
+        })
+        .unwrap_or_else(|| panic!("{dir} has no test named {name}"))
+}
+
+/// The clause a ch01-coded test's own `detail` line cites, as the first
+/// word pair of that line (`ch01 R4a(c)`, `ch01 R3`, `ch01 R15d`).
+fn cited_clause(detail: &str) -> String {
+    detail
+        .split("--")
+        .next()
+        .unwrap_or(detail)
+        .trim()
+        .trim_end_matches(',')
+        .to_string()
+}
+
+#[test]
+fn ch01_coded_tests_assert_their_code_and_clause() {
+    let mut failures = Vec::new();
+    for &(name, code) in CH01_CODED_09 {
+        assert!(
+            !PENDING_09.iter().any(|&(n, _)| n == name),
+            "{name} is one of the nine ch01-coded tests and must not be pending"
+        );
+        let target = target_named("09-types", name);
+        let clause = cited_clause(&parse_directives(&directive_source(&target)).detail);
+        assert!(
+            clause.starts_with("ch01 R"),
+            "{name}: its detail line must cite a ch01 clause, found {clause:?}"
+        );
+        let got = check_target_messages(&target);
+        if got.len() != 1 {
+            failures.push(format!(
+                "{name}: expected exactly one diagnostic, got {got:?}"
+            ));
+            continue;
+        }
+        if got[0].0 != code {
+            failures.push(format!("{name}: expected {code}, got {}", got[0].0));
+        }
+        if !got[0].1.contains(&clause) {
+            failures.push(format!(
+                "{name}: the message must cite {clause:?}; got {:?}",
+                got[0].1
+            ));
+        }
+    }
+    assert!(
+        failures.is_empty(),
+        "ch01-coded ch09 tests ({}):\n{}",
+        failures.len(),
+        failures.join("\n")
+    );
+}
+
+/// The two `check-ok` halves §13's I8 GATE names beside the nine: an
+/// implicit receiver move on a `sink` local is accepted, and a `Copyable`
+/// receiver is COPIED, so it stays usable for a second call.
+#[test]
+fn implicit_receiver_moves_that_are_legal_are_accepted() {
+    for name in [
+        "implicit-receiver-move-accepted",
+        "sink-receiver-copyable-not-moved-accepted",
+    ] {
+        let got = check_target_messages(&target_named("09-types", name));
+        assert!(got.is_empty(), "{name} must be accepted, got {got:?}");
+    }
+}
+
+/// ch09 Rule 46's NORMATIVE diagnostic requirement, asserted as the
+/// rendered string (design §11: "the R46 test asserts the rendered
+/// string"). The two positions are read out of the corpus file itself, so
+/// the assertion pins the SHAPE of the sentence and the facts it names
+/// without pinning the file's line numbering.
+#[test]
+fn r46_message_names_the_consuming_call_and_the_sink_self_declaration() {
+    let target = target_named("09-types", "implicit-receiver-move-then-use-rejected");
+    let src = fs::read_to_string(&target).unwrap();
+    // The `//!` directive block quotes the program, so the search starts
+    // at the first declaration rather than at byte 0.
+    let code = src
+        .find("module m;")
+        .expect("the corpus file names its module");
+    let at = |needle: &str| {
+        let byte = code
+            + src[code..]
+                .find(needle)
+                .expect("the corpus file still writes this");
+        let (l, c) = fors_diag::line_col(src.as_bytes(), byte as u32);
+        format!("{l}:{c}")
+    };
+    let decl_at = at("fn finish(");
+    // The consuming call is the one in `f`, after the `impl` block.
+    let body = code + src[code..].find("fn f(").expect("the test still has `f`");
+    let call_byte = body + src[body..].find("b.finish()").expect("`f` calls it");
+    let (cl, cc) = fors_diag::line_col(src.as_bytes(), call_byte as u32);
+    let call_at = format!("{cl}:{cc}");
+    let want = format!(
+        "`b` was moved by the call `b.finish()` at {call_at}, because `Builder.finish` takes \
+         `sink self` (declared at {decl_at})"
+    );
+    let got = check_target_messages(&target);
+    assert_eq!(got.len(), 1, "one diagnostic, got {got:?}");
+    assert_eq!(got[0].0, "O0004", "the code stays ch01's (ch09 R46)");
+    assert!(
+        got[0].1.ends_with(&want),
+        "R46's mandatory sentence must close the message.\nwant suffix: {want}\ngot:         {}",
+        got[0].1
+    );
+}
+
+/// ch01's own marker corpus, which §13's I8 GATE names ("From ch01: the 6
+/// `01.R2` marker tests and the two `01.R1` tests"). The three `01.R2`
+/// `check-error` files are the checker's — `call::conv_marker`, O0002 —
+/// and the three accepted ones must stay silent. The two `01.R1` files
+/// are the PARSER's: a parameter with no convention keyword does not
+/// parse as a parameter at all, which is why Rule 1 has no checker code.
+#[test]
+fn ch01_convention_and_marker_tests() {
+    let mut failures = Vec::new();
+    for (name, expect) in [
+        ("conv-missing-inout-marker-rejected", Some("O0002")),
+        ("conv-missing-move-rejected", Some("O0002")),
+        ("conv-missing-set-marker-rejected", Some("O0002")),
+        ("conv-inout-marker-present-accepted", None),
+        ("conv-move-present-accepted", None),
+        ("conv-set-marker-present-accepted", None),
+    ] {
+        let target = target_named("01-ownership", name);
+        let case = parse_directives(&directive_source(&target));
+        assert_eq!(case.rule, 2, "{name} must cite 01.R2");
+        let got = check_target_messages(&target);
+        match expect {
+            Some(code) => {
+                if got.len() != 1 || got[0].0 != code {
+                    failures.push(format!("{name}: expected one {code}, got {got:?}"));
+                } else if !got[0].1.contains("ch01 R2") {
+                    failures.push(format!("{name}: the message must cite ch01 R2: {got:?}"));
+                }
+            }
+            None => {
+                if !got.is_empty() {
+                    failures.push(format!("{name}: expected silence, got {got:?}"));
+                }
+            }
+        }
+    }
+    // 01.R1 is a grammar fact, so these two are asserted at the parser.
+    for (name, parses) in [
+        ("conv-convention-present-accepted", true),
+        ("conv-missing-convention-rejected", false),
+    ] {
+        let target = target_named("01-ownership", name);
+        let case = parse_directives(&directive_source(&target));
+        assert_eq!(case.rule, 1, "{name} must cite 01.R1");
+        let src = fs::read(&target).unwrap();
+        let p = parse_file(&src);
+        if p.diags.is_empty() != parses {
+            failures.push(format!(
+                "{name}: expected the parser to {}, got {:?}",
+                if parses { "accept" } else { "reject" },
+                p.diags
+            ));
+        }
+        if parses {
+            let got = check_target_messages(&target);
+            if !got.is_empty() {
+                failures.push(format!("{name}: the checker must stay silent, got {got:?}"));
+            }
+        }
+    }
+    assert!(
+        failures.is_empty(),
+        "ch01 convention/marker tests ({}):\n{}",
+        failures.len(),
+        failures.join("\n")
+    );
+}
+
+/// ch01 Rule 8's own two corpus files (I8 verification, 2026-10-02): a
+/// move on the `if` branch with the `else` branch leaving the place live
+/// is the disagreement, O0008 citing ch01 R8, reported once; consuming on
+/// both branches resolves it. The `check-ok` half is `parse-ok` in the
+/// corpus, so `no_new_diagnostics_outside_ch09` does not cover it.
+#[test]
+fn ch01_merge_liveness_tests() {
+    let got = check_target_messages(&target_named(
+        "01-ownership",
+        "merge-liveness-disagreement-rejected",
+    ));
+    assert_eq!(got.len(), 1, "one diagnostic, got {got:?}");
+    assert_eq!(got[0].0, "O0008");
+    assert!(got[0].1.contains("ch01 R8"), "got {:?}", got[0].1);
+    let got = check_target_messages(&target_named(
+        "01-ownership",
+        "merge-liveness-resolved-accepted",
+    ));
+    assert!(got.is_empty(), "both branches consume: got {got:?}");
 }

@@ -850,7 +850,7 @@ impl Lowerer<'_> {
                     cx.self_ty
                 }
             }
-            Head::GParam(owner, ord, k) => self.param_ty(cx, owner, ord, k),
+            Head::GParam(owner, ord, k) => self.param_ty(cx, owner, ord, k, pos, range),
             Head::Trait(_) => {
                 if pos == Pos::Value {
                     self.emit(
@@ -1031,7 +1031,7 @@ impl Lowerer<'_> {
                     cx.self_ty
                 }
             }
-            Head::GParam(owner, ord, k) => self.param_ty(cx, owner, ord, k),
+            Head::GParam(owner, ord, k) => self.param_ty(cx, owner, ord, k, pos, range),
             Head::Trait(def) => {
                 if pos == Pos::Value {
                     self.emit(
@@ -1077,12 +1077,42 @@ impl Lowerer<'_> {
         }
     }
 
-    fn param_ty(&mut self, cx: &mut Cx, owner: DefId, ord: u16, k: GKind) -> TyId {
+    fn param_ty(
+        &mut self,
+        cx: &mut Cx,
+        owner: DefId,
+        ord: u16,
+        k: GKind,
+        pos: Pos,
+        range: (u32, u32),
+    ) -> TyId {
         match k {
-            GKind::Brand => self.fir.tys.brand_ty(BrandRow::Param {
-                owner,
-                ordinal: ord,
-            }),
+            GKind::Brand => {
+                // R58 / ch01 R15d: "a brand parameter MUST appear only as
+                // a type argument in a position whose declared kind is
+                // `brand`; using it as the type of a value ... MUST be
+                // rejected". A brand ARGUMENT never arrives here —
+                // `type_args` sends a `brand` slot to `brand_arg` — so
+                // `Pos::Value` here is exactly "the type of a value".
+                // The code is ch01's (design §8's row 58, "`lower::
+                // brand_as_type` (ch01 R15d code)").
+                if pos == Pos::Value {
+                    self.emit_code(
+                        cx,
+                        range,
+                        fors_index::diag::Code::O(15),
+                        58,
+                        "a brand parameter is not a type: it occurs only as a brand argument \
+                         (ch01 R15d)"
+                            .to_string(),
+                    );
+                    return TY_ERROR;
+                }
+                self.fir.tys.brand_ty(BrandRow::Param {
+                    owner,
+                    ordinal: ord,
+                })
+            }
             GKind::Const => {
                 // A bare const parameter in type position is R13's "by
                 // identity" case: it stays a `Param` row so R9 compares it by
@@ -1687,6 +1717,19 @@ impl Lowerer<'_> {
 
     fn emit(&mut self, cx: &Cx, range: (u32, u32), code: u16, site: u16, msg: String) {
         self.sink.emit(cx.f.file, range, t(code), site, msg);
+    }
+
+    /// A diagnostic whose code another chapter owns (ch09 R58 reports
+    /// ch01 R15d's code, exactly as design §8's row 58 says).
+    fn emit_code(
+        &mut self,
+        cx: &Cx,
+        range: (u32, u32),
+        code: fors_index::diag::Code,
+        site: u16,
+        msg: String,
+    ) {
+        self.sink.emit(cx.f.file, range, code, site, msg);
     }
 }
 

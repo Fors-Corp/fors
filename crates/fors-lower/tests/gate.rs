@@ -419,8 +419,14 @@ fn gate_trap_min_rem_neg1_is_overflow() {
 
 #[test]
 fn gate_reject_generic_fn() {
+    // The `Copyable` bound is ch01 R3's, not this gate's: returning a
+    // `let` parameter of unbounded rigid type is a move out of a `let`
+    // parameter, which the checker's I8 flow pass now reports (ch09's
+    // `copy-without-copyable-rejected` is the same program). The gate
+    // here is that LOWERING refuses a generic `fn`, so the fixture has
+    // to be checked-clean first.
     assert!(matches!(
-        lower_error("fn id[T](let a: T) -> T { return a; }\nfn main() { }\n"),
+        lower_error("fn id[T: Copyable](let a: T) -> T { return a; }\nfn main() { }\n"),
         LowerError::Generic(_)
     ));
 }
@@ -432,7 +438,7 @@ fn gate_reject_generic_call() {
     // the generic callee itself answers `Generic` (see above), so there
     // would be no body to call.
     let built = build_raw(
-        "fn g[T](let a: T) -> T { return a; }\nfn f() -> i32 { var y: i32 = g(1); return y; }\nfn main() { }\n",
+        "fn g[T: Copyable](let a: T) -> T { return a; }\nfn f() -> i32 { var y: i32 = g(1); return y; }\nfn main() { }\n",
     );
     assert!(
         built.check_diags.is_empty(),

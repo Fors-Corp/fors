@@ -588,6 +588,13 @@ impl Wf<'_> {
             self.deps.push((def, set));
             self.body_nodes += cx.nodes;
             self.tape_events += cx.tape.len() as u64;
+            // I8 (design §7.9): the flow pass reads the tape typing just
+            // wrote, inside this declaration's own diagnostic budget. The
+            // tape is lent out and handed straight back, so `cx.finish`
+            // still retains it for FMIR lowering.
+            let tape = std::mem::take(&mut cx.tape);
+            self.flow(&mut cx, &tape, files);
+            cx.tape = tape;
             for s in &cx.sites {
                 if !self
                     .check_sites
@@ -837,10 +844,21 @@ impl Wf<'_> {
             NodeKind::ConsumeStmt | NodeKind::DiscardStmt => {
                 for c in cx.kids(node) {
                     let ty = self.synth(cx, c);
-                    let _ = ty;
                     if let Some(p) = self.place_of(cx, c) {
+                        // ch01 R4a's last sentence: "a `Copyable` place is
+                        // copied, never moved", so `discard i` on a
+                        // `Copyable` `i` takes a copy and leaves the place
+                        // live — `conv-convention-present-accepted`
+                        // discards a `let i: usize` and is accepted. I3
+                        // wrote `Move` unconditionally; nothing read the
+                        // tape until I8's flow pass, which does.
+                        let kind = if self.copyable(ty) {
+                            UseKind::Copy
+                        } else {
+                            UseKind::Move
+                        };
                         cx.tape
-                            .push(c as u32, p, UseKind::Move, Cause::Explicit(node as u32));
+                            .push(c as u32, p, kind, Cause::Explicit(node as u32));
                     }
                 }
                 TY_UNIT

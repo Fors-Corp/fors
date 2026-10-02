@@ -14,8 +14,9 @@
 //! (the use tape the flow pass will consume).
 //!
 //! Increment I3.5 adds [`facts`] (the `BodyFacts` side table FMIR lowering
-//! reads, plus the retained tape). `pat.rs`/`exhaust.rs` (I7) and
-//! `flow.rs` (I8) are still to come.
+//! reads, plus the retained tape); I7 adds [`pat`]/[`exhaust`] and I8
+//! adds [`flow`], the forward pass over that tape (ch01 R3, R4a, R8's
+//! loop-head merge for moves, ch09 R46's message).
 
 pub mod body;
 pub mod call;
@@ -25,6 +26,7 @@ pub mod diag;
 pub mod exhaust;
 pub mod expr;
 pub mod facts;
+pub mod flow;
 pub mod lower;
 pub mod member;
 pub mod methods;

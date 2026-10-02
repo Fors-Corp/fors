@@ -228,16 +228,17 @@ fn nested_receiver_records_method_not_field() {
     let _ = def;
 }
 
-/// S3: `(move x).m()` and `x.m()` with `sink self` produce exactly one
-/// Move event with an ImplicitReceiver cause each (R46: they mean exactly
-/// the same). Node ids differ between the forms, so the comparison is on
-/// (kind, cause shape, place).
+/// S3 / design §11's I8 row: `(move x).m()` and `x.m()` with `sink self`
+/// produce IDENTICAL tapes (ch09 R46: "`(move x).m(args)` is legal and
+/// means exactly the same"). Node ids differ between the forms, so the
+/// comparison is on the ORDERED sequence of (kind, cause shape, place) —
+/// an order-free comparison would not notice a reordered tape, and the
+/// flow pass reads the tape in order.
 #[test]
-fn explicit_and_implicit_receiver_moves_match() {
+fn implicit_and_explicit_receiver_move_produce_identical_tapes() {
     use fors_check::tape::{Cause, UseKind};
     fn shape(f: &fors_check::facts::BodyFacts) -> Vec<(UseKind, bool, fors_check::tape::PlaceId)> {
-        let mut out: Vec<_> = f
-            .tape
+        f.tape
             .events
             .iter()
             .map(|e| {
@@ -247,39 +248,48 @@ fn explicit_and_implicit_receiver_moves_match() {
                     e.place,
                 )
             })
-            .collect();
-        out.sort_by_key(|(k, c, p)| (*k as u8, *c, p.0));
-        out
+            .collect()
     }
-    let plain = check_source(
-        "struct B { x: i64 }\nimpl B { fn finish(sink self: B) -> i64 { let p = self.x; discard self; return p; } }\nfn f(sink b: B) -> i64 { return b.finish(); }",
-    );
-    let moved = check_source(
-        "struct B { x: i64 }\nimpl B { fn finish(sink self: B) -> i64 { let p = self.x; discard self; return p; } }\nfn f(sink b: B) -> i64 { return (move b).finish(); }",
-    );
+    const B: &str = "struct B { x: i64 }\nimpl B { fn finish(sink self: B) -> i64 { let p = self.x; discard self; return p; } }\n";
+    let plain = check_source(&format!(
+        "{B}fn f(sink b: B) -> i64 {{ return b.finish(); }}"
+    ));
+    let moved = check_source(&format!(
+        "{B}fn f(sink b: B) -> i64 {{ return (move b).finish(); }}"
+    ));
+    // Both forms are ACCEPTED, which is the flow pass agreeing with R46
+    // as well as the tape doing so.
     assert!(codes(&plain).is_empty(), "got {:?}", codes(&plain));
     assert!(codes(&moved).is_empty(), "got {:?}", codes(&moved));
     let fp = body_with_calls(&plain, 1);
     let fm = body_with_calls(&moved, 1);
-    // Exactly one implicit-receiver move in each form, on the same place.
-    let mp = fp
-        .tape
-        .events
-        .iter()
-        .filter(|e| matches!(e.cause, Cause::ImplicitReceiver { .. }))
-        .count();
-    let mm = fm
-        .tape
-        .events
-        .iter()
-        .filter(|e| matches!(e.cause, Cause::ImplicitReceiver { .. }))
-        .count();
-    assert_eq!((mp, mm), (1, 1), "one implicit move per form");
+    let implicit = |f: &fors_check::facts::BodyFacts| {
+        f.tape
+            .events
+            .iter()
+            .filter(|e| matches!(e.cause, Cause::ImplicitReceiver { .. }))
+            .count()
+    };
+    assert_eq!(
+        (implicit(fp), implicit(fm)),
+        (1, 1),
+        "one implicit move per form"
+    );
     assert_eq!(
         shape(fp),
         shape(fm),
         "tapes must match between `x.m()` and `(move x).m()`"
     );
+    // And the two forms make the SAME program illegal in the same way:
+    // a use after the move is R4a(a) either way.
+    let after_plain = check_source(&format!(
+        "{B}fn f(sink b: B) -> i64 {{ let n = b.finish(); return n + b.x; }}"
+    ));
+    let after_moved = check_source(&format!(
+        "{B}fn f(sink b: B) -> i64 {{ let n = (move b).finish(); return n + b.x; }}"
+    ));
+    assert_eq!(codes(&after_plain), vec!["O0004"]);
+    assert_eq!(codes(&after_moved), vec!["O0004"]);
 }
 
 // ------------------------------------------- increment I4's gate (design §11)
