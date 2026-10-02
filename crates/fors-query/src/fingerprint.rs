@@ -56,17 +56,17 @@ pub struct DeclFingerprint {
 /// alternative costs.
 pub fn decl_fingerprint(h: &DeclHashes) -> DeclFingerprint {
     // Q5: `gparam_names` is deliberately NOT mixed in.
-    let mut interface = mix(SALT_INTERFACE, h.sig_tokens);
+    let mut interface = mix(DOMAIN_INTERFACE, h.sig_tokens);
     interface = mix(interface, h.bounds_sorted); // Q6: already sorted.
     interface = mix(interface, h.const_value); // Q4: always.
     DeclFingerprint {
         interface,
-        body: mix(SALT_BODY, h.body_tokens),
+        body: mix(DOMAIN_BODY, h.body_tokens),
     }
 }
 
-const SALT_INTERFACE: ValueHash = 0x9e37_79b9_7f4a_7c15_f39c_c060_5ced_c835;
-const SALT_BODY: ValueHash = 0xc2b2_ae3d_27d4_eb4f_1656_67b1_9e37_79b9;
+const DOMAIN_INTERFACE: ValueHash = 0x9e37_79b9_7f4a_7c15_f39c_c060_5ced_c835;
+const DOMAIN_BODY: ValueHash = 0xc2b2_ae3d_27d4_eb4f_1656_67b1_9e37_79b9;
 
 /// The one-step fold the whole engine uses to combine value hashes. Not a
 /// cryptographic hash: design §14 Q2 keeps FNV-128 + SplitMix64 for every
@@ -79,9 +79,12 @@ pub fn mix(acc: ValueHash, v: ValueHash) -> ValueHash {
     ((hi as u128) << 64) | lo as u128
 }
 
-/// Folds a sequence of hashes order-sensitively, starting from `salt`.
-pub fn mix_all(salt: ValueHash, items: impl IntoIterator<Item = ValueHash>) -> ValueHash {
-    let mut acc = salt;
+/// Folds a sequence of hashes order-sensitively, starting from `domain`, a
+/// domain-separation tag that keeps two folds of equal content apart. This is
+/// a content hash for in-process memo keys (design §14 Q2: FNV/SplitMix, the
+/// threat model is a compiler talking to itself), not a cryptographic salt.
+pub fn mix_all(domain: ValueHash, items: impl IntoIterator<Item = ValueHash>) -> ValueHash {
+    let mut acc = domain;
     for (i, v) in items.into_iter().enumerate() {
         acc = mix(acc, v ^ (i as u128));
     }
