@@ -7,7 +7,8 @@ commit history, which predates the Conventional Commits convention.
 
 | Language | Compiler | Meaning |
 |---|---|---|
-| `lang-v0.5.3` | `compiler-v0.12.0` | current |
+| `lang-v0.5.3` | `compiler-v0.13.0` | current |
+| `lang-v0.5.3` | `compiler-v0.12.0` | checker I9, the query engine and the M1 exit |
 | `lang-v0.5.3` | `compiler-v0.11.0` | checker I10a |
 | `lang-v0.5.3` | `compiler-v0.10.0` | FMIR F1-completion |
 | `lang-v0.5.3` | `compiler-v0.9.0` | checker I8b, the round-6 flow |
@@ -99,6 +100,47 @@ measurement, the grammar, names and visibility), with a conformance corpus and
 an independent reference parser.
 
 ## Compiler
+
+### compiler-v0.13.0 — 2026-10-02
+
+FMIR increment **F-mono**, produced by one agent and independently
+verified by another. Implements `lang-v0.5.3`; still no code generator.
+
+- **Monomorphisation.** Every call whose `BodyFacts::generic_args` row is
+  non-empty lowers to an instance of the callee at those arguments,
+  lowered once per distinct `(callee, args)` and cached; generic free
+  functions, methods and associated functions of generic impls, generic
+  struct literals, trait methods through a bound (the impl selected on
+  the determined `Self` and the trait's own arguments), fields of generic
+  structs, const parameters read as values, and associated-type
+  projections normalised at the instance. Instantiated types live in a
+  lowering-owned clone of the checker's frozen type store; a gate test
+  asserts the frozen store's digest is unchanged by lowering. An
+  undetermined slot is a `LowerError`, never a default. With `std` in the
+  build the lowering refusals fell from ~160 to the ~44 that are F3's
+  `?`/`raise`.
+- **Pattern lowering** from `BodyFacts::patterns`, never re-derived: enum
+  arms by the discriminant `fors-layout` decides with payload projection,
+  struct and tuple arms by field projection, literal arms (negatives
+  narrowed, `Str` by bytes), bindings with the published copy-or-move,
+  R54's source order, R53's exhaustiveness read and asserted;
+  `let`/`var` destructurings; enum construction and tuple literals.
+- **`Buffer.empty`** has a real body over the uninitialised-aggregate
+  primitive; a read before write is `ub: uninit-read` with its site,
+  never a silent zero.
+- **Coverage.** 32 lowering gate tests for the above; 883 Rust tests
+  (18 held out with a stated reason).
+- **Verification found and fixed before merge.** Projections through a
+  bound never normalised at an instance; impl selection ignored the
+  trait's own arguments (`impl Conv[i64] for S` + `impl Conv[bool] for S`
+  refused both); a name-only interception hijacked a user method; a
+  trait method on a parameter-free impl was lowered twice under one name.
+- **Held out, with the evidence.** `buffer-index-past-len-trap`: `Buffer`
+  is a ch08 R17 prelude type name, so `Buffer.empty()`/`Buffer { .. }`
+  are a silent checker `TY_ERROR` even with `std` (a checker defect for
+  the next increment), and `IndexMut::at_mut` returns a place where FMIR
+  calls produce values (a design question). Explicit generic arguments
+  at a call site are not lowered yet.
 
 ### compiler-v0.12.0 — 2026-10-02
 
