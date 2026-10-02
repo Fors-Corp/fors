@@ -7,7 +7,8 @@ commit history, which predates the Conventional Commits convention.
 
 | Language | Compiler | Meaning |
 |---|---|---|
-| `lang-v0.5.3` | `compiler-v0.17.0` | current |
+| `lang-v0.5.3` | `compiler-v0.18.0` | current |
+| `lang-v0.5.3` | `compiler-v0.17.0` | checker I10c, the prelude names bind to std |
 | `lang-v0.5.3` | `compiler-v0.16.0` | checker I10, the other chapters' obligations |
 | `lang-v0.5.3` | `compiler-v0.15.0` | checker I10b, the silent-TY_ERROR sweep gate |
 | `lang-v0.5.3` | `compiler-v0.14.0` | FMIR F4/F6, defer and arena lowering |
@@ -104,6 +105,44 @@ measurement, the grammar, names and visibility), with a conformance corpus and
 an independent reference parser.
 
 ## Compiler
+
+### compiler-v0.18.0 — 2026-10-03
+
+FMIR increment **F3**, produced by one agent and independently verified
+by another. Implements `lang-v0.5.3`; still no code generator.
+
+- **Failure lowering.** `call?`, `call else |e| { }` and `raise` lower
+  from the checker's published ch02 facts, never from syntax: a `try_br`
+  with an error edge that applies at most one `ErrorFrom` conversion and
+  ends in a typed `raise`, on an exit edge that runs `errdefer` bodies
+  only on the error path and `defer` on both, with every obligation
+  still discharged. Both F4 hold-outs now run.
+- **ch02 R17's exit sequence.** An error escaping `main` flushes stdout,
+  writes exactly one `error: <render>` line to stderr and exits 1;
+  `render` implements R17's clause list in order (enum with payload,
+  struct, tuple, integer, bool, unit, `Str` with escapes, `..` for the
+  rest) using type names the lowering hands to the interpreter.
+- **Numeric family from facts.** The explicit-arithmetic methods and
+  `reduce` are lowered from `BodyFacts::numeric`, not by method spelling
+  — the spelling tables are deleted, a user method named `wrap_add`
+  keeps its body, and `N as T` from a `comptime_int` constant folds (an
+  unrepresentable value is a named refusal per ch03 R6).
+- **Coverage.** Six of the seven F3 gate rows run byte-exact (the seventh
+  is pinned on a corpus/std disagreement, with its rendering covered by
+  a twin); the lowering refusal census over the corpus and std is down
+  from 452 `Failure`s to zero, asserted. 966 Rust tests (16 held out
+  with a stated reason).
+- **Verification before merge** (34 end-to-end programs, byte-compared):
+  defer/errdefer order under `?` in loops, handlers and three-deep
+  propagation, every R17 clause, stdout-before-stderr on one pipe, and a
+  latched stdout then raise; three deliberate mutations each caught by a
+  gate; two permanent probe tests added.
+- **For the owner.** `02-failure/main-raises-std-error-run-error` writes
+  `mem.Counting[mem.Fixed[8]]` where std declares `Counting[N, A]`; a
+  handler-bound linear payload the handler drops is not reported (ch01
+  R22h at the `else |e|` binding); a struct-form variant literal and
+  `N.wrap_as[u8]()` on a comptime constant are silent `TY_ERROR`s;
+  `comptime_float` constants cannot fold (`ConstValue` has no float).
 
 ### compiler-v0.17.0 — 2026-10-03
 
