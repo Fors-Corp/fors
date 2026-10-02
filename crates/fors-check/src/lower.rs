@@ -528,6 +528,12 @@ pub struct Cx<'f, 'a> {
     impl_assoc: Vec<(Symbol, TyId)>,
     /// The impl whose parameters may head a projection inside `type A = RHS;`.
     assoc_rhs_owner: DefId,
+    /// I10b: the enclosing impl's written trait reference (`IndexMut[usize]`
+    /// in `impl IndexMut[usize] for Vec[T, A]`). R21 says `IndexMut[I]`
+    /// declares no `Output` and that `Self.Output` inside it denotes
+    /// `Index[I]`'s, so lowering `Self.Output` in such an impl needs THIS
+    /// impl's `I`. [`fors_fir::sig::NO_TRAIT_REF`] outside a trait impl.
+    impl_trait_ref: TraitRefId,
     /// ch01 R15 / ch09 R40: the fresh brands the enclosing `with arena`
     /// blocks introduce, innermost last. `with` is a statement, so this is
     /// a body-local scope `find` (the generic scope) knows nothing about.
@@ -555,6 +561,7 @@ impl<'f, 'a> Cx<'f, 'a> {
             self_kind: SelfKind::None,
             impl_assoc: Vec::new(),
             assoc_rhs_owner: NO_DEF,
+            impl_trait_ref: fors_fir::sig::NO_TRAIT_REF,
             fresh_brands: Vec::new(),
             fresh_brands_opened: 0,
             header_brand: None,
@@ -599,6 +606,21 @@ impl<'f, 'a> Cx<'f, 'a> {
             .rev()
             .find(|&&(n, ..)| n == node)
             .map(|&(_, d, o, k)| (d, o, k))
+    }
+
+    /// The generic parameter a name-use's introducing node declares, as
+    /// `(owner, ordinal, kind)`. `find` with a name, for the body phase: R58
+    /// needs a CONST parameter's owner and ordinal to give it its type.
+    pub fn gparam_of(&self, node: u32) -> Option<(DefId, u16, GKind)> {
+        self.find(node)
+    }
+
+    /// The enclosing `impl`/`trait`'s `Self`: the declaration node that
+    /// introduces it and the type it denotes. R34's `Self { .. }` literal
+    /// head is the body phase's reader; `None` outside an impl or trait.
+    pub fn self_binding(&self) -> Option<(u32, TyId)> {
+        (self.self_node != u32::MAX && self.self_ty != NO_TY)
+            .then_some((self.self_node, self.self_ty))
     }
 }
 
@@ -1576,9 +1598,45 @@ impl Lowerer<'_> {
                         if let Some(&(_, rhs)) = cx.impl_assoc.iter().find(|&&(n, _)| n == name) {
                             return rhs;
                         }
-                        let declared = self.shapes.declares_assoc(trait_def, name)
-                            || (trait_def == self.prelude.traits[tr::INDEXMUT]
-                                && name == self.prelude.output_name);
+                        // I10b (R21/R61): `IndexMut[I]` declares no
+                        // `Output` of its own, and inside an impl of it
+                        // `Self.Output` denotes the `Index[I]` impl's. The
+                        // carve-out below only silenced R61's diagnostic and
+                        // still answered `TY_ERROR`, so every `at_mut` body
+                        // in `std` (`Buffer`'s, `Vec`'s, `Map`'s) was checked
+                        // against an absorbing result type and its `[ ]`
+                        // ended `TY_ERROR` with nothing said. Answer the
+                        // projection instead and let R20 normalise it
+                        // through the `Index[I]` impl.
+                        if trait_def == self.prelude.traits[tr::INDEXMUT]
+                            && name == self.prelude.output_name
+                        {
+                            // R61(b) forbids a projection headed by a
+                            // concrete type, so the answer must be the
+                            // `Index` impl's own definition — R61(c)'s
+                            // "replaced at once by that impl's own
+                            // definition", read from the sibling impl.
+                            let args = if cx.impl_trait_ref == fors_fir::sig::NO_TRAIT_REF {
+                                fors_fir::ty::NO_ARGS
+                            } else {
+                                self.fir.tys.trait_ref(cx.impl_trait_ref).1
+                            };
+                            if let Some(rhs) = self.index_output(cx.self_ty, args, name) {
+                                return rhs;
+                            }
+                            self.emit(
+                                cx,
+                                range,
+                                61,
+                                21,
+                                "`Self.Output` here is `Index`'s, and no `Index` impl for this \
+                                 type with these arguments defines it: add the `impl Index[..] \
+                                 for ..` R21 requires, or write the element type itself"
+                                    .to_string(),
+                            );
+                            return TY_ERROR;
+                        }
+                        let declared = self.shapes.declares_assoc(trait_def, name);
                         if !declared {
                             let name_s =
                                 String::from_utf8_lossy(self.names.resolve(name)).into_owned();
@@ -1596,6 +1654,91 @@ impl Lowerer<'_> {
                 }
             }
         }
+    }
+
+    /// R21/R61(c): the `Output` the `Index[args]` impl for `self_ty` defines.
+    ///
+    /// `IndexMut[I]` declares no associated type of its own, so an
+    /// `impl IndexMut[As] for S` that writes `Self.Output` means the
+    /// `impl Index[As] for S` one — the prerequisite R21 requires of it. The
+    /// sibling is found by its lowered signature (self type and trait
+    /// reference); every impl head is lowered before any `fn` signature
+    /// ([`Lowerer::run`]), so the two impls may be written in either order.
+    /// `None` when there is none, which the caller REPORTS rather than
+    /// absorbing.
+    fn index_output(
+        &mut self,
+        self_ty: TyId,
+        args: fors_fir::ty::ArgsId,
+        name: Symbol,
+    ) -> Option<TyId> {
+        use fors_fir::subst::{Binding, one_way_match, subst_norm};
+        if self_ty == TY_ERROR || self_ty == NO_TY {
+            return None;
+        }
+        let index = self.prelude.traits[tr::INDEX];
+        let want = if args == fors_fir::ty::NO_ARGS {
+            Vec::new()
+        } else {
+            self.fir.tys.args(args).to_vec()
+        };
+        let defs: Vec<DefId> = self.defs.user_defs().map(|(d, _)| d).collect();
+        for def in defs {
+            if self.fir.sigs.kind(def) != SigKind::Impl {
+                continue;
+            }
+            let tref = self.fir.sigs.trait_ref(def);
+            if tref == fors_fir::sig::NO_TRAIT_REF {
+                continue;
+            }
+            let (td, ta) = self.fir.tys.trait_ref(tref);
+            if td != index {
+                continue;
+            }
+            let rhs = self.fir.sigs.assocs.rhs_of(self.fir.sigs.assoc(def), name);
+            if rhs == NO_TY || rhs == TY_ERROR {
+                continue;
+            }
+            // The sibling writes `S` and `As` over ITS OWN parameters, so the
+            // two impls never share a `TyId`: match one-way (R12's own
+            // compare), then carry the right-hand side over into this impl's
+            // vocabulary.
+            let arity = self
+                .fir
+                .sigs
+                .generics_store
+                .count(self.fir.sigs.generics(def));
+            let mut b = Binding::new(&[(def, arity as u16)]);
+            let sib_self = self.fir.sigs.self_ty(def);
+            if sib_self == NO_TY
+                || sib_self == TY_ERROR
+                || !one_way_match(&mut self.fir.tys, sib_self, self_ty, &mut b)
+            {
+                continue;
+            }
+            let sib_args = if ta == fors_fir::ty::NO_ARGS {
+                Vec::new()
+            } else {
+                self.fir.tys.args(ta).to_vec()
+            };
+            if sib_args.len() != want.len() {
+                continue;
+            }
+            let mut ok = true;
+            for (x, y) in sib_args.iter().zip(want.iter()) {
+                if !one_way_match(&mut self.fir.tys, *x, *y, &mut b) {
+                    ok = false;
+                    break;
+                }
+            }
+            if !ok {
+                continue;
+            }
+            if let Some(t) = subst_norm(&mut self.fir.tys, rhs, &b) {
+                return Some(t);
+            }
+        }
+        None
     }
 
     /// R61(c): exactly one trait among `bounds` declares `name`.
@@ -1866,6 +2009,17 @@ impl Lowerer<'_> {
     /// Lowers every user declaration in `(file, tree)` order (design §7.1
     /// phase 3). A declaration's parent always precedes it, because
     /// `build_decl_table` pushes rows in tree order.
+    ///
+    /// I10b verification: the HEADS (struct, enum, trait, impl — with its
+    /// associated-type definitions — and const) are lowered before any
+    /// `fn` signature, still each kind in tree order. A signature may need
+    /// another declaration's lowered head wherever it is written: `Self.
+    /// Output` inside `impl IndexMut[I] for S` is the `impl Index[I] for
+    /// S`'s own definition (R21/R61(c)), and the spec imposes no order on
+    /// the two impls, so an `IndexMut` impl written first must find its
+    /// sibling just the same. Impl heads keep their tree order among
+    /// themselves, which is what R19's "later impl naming the earlier" and
+    /// `ImplIndex`'s row order read.
     pub fn run(&mut self, files: &[FileCtx]) -> Lowered {
         let n = self.fir.sigs.len();
         let mut out = Lowered {
@@ -1876,7 +2030,18 @@ impl Lowerer<'_> {
         };
         let mut order = 0u32;
         let user: Vec<DefId> = self.defs.user_defs().map(|(d, _)| d).collect();
-        for def in user {
+        let is_fn = |k: DeclKind| matches!(k, DeclKind::Fn | DeclKind::ExternFn);
+        let heads: Vec<DefId> = user
+            .iter()
+            .copied()
+            .filter(|d| self.defs.get(*d).is_some_and(|r| !is_fn(r.kind)))
+            .collect();
+        let fns: Vec<DefId> = user
+            .iter()
+            .copied()
+            .filter(|d| self.defs.get(*d).is_some_and(|r| is_fn(r.kind)))
+            .collect();
+        for def in heads.into_iter().chain(fns) {
             let row = *self.defs.get(def).expect("user def has a row");
             let f = &files[row.file.index()];
             self.sink.open();
@@ -1927,6 +2092,7 @@ impl Lowerer<'_> {
                 cx.self_ty = info.self_ty;
                 cx.self_kind = info.kind;
                 cx.impl_assoc = info.assoc.clone();
+                cx.impl_trait_ref = info.trait_ref;
             }
         }
         self.push_gparams(cx, def, row.node as usize);
@@ -2529,6 +2695,7 @@ impl Lowerer<'_> {
         cx.self_ty = self_ty;
         cx.self_kind = SelfKind::Impl { trait_def };
         cx.assoc_rhs_owner = def;
+        cx.impl_trait_ref = trait_ref;
         self.fir.sigs.set_self_ty(def, self_ty);
         if trait_ref != fors_fir::sig::NO_TRAIT_REF {
             self.fir.sigs.set_trait_ref(def, trait_ref);

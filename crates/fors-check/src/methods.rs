@@ -25,7 +25,7 @@
 
 use fors_fir::sig::{Conv, SigKind};
 use fors_fir::subst::{Binding, one_way_match};
-use fors_fir::ty::{NO_ARGS, TyId, TyTag};
+use fors_fir::ty::{ArgsId, NO_ARGS, TraitRefId, TyId, TyTag};
 use fors_index::Symbol;
 use fors_index::diag::Code;
 use fors_index::ids::{DefId, ModuleId};
@@ -90,6 +90,24 @@ pub struct MethodHit {
     /// `true` when the call named the receiver as an ordinary first
     /// argument (R45's qualified form) rather than in method position.
     pub receiver_is_arg: bool,
+    /// I10b (R38(a) on the container): the trait's OWN arguments — `Self`
+    /// excluded — as the impl that answered supplies them, already
+    /// substituted for this receiver. [`NO_ARGS`] for an inherent method and
+    /// for a trait that declares no parameters of its own.
+    ///
+    /// R38(b) binds only `Self` from the receiver, so without this a call to
+    /// a method of `Conv[T]`/`Index[I]`/`Allocator[A]` had no source for the
+    /// trait's own slots and the call either reported T0039 or — before the
+    /// lookup answered at all — absorbed into a silent `TY_ERROR`. R19 makes
+    /// the source unambiguous: at most one impl matches a given
+    /// (trait, self type), so its arguments ARE the trait's arguments here.
+    pub trait_args: ArgsId,
+    /// I10b (R38(a)/R45): the head was written with its generic arguments
+    /// (`Bag[i64].of(1)`), so [`MethodHit::recv_ty`] is the INSTANTIATED head
+    /// and R38 step (b) must bind the container's parameters from it. For a
+    /// bare `Bag.of(1)` the head stands for its own parameters and step (c)
+    /// does that work instead, so this stays `false`.
+    pub explicit_head: bool,
 }
 
 /// A named method considered as a call candidate.
@@ -235,7 +253,16 @@ impl Wf<'_> {
                 if mname != name {
                     continue;
                 }
-                self.consider(cx, node, mdef, row.def, recv, method_position, &mut tier1);
+                self.consider(
+                    cx,
+                    node,
+                    mdef,
+                    row.def,
+                    recv,
+                    method_position,
+                    NO_ARGS,
+                    &mut tier1,
+                );
             }
         }
         if !tier1.is_empty() {
@@ -390,7 +417,16 @@ impl Wf<'_> {
                 if mname != name {
                     continue;
                 }
-                self.consider(cx, node, mdef, trait_def, recv, true, &mut tier);
+                // NO_ARGS, not the bound's own arguments: a rigid receiver
+                // already determines the trait's parameters through R38
+                // step (c) (the expected type), and the brand `A` of
+                // `Allocator[A]` is interned differently in a `Self` bound
+                // than in the body that writes `Block[A]` — seeding from the
+                // bound would decide the slot with the wrong one and turn
+                // `std/mem/alloc.fors`'s provided `create`/`deinit` into
+                // T0026. The impl head is the only source this increment
+                // solves from (see `impl_trait_ref`).
+                self.consider(cx, node, mdef, trait_def, recv, true, NO_ARGS, &mut tier);
             }
         }
         if tier.is_empty() {
@@ -497,7 +533,9 @@ impl Wf<'_> {
             .any(|d| self.impl_method_names(d).iter().any(|&(n, _)| n == name))
     }
 
-    /// Sorts one named method into its tier.
+    /// Sorts one named method into its tier. `trait_args` is the owner
+    /// trait's own arguments for this receiver ([`NO_ARGS`] for an inherent
+    /// impl and for a trait with no parameters of its own).
     fn consider(
         &mut self,
         cx: &mut BodyCx,
@@ -506,9 +544,10 @@ impl Wf<'_> {
         owner: DefId,
         recv: TyId,
         method_position: bool,
+        trait_args: ArgsId,
         tier: &mut Vec<Candidate>,
     ) {
-        match self.concrete_candidate(cx, node, mdef, owner, recv, method_position) {
+        match self.concrete_candidate(cx, node, mdef, owner, recv, method_position, trait_args) {
             Candidate::Hit(hit) => tier.push(Candidate::Hit(hit)),
             Candidate::No => {}
         }
@@ -543,7 +582,23 @@ impl Wf<'_> {
             .iter()
             .map(|h| {
                 let o = wf.head_name(h.owner);
-                format!("{o}.{}", wf.sym(name))
+                // A parameterised trait's candidates are told apart by the
+                // arguments the impl supplied (`Conv[i64].conv` beside
+                // `Conv[u8].conv`), which is also R45's qualified spelling.
+                let args = if h.trait_args == NO_ARGS {
+                    String::new()
+                } else {
+                    let xs: Vec<String> = wf
+                        .fir
+                        .tys
+                        .args(h.trait_args)
+                        .to_vec()
+                        .into_iter()
+                        .map(|t| wf.show(t))
+                        .collect();
+                    format!("[{}]", xs.join(", "))
+                };
+                format!("{o}{args}.{}", wf.sym(name))
             })
             .collect();
         Err(LookupError::Ambiguous {
@@ -565,6 +620,7 @@ impl Wf<'_> {
         owner: DefId,
         recv: TyId,
         method_position: bool,
+        trait_args: ArgsId,
     ) -> Candidate {
         // I6 (design §7.4): a method with parameters to determine is no
         // longer withheld. Its container's gparams (a trait's `Self` at
@@ -627,6 +683,8 @@ impl Wf<'_> {
                 recv_slot: 0,
                 recv_ty: recv,
                 receiver_is_arg: true,
+                trait_args,
+                explicit_head: false,
             });
         }
         let p = self.fir.sigs.fn_sigs.param(sig, slot as usize);
@@ -657,6 +715,8 @@ impl Wf<'_> {
             recv_slot: slot,
             recv_ty: recv,
             receiver_is_arg: false,
+            trait_args,
+            explicit_head: false,
         })
     }
 
@@ -740,7 +800,32 @@ impl Wf<'_> {
         saw_generic: &mut bool,
     ) {
         let want = self.fir.tys.intern_trait_ref(trait_def, NO_ARGS);
-        let h = self.holds(recv, want);
+        let mut h = self.holds(recv, want);
+        // I10b (R43 tier (2) for a PARAMETERISED trait). `holds` was asked
+        // with no trait arguments, and for a trait that declares its own
+        // (`Conv[T]`, `Index[I]`, `Allocator[A]`) that question can never be
+        // answered `Yes`: every impl row carries arguments, so R12's compare
+        // sees a length mismatch and says `No`. The lookup then turned the
+        // miss into `LookupError::Silent` and the whole call absorbed — the
+        // `s.conv()`/`b.conv()`/`self.free(move b)` family. R19 makes the
+        // arguments recoverable: at most one impl matches a given
+        // (trait, self type), so the impl head SUPPLIES them (R38(a)), and
+        // R12 is then asked the complete question.
+        // I10b verification: EVERY in-scope impl whose self type matches
+        // supplies a candidate, not the first one. R19 forbids two impls
+        // that UNIFY on (trait arguments, self type), so `impl Conv[i64]
+        // for S` beside `impl Conv[u8] for S` is legal, and `s.conv()`
+        // then has two candidates in tier (2) — R44's error, listing them —
+        // never a silent choice of the earlier impl.
+        let mut solved_args: Vec<ArgsId> = Vec::new();
+        if h != Holds::Yes && self.trait_has_params(trait_def) {
+            for solved in self.impl_trait_refs(cx, recv, trait_def) {
+                if self.holds(recv, solved) == Holds::Yes {
+                    h = Holds::Yes;
+                    solved_args.push(self.fir.tys.trait_ref(solved).1);
+                }
+            }
+        }
         if h != Holds::Yes {
             // `holds` was asked with NO trait arguments. For a trait WITH
             // parameters (`Index[I]`) a `No` may therefore be an artifact of
@@ -759,12 +844,80 @@ impl Wf<'_> {
             return;
         }
         self.dep(trait_def);
-        for (mname, mdef) in self.trait_method_defs(trait_def) {
-            if mname != name {
+        if solved_args.is_empty() {
+            solved_args.push(NO_ARGS);
+        }
+        for trait_args in solved_args {
+            for (mname, mdef) in self.trait_method_defs(trait_def) {
+                if mname != name {
+                    continue;
+                }
+                self.consider(
+                    cx,
+                    node,
+                    mdef,
+                    trait_def,
+                    recv,
+                    method_position,
+                    trait_args,
+                    tier,
+                );
+            }
+        }
+    }
+
+    /// R38(a) on the container: the trait arguments each in-scope impl for
+    /// `recv` supplies, as complete `TraitRef`s to ask R12 with, in impl-row
+    /// order and without duplicates.
+    ///
+    /// Same scan and same module scope as [`Self::scope_declares`] (ch08 R7,
+    /// the defining, current or directly-used module), and the same one-way
+    /// match `holds` uses, so an impl for a different argument list
+    /// (`Tagged for Box2[i64]` against a `Box2[i32]` receiver) supplies
+    /// nothing. R19 bounds the answer to one impl PER argument list, not
+    /// one per trait: `impl Conv[i64] for S` and `impl Conv[u8] for S` do
+    /// not unify and both answer, which is what makes `s.conv()` R44's
+    /// ambiguity rather than a silent pick. Empty when no impl in scope
+    /// matches.
+    fn impl_trait_refs(&mut self, cx: &BodyCx, recv: TyId, trait_def: DefId) -> Vec<TraitRefId> {
+        let mut out: Vec<TraitRefId> = Vec::new();
+        if self.fir.tys.tag(recv) != TyTag::Nominal {
+            return out;
+        }
+        let key = self.fir.tys.head_key(recv);
+        let head_mod = self.module_of(DefId(self.fir.tys.a(recv)));
+        let cur_mod = self.module_of(cx.owner);
+        let edges = self.edges_from(cur_mod);
+        for r in 0..self.impls.len() {
+            let row = self.impls.row(r as u32);
+            if row.trait_def != trait_def || row.trait_args == NO_ARGS {
                 continue;
             }
-            self.consider(cx, node, mdef, trait_def, recv, method_position, tier);
+            if self.fir.tys.head_key(row.self_ty) != key {
+                continue;
+            }
+            let impl_mod = self.module_of(row.def);
+            if impl_mod != head_mod && impl_mod != cur_mod && !edges.contains(&impl_mod) {
+                continue;
+            }
+            let arity = self
+                .fir
+                .sigs
+                .generics_store
+                .count(self.fir.sigs.generics(row.def));
+            let mut b = Binding::new(&[(row.def, arity as u16)]);
+            if !one_way_match(&mut self.fir.tys, row.self_ty, recv, &mut b) {
+                continue;
+            }
+            let tref = self.fir.tys.intern_trait_ref(trait_def, row.trait_args);
+            if let Some(t) = self.subst_trait_ref(tref, &b) {
+                self.dep(row.def);
+                if !out.contains(&t) {
+                    out.push(t);
+                }
+            }
         }
+        out
     }
 
     /// Whether `trait_def` has an impl for `recv` in R43's module scope that
