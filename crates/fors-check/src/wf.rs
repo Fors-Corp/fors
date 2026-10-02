@@ -67,6 +67,9 @@ pub struct Wf<'a> {
     pub holds_misses: u64,
     pub impl_scans: u64,
     pub tape_events: u64,
+    /// R55's plain usefulness algorithm (`exhaust.rs`): every step charged
+    /// across every `match` this build has typed so far.
+    pub exhaust_steps: u64,
     /// R38's `Binding`s: how many this build created (one per generic
     /// call or generic literal) and how many are LIVE right now. The
     /// second is the design's "`debug_assert!` at every statement
@@ -146,6 +149,7 @@ impl<'a> Wf<'a> {
             holds_misses: 0,
             impl_scans: 0,
             tape_events: 0,
+            exhaust_steps: 0,
             bindings_created: 0,
             live_bindings: 0,
             bodies_checked: 0,

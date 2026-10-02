@@ -398,22 +398,22 @@ pub const CH09_RULES: [RuleEntry; 62] = [
         "member-visibility-is-ch08s-code",
         &["member::check_visibility"],
     ),
-    r(50, Some(50), "pattern-checking", &["pat::check_pat"]),
-    r(51, Some(51), "let-pattern-binding", &["pat::bind_let"]),
+    imp(50, Some(50), "pattern-checking", &["pat::check_pat"]),
+    imp(51, Some(51), "let-pattern-binding", &["pat::bind_let"]),
     r(52, None, "grammar-fact-no-diagnostic", &[]),
-    r(
+    imp(
         53,
         Some(53),
         "match-exhaustiveness-missing-arm",
         &["exhaust::check_match"],
     ),
-    r(
+    imp(
         54,
         Some(54),
         "match-arm-not-useful",
         &["exhaust::check_match"],
     ),
-    r(
+    imp(
         55,
         Some(55),
         "exhaustiveness-step-budget",
@@ -679,12 +679,24 @@ mod tests {
         // slots (`call::call_owners`) — so they have no row to flip.
         // R57 stays unimplemented: its remaining sites are `pat::check_pat`
         // (I7) and the tape's rigid `Move` (I8), as I5 recorded.
+        //
+        // I7 adds R50 (`pat::check_pat`), R51 (`pat::bind_let`), R53/R54
+        // (`exhaust::check_match`'s two diagnostics over the same
+        // usefulness computation) and R55 (`exhaust::step_budget`). R52
+        // and R56 stay unimplemented: both are grammar facts with no
+        // diagnostic of their own (design §8: "NoCode"), proven by the
+        // absence of the production in ch07's grammar rather than by any
+        // code this crate runs, so there is no row to flip for them. R57
+        // still has `pat::check_pat` left unimplemented in its own row:
+        // that site is the "rigid types without a bound" half (matching a
+        // generic parameter's pattern needs a bound this increment does
+        // not check), not the ordinary case I7 built.
         assert_eq!(
             implemented,
             vec![
                 1, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24,
                 25, 26, 27, 28, 29, 30, 31, 32, 33, 34, 35, 36, 37, 38, 39, 40, 41, 42, 43, 44, 45,
-                47, 48, 49, 59, 60, 61, 62
+                47, 48, 49, 50, 51, 53, 54, 55, 59, 60, 61, 62
             ]
         );
         // NoCode rows, exactly as design §8 marks them.

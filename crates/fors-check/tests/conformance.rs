@@ -432,6 +432,10 @@ const CROSS_CHAPTER: &[(&str, &str)] = &[
         "checker_questions_not_diagnosed_accepted",
         "the test's whole point is that ch08 leaves these to the checker; `-> K` names a `const` in type position,          which ch09 R11 rejects (`local-shadowing-prelude-type-as-type-head-rejected` is the same clause)",
     ),
+    (
+        "pattern_variant_through_alias_accepted",
+        "ch08 R25 asserts only that the two-segment path through the alias reaches the variant as a reference; its          `Color` has exactly two variants (`Red`, `Rgb`), both matched, so ch09 R53/R54 (I7) find the trailing          `let other` arm unreachable — the SAME clause `unreachable-arm-rejected` asserts for a non-aliased enum",
+    ),
 ];
 
 /// A `std` declaration ch09 rejects: each entry is a declaration whose

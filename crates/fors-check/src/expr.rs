@@ -830,13 +830,16 @@ impl Wf<'_> {
         let mut fixed = want.unwrap_or(TY_NEVER);
         let mut arms = 0usize;
         let mut all_never = true;
+        let mut pat_store = crate::pat::PatStore::new();
+        let mut pat_arms: Vec<(usize, crate::pat::PatId)> = Vec::new();
         for &arm in kids.iter().skip(1) {
             if cx.kind(arm) != NodeKind::Arm {
                 continue;
             }
             let parts = cx.kids(arm);
             let Some(&pat) = parts.first() else { continue };
-            self.bind_pat(cx, pat, s);
+            let id = self.check_pat(cx, &mut pat_store, pat, s);
+            pat_arms.push((pat, id));
             let Some(&body) = parts.iter().find(|&&c| is_expr_kind(cx.kind(c))) else {
                 continue;
             };
@@ -854,8 +857,10 @@ impl Wf<'_> {
                 }
             }
         }
-        // R32: all arms `never` means the `match` is `never`. (Whether the
-        // arms COVER the scrutinee is R53's, in I7.)
+        // R53-R55: exhaustiveness, per-arm usefulness and the step budget,
+        // over this arm's own lowered patterns.
+        self.check_match(cx, node, &pat_arms, &pat_store, s);
+        // R32: all arms `never` means the `match` is `never`.
         if arms > 0 && all_never {
             return TY_NEVER;
         }
@@ -1194,123 +1199,6 @@ impl Wf<'_> {
             );
         }
     }
-
-    // -------------------------------------------------------- patterns
-
-    /// Binds a pattern's names. R50's own checks (and exhaustiveness) are
-    /// I7's; this is only what the body needs to have types for.
-    pub fn bind_pat(&mut self, cx: &mut BodyCx, pat: usize, s: TyId) {
-        match cx.kind(pat) {
-            NodeKind::PatLet => cx.bind(pat as u32, s, LocalKind::Value),
-            NodeKind::PatTuple => {
-                let parts: Vec<TyId> = if self.fir.tys.tag(self.fir.tys.unqual(s)) == TyTag::Tuple {
-                    self.fir
-                        .tys
-                        .args(ArgsId(self.fir.tys.b(self.fir.tys.unqual(s))))
-                        .to_vec()
-                } else {
-                    Vec::new()
-                };
-                for (i, c) in cx.kids(pat).into_iter().enumerate() {
-                    self.bind_pat(cx, c, parts.get(i).copied().unwrap_or(TY_ERROR));
-                }
-            }
-            NodeKind::PatDot | NodeKind::PatPath => {
-                let name = last_ident(cx, pat)
-                    .map(|i| self.names.intern(cx.f.tokens.text(i, cx.f.source)));
-                let payload_tys = name.map(|n| self.variant_payload(s, n)).unwrap_or_default();
-                for c in cx.kids(pat) {
-                    if cx.kind(c) != NodeKind::Payload {
-                        continue;
-                    }
-                    for (i, sub) in cx.kids(c).into_iter().enumerate() {
-                        let t = match cx.kind(sub) {
-                            NodeKind::FPat => {
-                                let fname = last_ident(cx, sub)
-                                    .map(|i| self.names.intern(cx.f.tokens.text(i, cx.f.source)));
-                                fname
-                                    .and_then(|f| self.record_field(s, name, f))
-                                    .unwrap_or(TY_ERROR)
-                            }
-                            _ => payload_tys.get(i).copied().unwrap_or(TY_ERROR),
-                        };
-                        match cx.kind(sub) {
-                            NodeKind::FPat => {
-                                for inner in cx.kids(sub) {
-                                    self.bind_pat(cx, inner, t);
-                                }
-                                if cx.kids(sub).is_empty() {
-                                    // `{ x }` shorthand binds the field name.
-                                    cx.bind(sub as u32, t, LocalKind::Value);
-                                }
-                            }
-                            _ => self.bind_pat(cx, sub, t),
-                        }
-                    }
-                }
-            }
-            _ => {}
-        }
-    }
-
-    /// The tuple-payload types of variant `name` of enum `s`, with the
-    /// enum's own arguments substituted (`some(let v)` on `Option[i64]`
-    /// binds `v: i64`, not `Option`'s parameter).
-    fn variant_payload(&mut self, s: TyId, name: fors_index::Symbol) -> Vec<TyId> {
-        let bare = self.fir.tys.unqual(s);
-        if self.fir.tys.tag(bare) != TyTag::Nominal {
-            return Vec::new();
-        }
-        let def = DefId(self.fir.tys.a(bare));
-        let args = ArgsId(self.fir.tys.b(bare));
-        let ms = self.fir.sigs.members(def);
-        for i in 0..self.fir.sigs.member_store.count(ms) {
-            let m = self.fir.sigs.member_store.get(ms, i);
-            if m.name == name && m.kind == fors_fir::sig::MemberKind::Variant {
-                let xs = self.fir.tys.args(m.args).to_vec();
-                return xs
-                    .into_iter()
-                    .map(|x| self.substituted(def, args, x))
-                    .collect();
-            }
-        }
-        Vec::new()
-    }
-
-    fn record_field(
-        &mut self,
-        s: TyId,
-        variant: Option<fors_index::Symbol>,
-        field: fors_index::Symbol,
-    ) -> Option<TyId> {
-        let bare = self.fir.tys.unqual(s);
-        if self.fir.tys.tag(bare) != TyTag::Nominal {
-            return None;
-        }
-        let def = DefId(self.fir.tys.a(bare));
-        let ms = self.fir.sigs.members(def);
-        for i in 0..self.fir.sigs.member_store.count(ms) {
-            let m = self.fir.sigs.member_store.get(ms, i);
-            match m.kind {
-                fors_fir::sig::MemberKind::Field if variant.is_none() && m.name == field => {
-                    let args = ArgsId(self.fir.tys.b(bare));
-                    return Some(self.substituted(def, args, m.ty));
-                }
-                fors_fir::sig::MemberKind::Variant if Some(m.name) == variant => {
-                    let sub = m.sub;
-                    for j in 0..self.fir.sigs.member_store.count(sub) {
-                        let f = self.fir.sigs.member_store.get(sub, j);
-                        if f.name == field {
-                            let args = ArgsId(self.fir.tys.b(bare));
-                            return Some(self.substituted(def, args, f.ty));
-                        }
-                    }
-                }
-                _ => {}
-            }
-        }
-        None
-    }
 }
 
 // ------------------------------------------------------------- helpers
@@ -1326,12 +1214,6 @@ fn is_repeat(cx: &BodyCx, node: usize) -> bool {
     let (a, b) = cx.f.tree.token_range(node);
     (a as usize..(b as usize).min(cx.f.tokens.kinds.len()))
         .any(|i| cx.f.tokens.kinds[i] == TokenKind::Semi)
-}
-
-fn last_ident(cx: &BodyCx, node: usize) -> Option<usize> {
-    let (a, b) = fors_resolve::paths::own_span(cx.f.tree, node);
-    (a as usize..(b as usize).min(cx.f.tokens.kinds.len()))
-        .rfind(|&i| cx.f.tokens.kinds[i] == TokenKind::Ident)
 }
 
 fn conv_written(cx: &BodyCx, p: usize) -> Option<Conv> {
