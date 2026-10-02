@@ -839,6 +839,16 @@ impl Wf<'_> {
             let parts = cx.kids(arm);
             let Some(&pat) = parts.first() else { continue };
             let id = self.check_pat(cx, &mut pat_store, pat, s);
+            // D6 (I10a): the arm, in R54's source order, with its decided
+            // pattern tree. Lowering tests the arms in exactly this order.
+            if let Some(root) = cx.facts.patterns.last_root() {
+                cx.facts.patterns.arms.push(crate::facts::PatArmRow {
+                    owner: node as u32,
+                    order: pat_arms.len() as u32,
+                    pat: pat as u32,
+                    root,
+                });
+            }
             pat_arms.push((pat, id));
             let Some(&body) = parts.iter().find(|&&c| is_expr_kind(cx.kind(c))) else {
                 continue;

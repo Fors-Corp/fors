@@ -130,6 +130,18 @@ impl Wf<'_> {
                 "this arm is not useful: every value it matches is already covered by an earlier arm".to_string(),
             );
         }
+        // D6 (I10a): R53's answer, for the `match` lowering is about to
+        // build. Recorded only when the walk finished — a budget-exceeded
+        // match (above) and a scrutinee that failed to type (at the top)
+        // leave NO row, so lowering refuses the body instead of guessing.
+        cx.facts
+            .patterns
+            .scrutinees
+            .push(crate::facts::ScrutineeRow {
+                owner: node as u32,
+                ty: s,
+                exhaustive: missing.is_none(),
+            });
         if let Some(w) = missing {
             let text = self.render_witness(&w[0]);
             self.bemit(

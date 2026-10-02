@@ -8,6 +8,13 @@
 //! of re-deriving types; the checker itself never reads it back, so a
 //! facts bug can only starve lowering, never mis-check a program.
 //!
+//! Increment I10a keeps the two promises this table made and never kept:
+//! D2's determined generic arguments ([`BodyFacts::generic_args`], the
+//! `facts.rs` line "I5 adds the determined generic arguments") and D5/D6's
+//! decided patterns ([`BodyFacts::patterns`] — I7 decided every pattern
+//! and discarded the decision, so an enum or struct `match` could not be
+//! lowered at all).
+//!
 //! Coverage contract: [`BodyFacts::record`] is called exactly once per
 //! `synth`/`check` return (the two wrappers in `expr.rs`) and once per
 //! `call_expr` return (the `?`-operand bypass in both judgements calls it
@@ -15,6 +22,7 @@
 //! [`NO_TY`] means "never visited", never "visited and unknown" — every
 //! undecided form answers [`TY_ERROR`], which is absorbing and recorded.
 
+use fors_fir::constval::ConstValue;
 use fors_fir::sig::Conv;
 use fors_fir::ty::{NO_TY, TyId};
 use fors_index::ids::DefId;
@@ -25,7 +33,9 @@ use crate::tape::{PlaceId, UseTape};
 ///
 /// I3.5 records the I3 subset: free functions, enum variants and `fn`
 /// values. I4 adds method resolution (inherent-before-trait lookup,
-/// `Method { def, owner }`); I5 adds the determined generic arguments.
+/// `Method { def, owner }`). The determined generic arguments were promised
+/// to I5 and landed in I10a, beside the callee rather than inside it:
+/// [`BodyFacts::generic_args`].
 /// A struct literal is not a call: it records [`FactCallee::Undecided`]
 /// with one [`Conv::Let`]-like entry per field in
 /// [`BodyFacts::arg_convs`] (post-F1 may add a dedicated variant; the
@@ -220,6 +230,225 @@ pub struct LinearObligations {
     pub lin: Vec<(TyId, bool)>,
 }
 
+// --------------------------------------------- I10a: D5, D6, D2's arguments
+
+/// D5: what one decided pattern node tests (I7's decision, published for
+/// lowering by I10a). `Wild` tests nothing and binds nothing; everything
+/// else is named by ids, never by text.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum PatShape {
+    /// Visited, but nothing was decided: a parse-error pattern node, or an
+    /// error path that reported and stopped. Absorbing, exactly like
+    /// [`FactCallee::Undecided`] — lowering must refuse the body rather
+    /// than read it as a wildcard.
+    Undecided,
+    /// `_`, or an omitted component's stand-in: tests nothing.
+    Wild,
+    /// `let n`: binds the component it faces. [`PatFactRow::node`] is the
+    /// `PatLet`/`Binding` node, which is the binding's slot in the body's
+    /// local table (the same key [`ObligationRow::root`] uses).
+    Bind {
+        /// How lowering must take the component: [`Conv::Let`] when the
+        /// checker answered `Copyable` for [`PatFactRow::ty`] (a copy),
+        /// [`Conv::Sink`] otherwise (a move — ch01 R22d(ii)'s
+        /// destructuring). The checker decides this; lowering never re-asks.
+        conv: Conv,
+    },
+    /// A literal or `const` pattern, by its comptime value row (R53/R54
+    /// make an equal constant and literal the same constructor).
+    Lit(ConstValue),
+    /// An enum variant, by its enum and the variant's member index.
+    Variant { en: DefId, index: u32 },
+    /// A struct pattern, by its declaration. Each child carries the FIELD
+    /// index it matches in [`PatFactRow::slot`]; an omitted field has no
+    /// child at all (ch09 R50's "omitted fields match anything").
+    Struct { def: DefId },
+    /// A tuple pattern of `len` components, in position order.
+    Tuple { len: u32 },
+}
+
+/// [`PatFactRow::slot`] at a pattern root: no parent component.
+pub const NO_PAT_SLOT: u32 = u32::MAX;
+
+/// D5: one node of a decided pattern tree. Children are a contiguous span
+/// of [`PatternFacts::subs`], exactly like [`PatStore`](crate::pat::PatStore)'s
+/// own arena — but here `_` and `let n` are DISTINCT rows, because lowering
+/// must bind the one and not the other.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub struct PatFactRow {
+    pub shape: PatShape,
+    /// The pattern's own CST node.
+    pub node: u32,
+    /// The type the pattern faces, with the scrutinee's arguments already
+    /// substituted (R51).
+    pub ty: TyId,
+    /// `(start, len)` into [`PatternFacts::subs`], in the order this node
+    /// tests its components.
+    pub subs: (u32, u32),
+    /// Which component of the PARENT this node matches: the struct field
+    /// index, the variant payload ordinal, or the tuple position.
+    /// [`NO_PAT_SLOT`] at a root.
+    pub slot: u32,
+}
+
+/// D6: one `match` arm, or one `let`/`var` destructuring (which is a
+/// one-arm match by R31/R52).
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub struct PatArmRow {
+    /// The `match` node, or the `let`/`var` statement.
+    pub owner: u32,
+    /// Position among `owner`'s arms, in source order: R54's order, which
+    /// is the order lowering must test them in.
+    pub order: u32,
+    /// The arm's pattern node (`Arm`'s first child, or the `Binding`/
+    /// `TupleBinding`).
+    pub pat: u32,
+    /// Index into [`PatternFacts::nodes`] of this arm's pattern root.
+    pub root: u32,
+}
+
+/// D6: the scrutinee of one `match` (or one destructuring) and R53's
+/// answer about it.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub struct ScrutineeRow {
+    /// The `match` node, or the `let`/`var` statement.
+    pub owner: u32,
+    /// The scrutinee's decided type.
+    pub ty: TyId,
+    /// R53: whether the arms cover it. A `let` destructuring is
+    /// irrefutable (R31/R52) and records `true`. A `match` the checker
+    /// could not decide (R55's budget, a scrutinee that failed to type)
+    /// records NO row at all, so lowering refuses the body instead of
+    /// guessing.
+    pub exhaustive: bool,
+}
+
+/// D5/D6 — the decided patterns (I10a). I7 decides every pattern and used
+/// to discard the decision; lowering cannot lower an enum or struct match
+/// without it.
+#[derive(Default, Debug)]
+pub struct PatternFacts {
+    pub nodes: Vec<PatFactRow>,
+    pub subs: Vec<u32>,
+    pub arms: Vec<PatArmRow>,
+    pub scrutinees: Vec<ScrutineeRow>,
+    /// The rows still being filled, innermost last, each with the children
+    /// registered under it so far. Empty between patterns: a pattern walk
+    /// opens and closes every row it visits, and an arm's body is typed
+    /// only after its pattern closed, so a nested `match` always starts
+    /// from an empty stack.
+    open: Vec<(u32, Vec<u32>)>,
+    /// The last ROOT row closed, which is the arm the caller just checked.
+    last_root: Option<u32>,
+}
+
+impl PatternFacts {
+    /// The children of `node` (an index into [`PatternFacts::nodes`]).
+    pub fn subs_of(&self, node: u32) -> &[u32] {
+        let (s, l) = self.nodes[node as usize].subs;
+        &self.subs[s as usize..(s + l) as usize]
+    }
+
+    /// Opens a row for one pattern node and makes it the parent of whatever
+    /// its judgement visits next. Paired with exactly one
+    /// [`PatternFacts::close`].
+    pub(crate) fn open(&mut self, node: u32, ty: TyId) -> u32 {
+        let idx = self.nodes.len() as u32;
+        self.nodes.push(PatFactRow {
+            shape: PatShape::Undecided,
+            node,
+            ty,
+            subs: (0, 0),
+            slot: NO_PAT_SLOT,
+        });
+        if let Some(frame) = self.open.last_mut() {
+            frame.1.push(idx);
+        } else {
+            self.last_root = None;
+        }
+        self.open.push((idx, Vec::new()));
+        idx
+    }
+
+    /// Closes the innermost open row, writing its children's span.
+    pub(crate) fn close(&mut self) {
+        let Some((idx, kids)) = self.open.pop() else {
+            return;
+        };
+        let start = self.subs.len() as u32;
+        self.subs.extend_from_slice(&kids);
+        self.nodes[idx as usize].subs = (start, kids.len() as u32);
+        if self.open.is_empty() {
+            self.last_root = Some(idx);
+        }
+    }
+
+    /// A childless row the judgement adds without recursing: an omitted
+    /// component's wildcard stand-in, or the `{ x }` field shorthand's
+    /// binding.
+    pub(crate) fn leaf(&mut self, node: u32, ty: TyId, shape: PatShape) -> u32 {
+        let idx = self.nodes.len() as u32;
+        self.nodes.push(PatFactRow {
+            shape,
+            node,
+            ty,
+            subs: (0, 0),
+            slot: NO_PAT_SLOT,
+        });
+        match self.open.last_mut() {
+            Some(frame) => frame.1.push(idx),
+            None => self.last_root = Some(idx),
+        }
+        idx
+    }
+
+    /// Sets the innermost open row's decided shape.
+    pub(crate) fn shape(&mut self, shape: PatShape) {
+        if let Some(&(idx, _)) = self.open.last() {
+            self.nodes[idx as usize].shape = shape;
+        }
+    }
+
+    /// Gives the child just registered its component index in this node.
+    pub(crate) fn slot_last(&mut self, slot: u32) {
+        if let Some((_, kids)) = self.open.last()
+            && let Some(&k) = kids.last()
+        {
+            self.nodes[k as usize].slot = slot;
+        }
+    }
+
+    /// Puts the open row's children into COMPONENT order: a `{ }` payload
+    /// may name its fields in any order, and lowering wants field order.
+    /// Stable, so a child with no component ([`NO_PAT_SLOT`], a name that
+    /// is no field) keeps its written position at the end.
+    pub(crate) fn sort_children(&mut self) {
+        let Some(mut kids) = self.open.last_mut().map(|f| std::mem::take(&mut f.1)) else {
+            return;
+        };
+        kids.sort_by_key(|&k| self.nodes[k as usize].slot);
+        if let Some(f) = self.open.last_mut() {
+            f.1 = kids;
+        }
+    }
+
+    /// The root row of the pattern the caller just checked.
+    pub(crate) fn last_root(&self) -> Option<u32> {
+        self.last_root
+    }
+
+    /// The arms of one `match`/destructuring node, in source order.
+    pub fn arms_of(&self, owner: u32) -> impl Iterator<Item = &PatArmRow> {
+        self.arms.iter().filter(move |a| a.owner == owner)
+    }
+
+    /// R53's answer for one `match`/destructuring node, when the checker
+    /// decided it.
+    pub fn scrutinee_of(&self, owner: u32) -> Option<&ScrutineeRow> {
+        self.scrutinees.iter().find(|r| r.owner == owner)
+    }
+}
+
 /// D9 — scoped sources (ch01 R19c(d), R19d): per value, the source place
 /// ROOTS its accesses extend. R19a's extents stay M3; this is the source
 /// SETS only, which is what R19c and R19d decide.
@@ -267,6 +496,20 @@ pub struct BodyFacts {
     /// D3 (rest): `(call node, parameter convention per typed argument)`.
     /// Pushed in source order; at most one row per call node.
     pub arg_convs: Vec<(u32, Vec<Conv>)>,
+    /// D2 (rest, I10a): `(call node, determined generic arguments)` — the
+    /// `facts.rs` promise "I5 adds the determined generic arguments",
+    /// finally kept. The arguments are `TyId`s in the checker's own
+    /// `TyStore`, after R38-R41 and R20's normalisation, in R38(a)'s
+    /// order: the CONTAINER's parameters (an inherent impl's, a trait's
+    /// `Self` at ordinal 0) and then the callee's own. A brand argument is
+    /// its brand type, a const argument its value row — both are already
+    /// `TyId`s here. A non-generic callee records an EMPTY row, which marks
+    /// the site visited and monomorphic; [`NO_TY`] in a row is a slot the
+    /// call did not determine, and the call's own type is then [`crate::
+    /// facts::BodyFacts::ty_of`]'s `TY_ERROR`. A struct literal records
+    /// the struct's arguments the same way. Pushed in source order; at most
+    /// one row per node.
+    pub generic_args: Vec<(u32, Vec<TyId>)>,
     /// The body's retained use tape (I8's flow pass consumes it from here
     /// once lowering owns the pipeline; until then it is the same tape the
     /// checker always emitted).
@@ -278,6 +521,9 @@ pub struct BodyFacts {
     pub linear_obligations: LinearObligations,
     /// D9 (I8b): the scoped source sets of ch01 R19c(d) and R19d.
     pub scoped_sources: ScopedSources,
+    /// D5/D6 (I10a): the decided patterns, per `match` and per `let`
+    /// destructuring.
+    pub patterns: PatternFacts,
 }
 
 impl BodyFacts {
@@ -292,10 +538,12 @@ impl BodyFacts {
             recv_conv: vec![None; n],
             member: vec![MemberTarget::None; n],
             arg_convs: Vec::new(),
+            generic_args: Vec::new(),
             tape: UseTape::new(),
             defer_regions: DeferRegions::default(),
             linear_obligations: LinearObligations::default(),
             scoped_sources: ScopedSources::default(),
+            patterns: PatternFacts::default(),
         }
     }
 
@@ -333,6 +581,32 @@ impl BodyFacts {
         if self.idx(node).is_some() && !self.arg_convs.iter().any(|&(n, _)| n == node) {
             self.arg_convs.push((node, convs));
         }
+    }
+
+    /// Records a call or struct-literal node's determined generic arguments
+    /// (D2, rest). First write wins, like [`BodyFacts::set_callee`]: the
+    /// node's own judgement records, and a re-visit of the same node (a
+    /// `check` that fell back to `synth`) must not append a second row.
+    pub fn set_generic_args(&mut self, node: u32, args: Vec<TyId>) {
+        if self.idx(node).is_some() && !self.generic_args.iter().any(|&(n, _)| n == node) {
+            self.generic_args.push((node, args));
+        }
+    }
+
+    /// The determined generic arguments of a call node, or `&[]` when the
+    /// callee is not generic (and when the node was never recorded: use
+    /// [`BodyFacts::records_generic_args`] to tell the two apart).
+    pub fn generic_args_of(&self, node: u32) -> &[TyId] {
+        self.generic_args
+            .iter()
+            .find(|&&(n, _)| n == node)
+            .map(|(_, v)| &v[..])
+            .unwrap_or(&[])
+    }
+
+    /// Whether `node` has a determined-generic-arguments row at all.
+    pub fn records_generic_args(&self, node: u32) -> bool {
+        self.generic_args.iter().any(|&(n, _)| n == node)
     }
 
     /// Records a projection node's resolved member (D4). First write wins:

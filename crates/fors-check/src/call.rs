@@ -8,11 +8,12 @@
 //!
 //! I5 replaces that provisional path with R38 proper: [`Wf::type_call`]
 //! runs steps (a)-(f) literally over a [`Binding`] that is a stack local
-//! of the call and is dropped when it returns. The one surface it does
-//! not reach is a GENERIC METHOD: `methods.rs` answers
-//! `Candidate::Generic` (silent) for a method with parameters to
-//! determine, which keeps R43's two tiers out of the inference and is
-//! unchanged here. Projections on a bound head still need R20
+//! of the call and is dropped when it returns. I6 brought generic METHODS
+//! into it and I10a the last surface it did not reach, R45's qualified
+//! call on a GENERIC head (`Buffer.empty()`): no candidate is withheld
+//! from R38 any more, and I10a also records the arguments R38 determined
+//! on `BodyFacts` (D2), which is what lowering monomorphises
+//! from. Projections on a bound head still need R20
 //! (`normalise_proj`, I6): a parameter type whose every slot is bound but
 //! whose substitution still fails is left silent and absorbing — the
 //! difference between "undetermined" (T0039, this increment) and "not
@@ -609,6 +610,19 @@ impl Wf<'_> {
             self.check_bounds(cx, node, shape.gdef, &shape.owners, &b);
         }
 
+        // D2 (rest, I10a): the determined generic arguments, in R38(a)'s
+        // order — the container's slots then the callee's own, exactly as
+        // `shape.owners` lists them — each normalised (R20) so lowering
+        // never sees a projection the checker already collapsed. Recorded
+        // for every typed call, empty when there was nothing to determine.
+        let determined: Vec<TyId> = b
+            .slots()
+            .to_vec()
+            .into_iter()
+            .map(|t| if t == NO_TY { NO_TY } else { self.normalise(t) })
+            .collect();
+        cx.facts.set_generic_args(node as u32, determined);
+
         // (f) the result, fully substituted.
         let raises = if shape.raises == NO_TY {
             NO_TY
@@ -642,11 +656,9 @@ impl Wf<'_> {
     /// silent rather than T0039: R40 binds a brand "only from a receiver
     /// or argument type", and the one source of a fresh brand that reaches
     /// a callee without an argument naming it — `one.alloc(Node { val: 1 })`,
-    /// whose literal takes `A` from `alloc`'s receiver-bound `T` — is a
-    /// GENERIC METHOD, which this increment does not type (`methods.rs`
-    /// answers `Candidate::Generic`). Until it does, the literal's expected
-    /// type does not exist here and a T0039 would be the checker's gap,
-    /// not the writer's.
+    /// whose literal takes `A` from `alloc`'s receiver-bound `T` — needs an
+    /// expected type this step does not have, so a T0039 here would be the
+    /// checker's gap, not the writer's.
     fn unbound_slot(&self, owners: &[(DefId, u16)], b: &Binding) -> Option<(DefId, u16, bool)> {
         let (owner, ord) = b.first_unbound_slot()?;
         debug_assert!(owners.iter().any(|&(o, _)| o == owner));
@@ -1220,7 +1232,14 @@ impl Wf<'_> {
                 return (Callee::Undecided, Vec::new());
             };
             // R47: a bracket on a path bound to a generic item instantiates.
-            if self.is_instantiation(cx, operand) {
+            // `Type.name[..](..)` — R45's qualified form carrying R38(a)'s
+            // explicit arguments on the FUNCTION segment — instantiates
+            // too (I10a verification: `Layout.of[T]()` on a NON-generic
+            // head was a silent `TY_ERROR`, because R47's test reads the
+            // head's own arity and a monomorphic head has none; the
+            // arguments are the associated function's, and R38(a) counts
+            // them against `shape.gdef`, which is that function).
+            if self.is_instantiation(cx, operand) || self.is_qualified_path(cx, operand) {
                 let (c, nested) = self.classify_callee(cx, operand);
                 if !nested.is_empty() {
                     return (Callee::Undecided, Vec::new());
@@ -1231,6 +1250,27 @@ impl Wf<'_> {
             return (Callee::Undecided, Vec::new());
         }
         (self.classify_head(cx, node), Vec::new())
+    }
+
+    /// Whether `node` is R45's qualified path `Type.name`: a `.`-path with
+    /// a tail the resolver did not consume, whose head is a struct or enum
+    /// declaration — exactly what [`Wf::qualified_callee`] accepts, read
+    /// here without typing anything.
+    fn is_qualified_path(&self, cx: &BodyCx, node: usize) -> bool {
+        if cx.kind(node) != NodeKind::NameExpr
+            || crate::member::path_segments(cx, node)
+                <= crate::member::path_consumed(cx, node).max(1) as usize
+        {
+            return false;
+        }
+        match cx.f.uses.target_of(node as u32) {
+            Some(ResolvedTarget::Entity(Entity::Item { file, decl })) => {
+                let def = self.defs.def_of(file, decl);
+                def != fors_fir::NO_DEF
+                    && matches!(self.fir.sigs.kind(def), SigKind::Struct | SigKind::Enum)
+            }
+            _ => false,
+        }
     }
 
     fn classify_head(&mut self, cx: &mut BodyCx, node: usize) -> Callee {
@@ -1374,8 +1414,15 @@ impl Wf<'_> {
 
     /// R45's qualified `Type.name`: the head denotes a nominal type whose
     /// method is called with the receiver as an ordinary first argument.
-    /// Anything else (a trait head, whose `Self` is R38's inference, or a
-    /// generic head, whose arguments are types) is I5's and stays silent.
+    /// A trait head, whose `Self` is R38's inference, is still silent.
+    ///
+    /// I10a: a GENERIC head is no longer silent. `Buffer.empty()` used to
+    /// leave the call node `TY_ERROR` with no diagnostic at all — the facts
+    /// then carried no callee and lowering had to refuse the body — because
+    /// this function bailed out on `arity > 0`. The head is instead applied
+    /// to its OWN parameters, exactly as a generic variant construction is
+    /// (see [`Callee::Variant`]'s shape), so R38 determines them from the
+    /// expected type and the arguments and R39 reports when it cannot.
     fn qualified_callee(&mut self, cx: &mut BodyCx, node: usize, n: usize) -> Callee {
         let Some(target) = cx.f.uses.target_of(node as u32) else {
             return Callee::Undecided;
@@ -1389,12 +1436,16 @@ impl Wf<'_> {
                 self.fir.sigs.kind(head_def),
                 SigKind::Struct | SigKind::Enum
             )
-            || self.arity(head_def) > 0
         {
             return Callee::Undecided;
         }
         self.dep(head_def);
-        let recv = self.fir.tys.nominal(head_def, NO_ARGS);
+        let recv = if self.arity(head_def) == 0 {
+            self.fir.tys.nominal(head_def, NO_ARGS)
+        } else {
+            let xs = self.own_args(head_def);
+            self.fir.tys.nominal_of(head_def, &xs)
+        };
         let Some(name) = self.segment_name(cx, node, n - 1) else {
             return Callee::Undecided;
         };
@@ -1810,6 +1861,15 @@ impl Wf<'_> {
                 .map(|_| Conv::Let)
                 .collect(),
         );
+        // D2 (rest, I10a): a generic struct's determined arguments, in its
+        // own parameter order; empty for a non-generic struct.
+        let determined: Vec<TyId> = b
+            .slots()
+            .to_vec()
+            .into_iter()
+            .map(|t| if t == NO_TY { NO_TY } else { self.normalise(t) })
+            .collect();
+        cx.facts.set_generic_args(node as u32, determined);
         // R38's "nothing survives the call": the literal's `Binding` dies
         // here, before the result is handed back.
         self.live_bindings -= 1;

@@ -25,7 +25,7 @@
 
 use fors_fir::sig::{Conv, SigKind};
 use fors_fir::subst::{Binding, one_way_match};
-use fors_fir::ty::{ArgsId, NO_ARGS, NO_TY, TyId, TyTag};
+use fors_fir::ty::{NO_ARGS, TyId, TyTag};
 use fors_index::Symbol;
 use fors_index::diag::Code;
 use fors_index::ids::{DefId, ModuleId};
@@ -94,13 +94,15 @@ pub struct MethodHit {
 
 /// A named method considered as a call candidate.
 enum Candidate {
-    /// Resolved: I4 types the call.
+    /// Resolved: the call is typed, and R38 determines whatever parameters
+    /// the method or its container still has.
+    ///
+    /// I10a removed the third arm, `Generic { owner }` — "a method with
+    /// parameters to determine, which I5's inference owns, silent". I6 took
+    /// the method case; this increment took the last one (R45's generic
+    /// ASSOCIATED function, `Buffer.empty()`), so no candidate is withheld
+    /// any more and a non-empty tier always has something to call.
     Hit(MethodHit),
-    /// A method with parameters to determine: I5's inference owns it, so
-    /// it counts as PRESENT for tier purposes (R43 stops at the first
-    /// non-empty tier) and as a candidate for ambiguity (R44), but a tier
-    /// with no better answer stays silent rather than erroring.
-    Generic { owner: DefId },
     /// Not a candidate (wrong self type, associated function in method
     /// position, foreign private after its diagnostic).
     No,
@@ -507,31 +509,27 @@ impl Wf<'_> {
     ) {
         match self.concrete_candidate(cx, node, mdef, owner, recv, method_position) {
             Candidate::Hit(hit) => tier.push(Candidate::Hit(hit)),
-            Candidate::Generic { owner } => tier.push(Candidate::Generic { owner }),
             Candidate::No => {}
         }
     }
 
     /// One candidate, or R44's error. Inherent-before-trait is the only
-    /// precedence; nothing is ever ranked. A generic same-name method counts
-    /// as present: one hit plus any generics (or two hits) is ambiguous;
-    /// generics alone stay silent for I5.
+    /// precedence; nothing is ever ranked. Since I10a no candidate is
+    /// withheld for another increment, so a non-empty tier with no hit can
+    /// only mean every same-name method was refused outright (an empty tier
+    /// never reaches here) — and `Silent` stays the honest answer for it.
     fn answer(wf: &mut Wf, name: Symbol, tier: Vec<Candidate>) -> Result<MethodHit, LookupError> {
         let mut hits = Vec::new();
-        let mut generic_owners = Vec::new();
         for c in tier {
             match c {
                 Candidate::Hit(hit) => hits.push(hit),
-                Candidate::Generic { owner } => generic_owners.push(owner),
                 Candidate::No => {}
             }
         }
         if hits.is_empty() {
-            // Every same-name method needs I5's inference: the tier is
-            // non-empty (it blocks the next one) but has nothing to call.
             return Err(LookupError::Silent);
         }
-        if hits.len() == 1 && generic_owners.is_empty() {
+        if hits.len() == 1 {
             let hit = hits.pop().unwrap();
             wf.dep(hit.def);
             wf.dep(hit.owner);
@@ -540,17 +538,13 @@ impl Wf<'_> {
             }
             return Ok(hit);
         }
-        let mut candidates: Vec<String> = hits
+        let candidates: Vec<String> = hits
             .iter()
             .map(|h| {
                 let o = wf.head_name(h.owner);
                 format!("{o}.{}", wf.sym(name))
             })
             .collect();
-        for owner in generic_owners {
-            let o = wf.head_name(owner);
-            candidates.push(format!("{o}.{}", wf.sym(name)));
-        }
         Err(LookupError::Ambiguous {
             name: wf.sym(name),
             candidates,
@@ -575,11 +569,10 @@ impl Wf<'_> {
         // longer withheld. Its container's gparams (a trait's `Self` at
         // ordinal 0) and then its own become R38's slots, which
         // `call.rs`'s `Shape::owners` carries; the receiver binds the
-        // container's in step (b) and the arguments bind the rest. I5's
-        // `Candidate::Generic` survives for the one form this increment
-        // still does not type: R45's generic ASSOCIATED function, whose
-        // "receiver" is an ordinary argument and which no §13 I6 GATE
-        // test exercises.
+        // container's in step (b) and the arguments bind the rest. I10a
+        // extends the same reading to R45's generic ASSOCIATED function
+        // (`Buffer.empty()`), where there is no receiver to bind with and
+        // step (c)'s expected type does the work instead.
         let sig = self.fir.sigs.fn_sig(mdef);
         if sig == fors_fir::NO_FN_SIG {
             return Candidate::No;
@@ -592,12 +585,17 @@ impl Wf<'_> {
             if method_position {
                 return Candidate::No;
             }
-            // A generic signature is I5's even in qualified form: silence
-            // before visibility, like the method path. Every parameter is
-            // an ordinary argument here (no receiver slot to skip).
-            if self.sig_mentions_any_var(sig) {
-                return Candidate::Generic { owner };
-            }
+            // I10a: a generic signature is no longer withheld here either.
+            // This was I5's last `Candidate::Generic`, and it made
+            // `Buffer.empty()` — an associated function of a GENERIC impl,
+            // the single most common constructor shape in `std` — answer
+            // `LookupError::Silent`, so the call node carried `TY_ERROR`
+            // with no diagnostic and no callee fact. The call's own R38 has
+            // everything it needs: `call_owners` puts the impl's parameters
+            // and then the function's own in the `Binding`, step (c) binds
+            // them from the expected type, and R39 reports when nothing
+            // does. Every parameter is an ordinary argument here (no
+            // receiver slot to skip).
             if !self.method_visible(cx, owner, mdef) {
                 let m = self.sym(self.method_name(owner, mdef));
                 let h = self.head_name(owner);
@@ -659,43 +657,6 @@ impl Wf<'_> {
             recv_ty: recv,
             receiver_is_arg: false,
         })
-    }
-
-    /// Whether a signature mentions a generic parameter or a projection in
-    /// ANY parameter (no receiver slot to skip), the result or `raises`.
-    /// For R45's qualified associated functions, where the "receiver" is
-    /// an ordinary first argument.
-    fn sig_mentions_any_var(&self, sig: fors_fir::sig::FnSigId) -> bool {
-        let n = self.fir.sigs.fn_sigs.count(sig);
-        for i in 0..n {
-            if self.ty_mentions_var(self.fir.sigs.fn_sigs.param(sig, i).ty) {
-                return true;
-            }
-        }
-        let r = self.fir.sigs.fn_sigs.result(sig);
-        if self.ty_mentions_var(r) {
-            return true;
-        }
-        let e = self.fir.sigs.fn_sigs.raises(sig);
-        e != NO_TY && self.ty_mentions_var(e)
-    }
-
-    fn ty_mentions_var(&self, ty: TyId) -> bool {
-        let bare = self.fir.tys.unqual(ty);
-        match self.fir.tys.tag(bare) {
-            TyTag::Param | TyTag::Proj | TyTag::Brand | TyTag::Fn | TyTag::Dyn => true,
-            TyTag::Nominal | TyTag::Tuple => {
-                let args = self.fir.tys.args(ArgsId(self.fir.tys.b(bare)));
-                args.iter().any(|&a| {
-                    let u = self.fir.tys.unqual(a);
-                    matches!(
-                        self.fir.tys.tag(u),
-                        TyTag::Param | TyTag::Proj | TyTag::Brand | TyTag::Fn | TyTag::Dyn
-                    )
-                })
-            }
-            _ => false,
-        }
     }
 
     /// Whether the method's declared self type ACCEPTS `recv` — design

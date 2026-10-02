@@ -3519,3 +3519,680 @@ fn a_sink_self_receiver_owes_its_linear_components() {
         "destructuring consumes: {destructured:?}"
     );
 }
+
+// ------------------------------------------------------------------- I10a
+//
+// "The facts lowering is missing": three gaps the FMIR F1-completion
+// increment hit. (1) `facts.rs` promised "I5 adds the determined generic
+// arguments" and I5 never did, so monomorphisation had no arguments to read.
+// (2) I7 decided every pattern and discarded the decision, so an enum or
+// struct `match` could not be lowered at all. (3) A member call on a
+// GENERIC impl left its node `TY_ERROR` with NO diagnostic, so the facts
+// carried no callee and lowering had to refuse the body.
+
+/// One checked probe with the syntax the facts are keyed by.
+struct Facts10 {
+    out: fors_check::CheckOutput,
+    kinds: Vec<fors_syntax::NodeKind>,
+}
+
+fn checked10(src: &str) -> Facts10 {
+    let mut interner = Interner::new();
+    let source = format!("module m;\nneeds {{ }};\n{src}");
+    let bytes = source.into_bytes();
+    let name: Segments = vec![interner.intern(b"m")];
+    let parsed = parse_file(&bytes);
+    assert!(
+        parsed.diags.is_empty(),
+        "probe must parse: {:?}\n{}",
+        parsed.diags,
+        String::from_utf8_lossy(&bytes)
+    );
+    let inputs = [FileInput {
+        tree: &parsed.tree,
+        tokens: &parsed.tokens,
+        source: &bytes,
+        name,
+    }];
+    let resolved = fors_resolve::resolve_in_package(&mut interner, &inputs, Some(0), Some(b"m"));
+    let out = fors_check::check_build(&inputs, &resolved, &mut interner);
+    let kinds = parsed.tree.kinds.to_vec();
+    Facts10 { out, kinds }
+}
+
+impl Facts10 {
+    fn codes(&self) -> Vec<String> {
+        self.out
+            .diagnostics
+            .iter()
+            .map(|d| d.code.as_string())
+            .collect()
+    }
+
+    /// Every `(node, row)` of the given kind that carries a generic-argument
+    /// row, in node order, across every body.
+    fn garg_rows(&self, kind: fors_syntax::NodeKind) -> Vec<(u32, Vec<fors_fir::ty::TyId>)> {
+        let mut out: Vec<(u32, Vec<fors_fir::ty::TyId>)> = Vec::new();
+        for (_, f) in &self.out.facts {
+            for (n, args) in &f.generic_args {
+                if self.kinds[*n as usize] == kind {
+                    out.push((*n, args.clone()));
+                }
+            }
+        }
+        out.sort_by_key(|&(n, _)| n);
+        out
+    }
+
+    /// The body table whose range covers `node`.
+    fn facts_at(&self, node: u32) -> &fors_check::facts::BodyFacts {
+        self.out
+            .facts
+            .iter()
+            .map(|(_, f)| f)
+            .find(|f| {
+                let (s, e) = f.range();
+                node >= s && node < e
+            })
+            .expect("a body covers the node")
+    }
+
+    /// The pattern tree of one arm, flattened depth-first as
+    /// `(depth, shape, slot)` — the shape of the decision, with no TyIds or
+    /// node numbers to re-pin when the fixture moves.
+    fn arm_tree(&self, owner: u32, order: u32) -> Vec<(usize, fors_check::facts::PatShape, i64)> {
+        let f = self.facts_at(owner);
+        let arm = f
+            .patterns
+            .arms
+            .iter()
+            .find(|a| a.owner == owner && a.order == order)
+            .unwrap_or_else(|| panic!("no arm {order} on node {owner}"));
+        let mut out = Vec::new();
+        walk10(f, arm.root, 0, &mut out);
+        out
+    }
+
+    /// The `DefId` of the nth declaration of `kind`, found through its CST
+    /// node so no `DeclId` index has to be guessed.
+    fn def_at(&self, kind: fors_syntax::NodeKind, nth: usize) -> fors_index::ids::DefId {
+        let node = self.node_of(kind, nth);
+        self.out
+            .defs
+            .as_ref()
+            .expect("defs")
+            .def_at(fors_index::ids::FileId(0), node)
+    }
+
+    fn node_of(&self, kind: fors_syntax::NodeKind, nth: usize) -> u32 {
+        self.kinds
+            .iter()
+            .enumerate()
+            .filter(|&(_, &k)| k == kind)
+            .map(|(i, _)| i as u32)
+            .nth(nth)
+            .unwrap_or_else(|| panic!("no {kind:?} #{nth}"))
+    }
+}
+
+fn walk10(
+    f: &fors_check::facts::BodyFacts,
+    i: u32,
+    depth: usize,
+    out: &mut Vec<(usize, fors_check::facts::PatShape, i64)>,
+) {
+    let r = f.patterns.nodes[i as usize];
+    let slot = if r.slot == fors_check::facts::NO_PAT_SLOT {
+        -1
+    } else {
+        r.slot as i64
+    };
+    out.push((depth, r.shape, slot));
+    for &k in f.patterns.subs_of(i) {
+        walk10(f, k, depth + 1, out);
+    }
+}
+
+/// I10a change (1), design §7.4 and §11/12's D2: every call site the
+/// checker resolves to a generic callee records the DETERMINED arguments,
+/// in R38(a)'s order (the container's parameters then the callee's own),
+/// after normalisation. Lowering monomorphises from this row and never
+/// re-runs R38.
+#[test]
+fn i10a_a_call_records_its_determined_generic_arguments() {
+    use fors_fir::ty::PrimKind;
+
+    const SRC: &str = "\
+fn id[T: Copyable](let x: T) -> T { return x; }
+struct Pair[T] { a: T, b: T }
+enum Opt2[T] { s(T), n }
+struct Bag[T] { v: T }
+impl[T: Copyable] Bag[T] { pub fn get(let self: Bag[T]) -> T { return self.v; } }
+trait Tr3 { fn go(let self: Self) -> i64; }
+struct Impl3 { n: i64 }
+impl Tr3 for Impl3 { fn go(let self: Self) -> i64 { return self.n; } }
+fn plain(let n: i64) -> i64 { return n; }
+fn f(let b: Bag[i64], let i: Impl3) -> i64 {
+    let one = id(1i64);
+    let two = id(true);
+    let p = Pair { a: 1u8, b: 2u8 };
+    let o: Opt2[bool] = Opt2.s(true);
+    let g = b.get();
+    let t = i.go();
+    return plain(3);
+}
+";
+    let mut c = checked10(SRC);
+    assert!(
+        c.codes().is_empty(),
+        "probe must check clean: {:?}",
+        c.codes()
+    );
+    let i64_ty = c.out.fir.tys.prim(PrimKind::I64);
+    let bool_ty = c.out.fir.tys.prim(PrimKind::Bool);
+    let u8_ty = c.out.fir.tys.prim(PrimKind::U8);
+
+    let calls = c.garg_rows(fors_syntax::NodeKind::CallExpr);
+    // `id(1i64)`, `id(true)`, `Opt2.s(true)`, `b.get()`, `i.go()`,
+    // `plain(3)`: every call records, generic or not.
+    let lists: Vec<Vec<fors_fir::ty::TyId>> = calls.iter().map(|(_, a)| a.clone()).collect();
+    assert_eq!(lists.len(), 6, "every call records one row: {lists:?}");
+    // The SAME generic function instantiated at two types in one body
+    // records two DIFFERENT argument lists.
+    assert_eq!(lists[0], vec![i64_ty], "`id(1i64)` determines `T := i64`");
+    assert_eq!(lists[1], vec![bool_ty], "`id(true)` determines `T := bool`");
+    assert_ne!(lists[0], lists[1], "one body, two instantiations");
+    // A generic variant construction determines the enum's own parameter.
+    assert_eq!(
+        lists[2],
+        vec![bool_ty],
+        "`Opt2.s(true)` determines `T := bool`"
+    );
+    // A method on a generic inherent impl: the CONTAINER's parameter,
+    // solved from the receiver (design §7.4 step (b)).
+    assert_eq!(lists[3], vec![i64_ty], "`b.get()` solves the impl's `T`");
+    // A method on a BOUND records the receiver's solved `Self`, which is
+    // ordinal 0 of a trait's generics.
+    let impl3 = c.def_at(fors_syntax::NodeKind::StructDecl, 2);
+    let self_ty = c.out.fir.tys.nominal(impl3, fors_fir::ty::NO_ARGS);
+    assert_eq!(lists[4].len(), 1, "a trait method has one container slot");
+    assert_eq!(lists[4][0], self_ty, "`i.go()` solves `Self := Impl3`");
+    // A NON-generic callee records an empty list — a row, so the site is
+    // marked visited and monomorphic, and not a missing fact.
+    assert!(lists[5].is_empty(), "`plain(3)` determines nothing");
+    assert!(
+        c.facts_at(calls[5].0).records_generic_args(calls[5].0),
+        "and the empty list is a recorded row, not an absent one"
+    );
+    // A method reached through a BOUND records the receiver's solved
+    // `Self` too — here the rigid parameter itself (R59: nothing more is
+    // learnt about it), which is what lowering monomorphises against.
+    let mut bound = checked10(
+        "trait Tr4 { fn go(let self: Self) -> i64; }\n\
+         fn via[T: Tr4](let x: T) -> i64 { return x.go(); }",
+    );
+    assert!(
+        bound.codes().is_empty(),
+        "the bound probe must check clean: {:?}",
+        bound.codes()
+    );
+    let via = bound.def_at(fors_syntax::NodeKind::FnDecl, 0);
+    let t_param = bound.out.fir.tys.param(via, 0);
+    let rows = bound.garg_rows(fors_syntax::NodeKind::CallExpr);
+    assert_eq!(rows.len(), 1, "one call: {rows:?}");
+    assert_eq!(
+        rows[0].1,
+        vec![t_param],
+        "`x.go()` on a bound solves `Self := T`"
+    );
+
+    // A struct literal of a generic struct records its arguments too.
+    let lits = c.garg_rows(fors_syntax::NodeKind::StructLit);
+    assert_eq!(lits.len(), 1, "one struct literal: {lits:?}");
+    assert_eq!(
+        lits[0].1,
+        vec![u8_ty],
+        "`Pair {{ a: 1u8, .. }}` is `Pair[u8]`"
+    );
+}
+
+/// I10a change (2), design §7.8 and §13's I7: the pattern decision is
+/// PUBLISHED. Each arm's tree names its variant by def and index, its
+/// struct by def with its children in FIELD order, its literals by value
+/// row and its bindings by convention; an omitted field has no child, and
+/// R53's exhaustiveness answer and the arm order come with it.
+#[test]
+fn i10a_every_pattern_publishes_its_decided_shape() {
+    use fors_check::facts::PatShape;
+    use fors_fir::constval::ConstValue;
+    use fors_fir::sig::Conv;
+
+    const SRC: &str = "\
+enum E3 { a, b(i64), c { x: i64, y: bool } }
+struct P3 { x: i64, y: bool }
+fn f(let e: E3) -> i64 {
+    match e {
+        E3.a => { 0 }
+        E3.b(let n) => { n }
+        E3.c { y: let q, x: let p } => { p }
+    }
+}
+fn g(let p: P3) -> i64 { match p { P3 { x: let a } => { a } } }
+fn h(let t: (i64, bool)) -> i64 {
+    let (u, v) = t;
+    match t {
+        (1, true) => { 1 }
+        (let w, _) => { w }
+    }
+}
+";
+    let c = checked10(SRC);
+    assert!(
+        c.codes().is_empty(),
+        "probe must check clean: {:?}",
+        c.codes()
+    );
+    let e3 = c.def_at(fors_syntax::NodeKind::EnumDecl, 0);
+    let p3 = c.def_at(fors_syntax::NodeKind::StructDecl, 0);
+
+    // ---- the enum match: three arms, in source order.
+    let m = c.node_of(fors_syntax::NodeKind::MatchExpr, 0);
+    let f = c.facts_at(m);
+    let arms: Vec<u32> = f.patterns.arms_of(m).map(|a| a.order).collect();
+    assert_eq!(arms, vec![0, 1, 2], "the arm order is R54's source order");
+    assert_eq!(
+        c.arm_tree(m, 0),
+        vec![(0, PatShape::Variant { en: e3, index: 0 }, -1)],
+        "a unit variant is its def and index, with no children"
+    );
+    assert_eq!(
+        c.arm_tree(m, 1),
+        vec![
+            (0, PatShape::Variant { en: e3, index: 1 }, -1),
+            (1, PatShape::Bind { conv: Conv::Let }, 0),
+        ],
+        "a payload binding is a child at component 0"
+    );
+    // The `{ y: .., x: .. }` payload is written out of order and published
+    // in FIELD order: `x` (0) before `y` (1).
+    assert_eq!(
+        c.arm_tree(m, 2),
+        vec![
+            (0, PatShape::Variant { en: e3, index: 2 }, -1),
+            (1, PatShape::Bind { conv: Conv::Let }, 0),
+            (1, PatShape::Bind { conv: Conv::Let }, 1),
+        ],
+        "a record payload is published in field order, not written order"
+    );
+    assert!(
+        f.patterns
+            .scrutinee_of(m)
+            .expect("a scrutinee row")
+            .exhaustive,
+        "three variants, three arms: R53 says exhaustive"
+    );
+
+    // ---- the struct pattern with an OMITTED field: one child only.
+    let gm = c.node_of(fors_syntax::NodeKind::MatchExpr, 1);
+    assert_eq!(
+        c.arm_tree(gm, 0),
+        vec![
+            (0, PatShape::Struct { def: p3 }, -1),
+            (1, PatShape::Bind { conv: Conv::Let }, 0),
+        ],
+        "an omitted field has no child at all"
+    );
+
+    // ---- the `let` destructuring publishes too (R31/R52: irrefutable).
+    let lets: Vec<u32> = (0..c.kinds.len() as u32)
+        .filter(|&n| c.kinds[n as usize] == fors_syntax::NodeKind::LetStmt)
+        .collect();
+    let destructuring = *lets
+        .iter()
+        .find(|&&n| {
+            let f = c.facts_at(n);
+            f.patterns.arms_of(n).any(|a| {
+                matches!(
+                    f.patterns.nodes[a.root as usize].shape,
+                    PatShape::Tuple { .. }
+                )
+            })
+        })
+        .expect("the `let (u, v) = t;` statement publishes a tree");
+    assert_eq!(
+        c.arm_tree(destructuring, 0),
+        vec![
+            (0, PatShape::Tuple { len: 2 }, -1),
+            (1, PatShape::Bind { conv: Conv::Let }, 0),
+            (1, PatShape::Bind { conv: Conv::Let }, 1),
+        ],
+        "a tuple `let` is a one-arm, irrefutable match"
+    );
+    assert!(
+        c.facts_at(destructuring)
+            .patterns
+            .scrutinee_of(destructuring)
+            .expect("a scrutinee row")
+            .exhaustive,
+        "a `let` destructuring is irrefutable"
+    );
+
+    // ---- nesting, a literal arm and a wildcard.
+    let hm = c.node_of(fors_syntax::NodeKind::MatchExpr, 2);
+    assert_eq!(
+        c.arm_tree(hm, 0),
+        vec![
+            (0, PatShape::Tuple { len: 2 }, -1),
+            (1, PatShape::Lit(ConstValue::I(1)), 0),
+            (1, PatShape::Lit(ConstValue::B(true)), 1),
+        ],
+        "a nested literal arm carries each literal's value row"
+    );
+    assert_eq!(
+        c.arm_tree(hm, 1),
+        vec![
+            (0, PatShape::Tuple { len: 2 }, -1),
+            (1, PatShape::Bind { conv: Conv::Let }, 0),
+            (1, PatShape::Wild, 1),
+        ],
+        "`_` is a row of its own: lowering must NOT bind it"
+    );
+}
+
+/// I10a change (2), the linear half: a binding whose component is not
+/// `Copyable` publishes `Conv::Sink`, which is the checker's own
+/// copy-or-move answer (ch01 R4a, R22d(ii)) and what lowering needs.
+#[test]
+fn i10a_a_pattern_binding_publishes_copy_or_move() {
+    use fors_check::facts::PatShape;
+    use fors_fir::sig::Conv;
+
+    const SRC: &str = "\
+struct Res9 { fd: i64 }
+impl Linear for Res9 { }
+struct Holder { r: Res9 }
+impl Holder { fn take(sink self: Self) { match self { Holder { r: let x } => { x.drop9(); } } } }
+impl Res9 { fn drop9(sink self: Self) { } }
+fn plainly(let n: i64) -> i64 { match n { let k => { k } } }
+";
+    let c = checked10(SRC);
+    assert!(
+        c.codes().is_empty(),
+        "probe must check clean: {:?}",
+        c.codes()
+    );
+    let m = c.node_of(fors_syntax::NodeKind::MatchExpr, 0);
+    assert_eq!(
+        c.arm_tree(m, 0)[1].1,
+        PatShape::Bind { conv: Conv::Sink },
+        "a linear component is MOVED out by the binding"
+    );
+    let plain = c.node_of(fors_syntax::NodeKind::MatchExpr, 1);
+    assert_eq!(
+        c.arm_tree(plain, 0),
+        vec![(0, PatShape::Bind { conv: Conv::Let }, -1)],
+        "a `Copyable` component is COPIED"
+    );
+}
+
+/// I10a change (3): a call to a member of a GENERIC impl used to leave its
+/// node `TY_ERROR` with NO diagnostic. Root cause: `call.rs`'s
+/// `qualified_callee` bailed out whenever the head had arity > 0, and
+/// `methods.rs`'s `concrete_candidate` answered `Candidate::Generic`
+/// (silent) for an associated function whose signature mentions a
+/// parameter — so `Buffer.empty()` resolved to nothing at all, silently.
+/// Both are gone: the head is applied to its own parameters and R38
+/// determines them, R39 reports when it cannot.
+#[test]
+fn i10a_a_generic_impl_associated_function_is_typed_not_silently_absorbed() {
+    use fors_check::facts::FactCallee;
+    use fors_fir::ty::TY_ERROR;
+
+    const SRC: &str = "\
+struct Buf9[T, N: usize] { len: usize, d: Array[T, N] }
+impl[T, N: usize] Buf9[T, N] {
+    pub fn empty(let z: T) -> Buf9[T, N] { return Buf9 { len: 0, d: [z; N] }; }
+    pub fn cap(let self: Self) -> usize { return N; }
+}
+fn mk() -> Buf9[i64, 4] { return Buf9.empty(0); }
+fn capped(let b: Buf9[i64, 4]) -> usize { return b.cap(); }
+";
+    let c = checked10(SRC);
+    assert!(
+        c.codes().is_empty(),
+        "probe must check clean: {:?}",
+        c.codes()
+    );
+    // The `Buf9.empty(0)` call node is TYPED, and it carries the callee and
+    // the determined arguments lowering needs.
+    let call = c.node_of(fors_syntax::NodeKind::CallExpr, 1);
+    let f = c.facts_at(call);
+    assert_ne!(f.ty_of(call), TY_ERROR, "the call is typed, not absorbed");
+    assert!(
+        matches!(f.callee_of(call), FactCallee::Method { .. }),
+        "and the callee fact names the associated function: {:?}",
+        f.callee_of(call)
+    );
+    assert_eq!(
+        f.generic_args_of(call).len(),
+        2,
+        "`T` and `N` of the impl are determined from the expected type"
+    );
+    // No silent TY_ERROR anywhere in this build: every typed node that is
+    // absorbing must have a diagnostic behind it, and there are none.
+    for (_, f) in &c.out.facts {
+        let (s, e) = f.range();
+        for n in s..e.min(c.kinds.len() as u32) {
+            assert_ne!(
+                f.ty_of(n),
+                TY_ERROR,
+                "node {n} ({:?}) is TY_ERROR with no diagnostic",
+                c.kinds[n as usize]
+            );
+        }
+    }
+    // And R39 SPEAKS where it used to be silent: with nothing to determine
+    // `T` and `N` from, the call is a diagnostic, not silence.
+    let undetermined = check_source(
+        "struct Buf8[T, N: usize] { len: usize }\n\
+         impl[T, N: usize] Buf8[T, N] { pub fn empty() -> Buf8[T, N] { return Buf8 { len: 0 }; } }\n\
+         fn mk() { Buf8.empty(); }",
+    );
+    assert_eq!(
+        undetermined,
+        vec!["T0039"],
+        "an undetermined parameter is R39's diagnostic, never silence"
+    );
+}
+
+/// I10a change (3) on the REAL `std` shapes the F1-completion verifier
+/// used: `Buffer.empty()`, `buf[i] = v` and `buf.cap()` through a build
+/// that contains `std/` itself (the shape
+/// `crates/fors-lower/tests/conformance_f2.rs::std_checks_clean` builds).
+/// Every one of them was a silent `TY_ERROR` before this increment.
+#[test]
+fn i10a_std_generic_impl_members_are_typed() {
+    use fors_fir::ty::TY_ERROR;
+
+    const USER: &[u8] = b"module m;\nneeds {};\n\nuse std.mem;\n\n\
+fn mk() -> mem.Buffer[i64, 4] { return mem.Buffer.empty(); }\n\
+fn capped(let buf: mem.Buffer[i64, 4]) -> usize { return buf.cap(); }\n\
+fn poke(inout buf: mem.Buffer[i64, 4]) { buf[2] = 1; }\n\
+fn peek(let buf: mem.Buffer[i64, 4]) -> i64 { return buf[1]; }\n";
+
+    let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../..")
+        .canonicalize()
+        .expect("repo root");
+    let files: &[(&str, &[&str])] = &[
+        ("io.fors", &["std", "io"]),
+        ("mem.fors", &["std", "mem"]),
+        ("mem/alloc.fors", &["std", "mem", "alloc"]),
+        ("mem/vec.fors", &["std", "mem", "vec"]),
+        ("mem/seq.fors", &["std", "mem", "seq"]),
+        ("mem/text.fors", &["std", "mem", "text"]),
+        ("mem/hashmap.fors", &["std", "mem", "hashmap"]),
+        ("fs.fors", &["std", "fs"]),
+        ("net.fors", &["std", "net"]),
+        ("proc.fors", &["std", "proc"]),
+        ("rand.fors", &["std", "rand"]),
+        ("time.fors", &["std", "time"]),
+        ("env.fors", &["std", "env"]),
+        ("ffi.fors", &["std", "ffi"]),
+        ("gpu.fors", &["std", "gpu"]),
+    ];
+    let mut interner = Interner::new();
+    let mut sources: Vec<Vec<u8>> = vec![USER.to_vec()];
+    let mut names: Vec<Segments> = vec![vec![interner.intern(b"m")]];
+    for (rel, segs) in files {
+        sources.push(std::fs::read(root.join("std").join(rel)).expect("std module reads"));
+        names.push(segs.iter().map(|s| interner.intern(s.as_bytes())).collect());
+    }
+    let parsed: Vec<_> = sources.iter().map(|s| parse_file(s)).collect();
+    for (p, n) in parsed.iter().zip(&names) {
+        assert!(p.diags.is_empty(), "{n:?} must parse: {:?}", p.diags);
+    }
+    let inputs: Vec<FileInput> = parsed
+        .iter()
+        .zip(sources.iter())
+        .zip(names.iter())
+        .map(|((p, s), n)| FileInput {
+            tree: &p.tree,
+            tokens: &p.tokens,
+            source: s,
+            name: n.clone(),
+        })
+        .collect();
+    let resolved = fors_resolve::resolve_in_package(&mut interner, &inputs, None, None);
+    assert!(
+        resolved.files[0].diagnostics.is_empty(),
+        "the user module must resolve clean: {:?}",
+        resolved.files[0]
+            .diagnostics
+            .iter()
+            .map(|d| d.code.as_string())
+            .collect::<Vec<_>>()
+    );
+    let out = fors_check::check_build(&inputs, &resolved, &mut interner);
+    let mine: Vec<String> = out
+        .diagnostics
+        .iter()
+        .filter(|d| d.file.index() == 0)
+        .map(|d| format!("{}: {}", d.code.as_string(), d.message))
+        .collect();
+    assert!(
+        mine.is_empty(),
+        "the user module must check clean: {mine:?}"
+    );
+    // No node of the user module is absorbing: before I10a, `Buffer.empty()`
+    // was `TY_ERROR` + `FactCallee::Undecided` with no diagnostic at all.
+    // Only the user module's OWN bodies: a `BodyFacts` range is in CST node
+    // numbers, which every file restarts, so `std`'s tables alias these.
+    let kinds = parsed[0].tree.kinds.to_vec();
+    let defs = out.defs.as_ref().expect("defs");
+    let mine_defs: Vec<fors_index::ids::DefId> = (0..kinds.len() as u32)
+        .filter(|&n| kinds[n as usize] == fors_syntax::NodeKind::FnDecl)
+        .map(|n| defs.def_at(fors_index::ids::FileId(0), n))
+        .filter(|d| *d != fors_fir::NO_DEF)
+        .collect();
+    assert_eq!(
+        mine_defs.len(),
+        4,
+        "the user module declares four functions"
+    );
+    let mut seen = 0;
+    for (owner, f) in &out.facts {
+        if !mine_defs.contains(owner) {
+            continue;
+        }
+        seen += 1;
+        let (s, e) = f.range();
+        for n in s..e.min(kinds.len() as u32) {
+            assert_ne!(
+                f.ty_of(n),
+                TY_ERROR,
+                "node {n} ({:?}) of the user module is a SILENT TY_ERROR",
+                kinds[n as usize]
+            );
+        }
+    }
+    assert_eq!(seen, 4, "every one of them was typed");
+}
+
+/// I10a verification, the fourth silent shape in the same family as change
+/// (3): R45's qualified call carrying R38(a)'s explicit arguments on the
+/// FUNCTION segment, `Layout.of[T]()`, on a NON-generic head. R47's
+/// instantiation test reads the head's own arity, which a monomorphic
+/// head lacks, so `classify_callee` fell through to a plain bracket and
+/// the call was `TY_ERROR` with no diagnostic — `std/mem/alloc.fors`'s
+/// `Allocator.create` shape. The qualified path now instantiates like a
+/// generic item does, and the arguments count against the function.
+#[test]
+fn i10a_a_qualified_call_with_explicit_arguments_on_a_monomorphic_head_is_typed() {
+    use fors_check::facts::FactCallee;
+    use fors_fir::ty::{PrimKind, TY_ERROR};
+
+    const SRC: &str = "\
+struct Layout9 { size: usize }
+impl Layout9 { pub fn of[T]() -> Layout9 { return Layout9 { size: 8 }; } }
+fn g[T]() -> Layout9 { return Layout9.of[T](); }
+fn h() -> Layout9 { return Layout9.of[i64](); }
+";
+    let mut c = checked10(SRC);
+    assert!(
+        c.codes().is_empty(),
+        "probe must check clean: {:?}",
+        c.codes()
+    );
+    let i64_ty = c.out.fir.tys.prim(PrimKind::I64);
+    let g = c.def_at(fors_syntax::NodeKind::FnDecl, 1);
+    let t_param = c.out.fir.tys.param(g, 0);
+    let calls = c.garg_rows(fors_syntax::NodeKind::CallExpr);
+    assert_eq!(
+        calls.len(),
+        2,
+        "both qualified calls record a row: {calls:?}"
+    );
+    for (n, _) in &calls {
+        let f = c.facts_at(*n);
+        assert_ne!(f.ty_of(*n), TY_ERROR, "node {n} is typed, not absorbed");
+        assert!(
+            matches!(f.callee_of(*n), FactCallee::Method { .. }),
+            "node {n} names the associated function: {:?}",
+            f.callee_of(*n)
+        );
+    }
+    assert_eq!(
+        calls[0].1,
+        vec![t_param],
+        "`Layout9.of[T]()` binds `T := T`"
+    );
+    assert_eq!(
+        calls[1].1,
+        vec![i64_ty],
+        "`Layout9.of[i64]()` binds `T := i64`"
+    );
+    // No silent TY_ERROR anywhere in the build.
+    for (_, f) in &c.out.facts {
+        let (s, e) = f.range();
+        for n in s..e.min(c.kinds.len() as u32) {
+            assert_ne!(
+                f.ty_of(n),
+                TY_ERROR,
+                "node {n} ({:?}) is TY_ERROR with no diagnostic",
+                c.kinds[n as usize]
+            );
+        }
+    }
+    // The count is checked against the FUNCTION's own parameters (R39),
+    // not the head's.
+    assert_eq!(
+        check_source(
+            "struct Layout8 { size: usize }\n\
+             impl Layout8 { pub fn of[T]() -> Layout8 { return Layout8 { size: 8 }; } }\n\
+             fn h() -> Layout8 { return Layout8.of[i64, bool](); }",
+        ),
+        vec!["T0039"],
+        "a wrong explicit count is R39's diagnostic"
+    );
+}

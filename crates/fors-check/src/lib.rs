@@ -16,7 +16,12 @@
 //! Increment I3.5 adds [`facts`] (the `BodyFacts` side table FMIR lowering
 //! reads, plus the retained tape); I7 adds [`pat`]/[`exhaust`] and I8
 //! adds [`flow`], the forward pass over that tape (ch01 R3, R4a, R8's
-//! loop-head merge for moves, ch09 R46's message).
+//! loop-head merge for moves, ch09 R46's message). Increment I10a fills
+//! the two gaps FMIR lowering found in [`facts`]: the determined generic
+//! arguments per call site and the decided pattern trees per `match` and
+//! per `let` destructuring — and types R45's qualified call on a generic
+//! head (`Buffer.empty()`), which used to be `TY_ERROR` with no
+//! diagnostic at all.
 
 pub mod body;
 pub mod call;
