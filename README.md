@@ -1,5 +1,7 @@
 # Fors
 
+[![Support · 1,99 €](https://img.shields.io/badge/Support-1%2C99_%E2%82%AC-2f855a)](https://marcfors.com/donate?from=fors)
+
 Fors (`.fors`, CLI `fors`) is a systems and HPC programming language under construction: mutable value
 semantics with no lifetimes, capability-based authority with no ambient I/O, deterministic-by-default
 parallelism, and a from-scratch toolchain with no LLVM. The bootstrap compiler is written in Rust.
@@ -29,6 +31,8 @@ cargo run --release -p fors-cli -- check tests/conformance/08-names/enum-variant
 ```
 
 No performance claim is made anywhere in this repository without a results file that reproduces it.
+
+If this project is useful to you, you can [support it with 1,99 €](https://marcfors.com/donate?from=fors).
 
 ## Licensing
 
