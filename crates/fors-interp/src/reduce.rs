@@ -8,14 +8,14 @@
 //! operand order or the tail rules belongs there, so the interpreter and
 //! every future backend cannot drift apart.
 //!
-//! **[HOLE-7] hard-coding, executor half.** No checker increment types
-//! ch03 R11's `reduce`, so `fors-lower` hard-codes the primitive's typing
-//! and names the combining function by the FMIR opcode spelling it would
-//! have emitted for the same binary operator in ordinary code
-//! (`fadd`/`fsub`/`fmul`/`fdiv`/`frem`, `add`/`sub`/`mul`/`div`/`rem`).
-//! [`ReduceOp::resolve`] is the other end of that convention; the single
-//! site that produces the names is `fors-lower::lower::reduce_op_name`.
-//! When the adopting checker increment lands, both ends move together.
+//! **The combining function's name.** A bare-operator `op` is named by the
+//! FMIR opcode spelling `fors-lower` would emit for the same binary operator
+//! in ordinary code (`fadd`/`fsub`/`fmul`/`fdiv`/`frem`, `add`/`sub`/`mul`/
+//! `div`/`rem`). [`ReduceOp::resolve`] is the reading end of that
+//! convention; the single site that produces the names is
+//! `fors-lower::lower::reduce_op_name`. [HOLE-7] is closed: checker
+//! increment I10 types ch03 R11's `reduce` and publishes a D11 `ReduceRow`,
+//! which is what `fors-lower` lowers the call from (F3).
 
 use fors_fmir::op::TrapKind;
 

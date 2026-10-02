@@ -1,4 +1,4 @@
-//! F1, F2, F5 and F7 gate tests, driven end to end against the REAL
+//! F1, F2, F3, F4, F5, F6 and F7 gate tests, driven end to end against the REAL
 //! conformance corpus files (design §9's per-increment GATE lists are the
 //! acceptance criteria),
 //! through the full pipeline a `fors build`/`fors run` would use: parse ->
@@ -155,6 +155,9 @@ struct Run {
     /// `stdout_write_line` intrinsic, so this image is where those lines
     /// would appear if a body HAD run.
     written: Vec<u8>,
+    /// F3: what the RUNTIME wrote to the standard error descriptor — ch02
+    /// R17(b)'s one `error: ` line on an error exit of `main`.
+    stderr: Vec<u8>,
 }
 
 /// Builds `src` (plus `std/io.fors` when the source names `use std.io;` —
@@ -227,6 +230,7 @@ fn build_and_run(label: &str, stem: &str, src: &[u8], host: &HostEnv) -> Run {
         .count();
     // F-mono: an instantiated body's types live in the lowering-owned store.
     let tys = lowered.tys;
+    let names = lowered.names;
     let fns: Vec<_> = lowered
         .fns
         .into_iter()
@@ -237,9 +241,12 @@ fn build_and_run(label: &str, stem: &str, src: &[u8], host: &HostEnv) -> Run {
             intrinsics: f.intrinsics,
         })
         .collect();
-    let prog = Program::entry_by_name(fns, "main", Config::v0_1()).expect("a main");
+    let prog = Program::entry_by_name(fns, "main", Config::v0_1())
+        .expect("a main")
+        .with_names(names);
     let outcome = run_with_host(&prog, &tys, host).expect("a verified program runs");
     let written = outcome.stdout.clone();
+    let stderr = outcome.stderr.clone();
     let observed = match entry_exit(&outcome) {
         ExitStatus::Trap(k) => Observed::Trap(k),
         ExitStatus::Status(code) => Observed::Status(code, outcome.stdout),
@@ -248,6 +255,7 @@ fn build_and_run(label: &str, stem: &str, src: &[u8], host: &HostEnv) -> Run {
         observed,
         contract_checks,
         written,
+        stderr,
     }
 }
 
@@ -281,22 +289,47 @@ fn check_source(label: &str, stem: &str, src: &str, host: &HostEnv) -> Run {
                 assert_eq!(*stdout, expected, "{label}: stdout");
             }
         }
-        "run-error" => {
-            let Observed::Status(code, _) = run.observed else {
-                panic!("{label}: expected run-error, got {:?}", run.observed);
-            };
-            let want: i32 = d
-                .detail
-                .strip_prefix("status:")
-                .expect("F2's run-error tests all pin a status")
-                .trim()
-                .parse()
-                .expect("status is an int");
-            assert_eq!(code, want, "{label}: exit status");
-        }
+        "run-error" => assert_run_error(label, &d, &run),
         other => panic!("{label}: unhandled expect kind {other:?}"),
     }
     run
+}
+
+/// design §7.2a's `run-error` row. Two shapes:
+/// - `detail: status: N` (ch10 R40(d)'s latched-`Stdout` row, F2): the exit
+///   status is `N`;
+/// - otherwise (ch02 R17, F3): the status is 1 and the LAST line of the
+///   process's stderr equals `detail` — "last", because `main`'s own deferred
+///   bodies may write to `Stderr` first (`main-raises-after-defer-run-error`).
+///   The runtime's line is the whole of [`Run::stderr`], so it must also be
+///   exactly ONE line.
+fn assert_run_error(label: &str, d: &Directive, run: &Run) {
+    let Observed::Status(code, _) = run.observed else {
+        panic!("{label}: expected run-error, got {:?}", run.observed);
+    };
+    if let Some(status) = d.detail.strip_prefix("status:") {
+        let want: i32 = status.trim().parse().expect("status is an int");
+        assert_eq!(code, want, "{label}: exit status");
+        return;
+    }
+    assert_eq!(
+        code, 1,
+        "{label}: an error out of `main` exits 1 (ch02 R17(c))"
+    );
+    let text = String::from_utf8_lossy(&run.stderr);
+    assert!(
+        text.ends_with('\n') && text.matches('\n').count() == 1,
+        "{label}: ch02 R17(b) writes exactly ONE line, got {text:?}"
+    );
+    let last = text
+        .trim_end_matches('\n')
+        .rsplit('\n')
+        .next()
+        .unwrap_or("");
+    assert_eq!(
+        last, d.detail,
+        "{label}: the last stderr line (design §7.2a)"
+    );
 }
 
 /// Checks the corpus file `rel` against its own directive under `host`.
@@ -423,6 +456,7 @@ fn build_and_run_with_std(label: &str, stem: &str, src: &[u8], host: &HostEnv) -
         .count();
     // F-mono: an instantiated body's types live in the lowering-owned store.
     let tys = lowered.tys;
+    let names = lowered.names;
     let fns: Vec<_> = lowered
         .fns
         .into_iter()
@@ -433,9 +467,12 @@ fn build_and_run_with_std(label: &str, stem: &str, src: &[u8], host: &HostEnv) -
             intrinsics: f.intrinsics,
         })
         .collect();
-    let prog = Program::entry_by_name(fns, "main", Config::v0_1()).expect("a main");
+    let prog = Program::entry_by_name(fns, "main", Config::v0_1())
+        .expect("a main")
+        .with_names(names);
     let outcome = run_with_host(&prog, &tys, host).expect("a verified program runs");
     let written = outcome.stdout.clone();
+    let stderr = outcome.stderr.clone();
     let observed = match entry_exit(&outcome) {
         ExitStatus::Trap(k) => Observed::Trap(k),
         ExitStatus::Status(code) => Observed::Status(code, outcome.stdout),
@@ -444,6 +481,7 @@ fn build_and_run_with_std(label: &str, stem: &str, src: &[u8], host: &HostEnv) -
         observed,
         contract_checks,
         written,
+        stderr,
     }
 }
 
@@ -518,31 +556,22 @@ fn gate_test_std(rel: &str) {
                 panic!("{rel}: expected run-ok, got {:?}", run.observed);
             };
             assert_eq!(code, 0, "{rel}: exit status");
-            // README §7.2a: `run-ok`'s stdout bytes equal `detail` EXACTLY
-            // (`(no output)` = empty) — no implicit trailing newline. F2's
-            // own `check_source` appends one because every F2 test prints
-            // with `write_line`; an F7 test may use `write_uint` (no
-            // newline), so this runner compares literally instead.
+            // README §7.2a: `run-ok`'s stdout bytes equal `detail` (`(no
+            // output)` = empty). `detail` names the printed TEXT: a program
+            // that prints with `write_line` ends it with that call's own
+            // `\n` (F2's `check_source` appends exactly one), while an F7
+            // test may print with `write_uint`, which adds none
+            // (`str-index-is-bytes-run-ok`). So one trailing `\n`, when
+            // present, is `write_line`'s and not part of the text.
             let expected: &[u8] = if d.detail == "(no output)" {
                 b""
             } else {
                 d.detail.as_bytes()
             };
-            assert_eq!(&stdout[..], expected, "{rel}: stdout");
+            let text = stdout.strip_suffix(b"\n").unwrap_or(&stdout[..]);
+            assert_eq!(text, expected, "{rel}: stdout");
         }
-        "run-error" => {
-            let Observed::Status(code, _) = run.observed else {
-                panic!("{rel}: expected run-error, got {:?}", run.observed);
-            };
-            let want: i32 = d
-                .detail
-                .strip_prefix("status:")
-                .expect("run-error detail pins a status")
-                .trim()
-                .parse()
-                .expect("status is an int");
-            assert_eq!(code, want, "{rel}: exit status");
-        }
+        "run-error" => assert_run_error(rel, &d, &run),
         other => panic!("{rel}: unhandled expect kind {other:?}"),
     }
 }
@@ -675,13 +704,10 @@ fn gate_str_index_is_bytes_run_ok() {
     gate_test_std("10-std/str-index-is-bytes-run-ok.fors");
 }
 
+/// Ran as of F3: `s.slice(0, 2) else |e| { .. }` is a `try_br` on the call
+/// to `Str.slice`'s real body (`std/mem/text.fors`), which `raise`s
+/// `Utf8Error.not_a_boundary` into the handler.
 #[test]
-#[ignore = "HELD OUT: `s.slice(0, 2) else |e| { ... }` needs the Handler/\
-            try_br machinery (F3), which `fors-lower` rejects outright \
-            today (NodeKind::Handler/TryExpr/RaiseStmt => LowerError::\
-            Failure) — F3 waits on I10 per the task brief. `Str.slice`'s \
-            own body (std/mem/text.fors) is real and would lower once \
-            `raise` does; the test itself needs the `else` handler too."]
 fn gate_str_slice_non_boundary_raises_run_ok() {
     gate_test_std("10-std/str-slice-non-boundary-raises-run-ok.fors");
 }
@@ -696,7 +722,8 @@ fn gate_str_slice_non_boundary_raises_run_ok() {
             `Option.is_some`/`unwrap_or`, `slice.fill`/`swap`/`sort`, \
             `Vec.push`/`pop`/`deinit` and the rest no longer report at all \
             (the std diagnostic list dropped from ~160 rows to the ~44 that \
-            are F3's `?`/`raise`). `Buffer.empty`'s self-recursive stand-in \
+            were F3's `?`/`raise`, and F3 took it to ONE: `from_utf8`'s \
+            value-position `if`). `Buffer.empty`'s self-recursive stand-in \
             is GONE too: `std/mem.fors` now has a real body over the \
             uninitialised-aggregate primitive `buffer_uninit_data`, which \
             lowers to `fors-interp`'s `agg_uninit` (a read before write is \
@@ -731,39 +758,30 @@ fn gate_buffer_index_past_len_trap() {
 }
 
 #[test]
-#[ignore = "HELD OUT on F3. `try_for_each`'s body is `?`/`else |e| \
-            { ... }` over a fallible step, which needs `try_br` and the \
-            handler form — `fors-lower` answers `LowerError::Failure` for \
-            `NodeKind::Handler`/`TryExpr`/`RaiseStmt`, and F3 waits on \
-            I10 (verified by un-ignoring: `main` is `Failure`). The loop \
-            half of this hold-out is GONE: `for`/`while`/`break`/\
-            `continue` lower as of F1-completion. Two further facts the \
-            same run shows, so F3 alone will not turn this green: `step` \
-            (`raise AllocError.out_of_memory` through `std.mem`) lowers to \
-            `CheckErrors`, i.e. the checker leaves a node of it `TY_ERROR` \
-            with no diagnostic (a user enum's `raise E.a` is a clean \
-            `Failure`, so this is the std path's typing). The third fact in \
-            this note is GONE: `SliceIter.next`'s `Option` pattern match \
-            lowers as of F-mono, which reads `BodyFacts::patterns` (I10a's \
-            D5/D6) — re-verified by un-ignoring, where `main` and `slice` \
-            report exactly `Failure` and no `Match`."]
+#[ignore = "HELD OUT on CHECKER defects (re-verified by un-ignoring after \
+            F3, which lowers `?`/`else |e|`/`raise` and is no longer a \
+            reason): (1) `step`'s `raise AllocError.out_of_memory;` through \
+            `use std.mem;` leaves a node `TY_ERROR` with no diagnostic \
+            (`fors-lower` refuses `step` with `CheckErrors`) — the same \
+            prelude-opaque `AllocError` path that makes a signature's \
+            `raises AllocError` lower to `TY_ERROR` (see \
+            `gate_main_raises_std_error_run_error`); (2) the handler on \
+            `mem.iter(xs).try_for_each(step) else |e| { .. }` gets no D10 \
+            `HandlerRow`, so `main` is refused with the named \
+            `LowerError::Failure(\"an `else |e|` handler the checker \
+            published no D10 row for\")`. Both are fors-check's."]
 fn gate_try_for_each_error_propagates_run_ok() {
     gate_test_std("10-std/try-for-each-error-propagates-run-ok.fors");
 }
 
 #[test]
-#[ignore = "HELD OUT, and its two STATED reasons were re-verified by \
-            un-ignoring after F-mono: `a.create(1)?`/`v.push(...)?` still \
-            need `?`/`try_br` (F3, waiting on I10 — every `std` body in the \
-            run's diagnostic list now reports exactly `Failure`), and the \
-            allocator obligation machinery is still F6's lowering half, \
-            waiting on I8b. The THIRD reason is gone: monomorphisation \
-            exists, and `Vec`'s and `Own`'s generic bodies lower. What the \
-            run shows today: `main` is `CheckErrors` — `Vec.new()` is R45's \
-            qualified form on the PRELUDE type name `Vec`, the same silent \
-            `TY_ERROR` described on `gate_buffer_index_past_len_trap` — and \
-            `fill(&v, &heap)` additionally needs the `&x` by-reference \
-            argument form, which `fors-lower::lower_call` reports by name."]
+#[ignore = "HELD OUT on a CHECKER defect (re-verified by un-ignoring after \
+            F3): `main` is `CheckErrors` — `Vec.new()` is R45's qualified \
+            form on the PRELUDE type name `Vec`, the silent `TY_ERROR` \
+            described on `gate_buffer_index_past_len_trap`. The older \
+            reasons are gone: `?`/`try_br` lower as of F3, the allocator \
+            obligation machinery is F6's and in, monomorphisation exists, \
+            and `&x` arguments lower (F6)."]
 fn gate_vec_deinit_empty_nonempty_trap() {
     gate_test_std("10-std/vec-deinit-empty-nonempty-trap.fors");
 }
@@ -774,13 +792,14 @@ fn gate_vec_deinit_empty_nonempty_trap() {
 /// write come back as `EPIPE` (latched, ch10 R39) instead of killing the
 /// process, and the test starts from `SIG_DFL` to prove that.
 #[cfg(unix)]
+// Signal dispositions are process-wide and the test harness runs tests
+// concurrently: serialise every DFL -> IGN -> write window so one test's
+// reset can never land inside another's (`gate_test_closed_stdout` and F3's
+// `f3_latched_stdout_then_raise_exits_1_and_stdout_precedes_the_error_line`).
+static SIGPIPE_WINDOW: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
 fn gate_test_closed_stdout(rel: &str) {
     use std::os::fd::AsRawFd;
-    use std::sync::Mutex;
-    // Signal dispositions are process-wide and the test harness runs
-    // tests concurrently: serialise the DFL -> IGN -> write window so one
-    // test's reset can never land inside another's.
-    static SIGPIPE_WINDOW: Mutex<()> = Mutex::new(());
     let _guard = SIGPIPE_WINDOW.lock().unwrap_or_else(|p| p.into_inner());
     let was = fors_interp::shim::set_sigpipe(fors_interp::shim::SIG_DFL);
     fors_interp::install_sigpipe_ignore();
@@ -788,6 +807,7 @@ fn gate_test_closed_stdout(rel: &str) {
     drop(reader);
     let host = HostEnv {
         stdout_fd: Some(writer.as_raw_fd()),
+        ..HostEnv::default()
     };
     check_corpus_file(rel, &host);
     drop(writer);
@@ -995,6 +1015,7 @@ fn open_pipe_carries_stdout_through_and_exits_0() {
     let (mut reader, writer) = std::io::pipe().expect("a pipe");
     let host = HostEnv {
         stdout_fd: Some(writer.as_raw_fd()),
+        ..HostEnv::default()
     };
     let run = check_corpus_file(
         "10-std/write-line-without-question-accepted-run-ok.fors",
@@ -1018,11 +1039,10 @@ fn open_pipe_carries_stdout_through_and_exits_0() {
 // `slice_range` in `fors-lower`, the `Slice` descriptor and `reduce_tree`
 // in `fors-interp`, and the shape itself in `fors-fmir::reduce`.
 //
-// Two documented stand-ins carry these files, both in the genre F2
-// established for `Buffer.fixed` (design §5.8):
-//   * **[HOLE-7]**: no checker increment types ch03 R11's `reduce`, so the
-//     call is poisoned and `fors-lower` hard-codes the primitive's typing
-//     (`reduce_stub_ranges` names all three sites).
+// One documented stand-in carries these files, in the genre F2 established
+// for `Buffer.fixed` (design §5.8) — the other, [HOLE-7]'s hard-coded
+// `reduce` typing, is gone: I10 publishes a D11 `ReduceRow` per call and F3
+// lowers from it:
 //   * `Slice[T]` has no std body until F7, so `slice_range` builds a
 //     three-cell `{ base, start, len }` descriptor and `reduce_tree` is its
 //     only consumer (`fors-interp::exec::slice_parts`).
@@ -1374,19 +1394,11 @@ fn gate_int_fixed_width_i64_accepted_run_ok() {
     gate_test("03-numerics/int-fixed-width-i64-accepted-run-ok.fors");
 }
 
+/// ch03 R9: `N as i32` from a `comptime_int` constant is the converted
+/// CONSTANT, folded at lowering (`FnLower::fold_comptime_cast`). Ran as of
+/// F3: I10 made `comptime_int` a resolved prelude type, and the checker folds
+/// the constant's value.
 #[test]
-#[ignore = "HELD OUT: `const N: comptime_int = 5;` does not RESOLVE in this \
-            build — `fors-resolve` reports N0014 (ch08 R14, unresolved \
-            name) on the type name `comptime_int`, which no crate in the \
-            workspace knows (`grep -r comptime_int crates/` finds only \
-            `fors-lower`'s own `TyTag::ConstVal` message). The failure is \
-            therefore BEFORE check and before lowering, and no lowering \
-            stand-in can reach it: ch03 R9's comptime-integer surface is \
-            I10's, the same increment `fors-check`'s methods.rs names for \
-            ch03 R4/R6, and reading a named `const`'s VALUE additionally \
-            needs F9's comptime evaluator (`fors-lower` answers \
-            `LowerError::Comptime` for a `const` reference by design). \
-            Every other F1 gate test passes."]
 fn gate_comptime_int_explicit_conversion_accepted() {
     gate_test("03-numerics/comptime-int-explicit-conversion-accepted.fors");
 }
@@ -1418,32 +1430,18 @@ fn gate_trap_overflow() {
 // textual cut is structural, and an exit edge on every static exit carrying
 // the pending bodies in R23a's order.
 //
-// Two of the nine are HELD OUT, and for the reason design §9 names: they
-// need F3's failure edges, which wait on I10's ch02 typing.
-// `01-ownership/errdefer-skipped-on-return-run-ok` is written with an `else
-// |e| { }` handler and `02-failure/main-raises-after-defer-run-error` with
-// `raise`; `prescan` still refuses both as `LowerError::Failure`
-// (`gate_f4_held_out_cases_are_named_failure_edges` asserts exactly that, so
-// the hold-out cannot rot into silence).
+// The last two of the nine were held out on F3's failure edges and run as of
+// F3: `01-ownership/errdefer-skipped-on-return-run-ok` is written with an
+// `else |e| { }` handler (a normal exit: the `errdefer` stays pending) and
+// `02-failure/main-raises-after-defer-run-error` with `raise` out of `main`
+// (an error exit: the `defer` runs BEFORE ch02 R17's line).
 
 #[test]
-#[ignore = "HELD OUT on F3. The `errdefer` body itself lowers (R23b filters it \
-            off every normal exit), but the gate row's `main` is \
-            `work(&out) else |e| { return; };` — a Handler, i.e. `?`/`else` \
-            beyond what F2's exit table does, which waits on I10's ch02 \
-            typing. `gate_f4_held_out_cases_are_named_failure_edges` in \
-            `gate.rs` pins that this is the ONLY reason."]
 fn gate_errdefer_skipped_on_return_run_ok() {
     gate_test("01-ownership/errdefer-skipped-on-return-run-ok.fors");
 }
 
 #[test]
-#[ignore = "HELD OUT on F3. `raise Error.boom;` out of `main` is `raise` \
-            propagation beyond what F2's exit table does (I10's ch02 \
-            typing). The ORDER it pins — the deferred line on `Stderr` \
-            before ch02 R17's `error: ` line — is design §5.4 step 2, and \
-            the pending-body machinery that produces it is in and tested by \
-            the five `run-ok` rows above; only the error EDGE is missing."]
 fn gate_main_raises_after_defer_run_error() {
     gate_test("02-failure/main-raises-after-defer-run-error.fors");
 }
@@ -1597,10 +1595,10 @@ fn f4_exit_edges_carry_expected_pending_over_the_corpus() {
             }
             for (i, hit) in seen.iter().enumerate() {
                 let row = decl.defers.get(i as u32..i as u32 + 1)[0];
-                // An `ErrDefer` body on no edge is CORRECT while F3's error
-                // edges do not exist yet (ch01 R23b: it runs on error exits
-                // only, and a body whose only exits are normal has none).
-                // A plain `defer` on no edge would be a dropped body.
+                // An `ErrDefer` body on no edge is CORRECT (ch01 R23b: it runs
+                // on error exits only, and a body whose function has no error
+                // exit — `handler-makes-normal-exit` — has none). A plain
+                // `defer` on no edge would be a dropped body.
                 assert!(
                     *hit || row.kind == fors_fmir::scope::DeferKind::ErrDefer,
                     "{}: defer row {i} is on no exit edge, so its body would never run",
@@ -1766,4 +1764,513 @@ fn f6_no_obligation_is_undischarged_and_a_leak_is_not_a_trap() {
         "a linear leak is a `ub:` report, never a trap (ch02 R15's list is closed at eight)"
     );
     println!("F6: {obligations_seen} obligation-edge pairs checked over the corpus");
+}
+
+// ------------------------------------------------------- the lowering counter
+//
+// design §9's F3 asks for a COUNTER in the gate output: how many corpus
+// targets fail to lower. A "target" is one function body of a corpus file
+// whose build checks clean (the corpus also holds deliberate parse-error and
+// check-error files, whose bodies lowering never sees), plus every body of
+// the `std` package built as a consuming program builds it. Each refusal is
+// a named `LowerError`; the census groups them by variant and prints the
+// totals, so the next increment can see what remains without re-running a
+// hand experiment.
+//
+// Measured when F3 landed: BEFORE, 552 corpus bodies (482 check-clean files)
+// plus 43 std bodies were refused, 409 + 43 of them `Failure` (`?`/`else
+// |e|`/`raise`; most corpus rows are `std/io.fors`'s nine raising bodies,
+// built with every file that names `use std.io;`). AFTER, 143 + 1, and no
+// `Failure` at all; the census asserts that last fact, so a ch02 form that
+// stops lowering is a test failure, not a number nobody reads.
+
+/// One refusal row: `(target label, function name, error)`.
+type Refusal = (String, String, fors_lower::LowerError);
+
+/// The bodies of `src` (plus `std/io.fors` when it names it) that do NOT
+/// lower, when the build checks clean; `None` when it does not.
+fn census_file(stem: &str, src: &[u8]) -> Option<Vec<Refusal>> {
+    let mut interner = Interner::new();
+    let mut sources: Vec<Vec<u8>> = vec![src.to_vec()];
+    let mut names: Vec<Segments> = vec![module_name_of(stem, src, &mut interner)];
+    if String::from_utf8_lossy(src).contains("use std.io;") {
+        sources.push(fs::read(repo_root().join("std/io.fors")).ok()?);
+        names.push(vec![interner.intern(b"std"), interner.intern(b"io")]);
+    }
+    let parsed: Vec<_> = sources.iter().map(|s| parse_file(s)).collect();
+    if parsed.iter().any(|p| !p.diags.is_empty()) {
+        return None;
+    }
+    let inputs: Vec<FileInput> = parsed
+        .iter()
+        .zip(sources.iter())
+        .zip(names.iter())
+        .map(|((p, s), n)| FileInput {
+            tree: &p.tree,
+            tokens: &p.tokens,
+            source: s,
+            name: n.clone(),
+        })
+        .collect();
+    let resolved = fors_resolve::resolve_in_package(&mut interner, &inputs, Some(0), None);
+    if resolved.files.iter().any(|f| !f.diagnostics.is_empty()) {
+        return None;
+    }
+    let out = fors_check::check_build(&inputs, &resolved, &mut interner);
+    if !out.diagnostics.is_empty() {
+        return None;
+    }
+    let lowered = fors_lower::lower_build(&inputs, &out, &mut interner);
+    Some(
+        lowered
+            .diags
+            .into_iter()
+            .map(|d| (stem.to_string(), d.name, d.error))
+            .collect(),
+    )
+}
+
+/// The `std` package's own refusals, built with `std`-prefixed module names
+/// exactly as [`std_checks_clean`] builds it.
+fn census_std() -> Vec<Refusal> {
+    let mut interner = Interner::new();
+    let mut sources: Vec<Vec<u8>> = Vec::new();
+    let mut names: Vec<Segments> = Vec::new();
+    for (segs, s) in std_module_sources() {
+        names.push(segs.iter().map(|b| interner.intern(b)).collect());
+        sources.push(s);
+    }
+    let parsed: Vec<_> = sources.iter().map(|s| parse_file(s)).collect();
+    let inputs: Vec<FileInput> = parsed
+        .iter()
+        .zip(sources.iter())
+        .zip(names.iter())
+        .map(|((p, s), n)| FileInput {
+            tree: &p.tree,
+            tokens: &p.tokens,
+            source: s,
+            name: n.clone(),
+        })
+        .collect();
+    let resolved = fors_resolve::resolve_in_package(&mut interner, &inputs, None, None);
+    let out = fors_check::check_build(&inputs, &resolved, &mut interner);
+    let lowered = fors_lower::lower_build(&inputs, &out, &mut interner);
+    lowered
+        .diags
+        .into_iter()
+        .map(|d| ("std".to_string(), d.name, d.error))
+        .collect()
+}
+
+/// A `LowerError`'s variant name, for grouping.
+fn refusal_kind(e: &fors_lower::LowerError) -> &'static str {
+    use fors_lower::LowerError as L;
+    match e {
+        L::CheckErrors => "CheckErrors",
+        L::Generic(_) => "Generic",
+        L::Projection => "Projection",
+        L::Closure => "Closure",
+        L::Match => "Match",
+        L::Failure(_) => "Failure",
+        L::Loop => "Loop",
+        L::Comptime(_) => "Comptime",
+        L::Unsupported(_) => "Unsupported",
+        L::Unresolved(_) => "Unresolved",
+        L::InvalidUtf8Literal(_) => "InvalidUtf8Literal",
+    }
+}
+
+#[test]
+fn lowering_refusal_counter_over_the_corpus_and_std() {
+    let root = repo_root().join("tests/conformance");
+    let mut files: Vec<PathBuf> = Vec::new();
+    collect_fors(&root, &mut files);
+    files.sort();
+    let mut corpus: Vec<Refusal> = Vec::new();
+    let mut clean_files = 0usize;
+    for path in &files {
+        let Ok(src) = fs::read(path) else { continue };
+        let stem = path
+            .strip_prefix(&root)
+            .unwrap_or(path)
+            .with_extension("")
+            .to_string_lossy()
+            .into_owned();
+        let leaf = path.file_stem().unwrap().to_string_lossy().into_owned();
+        if let Some(rows) = census_file(&leaf, &src) {
+            clean_files += 1;
+            corpus.extend(rows.into_iter().map(|(_, f, e)| (stem.clone(), f, e)));
+        }
+    }
+    let std_rows = census_std();
+    let mut by_kind: std::collections::BTreeMap<&str, (usize, usize)> = Default::default();
+    for (_, _, e) in &corpus {
+        by_kind.entry(refusal_kind(e)).or_default().0 += 1;
+    }
+    for (_, _, e) in &std_rows {
+        by_kind.entry(refusal_kind(e)).or_default().1 += 1;
+    }
+    println!(
+        "LOWERING COUNTER: {} corpus bodies refused across {clean_files} check-clean corpus \
+         files; {} std bodies refused",
+        corpus.len(),
+        std_rows.len()
+    );
+    for (k, (c, s)) in &by_kind {
+        println!("  {k:<12} corpus {c:>3}  std {s:>3}");
+    }
+    for (t, f, e) in corpus.iter().chain(std_rows.iter()) {
+        println!("  refused: {t} :: {f}: {e:?}");
+    }
+    let failures: Vec<&Refusal> = corpus
+        .iter()
+        .chain(std_rows.iter())
+        .filter(|(_, _, e)| matches!(e, fors_lower::LowerError::Failure(_)))
+        .collect();
+    assert!(
+        failures.is_empty(),
+        "F3: every ch02 failure form in a check-clean body lowers; refused: {failures:#?}"
+    );
+}
+
+// ---------------------------------------------------------------- F3's gate
+//
+// design §9's F3 list: `try_br`, error edges, at most one `ErrorFrom` per
+// edge, the handler form, and ch02 R17's five-step exit sequence with the
+// full `render` clause list. Each `run-error` row asserts status 1 and the
+// EXACT last stderr line (design §7.2a), which is the runtime's one line.
+
+#[test]
+fn gate_main_raises_unit_variant_run_error() {
+    gate_test("02-failure/main-raises-unit-variant-run-error.fors");
+}
+
+#[test]
+fn gate_main_raises_payload_run_error() {
+    gate_test("02-failure/main-raises-payload-run-error.fors");
+}
+
+#[test]
+fn gate_main_raises_nested_payload_run_error() {
+    gate_test("02-failure/main-raises-nested-payload-run-error.fors");
+}
+
+/// PINNED, not run: the row cannot reach lowering, and the three reasons are
+/// all outside F3's crates (verified by running it, and by running a copy
+/// with reason (1) corrected):
+/// 1. a CORPUS/STD disagreement — the file writes `mem.Counting[mem.Fixed[8]]`
+///    while `std/mem.fors` declares `Counting[N: usize, A: brand]` ("Standalone,
+///    not a wrapper: ch01 R15a forbids holding a parent allocator in a field"),
+///    so the checker correctly reports T0011 ("a type where a constant argument
+///    is expected") at the `with allocator` type;
+/// 2. with that corrected to `mem.Counting[8]`, `fill`'s signature `raises
+///    AllocError` (the prelude-opaque std name, reached through `use std.mem;`)
+///    lowers to `TY_ERROR` with NO diagnostic, so `fill(&counting)?` gets no
+///    D10 `TryRow` and `fors-lower` refuses `main` with the named
+///    `LowerError::Failure("a `?` the checker published no D10 row for")` —
+///    a fors-check defect;
+/// 3. `fill`'s own body is `TY_ERROR` throughout (`Vec.new()` is R45's
+///    qualified call on the PRELUDE type name `Vec`, the silent `TY_ERROR`
+///    `gate_vec_deinit_empty_nonempty_trap` documents).
+///
+/// The rendering this row pins — a std error by its fully-qualified path — is
+/// covered at source level by `f3_std_error_renders_by_its_fully_qualified_path`.
+/// This test asserts reason (1) exactly, so it fails the moment the corpus or
+/// std changes and the row must be re-tried.
+#[test]
+fn gate_main_raises_std_error_run_error() {
+    let path =
+        repo_root().join("tests/conformance/02-failure/main-raises-std-error-run-error.fors");
+    let src = fs::read(&path).expect("corpus file reads");
+    let codes = std_build_check_codes(&src);
+    assert_eq!(
+        codes,
+        vec!["T0011".to_string()],
+        "the pinned blocker changed: re-try `gate_test_std` on this row"
+    );
+}
+
+/// The check diagnostics (codes, owner conflicts excepted) of `src` built
+/// with the whole `std` package, as [`build_and_run_with_std`] builds it.
+fn std_build_check_codes(src: &[u8]) -> Vec<String> {
+    let mut interner = Interner::new();
+    let mut sources: Vec<Vec<u8>> = vec![src.to_vec()];
+    let mut names: Vec<Segments> = vec![module_name_of("main", src, &mut interner)];
+    for (segs, s) in std_module_sources() {
+        names.push(segs.iter().map(|b| interner.intern(b)).collect());
+        sources.push(s);
+    }
+    let parsed: Vec<_> = sources.iter().map(|s| parse_file(s)).collect();
+    let inputs: Vec<FileInput> = parsed
+        .iter()
+        .zip(sources.iter())
+        .zip(names.iter())
+        .map(|((p, s), n)| FileInput {
+            tree: &p.tree,
+            tokens: &p.tokens,
+            source: s,
+            name: n.clone(),
+        })
+        .collect();
+    let resolved = fors_resolve::resolve_in_package(&mut interner, &inputs, Some(0), None);
+    let out = fors_check::check_build(&inputs, &resolved, &mut interner);
+    let (rest, _) = split_std_owner_conflicts(&inputs, &interner, &out.diagnostics);
+    rest.iter()
+        .map(|d| d.split(": ").nth(1).unwrap_or(d).to_string())
+        .collect()
+}
+
+/// The source-level twin of `main-raises-std-error-run-error`'s rendering
+/// (ch02 R17: "an enum value renders as its type's fully-qualified path"): a
+/// std error raised by a callee, propagated by `?` with R2's equal types, out
+/// of `main`.
+#[test]
+fn f3_std_error_renders_by_its_fully_qualified_path() {
+    const SRC: &[u8] = b"\
+module main;
+needs { };
+use std.mem.alloc;
+
+fn step() raises alloc.AllocError {
+    raise alloc.AllocError.too_large;
+}
+
+fn main() raises alloc.AllocError {
+    step()?;
+}
+";
+    let run = build_and_run_with_std("std_error_path", "main", SRC, &HostEnv::default());
+    let Observed::Status(code, ref stdout) = run.observed else {
+        panic!("expected status 1, got {:?}", run.observed);
+    };
+    assert_eq!(code, 1);
+    assert_eq!(stdout, b"", "R17(c): nothing is written to `Stdout`");
+    assert_eq!(run.stderr, b"error: std.mem.alloc.AllocError.too_large\n");
+}
+
+#[test]
+fn gate_main_raises_flushes_stdout_run_error() {
+    let run = check_corpus_file(
+        "02-failure/main-raises-flushes-stdout-run-error.fors",
+        &HostEnv::default(),
+    );
+    // R17(a): the buffered `Stdout` content still arrives.
+    assert_eq!(run.written, b"buffered\n", "R17(a): stdout is flushed");
+}
+
+#[test]
+fn gate_handler_makes_normal_exit() {
+    gate_test("02-failure/handler-makes-normal-exit.fors");
+}
+
+#[test]
+fn gate_main_raises_exit_status_one_run_error() {
+    gate_test("10-std/main-raises-exit-status-one-run-error.fors");
+}
+
+/// ch02 R17(b)-(c) at the descriptor: the runtime's line goes to the
+/// standard error descriptor unbuffered and whole, and when that write fails
+/// the status is STILL 1 — no retry, no other destination, no trap. The
+/// failing descriptor is one no process opens (EBADF), so nothing else in
+/// the harness can be written to by mistake.
+#[cfg(unix)]
+#[test]
+fn f3_error_line_reaches_the_stderr_descriptor_and_a_failed_write_still_exits_1() {
+    use std::io::Read;
+    use std::os::fd::AsRawFd;
+    let rel = "02-failure/main-raises-unit-variant-run-error.fors";
+    let (mut reader, writer) = std::io::pipe().expect("a pipe");
+    let host = HostEnv {
+        stderr_fd: Some(writer.as_raw_fd()),
+        ..HostEnv::default()
+    };
+    let run = check_corpus_file(rel, &host);
+    drop(writer);
+    let mut got = Vec::new();
+    reader.read_to_end(&mut got).expect("the pipe reads");
+    assert_eq!(got, b"error: main.Error.boom\n");
+    assert_eq!(run.stderr, got, "the captured line is the written one");
+    // R17's last paragraph: the write fails (EBADF) and the run still
+    // settles at status 1 — `check_corpus_file` asserts the directive.
+    let host = HostEnv {
+        stderr_fd: Some(1_000_000),
+        ..HostEnv::default()
+    };
+    check_corpus_file(rel, &host);
+}
+
+// ------------------------------------------------- F3's verifier probes
+//
+// Inline programs the corpus gates do not cover, each asserted on the EXACT
+// bytes: the `write_line` image (the order every pending body ran in), the
+// runtime's one stderr line and the status. Written by F3's independent
+// verifier; the shapes it found no corpus row for.
+
+/// One probe: its source, the expected status, the expected `write_line`
+/// image and, for status 1, the runtime's exact stderr line.
+struct Probe {
+    name: &'static str,
+    src: &'static str,
+    status: i32,
+    written: &'static str,
+    stderr: &'static str,
+}
+
+const F3_PROBES: &[Probe] = &[
+    // `?` in a loop under a per-iteration `defer` AND `errdefer`, failing on
+    // the second iteration: the first iteration's normal exit runs only its
+    // `defer`; the error exit runs both, innermost first (ch01 R23a/R23b),
+    // then the function's own, then `main`'s line.
+    Probe {
+        name: "q_in_loop_error_path",
+        src: "module m;\nneeds { io.stdout };\nuse std.io;\nenum E { boom }\n\
+              fn step(let i: usize) raises E { if i == 1 { raise E.boom; } }\n\
+              fn work(inout o: io.Stdout) raises E {\n    defer o.write_line(\"fn-defer\");\n    errdefer o.write_line(\"fn-errdefer\");\n    let n: usize = 3;\n    for i in 0 ..< n {\n        defer o.write_line(\"defer\");\n        errdefer o.write_line(\"errdefer\");\n        o.write_line(\"body\");\n        step(i)?;\n    }\n    o.write_line(\"not reached\");\n}\n\
+              fn main(inout o: io.Stdout) raises E { work(&o)?; }\n",
+        status: 1,
+        written: "body\ndefer\nbody\nerrdefer\ndefer\nfn-errdefer\nfn-defer\n",
+        stderr: "error: m.E.boom\n",
+    },
+    // The same shape on the normal path: no `errdefer` body runs anywhere.
+    Probe {
+        name: "q_in_loop_normal_path",
+        src: "module m;\nneeds { io.stdout };\nuse std.io;\nenum E { boom }\n\
+              fn step(let i: usize) raises E { if i == 9 { raise E.boom; } }\n\
+              fn work(inout o: io.Stdout) raises E {\n    defer o.write_line(\"fn-defer\");\n    errdefer o.write_line(\"fn-errdefer\");\n    let n: usize = 2;\n    for i in 0 ..< n {\n        defer o.write_line(\"defer\");\n        errdefer o.write_line(\"errdefer\");\n        o.write_line(\"body\");\n        step(i)?;\n    }\n    o.write_line(\"end\");\n}\n\
+              fn main(inout o: io.Stdout) raises E { errdefer o.write_line(\"main-errdefer\"); work(&o)?; o.write_line(\"main-end\"); }\n",
+        status: 0,
+        written: "body\ndefer\nbody\ndefer\nend\nfn-defer\nmain-end\n",
+        stderr: "",
+    },
+    // A `?` INSIDE a handler block propagates the second error (ch02 R16:
+    // the handler then makes an error exit, so `main`'s `errdefer` runs).
+    Probe {
+        name: "q_inside_handler_propagates",
+        src: "module m;\nneeds { io.stdout };\nuse std.io;\nenum E { boom, bang }\n\
+              fn a() -> i32 raises E { raise E.boom; }\nfn b() -> i32 raises E { raise E.bang; }\n\
+              fn main(inout o: io.Stdout) raises E {\n    errdefer o.write_line(\"main-errdefer\");\n    let n: i32 = a() else |e| { b()? };\n    o.write_line(\"not reached\");\n}\n",
+        status: 1,
+        written: "main-errdefer\n",
+        stderr: "error: m.E.bang\n",
+    },
+    // A handler that re-raises its binding.
+    Probe {
+        name: "handler_reraises",
+        src: "module m;\nneeds { io.stdout };\nuse std.io;\nenum E { boom }\n\
+              fn a() raises E { raise E.boom; }\n\
+              fn main(inout o: io.Stdout) raises E {\n    errdefer o.write_line(\"main-errdefer\");\n    a() else |e| { o.write_line(\"in-handler\"); raise e; };\n    o.write_line(\"not reached\");\n}\n",
+        status: 1,
+        written: "in-handler\nmain-errdefer\n",
+        stderr: "error: m.E.boom\n",
+    },
+    // Three frames deep: each frame's bodies run innermost first, callee
+    // before caller, all before the runtime's line.
+    Probe {
+        name: "three_frames_defer_order",
+        src: "module m;\nneeds { io.stdout };\nuse std.io;\nenum E { boom }\n\
+              fn inner(inout o: io.Stdout) raises E {\n    defer o.write_line(\"inner-defer\");\n    errdefer o.write_line(\"inner-errdefer\");\n    raise E.boom;\n}\n\
+              fn outer(inout o: io.Stdout) raises E {\n    defer o.write_line(\"outer-defer\");\n    errdefer o.write_line(\"outer-errdefer\");\n    inner(&o)?;\n}\n\
+              fn main(inout o: io.Stdout) raises E {\n    defer o.write_line(\"main-defer\");\n    outer(&o)?;\n}\n",
+        status: 1,
+        written: "inner-errdefer\ninner-defer\nouter-errdefer\nouter-defer\nmain-defer\n",
+        stderr: "error: m.E.boom\n",
+    },
+    // ch01 R23c's own escape inside an `errdefer` body: a handler that
+    // neither raises nor returns, walked by the verifier (F3), run here.
+    Probe {
+        name: "handler_inside_errdefer_body",
+        src: "module m;\nneeds { io.stdout };\nuse std.io;\nenum E { boom, other }\n\
+              fn step2() raises E { raise E.other; }\n\
+              fn main(inout o: io.Stdout) raises E {\n    errdefer step2() else |e| { o.write_line(\"handled-in-errdefer\"); };\n    raise E.boom;\n}\n",
+        status: 1,
+        written: "handled-in-errdefer\n",
+        stderr: "error: m.E.boom\n",
+    },
+    // R17's scalar clauses on one line: a negative integer, `bool`, `()`,
+    // every `Str` escape, `u8`'s and `i64`'s extremes.
+    Probe {
+        name: "render_scalar_clauses",
+        src: "module m;\nneeds { };\nenum E { code(i32, bool, (), Str, u8, i64, i64) }\n\
+              fn main() raises E {\n    raise E.code(-7, true, (), \"a\\\"b\\\\c\\td\\re\\nf\", 255, 9223372036854775807, -9223372036854775808);\n}\n",
+        status: 1,
+        written: "",
+        stderr: "error: m.E.code(-7, true, (), \"a\\\"b\\\\c\\td\\re\\nf\", 255, 9223372036854775807, -9223372036854775808)\n",
+    },
+    // A struct payload inside a nested enum, and a tuple payload.
+    Probe {
+        name: "render_nested_struct_and_tuple",
+        src: "module m;\nneeds { };\nstruct P { x: i32, y: i64 }\nenum Inner { deep(P) }\nenum E { wrap(Inner, (i32, bool)) }\n\
+              fn main() raises E { raise E.wrap(Inner.deep(P { x: 1, y: -2 }), (3, false)); }\n",
+        status: 1,
+        written: "",
+        stderr: "error: m.E.wrap(m.Inner.deep(m.P{ x: 1, y: -2 }), (3, false))\n",
+    },
+];
+
+#[test]
+fn f3_verifier_probes_run_with_exact_bodies_lines_and_status() {
+    for p in F3_PROBES {
+        let run = build_and_run(p.name, "m", p.src.as_bytes(), &HostEnv::default());
+        let Observed::Status(code, _) = run.observed else {
+            panic!("{}: expected a status, got {:?}", p.name, run.observed);
+        };
+        assert_eq!(code, p.status, "{}: exit status", p.name);
+        assert_eq!(
+            String::from_utf8_lossy(&run.written),
+            p.written,
+            "{}: the write_line image",
+            p.name
+        );
+        assert_eq!(
+            String::from_utf8_lossy(&run.stderr),
+            p.stderr,
+            "{}: the runtime's stderr",
+            p.name
+        );
+    }
+}
+
+/// ch02 R17(a)-(c) against ch10 R40(d): `Stdout` already LATCHED when `main`
+/// raises still exits 1 (R17(c) "whether or not (a) succeeded"), never 2.
+/// And with both descriptors on ONE pipe, every `Stdout` byte precedes the
+/// runtime's line (R17(a) flushes before (b) writes).
+#[cfg(unix)]
+#[test]
+fn f3_latched_stdout_then_raise_exits_1_and_stdout_precedes_the_error_line() {
+    use std::io::Read;
+    use std::os::fd::AsRawFd;
+    const SRC: &[u8] = b"module m;\nneeds { io.stdout };\nuse std.io;\nenum E { boom }\n\
+        fn main(inout out: io.Stdout) raises E { out.write_line(\"one\"); out.write_line(\"two\"); raise E.boom; }\n";
+    // One pipe for both descriptors: the order is observable.
+    let (mut reader, writer) = std::io::pipe().expect("a pipe");
+    let host = HostEnv {
+        stdout_fd: Some(writer.as_raw_fd()),
+        stderr_fd: Some(writer.as_raw_fd()),
+    };
+    let run = build_and_run("shared_pipe", "m", SRC, &host);
+    drop(writer);
+    let mut got = Vec::new();
+    reader.read_to_end(&mut got).expect("the pipe reads");
+    assert_eq!(got, b"one\ntwo\nerror: m.E.boom\n");
+    assert!(matches!(run.observed, Observed::Status(1, _)));
+    // The read end closed before `main`: the first write latches (ch10 R39)
+    // and the raise still exits 1.
+    let _guard = SIGPIPE_WINDOW.lock().unwrap_or_else(|p| p.into_inner());
+    let was = fors_interp::shim::set_sigpipe(fors_interp::shim::SIG_DFL);
+    fors_interp::install_sigpipe_ignore();
+    let (closed_r, closed_w) = std::io::pipe().expect("a pipe");
+    drop(closed_r);
+    let host = HostEnv {
+        stdout_fd: Some(closed_w.as_raw_fd()),
+        stderr_fd: None,
+    };
+    let run = build_and_run("latched_then_raise", "m", SRC, &host);
+    assert!(
+        matches!(run.observed, Observed::Status(1, _)),
+        "R17(c): status 1 even though (a)'s flush had nothing left and `Stdout` was latched: {:?}",
+        run.observed
+    );
+    assert_eq!(run.stderr, b"error: m.E.boom\n");
+    drop(closed_w);
+    fors_interp::shim::set_sigpipe(was);
 }

@@ -10,10 +10,11 @@
 //!
 //! F1 scope: non-generic `fn` bodies over scalars, `bool`, `Str`, local
 //! structs (field reads), free-function and inherent-method calls, `let`
-//! bindings, assignment, `if`/`else` and blocks. Everything else —
-//! generics, `defer`/`errdefer`, projections, closures, `match`, `?`/
-//! `raise`, loops, `const` refs — is a clean [`LowerError`] diagnostic,
-//! never a panic. The [`Program`](fors_interp::Program)-shaped output is
+//! bindings, assignment, `if`/`else` and blocks. Everything outside the
+//! lowered subset — projections, closures, `const` refs, the M3
+//! concurrency statements — is a clean [`LowerError`] diagnostic, never a
+//! panic (later increments widened the subset: loops, `match`, generics,
+//! `defer`/`errdefer`, and F3's `?`/`else |e|`/`raise`). The [`Program`](fors_interp::Program)-shaped output is
 //! assembled by the caller (tests): this crate returns [`LoweredFn`] rows,
 //! so it never depends on the interpreter crate (design §2, "Why three").
 
@@ -25,6 +26,13 @@
 //! checker's frozen one — see [`mono`]'s module docs). A `match`, and a
 //! `let`/`var` destructuring, lowers from `BodyFacts::patterns`: the
 //! checker's decided shapes, never re-derived here.
+//!
+//! F3 adds ch02's failure surface from `BodyFacts::failure` (D10) — `?` and
+//! `else |e| { }` as a `try_br` on the call, `raise` as the `raise`
+//! terminator on an `Error` exit edge — and lowers ch03's explicit-arithmetic
+//! methods and `reduce` from `BodyFacts::numeric` (D11) instead of by
+//! spelling. [`LoweredBuild::names`] carries the static names ch02 R17's
+//! `render` needs.
 
 pub mod diag;
 pub mod lower;

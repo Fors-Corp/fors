@@ -7,7 +7,7 @@
 //! `not`, `conv_*`), aggregates (`agg_new`, `field`), direct calls
 //! (`call_direct`), the single host door (`intrinsic`, closed table in
 //! [`exec`]), and terminators (`br`, `cond_br`, `ret`, `trap`,
-//! `unreachable`). Everything else (`index`, `try_br`, …) answers
+//! `unreachable`). Everything else outside the implemented subset answers
 //! [`InterpError`], never a panic.
 //!
 //! F5 adds `slice_range` and `reduce_tree`: the tree's SHAPE is
@@ -19,6 +19,12 @@
 //! dispatch loop runs the edge's pending `defer`/`errdefer` bodies, then the
 //! drops, then ch01 R22h's check, then the transfer — in that order, from
 //! the data, never re-derived. A `trap` is not an exit and runs none of it.
+//!
+//! **F3** (design §3.6, §5.4) executes `try_br` — a callee's `raise` lands
+//! on the caller's `try_br` for that call, whose `err` edge carries the
+//! error in the call's own value — and runs ch02 R17's five-step error exit
+//! of `main` once, in the dispatch loop's `error_exit`, with [`render`] as
+//! R17's clause list.
 //!
 //! **F6's interpreter half** (design §3.5, §3.7, §5.1, §5.2) adds [`mem`]'s
 //! allocation objects, arenas and generation checks, and [`ub`]'s detection
@@ -50,6 +56,7 @@ pub mod exec;
 pub mod mem;
 pub mod program;
 pub mod reduce;
+pub mod render;
 pub mod shim;
 pub mod trap;
 pub mod ub;
