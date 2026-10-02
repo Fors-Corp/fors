@@ -636,8 +636,10 @@ pub fn build(fir: &mut Fir, names: &mut Interner) -> PreludeDefs {
     }
 
     // ch10 R2's prelude-named std types: opaque unless package `std` is in
-    // the build, in which case the resolver binds them to real items and this
-    // row is never consulted.
+    // the build, in which case the resolver binds them to real items
+    // (`fors_resolve::items::bind_std_prelude`, I10c: each name answers the
+    // `Entity::Item` that `std.mem` exports under it) and this row is never
+    // consulted.
     for n in OPAQUE {
         let s = names.intern(n);
         table.push((s, PreludeEntity::Opaque));

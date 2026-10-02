@@ -291,11 +291,16 @@ pub const CHECK_SITES: &[CheckSiteRow] = &[
         rule: 31,
         corpus: true,
     },
+    // ch09 R31: only the `block` body of a `defer`/`errdefer` is a CHECK
+    // position; the `expr ";"` form "is checked as the expression statement
+    // it abbreviates" (synthesised, I10c). No checked corpus file writes
+    // `errdefer { .. }` (07-grammar's `errdefer-block-parses` is parse-only),
+    // so this row is reached by no corpus test.
     CheckSiteRow {
         parent: NodeKind::ErrdeferStmt,
         slot: Slot::UnitBody,
         rule: 31,
-        corpus: true,
+        corpus: false,
     },
     CheckSiteRow {
         parent: NodeKind::Block,
@@ -1305,8 +1310,17 @@ impl Wf<'_> {
         });
         let pk = cx.kind(node);
         for &c in &kids {
-            cx.site(pk, Slot::UnitBody);
-            self.check(cx, c, TY_UNIT);
+            if cx.kind(c) == NodeKind::Block {
+                cx.site(pk, Slot::UnitBody);
+                self.check(cx, c, TY_UNIT);
+            } else {
+                // ch09 R31: "its `expr ";"` form is checked as the
+                // expression statement it abbreviates" — SYNTHESISED and its
+                // value dropped, never checked against `()` (which let
+                // R38(c) bind a callee's result parameter to `()`: `defer
+                // a.deinit(move b);` with `deinit[T](..) -> T`).
+                self.synth(cx, c);
+            }
         }
         cx.defers.pop();
         TY_UNIT
@@ -1423,7 +1437,7 @@ impl Wf<'_> {
         let mut unknown = false;
         for it in self.iterator_traits() {
             let want = self.fir.tys.intern_trait_ref(it, fors_fir::ty::NO_ARGS);
-            match self.holds(bare, want) {
+            match self.holds_exact(bare, want) {
                 crate::wf::Holds::Yes => return self.assoc_item(bare, it, item),
                 crate::wf::Holds::Unknown => unknown = true,
                 crate::wf::Holds::No => {}

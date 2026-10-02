@@ -191,8 +191,12 @@ pub struct Universe {
 /// Types, traits and values only: since owner decision 2026-09-19 round 5
 /// (D3) the prelude holds NO modules, so a std module is in scope only
 /// where the header imports it.
+///
+/// The second map holds the variant names of a prelude name bound to a
+/// real enum item ([`bind_std_prelude`]), so `AllocError.out_of_memory`
+/// resolves its tail exactly as `mem.AllocError.out_of_memory` does.
 #[derive(Default)]
-pub struct Prelude(HashMap<Symbol, Entity>);
+pub struct Prelude(HashMap<Symbol, Entity>, HashMap<Symbol, Vec<Symbol>>);
 
 impl Prelude {
     /// Rule 17 lookup for a name used inside `scope`'s module. The
@@ -200,6 +204,13 @@ impl Prelude {
     /// which the round-5 prelude no longer treats differently).
     pub fn get(&self, _scope: &ModuleScope, name: Symbol) -> Option<Entity> {
         self.0.get(&name).copied()
+    }
+
+    /// The variant names of the enum item a prelude name is bound to (ch10
+    /// R2's `AllocError` and `Utf8Error` in a build with `std`); empty for
+    /// every other prelude name.
+    pub fn variants(&self, name: Symbol) -> &[Symbol] {
+        self.1.get(&name).map_or(&[], Vec::as_slice)
     }
 }
 
@@ -250,7 +261,63 @@ fn build_prelude(interner: &mut Interner) -> Prelude {
         let s = interner.intern(n);
         out.insert(s, Entity::PreludeValue(s));
     }
-    Prelude(out)
+    Prelude(out, HashMap::new())
+}
+
+/// ch10 R2 / ch08 R17: in a build that contains package `std` (`has_std`:
+/// some module is literally `std.*`), each of the eight prelude names std
+/// contributes (`PRELUDE_TYPES5`) denotes "the SAME item as its module
+/// path, `mem.Vec`" — ch10 R2's table: "each defined in `std.mem` or a
+/// submodule of it". So each is bound here to the public item that exactly
+/// one of `std.mem` / `std.mem.<x>` DECLARES under that name (its own
+/// pass-1 row, `Origin::Item`), the real `Entity::Item` with its variants.
+/// A name no such module declares — or two declare — stays
+/// `Entity::PreludeType` (the checker's `PreludeEntity::Opaque`), exactly
+/// as in a build without `std`, so a partial std is never guessed at.
+///
+/// Runs between pass 1 and pass 2, off declarations rather than
+/// `std.mem`'s re-exports, so it does not depend on the order modules are
+/// linked in and a `use std.mem.Vec;` (or `use std.mem.vec.Vec;`) in any
+/// module is compared against the real item by [`bind_use_name`]: ch08
+/// R13's "an import that binds a name to the entity that name already
+/// denotes ... is not a collision", which ch10 R2 promises for the two
+/// spellings ("so the two spellings never collide under Rule 13").
+fn bind_std_prelude(interner: &mut Interner, modules: &ModuleTable, universe: &mut Universe) {
+    if !universe.has_std {
+        return;
+    }
+    let std_sym = interner.intern(b"std");
+    let mem_sym = interner.intern(b"mem");
+    let homes: Vec<usize> = (0..modules.name.len())
+        .filter(|&m| {
+            let n = &modules.name[m];
+            (n.len() == 2 || n.len() == 3) && n[0] == std_sym && n[1] == mem_sym
+        })
+        .collect();
+    let Universe {
+        scopes, prelude, ..
+    } = universe;
+    for n in &prelude::PRELUDE_TYPES5 {
+        let s = interner.intern(n);
+        let mut found: Option<(Entity, Vec<Symbol>)> = None;
+        let mut count = 0usize;
+        for &m in &homes {
+            let Some(scope) = scopes.get(m) else { continue };
+            if let Some(Export::Public(row)) = scope.export(s)
+                && row.origin == Origin::Item
+                && matches!(row.entity, Entity::Item { .. })
+            {
+                count += 1;
+                found = Some((row.entity, row.variants.to_vec()));
+            }
+        }
+        if count == 1
+            && let Some((entity, variants)) = found
+        {
+            prelude.0.insert(s, entity);
+            prelude.1.insert(s, variants);
+        }
+    }
 }
 
 fn is_sig(tokens: &Tokens, i: usize) -> bool {
@@ -898,6 +965,10 @@ pub fn build_universe_in_package(
         check_signature_leaks(interner, f, m, scope, &mut diags);
     }
 
+    // I10c: ch10 R2's eight prelude names, bound to std's declarations
+    // BEFORE any `use` is linked (see `bind_std_prelude`).
+    bind_std_prelude(interner, modules, &mut universe);
+
     // Pass 2: `use`/`pub use`, in dependency order (Rule 7).
     let order = dependency_order(n, edges, modules, interner);
     for m in order {
@@ -1173,15 +1244,27 @@ fn bind_use_name(
     let scope = &mut scopes[from];
     let poisoned = entity == Entity::Poisoned;
     if let Some(pe) = prelude.get(scope, bound_name) {
-        let same = match (pe, entity) {
+        // Rule 13's same-entity case. The third arm is I10c's: with `std`
+        // in the build a prelude name of ch10 R2 IS the real item
+        // (`bind_std_prelude`), so `use std.mem.Vec;` beside the prelude
+        // `Vec` binds "the entity that name already denotes" — ch10 R2:
+        // "the two spellings never collide under Rule 13".
+        let same_module = match (pe, entity) {
             (Entity::PreludeModule(_, Some(pm)), Entity::Module(em)) => pm == em,
             (Entity::PreludeModule(a, _), Entity::PreludeModule(b, _)) => a == b,
             _ => false,
         };
-        if same || poisoned {
+        let same_item =
+            matches!((pe, entity), (Entity::Item { .. }, Entity::Item { .. })) && pe == entity;
+        if same_module || poisoned {
             return;
         }
-        if !scope.in_std {
+        // A same-item import falls through to the normal binding below —
+        // a `pub use` of it must still become an export row (`std.mem`'s
+        // own `pub use std.mem.vec.Vec;` is what `mem.Vec` resolves
+        // through), and a scope row for the real item is what the prelude
+        // already answers.
+        if !same_item && !scope.in_std {
             diags.push((
                 from,
                 Diagnostic::new(

@@ -621,6 +621,15 @@ impl Wf<'_> {
             }
         }
 
+        // §7.10: an expected type that itself failed to lower is a step (c)
+        // that could not run. A slot only it would have determined (`var v:
+        // Vec[i32, heap] = Vec.new();` with the annotation already
+        // `TY_ERROR`) must not become a second, T0039 diagnostic for the
+        // annotation's own failure.
+        if slots > 0 && expected == Some(TY_ERROR) && !b.is_complete() {
+            unowned = true;
+        }
+
         // (d) the arguments, left to right.
         let mut pending: Vec<(usize, usize, TyId)> = Vec::new();
         for (i, &arg) in args.iter().enumerate() {
