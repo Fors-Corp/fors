@@ -662,17 +662,40 @@ fn repo_root() -> std::path::PathBuf {
 /// this fails.
 #[test]
 fn the_query_path_agrees_with_check_build_over_the_ch09_corpus() {
-    let dir = repo_root().join("tests/conformance/09-types");
+    query_path_agrees_with_check_build("09-types", 200);
+}
+
+/// I10: the same oracle over the two chapters this increment turned on —
+/// every new ch02/ch03 diagnostic is per-body or signature-phase, and the
+/// DAG must reproduce it exactly.
+#[test]
+fn the_query_path_agrees_with_check_build_over_the_ch02_and_ch03_corpora() {
+    query_path_agrees_with_check_build("02-failure", 30);
+    query_path_agrees_with_check_build("03-numerics", 40);
+}
+
+/// I10, half B: the same oracle over the ch04 corpus (whose new checks read
+/// the module header — `needs`, `inputs`, `use` — from inside a body) and
+/// the ch01 corpus (whose `Shared` and brand checks are whole-build and
+/// per-body respectively).
+#[test]
+fn the_query_path_agrees_with_check_build_over_the_ch04_and_ch01_corpora() {
+    query_path_agrees_with_check_build("04-authority", 25);
+    query_path_agrees_with_check_build("01-ownership", 100);
+}
+
+fn query_path_agrees_with_check_build(chapter: &str, at_least: usize) {
+    let dir = repo_root().join("tests/conformance").join(chapter);
     let mut paths: Vec<std::path::PathBuf> = std::fs::read_dir(&dir)
-        .expect("the ch09 corpus")
+        .expect("the corpus directory")
         .flatten()
         .map(|e| e.path())
         .filter(|p| p.extension().is_some_and(|e| e == "fors"))
         .collect();
     paths.sort();
     assert!(
-        paths.len() > 200,
-        "the ch09 corpus is {} files",
+        paths.len() > at_least,
+        "the {chapter} corpus is {} files",
         paths.len()
     );
 
@@ -731,11 +754,63 @@ fn the_query_path_agrees_with_check_build_over_the_ch09_corpus() {
     }
     assert!(
         mismatches.is_empty(),
-        "{} of {} ch09 files disagree:\n{}",
+        "{} of {} {chapter} files disagree:\n{}",
         mismatches.len(),
         paths.len(),
         mismatches.join("\n")
     );
+}
+
+/// I10 (ch03 R18): `@specialize` is part of the callee's SIGNATURE (the
+/// flags byte of its canonical encoding), so adding it re-checks the `simd`
+/// caller and clears its D0018 — never a stale diagnostic. ch03 R4's
+/// `@unsafe` is on the declaration's own signature tokens, which its body
+/// node reads.
+#[test]
+fn an_attribute_a_ch03_rule_reads_reaches_the_body_that_reads_it() {
+    let src = "module pkg.a;\nneeds { };\nfn id[T: Copyable](let a: T) -> T { return a; }\nfn f() { simd for i in 0 ..< 8 { var r: i32 = id(i); } }\nfn g(let x: i32) -> i32 { return x.unchecked_add(1); }\n".to_string();
+    let mut h = build(&[("pkg.a", src)]);
+    let codes = |h: &H| -> Vec<String> {
+        h.qb.diagnostics()
+            .iter()
+            .map(|d| d.code.as_string())
+            .collect()
+    };
+    assert_eq!(codes(&h), vec!["D0018", "D0004"]);
+    h.edit(0, "fn id[", "@specialize\nfn id[");
+    assert!(
+        h.bodies().iter().any(|b| b.ends_with('f')),
+        "the caller's body re-ran: {:?}",
+        h.bodies()
+    );
+    assert_eq!(codes(&h), vec!["D0004"]);
+    h.edit(0, "fn g(", "@unsafe(invariant: \"x < MAX\")\nfn g(");
+    assert_eq!(codes(&h), Vec::<String>::new());
+}
+
+/// I10, half B: ch04 R2a's and R13's body checks read the MODULE HEADER
+/// (`needs`, `inputs`). Editing the header must re-check the bodies that
+/// read it — adding `ffi` clears the A0002, listing the path clears the
+/// A0013 — never leave a stale diagnostic.
+#[test]
+fn a_header_clause_a_ch04_rule_reads_reaches_the_body_that_reads_it() {
+    let src = "module pkg.a;\nneeds { };\nuse std.fs;\nfn s() { probe(1); }\nfn r() { comptime { let d: Str = fs.read_to_string(\"a.json\"); } }\n@unsafe(invariant: \"none\")\nextern \"c\" fn probe(let n: i32);\n".to_string();
+    let mut h = build(&[("pkg.a", src)]);
+    let codes = |h: &H| -> Vec<String> {
+        h.qb.diagnostics()
+            .iter()
+            .map(|d| d.code.as_string())
+            .collect()
+    };
+    assert_eq!(codes(&h), vec!["A0002", "A0013"]);
+    h.edit(0, "needs { };", "needs { ffi };");
+    assert_eq!(codes(&h), vec!["A0013"]);
+    h.edit(
+        0,
+        "needs { ffi };",
+        "needs { ffi };\ninputs { \"a.json\" };",
+    );
+    assert_eq!(codes(&h), Vec::<String>::new());
 }
 
 fn header_segments(

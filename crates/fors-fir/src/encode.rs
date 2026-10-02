@@ -1282,6 +1282,8 @@ pub fn decode_sig(
 
     fir.sigs.set_kind(self_def, kind);
     fir.sigs.set_soa(self_def, flags & crate::sig::SIG_SOA != 0);
+    fir.sigs
+        .set_specialize(self_def, flags & crate::sig::SIG_SPECIALIZE != 0);
     fir.sigs.set_generics(self_def, g);
 
     match kind {
