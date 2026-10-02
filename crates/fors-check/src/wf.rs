@@ -53,6 +53,19 @@ pub struct Wf<'a> {
     /// The nominal heads an `impl Linear for T {}` declared linear (ch01 R22).
     linear_roots: Vec<DefId>,
     linear_memo: HashMap<TyId, bool>,
+    /// R22a's three head classes, resolved once from the prelude: the heads
+    /// that hold their first argument BY VALUE (`Array`, `vector`,
+    /// `atomic`, `Option`), the ones that are linear without descending
+    /// (`Own`), and the indirections `lin` must never enter (`Slice`,
+    /// `Ref`, `Arena`, `Range`, `RangeIncl`, `mask`). Each sorted.
+    lin_by_value: Vec<DefId>,
+    lin_own: Vec<DefId>,
+    lin_opaque: Vec<DefId>,
+    /// R22c: the rigid leaves this build decided are NOT `Droppable`, and
+    /// are therefore linear. Sorted; grows monotonically, so the `lin` memo
+    /// beside it never goes stale (a leaf is classified before any type
+    /// containing it is asked).
+    rigid_linear: Vec<TyId>,
     /// Per `DefId`: has this declaration already produced a diagnostic? A
     /// body is typed only when its own signature — and its `impl`/`trait`
     /// head — came out clean (design §10: one root cause per declaration).
@@ -140,6 +153,10 @@ impl<'a> Wf<'a> {
             impls: fors_fir::impls::ImplIndex::new(),
             linear_roots: Vec::new(),
             linear_memo: HashMap::new(),
+            lin_by_value: Vec::new(),
+            lin_own: Vec::new(),
+            lin_opaque: Vec::new(),
+            rigid_linear: Vec::new(),
             spoke: Vec::new(),
             synths: 0,
             checks: 0,
@@ -251,85 +268,154 @@ impl<'a> Wf<'a> {
         }
         self.linear_roots.sort_unstable_by_key(|d| d.0);
         self.linear_roots.dedup();
+        let g = |i: usize| self.prelude.generics[i];
+        self.lin_by_value = vec![
+            g(gty::ARRAY),
+            g(gty::VECTOR),
+            g(gty::ATOMIC),
+            g(gty::OPTION),
+        ];
+        self.lin_own = vec![g(gty::OWN)];
+        self.lin_opaque = vec![
+            g(gty::SLICE),
+            g(gty::REF),
+            g(gty::ARENA),
+            g(gty::RANGE),
+            g(gty::RANGEINCL),
+            g(gty::MASK),
+        ];
+        for v in [
+            &mut self.lin_by_value,
+            &mut self.lin_own,
+            &mut self.lin_opaque,
+        ] {
+            v.sort_unstable_by_key(|d| d.0);
+            v.dedup();
+        }
     }
 
-    /// ch01 R22a: linearity propagates structurally from a declared root.
+    /// ch01 R22a-R22c: `lin(T)`, delegated to [`fors_fir::ty::lin`].
+    ///
+    /// The descent lives in `fors-fir` because FMIR lowering reads the same
+    /// answer out of `BodyFacts` (datum D8) and must not re-derive it. What
+    /// stays here is the half the type store cannot know: which heads were
+    /// declared linear, and R22c's rigid leaves — a `Param` or a neutral
+    /// projection is linear unless its DECLARED bounds make it `Droppable`.
+    /// Every leaf of `ty` is answered before the descent runs, so the memo
+    /// never caches an answer that a later leaf would change.
     pub fn is_linear(&mut self, ty: TyId) -> bool {
         if let Some(&v) = self.linear_memo.get(&ty) {
             return v;
         }
-        self.linear_memo.insert(ty, false); // break cycles conservatively
-        let v = self.is_linear_uncached(ty, 0);
-        self.linear_memo.insert(ty, v);
-        v
+        for leaf in self.lin_leaves(ty) {
+            if self
+                .rigid_linear
+                .binary_search_by_key(&leaf.0, |t| t.0)
+                .is_err()
+                && !self.rigid_droppable(leaf)
+            {
+                let at = self.rigid_linear.partition_point(|t| t.0 < leaf.0);
+                self.rigid_linear.insert(at, leaf);
+            }
+        }
+        let Wf {
+            fir,
+            linear_memo,
+            linear_roots,
+            lin_by_value,
+            lin_own,
+            lin_opaque,
+            rigid_linear,
+            ..
+        } = self;
+        let env = fors_fir::ty::LinEnv {
+            roots: linear_roots,
+            by_value: lin_by_value,
+            own: lin_own,
+            opaque: lin_opaque,
+            rigid_linear,
+        };
+        fors_fir::ty::lin(&mut fir.tys, &fir.sigs, &env, linear_memo, ty)
     }
 
-    fn is_linear_uncached(&mut self, ty: TyId, depth: u32) -> bool {
-        if depth > 64 || ty == TY_ERROR || ty == NO_TY {
-            return false;
-        }
-        match self.fir.tys.tag(ty) {
-            TyTag::Nominal => {
-                let def = DefId(self.fir.tys.a(ty));
-                if self
-                    .linear_roots
-                    .binary_search_by_key(&def.0, |d| d.0)
-                    .is_ok()
-                {
-                    return true;
-                }
-                // A built-in generic head stores its arguments by value only
-                // for `Array`/`vector`/`atomic`/`Option`; `Own`/`Ref`/`Arena`
-                // are ch01's and never linear by their argument.
-                if let Some(g) = self.prelude.generic_index(def) {
-                    return match g {
-                        gty::ARRAY | gty::VECTOR | gty::ATOMIC | gty::OPTION => {
-                            let args = self.fir.tys.args_vec(ArgsId(self.fir.tys.b(ty)));
-                            args.first()
-                                .is_some_and(|&x| self.is_linear_uncached(x, depth + 1))
-                        }
-                        _ => false,
-                    };
-                }
-                let ms = self.fir.sigs.members(def);
-                let n = self.fir.sigs.member_store.count(ms);
-                for i in 0..n {
-                    let m = self.fir.sigs.member_store.get(ms, i);
-                    match m.kind {
-                        MemberKind::Field => {
-                            if self.is_linear_uncached(m.ty, depth + 1) {
-                                return true;
-                            }
-                        }
-                        MemberKind::Variant => match m.payload {
-                            PayloadKind::Tuple => {
-                                let xs = self.fir.tys.args_vec(m.args);
-                                if xs.iter().any(|&x| self.is_linear_uncached(x, depth + 1)) {
-                                    return true;
-                                }
-                            }
-                            PayloadKind::Record => {
-                                let k = self.fir.sigs.member_store.count(m.sub);
-                                for j in 0..k {
-                                    let f = self.fir.sigs.member_store.get(m.sub, j);
-                                    if self.is_linear_uncached(f.ty, depth + 1) {
-                                        return true;
-                                    }
-                                }
-                            }
-                            PayloadKind::None => {}
-                        },
-                        MemberKind::Item => {}
-                    }
-                }
-                false
+    /// ch01 R22a(b) alone: some by-value component of `ty` is linear,
+    /// whatever its own head declares. See [`fors_fir::ty::lin_components`].
+    pub fn has_linear_component(&mut self, ty: TyId) -> bool {
+        for leaf in self.lin_leaves(ty) {
+            if self
+                .rigid_linear
+                .binary_search_by_key(&leaf.0, |t| t.0)
+                .is_err()
+                && !self.rigid_droppable(leaf)
+            {
+                let at = self.rigid_linear.partition_point(|t| t.0 < leaf.0);
+                self.rigid_linear.insert(at, leaf);
             }
-            TyTag::Tuple => {
-                let xs = self.fir.tys.args_vec(ArgsId(self.fir.tys.b(ty)));
-                xs.iter().any(|&x| self.is_linear_uncached(x, depth + 1))
-            }
-            _ => false,
         }
+        let Wf {
+            fir,
+            linear_memo,
+            linear_roots,
+            lin_by_value,
+            lin_own,
+            lin_opaque,
+            rigid_linear,
+            ..
+        } = self;
+        let env = fors_fir::ty::LinEnv {
+            roots: linear_roots,
+            by_value: lin_by_value,
+            own: lin_own,
+            opaque: lin_opaque,
+            rigid_linear,
+        };
+        fors_fir::ty::lin_components(&mut fir.tys, &fir.sigs, &env, linear_memo, ty)
+    }
+
+    /// ch01 R22c: `X: Droppable` iff `lin(X)` is false. The public name the
+    /// design's Builds list gives this half.
+    pub fn is_droppable(&mut self, ty: TyId) -> bool {
+        !self.is_linear(ty)
+    }
+
+    /// The rigid leaves [`Wf::is_linear`]'s descent would consult.
+    fn lin_leaves(&mut self, ty: TyId) -> Vec<TyId> {
+        let Wf {
+            fir,
+            linear_roots,
+            lin_by_value,
+            lin_own,
+            lin_opaque,
+            ..
+        } = self;
+        let env = fors_fir::ty::LinEnv {
+            roots: linear_roots,
+            by_value: lin_by_value,
+            own: lin_own,
+            opaque: lin_opaque,
+            rigid_linear: &[],
+        };
+        fors_fir::ty::open_leaves(&mut fir.tys, &fir.sigs, &env, ty)
+    }
+
+    /// ch01 R22c: a rigid type parameter is `Droppable` iff its declared
+    /// bounds include `Droppable`, `Copyable` (R22e) or `Iterator` (ch09
+    /// R21); a neutral projection iff the bounds its trait declares for the
+    /// associated type, or the constraint entries in scope (R62), do.
+    pub fn rigid_droppable(&mut self, ty: TyId) -> bool {
+        if !matches!(self.fir.tys.tag(ty), TyTag::Param | TyTag::Proj) {
+            return true;
+        }
+        let implied = [tr::DROPPABLE, tr::COPYABLE, tr::ITERATOR];
+        let wanted: Vec<DefId> = implied.iter().map(|&i| self.prelude.traits[i]).collect();
+        let iters = self.iterator_traits();
+        for b in self.declared_bounds(ty) {
+            let (d, _) = self.fir.tys.trait_ref(b);
+            if wanted.contains(&d) || iters.contains(&d) {
+                return true;
+            }
+        }
+        false
     }
 
     // --------------------------------------------------- bound satisfaction
@@ -828,6 +914,27 @@ impl Wf<'_> {
                         24,
                         24,
                         "an `impl Linear` must not bound any of its parameters: linearity is a fact of the constructor, never of an instantiation".to_string(),
+                    );
+                    continue;
+                }
+                // ch01 R22: the `impl` MUST appear in the module that
+                // defines `T` (as for `Shared`, R21a), so that every
+                // private field is visible to the `lin` descent.
+                if let HeadKey::Nominal(head) = r.head
+                    && head != NO_DEF
+                    && !self.same_module(head, r.def)
+                {
+                    let h = self.head_name(head);
+                    self.emit(
+                        r.def,
+                        file,
+                        range,
+                        24,
+                        24,
+                        format!(
+                            "`impl Linear for {h}` must appear in the module that defines `{h}` \
+                             (ch01 R22): linearity is a fact of the constructor"
+                        ),
                     );
                 }
             }

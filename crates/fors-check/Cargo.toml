@@ -13,5 +13,12 @@ fors-index = { path = "../fors-index" }
 fors-resolve = { path = "../fors-resolve" }
 fors-fir = { path = "../fors-fir" }
 
+[dev-dependencies]
+# D7's per-exit multiset is asserted against FMIR F4's own oracle,
+# `fors_fmir::exit::expected_pending` (design §13, "Interface to FMIR
+# lowering": the verifier check is an assertion against D7, never a
+# re-derivation). Test-only; the checker itself never reads `fors-fmir`.
+fors-fmir = { path = "../fors-fmir" }
+
 [lints]
 workspace = true

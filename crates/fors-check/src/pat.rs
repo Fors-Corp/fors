@@ -152,6 +152,33 @@ impl Wf<'_> {
         s: TyId,
     ) -> PatId {
         store.touch();
+        // ch01 R22d(ii): destructuring discharges a linear obligation only
+        // when the arm binds EVERY linear component with `let n`. A `_` or
+        // a literal pattern facing a linear component is a drop, and the
+        // code and the diagnostic are ch01's (ch09 R50 is the emission
+        // site: "omitted fields match anything" is its clause).
+        if matches!(cx.kind(pat), NodeKind::PatWild | NodeKind::PatLit)
+            && s != TY_ERROR
+            && s != NO_TY
+            && self.is_linear(s)
+        {
+            let w = self.show(s);
+            let what = if cx.kind(pat) == NodeKind::PatWild {
+                "`_`"
+            } else {
+                "a literal pattern"
+            };
+            self.bemit_code(
+                cx,
+                pat,
+                Code::O(22),
+                50,
+                format!(
+                    "{what} faces the linear component type `{w}` and drops it: bind it with                      `let n` and consume it (ch01 R22d(ii))"
+                ),
+            );
+            return store.wild();
+        }
         match cx.kind(pat) {
             NodeKind::PatWild => store.wild(),
             NodeKind::PatLet => {
@@ -763,6 +790,28 @@ impl Wf<'_> {
             {
                 subs[k] = Some(bound);
             }
+        }
+        // ch01 R22d(ii): an OMITTED `{ }` field matches anything, so a
+        // linear one is dropped by this pattern.
+        for (k, &(name, ty)) in fields.iter().enumerate() {
+            if subs[k].is_some() || ty == TY_ERROR || ty == NO_TY {
+                continue;
+            }
+            if !self.is_linear(ty) {
+                continue;
+            }
+            let f = self.sym(name);
+            let w = self.show(ty);
+            self.bemit_code(
+                cx,
+                payload,
+                Code::O(22),
+                50,
+                format!(
+                    "the field `{f}` of linear type `{w}` is omitted from this pattern, and an                      omitted field matches anything: bind it with `let n` and consume it (ch01                      R22d(ii))"
+                ),
+            );
+            break;
         }
         subs.into_iter()
             .map(|o| o.unwrap_or_else(|| store.wild()))

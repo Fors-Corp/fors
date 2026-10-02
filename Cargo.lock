@@ -12,6 +12,7 @@ version = "0.8.0"
 dependencies = [
  "fors-diag",
  "fors-fir",
+ "fors-fmir",
  "fors-index",
  "fors-lex",
  "fors-resolve",
