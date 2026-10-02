@@ -154,9 +154,17 @@ fn shift_count_rule_is_count_ge_width() {
             int_binop("shl", mode, 1, 32, ik(PrimKind::I32)),
             Err(TrapKind::Shift)
         );
+        // A count of `width - 1` passes the count rule in every mode; what
+        // the RESULT is then depends on the mode: `1 << 31` is `2^31`,
+        // out of `i32`'s range, so `sat_` clamps it to `i32::MAX` (design
+        // §5.5) while the others keep the low bits (`i32::MIN`).
         assert_eq!(
             int_binop("shl", mode, 1, 31, ik(PrimKind::I32)),
-            Ok(0x8000_0000)
+            Ok(if mode == ArithMode::Sat {
+                0x7FFF_FFFF
+            } else {
+                0x8000_0000
+            })
         );
     }
     // Arithmetic vs logical right shift follows signedness.
@@ -950,4 +958,92 @@ fn frem_f32_exact_pairs_and_properties() {
             assert_eq!(got, (a % b) as f32, "frem_f32({a}, {b})");
         }
     }
+}
+
+#[test]
+fn wrap_and_trunc_as_widen_a_negative_with_its_sign() {
+    // `wrap_as` is the source VALUE modulo `2^w` (two's-complement
+    // truncation), so widening a negative keeps its value: `(-1i8)
+    // .wrap_as[i32]()` is `-1`, not `255`; `(-1i32).wrap_as[u64]()` is
+    // `2^64 - 1`, not `2^32 - 1`.
+    assert_eq!(
+        conv_wrap(0xFF, nk(PrimKind::I8), nk(PrimKind::I32)),
+        0xFFFF_FFFF
+    );
+    assert_eq!(
+        conv_wrap(0xFFFF_FFFF, nk(PrimKind::I32), nk(PrimKind::U64)),
+        u64::MAX
+    );
+    assert_eq!(
+        conv_trunc(0xFFFF_FFFB, nk(PrimKind::I32), nk(PrimKind::I64)),
+        (-5i64) as u64
+    );
+    // An unsigned source still zero-extends.
+    assert_eq!(conv_wrap(0xFF, nk(PrimKind::U8), nk(PrimKind::I32)), 0xFF);
+    // Narrowing is unchanged: the low bits.
+    assert_eq!(conv_wrap(300, nk(PrimKind::U32), nk(PrimKind::U8)), 44);
+}
+
+#[test]
+fn sat_shl_clamps_the_true_result() {
+    // design §5.5: `sat_*` clamps to the type's bounds; the count rule
+    // (`count >= width` traps) is mode-independent (design §11.1 Q4).
+    assert_eq!(
+        int_binop("shl", ArithMode::Sat, 7, 31, ik(PrimKind::I32)),
+        Ok(0x7FFF_FFFF)
+    );
+    assert_eq!(
+        int_binop("shl", ArithMode::Sat, 0xFFFF_FFFF, 1, ik(PrimKind::I32)),
+        Ok(0xFFFF_FFFE)
+    );
+    assert_eq!(
+        int_binop("shl", ArithMode::Sat, 0x8000_0000, 1, ik(PrimKind::I32)),
+        Ok(0x8000_0000)
+    );
+    assert_eq!(
+        int_binop("shl", ArithMode::Sat, 128, 1, ik(PrimKind::U8)),
+        Ok(255)
+    );
+    assert_eq!(
+        int_binop("shl", ArithMode::Sat, 3, 2, ik(PrimKind::U8)),
+        Ok(12)
+    );
+    assert_eq!(
+        int_binop("shl", ArithMode::Sat, 1, 64, ik(PrimKind::U64)),
+        Err(TrapKind::Shift)
+    );
+    // `wrap_shl` keeps the low bits.
+    assert_eq!(
+        int_binop("shl", ArithMode::Wrap, 128, 1, ik(PrimKind::U8)),
+        Ok(0)
+    );
+}
+
+#[test]
+fn checked_f64_to_f32_traps_unless_exact() {
+    // ch03 Rule 6: `as` traps if the value is not exactly representable.
+    assert_eq!(
+        conv_checked(0.1f64.to_bits(), nk(PrimKind::F64), nk(PrimKind::F32)),
+        Err(TrapKind::CheckedConversion)
+    );
+    assert_eq!(
+        conv_checked(0.5f64.to_bits(), nk(PrimKind::F64), nk(PrimKind::F32)),
+        Ok(0.5f32.to_bits() as u64)
+    );
+    assert_eq!(
+        conv_checked(1e300f64.to_bits(), nk(PrimKind::F64), nk(PrimKind::F32)),
+        Err(TrapKind::CheckedConversion)
+    );
+    assert_eq!(
+        conv_checked(
+            f64::INFINITY.to_bits(),
+            nk(PrimKind::F64),
+            nk(PrimKind::F32)
+        ),
+        Ok(f32::INFINITY.to_bits() as u64)
+    );
+    assert_eq!(
+        conv_checked(f64::NAN.to_bits(), nk(PrimKind::F64), nk(PrimKind::F32)),
+        Ok(CANONICAL_F32_NAN as u64)
+    );
 }

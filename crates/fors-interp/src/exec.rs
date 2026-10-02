@@ -206,6 +206,14 @@ const INTRINSIC_STR_BYTE_AT: &str = "str_byte_at";
 /// raise is Fors code in `std/mem/text.fors`; this only copies bytes).
 const INTRINSIC_STR_BYTE_SLICE: &str = "str_byte_slice";
 
+/// `seq_len(seq)`: the element count of an `Array`/`Slice`-shaped value.
+/// ch10 Rule 42's `len` builtin and the bound of every `for` over a
+/// sequence (`fors-lower::emit_seq_len`). FMIR has no `len` opcode — design
+/// §3.10's 71 do not include one, because a real `Slice` is a `{ptr, len}`
+/// pair whose length is a `field` read — so until F7's real `Slice`
+/// representation lands the descriptor's own window answers it.
+const INTRINSIC_SEQ_LEN: &str = "seq_len";
+
 /// The bytes a `Str` handle names in the machine's byte table. A handle
 /// outside the table is a lowering bug (an intrinsic reached with a
 /// non-`Str` receiver), reported as [`InterpError::MissingString`] — never
@@ -219,9 +227,69 @@ fn str_bytes<'m>(m: &'m Machine<'_>, handle: Slot) -> Result<&'m [u8], Fault> {
 
 /// Aggregate cells: one field-granular allocation (see the module docs for
 /// why cells, not bytes, in F1).
+///
+/// `kind` tells an AGGREGATE's own cells from a `Slice` DESCRIPTOR's three
+/// bookkeeping cells (`slice_range`'s `{base, start, len}`). Without it the
+/// two are indistinguishable — a three-element `Array[T, 3]` and a slice
+/// descriptor are both "a cell with three slots" — and `index` would read a
+/// descriptor's `start` as if it were element 1.
 #[derive(Clone, Debug, Default)]
 struct Cells {
     slots: Vec<Slot>,
+    kind: CellKind,
+}
+
+/// What a [`Cells`] row holds.
+#[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
+enum CellKind {
+    /// A struct, tuple, enum payload or array: one slot per component.
+    #[default]
+    Agg,
+    /// `slice_range`'s descriptor: `{base cell handle, start, len}`.
+    Slice,
+}
+
+impl Cells {
+    fn agg(slots: Vec<Slot>) -> Cells {
+        Cells {
+            slots,
+            kind: CellKind::Agg,
+        }
+    }
+}
+
+/// Where a sequence VALUE's elements live: `(cell handle, start, len)`. An
+/// aggregate is its own elements; a `Slice` descriptor names another cell
+/// plus a window into it. The one resolver `index`, a `Seg::Index` place and
+/// `seq_len` all share, so the four never disagree about what element `i` is.
+fn seq_window(m: &Machine<'_>, v: Slot) -> Result<(usize, u64, u64), InterpError> {
+    let cell = m
+        .cells
+        .get(v.bits as usize)
+        .ok_or_else(|| InterpError::TypeMismatch("value is not a sequence".into()))?;
+    match cell.kind {
+        CellKind::Agg => Ok((v.bits as usize, 0, cell.slots.len() as u64)),
+        CellKind::Slice => {
+            let [base, start, len] = cell.slots.as_slice() else {
+                return Err(InterpError::TypeMismatch(
+                    "a slice descriptor must have exactly three cells".into(),
+                ));
+            };
+            let base_len = m
+                .cells
+                .get(base.bits as usize)
+                .map(|c| c.slots.len() as u64)
+                .ok_or_else(|| {
+                    InterpError::TypeMismatch("a slice descriptor's base is not a cell".into())
+                })?;
+            if start.bits.saturating_add(len.bits) > base_len {
+                return Err(InterpError::TypeMismatch(
+                    "a slice descriptor reaches past its base".into(),
+                ));
+            }
+            Ok((base.bits as usize, start.bits, len.bits))
+        }
+    }
 }
 
 /// Which memory range a borrow stack belongs to (design §5.2).
@@ -958,7 +1026,7 @@ fn exec_inst(fr: usize, inst: u32, inst_row: InstRow, m: &mut Machine<'_>) -> Re
                 slots.push(m.slot(fr, inst, v)?);
             }
             let id = m.cells.len() as u64;
-            m.cells.push(Cells { slots });
+            m.cells.push(Cells::agg(slots));
             define(dest, m, fr, Slot::val(id));
         }
         Op::Field => {
@@ -983,25 +1051,37 @@ fn exec_inst(fr: usize, inst: u32, inst_row: InstRow, m: &mut Machine<'_>) -> Re
             let base = val_operand(m, fr, inst, inst_row.site, inst_row.a)?;
             let lo = val_operand(m, fr, inst, inst_row.site, inst_row.b)?;
             let hi = val_operand(m, fr, inst, inst_row.site, inst_row.c)?;
-            let base_len = m
-                .cells
-                .get(base.bits as usize)
-                .map(|c| c.slots.len() as u64)
-                .ok_or_else(|| {
-                    InterpError::TypeMismatch("slice_range base is not an aggregate".into())
-                })?;
+            // Re-slicing a slice is ch03 R24's own composition: the new
+            // window is relative to the base's elements, not to the
+            // descriptor's three cells, so the bounds are checked against
+            // the window `base` already names.
+            let (cell, start, base_len) = seq_window(m, base)?;
             if lo.bits > hi.bits || hi.bits > base_len {
                 return Err(Fault::Trap(TrapKind::Bounds));
             }
             let id = m.cells.len() as u64;
             m.cells.push(Cells {
                 slots: vec![
-                    Slot::val(base.bits),
-                    Slot::val(lo.bits),
+                    Slot::val(cell as u64),
+                    Slot::val(start + lo.bits),
                     Slot::val(hi.bits - lo.bits),
                 ],
+                kind: CellKind::Slice,
             });
             define(dest, m, fr, Slot::val(id));
+        }
+        Op::Index => {
+            // ch03 R24 / ch10 R23: `a[i]` is bounds-checked, and the check
+            // is ch02 R15's `bounds` TRAP — never a wrap, never a clamp,
+            // and never elided (there is no mode field on this opcode).
+            let base = val_operand(m, fr, inst, inst_row.site, inst_row.a)?;
+            let idx = val_operand(m, fr, inst, inst_row.site, inst_row.b)?;
+            let (cell, start, len) = seq_window(m, base)?;
+            if idx.bits >= len {
+                return Err(Fault::Trap(TrapKind::Bounds));
+            }
+            let s = m.cells[cell].slots[(start + idx.bits) as usize];
+            define(dest, m, fr, s);
         }
         Op::ReduceTree => {
             // design §5.7: the interpreter executes §3.9's expansion
@@ -1022,7 +1102,7 @@ fn exec_inst(fr: usize, inst: u32, inst_row: InstRow, m: &mut Machine<'_>) -> Re
                 };
                 (sym.0, red.xs, red.identity, red.b, red.l)
             };
-            let (base, start, n) = slice_parts(m, m.slot(fr, inst, xs)?)?;
+            let (base, start, n) = seq_window(m, m.slot(fr, inst, xs)?)?;
             if n == 0 {
                 // ch03 R11a: trap unless an `identity:` was supplied.
                 if identity.0 == fors_fmir::ids::ABSENT {
@@ -1033,7 +1113,7 @@ fn exec_inst(fr: usize, inst: u32, inst_row: InstRow, m: &mut Machine<'_>) -> Re
                 return Ok(());
             }
             let elems: Vec<Slot> = {
-                let cell = m.cells.get(base as usize).ok_or_else(|| {
+                let cell = m.cells.get(base).ok_or_else(|| {
                     InterpError::TypeMismatch("reduce_tree operand is not a slice".into())
                 })?;
                 cell.slots
@@ -1503,26 +1583,6 @@ fn find_string<'m>(m: &'m Machine<'_>, fr: usize, const_idx: u32) -> Result<&'m 
         .ok_or_else(|| InterpError::MissingString(const_idx).into())
 }
 
-/// F5's `Slice[T]` stand-in, the read half: `slice_range` builds a
-/// three-cell DESCRIPTOR `{ base aggregate handle, start, len }` rather
-/// than copying elements, and this reads it back. It is the same kind of
-/// "minimal intrinsic-backed stub" F2 used for `Buffer.fixed` (design
-/// §5.8): real `Slice` bodies, with `len`, indexing and the iterator
-/// surface, are F7's, and when they land this descriptor is what they
-/// replace. Nothing but `reduce_tree` consumes it today.
-fn slice_parts(m: &Machine<'_>, desc: Slot) -> Result<(u64, u64, u64), InterpError> {
-    let cell = m
-        .cells
-        .get(desc.bits as usize)
-        .ok_or_else(|| InterpError::TypeMismatch("slice operand is not a slice".into()))?;
-    match cell.slots.as_slice() {
-        [base, start, len] => Ok((base.bits, start.bits, len.bits)),
-        _ => Err(InterpError::TypeMismatch(
-            "slice operand is not a three-cell slice descriptor".into(),
-        )),
-    }
-}
-
 fn decl_intrinsic_name(m: &Machine<'_>, fr: usize, sym: u32) -> Result<String, InterpError> {
     let func = m.frames[fr].func;
     m.prog.fns[func]
@@ -1799,12 +1859,27 @@ fn read_place(
         }
         [fors_fmir::place::Seg::Index(idx)] => {
             let idx = *idx;
-            let cell = m.cells.get(base.bits as usize).ok_or_else(|| {
-                InterpError::TypeMismatch("place base is not an aggregate".into())
-            })?;
-            let len = cell.slots.len();
-            let i = index_in_bounds(m, fr, inst, site, idx, len)?;
-            Ok(m.cells[base.bits as usize].slots[i])
+            let (cell, start, len) = seq_window(m, base)?;
+            let i = index_in_bounds(m, fr, inst, site, idx, len as usize)?;
+            Ok(m.cells[cell].slots[start as usize + i])
+        }
+        // `self.data[i]`: one field, then one element of it. The only
+        // two-segment path F1 lowering builds (`fors-lower::
+        // lower_index_assign`), and the shape `Buffer`/`Vec` bodies use.
+        [
+            fors_fmir::place::Seg::Field(f),
+            fors_fmir::place::Seg::Index(idx),
+        ] => {
+            let (f, idx) = (*f, *idx);
+            let seq = m
+                .cells
+                .get(base.bits as usize)
+                .and_then(|c| c.slots.get(f as usize))
+                .copied()
+                .ok_or_else(|| InterpError::TypeMismatch("place field out of range".into()))?;
+            let (cell, start, len) = seq_window(m, seq)?;
+            let i = index_in_bounds(m, fr, inst, site, idx, len as usize)?;
+            Ok(m.cells[cell].slots[start as usize + i])
         }
         _ => Err(InterpError::TypeMismatch("place path outside the F1/F2 shapes".into()).into()),
     }
@@ -1953,14 +2028,27 @@ fn write_place(
         [fors_fmir::place::Seg::Index(idx)] => {
             let idx = *idx;
             let base = root_slot(m, fr, inst, site, root)?;
-            let len = m
+            let (cell, start, len) = seq_window(m, base)?;
+            let i = index_in_bounds(m, fr, inst, site, idx, len as usize)?;
+            m.cells[cell].slots[start as usize + i] = v;
+            Ok(())
+        }
+        // `self.data[i] = v`: see `read_place`'s matching arm.
+        [
+            fors_fmir::place::Seg::Field(f),
+            fors_fmir::place::Seg::Index(idx),
+        ] => {
+            let (f, idx) = (*f, *idx);
+            let base = root_slot(m, fr, inst, site, root)?;
+            let seq = m
                 .cells
                 .get(base.bits as usize)
-                .ok_or_else(|| InterpError::TypeMismatch("place base is not an aggregate".into()))?
-                .slots
-                .len();
-            let i = index_in_bounds(m, fr, inst, site, idx, len)?;
-            m.cells[base.bits as usize].slots[i] = v;
+                .and_then(|c| c.slots.get(f as usize))
+                .copied()
+                .ok_or_else(|| InterpError::TypeMismatch("place field out of range".into()))?;
+            let (cell, start, len) = seq_window(m, seq)?;
+            let i = index_in_bounds(m, fr, inst, site, idx, len as usize)?;
+            m.cells[cell].slots[start as usize + i] = v;
             Ok(())
         }
         _ => Err(InterpError::TypeMismatch("place path outside the F1/F2 shapes".into()).into()),
@@ -2119,6 +2207,14 @@ fn exec_intrinsic(
             define(dest, m, fr, Slot::val(id));
             Ok(())
         }
+        INTRINSIC_SEQ_LEN => {
+            // `seq_len(seq)`: see `INTRINSIC_SEQ_LEN`. Total — it reads a
+            // window, touches no element, and cannot trap.
+            let seq = args.first().copied().unwrap_or_else(Slot::unit);
+            let (_, _, len) = seq_window(m, seq)?;
+            define(dest, m, fr, Slot::val(len));
+            Ok(())
+        }
         other => Err(InterpError::UnknownIntrinsic(other.to_string()).into()),
     }
 }
@@ -2150,6 +2246,41 @@ fn exec_term(
         Op::CondBr => {
             let c = read_terminator_operand(m, fr, term.site, term.a)?;
             let to = BlockId(if c.bits != 0 { term.b } else { term.c });
+            begin_exit_or_goto(fr, block, to, None, false, m)
+        }
+        Op::SwitchDiscr => {
+            // design §3.10: `a` indexes `DeclFmir::switches`; the row
+            // carries the scrutinee, the default edge and the arm table.
+            // Arms are compared on the scrutinee's own BITS — `fors-lower`
+            // narrows each pattern literal to the scrutinee's width, so a
+            // negative `i32` pattern and the zero-extended slot agree.
+            //
+            // ch09 R55's arm-selection step budget is the CHECKER's
+            // (type-checker.md §13 I7); at run time the arms are a linear
+            // scan in source order, and the FIRST match wins, which is what
+            // makes an earlier arm shadow a later duplicate exactly as the
+            // surface reads.
+            let (discr, default, arms) = {
+                let decl = &m.func(m.frames[fr].func).decl;
+                let sw = decl.insts.switches.get(term.a as usize).ok_or_else(|| {
+                    InterpError::TypeMismatch("switch_discr names no switch row".into())
+                })?;
+                let arms: Vec<fors_fmir::inst::SwitchArm> = decl
+                    .insts
+                    .switch_arms
+                    .get(sw.arms.start as usize..sw.arms.end as usize)
+                    .ok_or_else(|| {
+                        InterpError::TypeMismatch("switch_discr's arm range is out of range".into())
+                    })?
+                    .to_vec();
+                (sw.discr, sw.default, arms)
+            };
+            let v = read_terminator_operand(m, fr, term.site, discr.0)?;
+            let to = arms
+                .iter()
+                .find(|a| a.value as u64 == v.bits)
+                .map(|a| a.target)
+                .unwrap_or(default);
             begin_exit_or_goto(fr, block, to, None, false, m)
         }
         Op::Ret | Op::Raise => {

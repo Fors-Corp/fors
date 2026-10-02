@@ -713,9 +713,24 @@ fn check_one_secret_rejection(
     out: &mut Vec<Diagnostic>,
 ) {
     match op {
-        Op::CondBr | Op::SwitchDiscr => {
+        Op::CondBr => {
             if let Some(cond) = val_or_none(row.a)
                 && is_secret(decl, cond)
+            {
+                out.push(Diagnostic::new(
+                    DiagCode::SecretBranchOrIndex,
+                    at,
+                    "branch on a secret operand",
+                ));
+            }
+        }
+        Op::SwitchDiscr => {
+            // `a` indexes `DeclFmir::switches` (op.rs's table), not the
+            // value pool: the scrutinee is the row's `discr`. A row that
+            // does not exist is not a secret operand (the same rule as
+            // `is_secret` for a dangling value).
+            if let Some(sw) = decl.insts.switches.get(row.a as usize)
+                && is_secret(decl, sw.discr)
             {
                 out.push(Diagnostic::new(
                     DiagCode::SecretBranchOrIndex,
@@ -963,6 +978,43 @@ mod tests {
                 ty: TY_UNIT,
                 site: crate::ids::SiteId(0),
             },
+            scope: crate::ids::ScopeId(0),
+        });
+        let diags = verify(&decl);
+        assert!(
+            diags
+                .iter()
+                .any(|d| d.code == DiagCode::SecretBranchOrIndex),
+            "{diags:?}"
+        );
+    }
+
+    #[test]
+    fn switch_on_secret_is_rejected_through_the_switch_table() {
+        // `switch_discr`'s `a` is a row of `switches`, not a value: the
+        // secret scrutinee lives in that row's `discr`.
+        let mut decl = DeclFmir::empty(DeclKeyId(0), FnSigId(0));
+        let secret = decl.push_val(ValRow::new(TY_UNIT, true, 0, ValDef::Param(0)));
+        let target = decl.blocks.push(BlockRow {
+            first_inst: 0,
+            inst_len: 0,
+            term: plain(Op::Unreachable),
+            scope: crate::ids::ScopeId(0),
+        });
+        let arms = decl
+            .insts
+            .push_switch_arms(&[crate::inst::SwitchArm { value: 1, target }]);
+        let sw = decl.insts.push_switch(crate::inst::SwitchRow {
+            discr: secret,
+            default: target,
+            arms,
+        });
+        let mut term = plain(Op::SwitchDiscr);
+        term.a = sw;
+        decl.entry = decl.blocks.push(BlockRow {
+            first_inst: 0,
+            inst_len: 0,
+            term,
             scope: crate::ids::ScopeId(0),
         });
         let diags = verify(&decl);
