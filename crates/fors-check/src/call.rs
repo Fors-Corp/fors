@@ -19,7 +19,7 @@
 //! normalised" (I6) is [`fors_fir::subst::first_unbound`].
 
 use fors_fir::sig::{Conv, GParamKind, MemberKind, PayloadKind, SigKind, VIS_PRIVATE};
-use fors_fir::subst::{Binding, MatchMode, NeutralOnly, first_unbound, one_way_match, subst_norm};
+use fors_fir::subst::{Binding, MatchMode, first_unbound};
 use fors_fir::ty::{ArgsId, FnTyId, NO_ARGS, NO_TY, TY_ERROR, TY_NEVER, TY_UNIT, TyId, TyTag};
 use fors_index::Symbol;
 use fors_index::diag::Code;
@@ -287,7 +287,12 @@ impl Wf<'_> {
                         receiver = Some((p.ty, hit.recv_ty));
                     }
                     Shape {
-                        owners: Vec::new(),
+                        // I6 (design §7.4): the owner container's gparams
+                        // (a trait's `Self` at ordinal 0) then the method's
+                        // own. The receiver binds the container's in step
+                        // (b), which is what makes a method returning
+                        // `Self.A` or `I.Item` typable at all.
+                        owners: self.call_owners(hit.owner, hit.def),
                         gdef: hit.def,
                         params: ps,
                         result: self.fir.sigs.fn_sigs.result(sig),
@@ -432,7 +437,7 @@ impl Wf<'_> {
             && recv_ty != TY_ERROR
             && recv_ty != NO_TY
         {
-            one_way_match(&mut self.fir.tys, self_ty, recv_ty, &mut b);
+            self.match_n(self_ty, recv_ty, &mut b);
         }
 
         // (c) the expected type, in NoFail mode: brand positions are
@@ -446,14 +451,7 @@ impl Wf<'_> {
             && !b.is_complete()
         {
             let mut probe = b.clone();
-            let ok = fors_fir::subst::one_way_match_mode(
-                &mut self.fir.tys,
-                shape.result,
-                w,
-                &mut probe,
-                &mut NeutralOnly,
-                MatchMode::NoFail,
-            );
+            let ok = self.match_n_mode(shape.result, w, &mut probe, MatchMode::NoFail);
             if ok {
                 b = probe;
             }
@@ -497,8 +495,13 @@ impl Wf<'_> {
                 None => {
                     if first_unbound(&self.fir.tys, p, &b).is_none() {
                         // Every slot is bound and the substitution still
-                        // failed: R20's normalisation, which is I6's.
-                        unowned = true;
+                        // failed: R20. I6 owns it — `NoImpl` is T0012 at
+                        // the site, an exhausted work budget is T0020.
+                        if !bad && self.report_norm_failure(cx, value) {
+                            bad = true;
+                        } else {
+                            unowned = true;
+                        }
                         if !self.check_only_form(cx, value) {
                             self.synth(cx, value);
                         }
@@ -516,7 +519,7 @@ impl Wf<'_> {
                     }
                     // R33: an argument of type `never` binds nothing.
                     if s != TY_NEVER {
-                        one_way_match(&mut self.fir.tys, p, s, &mut b);
+                        self.match_n(p, s, &mut b);
                     }
                     pending.push((i, value, s));
                 }
@@ -562,7 +565,13 @@ impl Wf<'_> {
                             bad = true;
                         }
                     }
-                    None => unowned = true,
+                    None => {
+                        if !bad && self.report_norm_failure(cx, value) {
+                            bad = true;
+                        } else {
+                            unowned = true;
+                        }
+                    }
                 },
             }
         }
@@ -601,6 +610,9 @@ impl Wf<'_> {
                 match first_unbound(&self.fir.tys, shape.result, &b) {
                     Some((owner, ord, false)) if !unowned => {
                         self.cannot_infer(cx, node, shape.gdef, owner, ord)
+                    }
+                    None if !unowned => {
+                        self.report_norm_failure(cx, node);
                     }
                     _ => {}
                 }
@@ -655,7 +667,25 @@ impl Wf<'_> {
             return Some(ty);
         }
         self.subst_calls += 1;
-        subst_norm(&mut self.fir.tys, ty, b)
+        self.subst_norm_n(ty, b)
+    }
+
+    /// R20's outcome for a substitution that failed although every slot it
+    /// mentions is bound (design §7.5, §8's R20 row). `NoImpl` is T0012 at
+    /// the site that asked; §17 amendment 2's exhausted work budget is
+    /// T0020 asking for the chain to be split. `false` means the
+    /// normalisation failed for a reason nothing reports (an error type, a
+    /// trait not in this build), which is silence.
+    fn report_norm_failure(&mut self, cx: &mut BodyCx, at: usize) -> bool {
+        if self.take_budget_exceeded() {
+            self.emit_budget(cx, at);
+            return true;
+        }
+        if let Some((head, tref)) = self.take_no_impl() {
+            self.emit_no_impl(cx, at, head, tref);
+            return true;
+        }
+        false
     }
 
     /// The tape event an argument's convention produces (design §7.9).
@@ -766,7 +796,7 @@ impl Wf<'_> {
                 let got = self.synth_closure_with(cx, value, &ps);
                 let r = self.fir.tys.fn_tys().result(FnTyId(self.fir.tys.a(got)));
                 if r != TY_ERROR && r != NO_TY && r != TY_NEVER {
-                    one_way_match(&mut self.fir.tys, declared_result, r, b);
+                    self.match_n(declared_result, r, b);
                 }
                 got
             }
@@ -836,7 +866,21 @@ impl Wf<'_> {
             self.dep(owner);
             let g = self.fir.sigs.generics(owner);
             let count = self.fir.sigs.generics_store.count(g);
+            let owner_is_trait = self.fir.sigs.kind(owner) == SigKind::Trait;
             for o in 0..(n as usize).min(count) {
+                // A TRAIT container's ordinal 0 is its implicit `Self`, and
+                // the only bound a `Self` carries is the trait itself (both
+                // the prelude and lowering build it that way). That the
+                // receiver implements the trait is a PRECONDITION of the
+                // lookup that answered — `methods::trait_candidates` requires
+                // `holds(recv, trait) == Yes`, and the rigid path requires
+                // the trait to be among the receiver's declared bounds — so
+                // re-deriving it here would only re-report what member lookup
+                // already decided. §7.4(e)'s "bounds of the container" are
+                // the bounds on the container's own PARAMETERS.
+                if owner_is_trait && o == 0 {
+                    continue;
+                }
                 let x = b.slot(owner, o as u16);
                 if x == NO_TY || x == TY_ERROR {
                     continue;
@@ -872,11 +916,20 @@ impl Wf<'_> {
                 if bounds.is_empty() {
                     continue;
                 }
+                // I6: the subject goes through R20's normalisation first, so
+                // `Vec[i32].Item` is `i32` here. What survives is NEUTRAL — a
+                // projection on a rigid head — and `holds`'s `Proj` arm
+                // answers it from the trait's `type A: ...` declaration plus
+                // the constraint entries in scope (R16, R62). A subject that
+                // merely CONTAINS a neutral projection (`Box2[I.Item]`) is
+                // an ordinary R12 question: an impl matches it or not by
+                // one-way match (a generic `impl[T] Tr for Box2[T]` binds
+                // `T := I.Item`; a concrete `impl Tr for Box2[i64]` cannot,
+                // R59), and the impl's own bounds on what it bound are
+                // answered by the `Proj` arm. A brand has no bounds at all.
+                let x = self.normalise(x);
                 let x = self.fir.tys.unqual(x);
-                // A projection subject is R12's through I6's normalisation.
-                if matches!(self.fir.tys.tag(x), TyTag::Proj | TyTag::Brand)
-                    || fors_fir::impls::contains_proj(&self.fir.tys, x)
-                {
+                if self.fir.tys.tag(x) == TyTag::Brand {
                     continue;
                 }
                 for want in bounds {
@@ -898,6 +951,73 @@ impl Wf<'_> {
                         12,
                         format!(
                             "`{subject}` does not implement `{tr}`, which `{f}`'s parameter `{pname}` requires"
+                        ),
+                    );
+                    return;
+                }
+            }
+        }
+        self.check_constraint_entries(cx, node, gdef, owners, b);
+    }
+
+    /// R62's USE side (design §7.4(e): "for each bound **and constraint
+    /// entry** of the callee (and container)"). A constraint entry's subject
+    /// is a projection written in the declaration's own terms (`I.Item`);
+    /// at the call it goes through R20's substitute-and-normalise, which is
+    /// what turns `I.Item` with `I := Circles` into `Circle`, and then every
+    /// bound of the entry must hold for it.
+    ///
+    /// Takes no explicit generic arguments of its own (R38(a): "constraint
+    /// entries take none"), so there is nothing to count here.
+    fn check_constraint_entries(
+        &mut self,
+        cx: &mut BodyCx,
+        node: usize,
+        gdef: DefId,
+        owners: &[(DefId, u16)],
+        b: &Binding,
+    ) {
+        use crate::wf::Holds;
+        for &(owner, _) in owners {
+            let g = self.fir.sigs.generics(owner);
+            let cl = self.fir.sigs.generics_store.constraints(g);
+            let n = self.fir.sigs.constraints.count(cl);
+            for i in 0..n {
+                let (subject, bl) = self.fir.sigs.constraints.entry(cl, i);
+                if subject == NO_TY || subject == TY_ERROR {
+                    continue;
+                }
+                // The subject as the declaration wrote it, for the message.
+                let written = self.show(subject);
+                let Some(x) = self.subst_now(subject, b) else {
+                    // A slot the entry mentions is still unbound (R39
+                    // reported that) or the projection has no impl (the
+                    // caller reports R20's `NoImpl`). Either way, silence.
+                    continue;
+                };
+                let x = self.fir.tys.unqual(x);
+                if x == TY_ERROR || x == NO_TY || self.fir.tys.tag(x) == TyTag::Brand {
+                    continue;
+                }
+                let bounds = self.fir.sigs.bounds.get(bl).to_vec();
+                for want in bounds {
+                    let Some(want) = self.subst_trait_ref(want, b) else {
+                        continue;
+                    };
+                    if self.holds(x, want) != Holds::No {
+                        continue;
+                    }
+                    let subject = self.show(x);
+                    let (tdef, _) = self.fir.tys.trait_ref(want);
+                    let tr = self.head_name(tdef);
+                    let f = self.head_name(gdef);
+                    self.bemit(
+                        cx,
+                        node,
+                        12,
+                        62,
+                        format!(
+                            "`{subject}` does not implement `{tr}`, which `{f}`'s constraint entry `{written}: {tr}` requires"
                         ),
                     );
                     return;
@@ -1422,14 +1542,7 @@ impl Wf<'_> {
                 && w != NO_TY
             {
                 let mut probe = b.clone();
-                if fors_fir::subst::one_way_match_mode(
-                    &mut self.fir.tys,
-                    head_ty,
-                    w,
-                    &mut probe,
-                    &mut NeutralOnly,
-                    MatchMode::NoFail,
-                ) {
+                if self.match_n_mode(head_ty, w, &mut probe, MatchMode::NoFail) {
                     b = probe;
                 }
             }
@@ -1511,7 +1624,7 @@ impl Wf<'_> {
                                 }
                                 // R33: a `never` field binds nothing.
                                 if s != TY_NEVER {
-                                    one_way_match(&mut self.fir.tys, fields[k].2, s, &mut b);
+                                    self.match_n(fields[k].2, s, &mut b);
                                 }
                                 pending.push((v, fields[k].2, s));
                             }

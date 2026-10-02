@@ -135,9 +135,14 @@ impl Wf<'_> {
         recv: TyId,
         name: Symbol,
     ) -> Result<MethodHit, LookupError> {
+        // I6: R20 first. A receiver whose type still mentions a projection
+        // is normalised before anything is looked up on it, so `Vec[i32].Item`
+        // is `i32` here and `Box2[I.Item]` is itself (neutral: R20 plus R59 —
+        // nothing is learnt from what `I` might become).
+        let recv = self.normalise(recv);
         let bare = self.fir.tys.unqual(recv);
         let cur_mod = self.module_of(cx.owner);
-        let key = (cur_mod.0, bare, name, true);
+        let key = (cur_mod.0, bare, name, true, self.memo_scope(bare));
         if let Some(cached) = self.method_memo.get(&key).cloned() {
             self.replay_method_deps(bare, &cached);
             return cached;
@@ -150,9 +155,13 @@ impl Wf<'_> {
             // tier (2) for it as for any other head. R43's `.count()` on
             // the `usize` that an inherent `take` re-routed to is this case.
             TyTag::Nominal | TyTag::Prim => self.lookup_on_head(cx, node, bare, name, true),
-            TyTag::Param => self.lookup_on_param(cx, node, bare, name),
-            // Projections are I6's; anything else has no method table this
-            // increment owns. Silent.
+            // R43's two rigid cases: a parameter's candidate traits are its
+            // bounds; a NEUTRAL projection's are the trait's declared bounds
+            // for the associated type (R16) plus the constraint entries in
+            // scope (R62) — which is exactly what `declared_bounds` answers,
+            // and nothing from any impl (R57).
+            TyTag::Param | TyTag::Proj => self.lookup_on_rigid(cx, node, bare, name),
+            // Anything else has no method table. Silent.
             _ => Err(LookupError::Silent),
         };
         self.method_memo.insert(key, ans.clone());
@@ -175,6 +184,23 @@ impl Wf<'_> {
             if hit.trait_def != fors_fir::NO_DEF {
                 self.dep(hit.trait_def);
             }
+        }
+    }
+
+    /// The scope component of the lookup memo's key: the declaration being
+    /// typed when the answer can depend on it, `0` otherwise. R62's
+    /// constraint entries live on a declaration's own generics, so two
+    /// functions in one module can see different bounds on the SAME neutral
+    /// projection — and a memo keyed by module alone would hand the second
+    /// the first's answer. Only a receiver that mentions a projection is
+    /// affected, so every other lookup keeps one entry per module.
+    fn memo_scope(&self, recv: TyId) -> u32 {
+        if self.fir.tys.tag(recv) == TyTag::Proj
+            || fors_fir::impls::contains_proj(&self.fir.tys, recv)
+        {
+            self.cur_scope.0
+        } else {
+            0
         }
     }
 
@@ -270,8 +296,13 @@ impl Wf<'_> {
             // a projection normalization could reveal: I5/I6 own the
             // call, so no tier answers and there is nothing to report.
             // Otherwise the table is complete and R43 reports.
+            // I6: a receiver that still mentions a projection is NOT a
+            // reason for silence any more. Normalisation ran before the
+            // lookup, so what is left is neutral, and R59 says nothing is
+            // learnt from what the parameter might become: the tiers above
+            // are the whole table (`neutral-projection-does-not-match-
+            // concrete-impl-rejected`).
             if saw_generic
-                || self.recv_hides_projection(recv)
                 || self.prim_table_incomplete(recv, name)
                 || self.prelude_head_table_incomplete(recv, name)
             {
@@ -299,7 +330,7 @@ impl Wf<'_> {
     ) -> Result<MethodHit, LookupError> {
         let bare = self.fir.tys.unqual(recv);
         let cur_mod = self.module_of(cx.owner);
-        let key = (cur_mod.0, bare, name, false);
+        let key = (cur_mod.0, bare, name, false, self.memo_scope(bare));
         if let Some(cached) = self.method_memo.get(&key).cloned() {
             self.replay_method_deps(bare, &cached);
             return cached;
@@ -315,29 +346,41 @@ impl Wf<'_> {
         ans
     }
 
-    /// R43's rigid case: the candidate traits are exactly the bounds.
-    /// An empty tier stays silent: bound-trait declarations (especially
-    /// the prelude's opaque rows) need not list every method yet, so
-    /// absence proves nothing. Ambiguity still reports.
-    fn lookup_on_param(
+    /// R43's rigid cases (a `Param`, or a neutral `Proj`): the candidate
+    /// traits are exactly the type's declared bounds.
+    /// An empty tier is T0043 when every candidate trait is declared in this
+    /// build (a `trait` item, whose member table is complete), and silence
+    /// when a PRELUDE trait is among them: the prelude's opaque rows need not
+    /// list every method yet (an `Iterator`'s adaptors live in `std`), so
+    /// absence there proves nothing. Ambiguity still reports.
+    fn lookup_on_rigid(
         &mut self,
         cx: &mut BodyCx,
         node: usize,
         recv: TyId,
         name: Symbol,
     ) -> Result<MethodHit, LookupError> {
-        let owner = DefId(self.fir.tys.a(recv));
-        let ord = self.fir.tys.b(recv) as usize;
-        let gid = self.fir.sigs.generics(owner);
-        if ord >= self.fir.sigs.generics_store.count(gid) {
-            return Err(LookupError::Silent);
-        }
-        let bounds = self.fir.sigs.generics_store.param(gid, ord).bounds;
+        let bounds = self.declared_bounds(recv);
         let mut tier: Vec<Candidate> = Vec::new();
-        for r in self.fir.sigs.bounds.get(bounds).to_vec() {
+        // A parameter whose bound did not RESOLVE (ch10 R2's std names are
+        // `PreludeEntity::Opaque` in a build without `std`: `L: Allocator[A]`
+        // under `needs { }`) carries no bound in the signature store at all,
+        // so an empty table proves nothing about it. Pass A recorded that
+        // as `GKind::Unknown`.
+        let mut table_incomplete = self.fir.tys.tag(recv) == TyTag::Param
+            && self
+                .shapes
+                .gkinds(DefId(self.fir.tys.a(recv)))
+                .get(self.fir.tys.b(recv) as usize)
+                == Some(&crate::lower::GKind::Unknown);
+        for r in bounds {
             let trait_def = self.fir.tys.trait_ref(r).0;
             if trait_def == fors_fir::NO_DEF {
+                table_incomplete = true;
                 continue;
+            }
+            if self.prelude.trait_index(trait_def).is_some() {
+                table_incomplete = true;
             }
             self.dep(trait_def);
             for (mname, mdef) in self.trait_method_defs(trait_def) {
@@ -348,13 +391,30 @@ impl Wf<'_> {
             }
         }
         if tier.is_empty() {
-            // Rigid silence: bound-trait declarations (especially the
-            // prelude's opaque rows) need not list every method yet, so
-            // an empty tier proves nothing. Ambiguity still reports.
-            let _ = recv;
-            return Err(LookupError::Silent);
+            if table_incomplete {
+                return Err(LookupError::Silent);
+            }
+            // R43: for a rigid receiver the candidate traits are EXACTLY its
+            // bounds (a parameter's declared ones; a neutral projection's
+            // declared ones plus the constraint entries in scope), every one
+            // of them a declaration in this build with a complete member
+            // table. No candidate is T0043, not silence.
+            return Err(LookupError::None {
+                recv: self.show(recv),
+                name: self.sym(name),
+            });
         }
         Self::answer(self, name, tier)
+    }
+
+    /// Whether a trait declares generic parameters of its own beyond the
+    /// implicit `Self` at ordinal 0 (`Index[I]` does, `Tagged` does not).
+    fn trait_has_params(&self, trait_def: DefId) -> bool {
+        self.fir
+            .sigs
+            .generics_store
+            .count(self.fir.sigs.generics(trait_def))
+            > 1
     }
 
     /// Whether a MISS on a primitive head is an artifact of a surface this
@@ -434,13 +494,6 @@ impl Wf<'_> {
             .any(|d| self.impl_method_names(d).iter().any(|&(n, _)| n == name))
     }
 
-    /// Whether `recv` mentions a projection anywhere in its arguments: a
-    /// call on it may resolve after I6's normalization, so an empty tier
-    /// stays silent rather than reporting R43.
-    fn recv_hides_projection(&self, recv: TyId) -> bool {
-        fors_fir::impls::contains_proj(&self.fir.tys, recv)
-    }
-
     /// Sorts one named method into its tier.
     fn consider(
         &mut self,
@@ -518,15 +571,15 @@ impl Wf<'_> {
         recv: TyId,
         method_position: bool,
     ) -> Candidate {
-        if self.arity(mdef) > 0 {
-            return Candidate::Generic { owner };
-        }
-        // A trait's `Self` is supplied by the receiver, so a trait
-        // method's container never withholds it; an impl's parameters
-        // are I5's inference.
-        if self.container_arity(mdef) > 0 && !self.container_is_trait(mdef) {
-            return Candidate::Generic { owner };
-        }
+        // I6 (design §7.4): a method with parameters to determine is no
+        // longer withheld. Its container's gparams (a trait's `Self` at
+        // ordinal 0) and then its own become R38's slots, which
+        // `call.rs`'s `Shape::owners` carries; the receiver binds the
+        // container's in step (b) and the arguments bind the rest. I5's
+        // `Candidate::Generic` survives for the one form this increment
+        // still does not type: R45's generic ASSOCIATED function, whose
+        // "receiver" is an ordinary argument and which no §13 I6 GATE
+        // test exercises.
         let sig = self.fir.sigs.fn_sig(mdef);
         if sig == fors_fir::NO_FN_SIG {
             return Candidate::No;
@@ -578,17 +631,8 @@ impl Wf<'_> {
             });
         }
         let p = self.fir.sigs.fn_sigs.param(sig, slot as usize);
-        if self.fir.tys.tag(recv) != TyTag::Param && !self.self_matches(owner, p.ty, recv) {
+        if !self.self_accepts(mdef, owner, p.ty, recv) {
             return Candidate::No;
-        }
-        // The result, raises and non-receiver parameters must be free of
-        // parameters and projections: anything mentioning them needs
-        // I5's instantiation (Self := receiver) or I6's normalization,
-        // so a tier with no better answer stays silent. This check comes
-        // before visibility: an I5-owned generic method is silent even
-        // when foreign-private.
-        if self.sig_mentions_var(sig, slot) {
-            return Candidate::Generic { owner };
         }
         if !self.method_visible(cx, owner, mdef) {
             let m = self.sym(self.method_name(owner, mdef));
@@ -615,28 +659,6 @@ impl Wf<'_> {
             recv_ty: recv,
             receiver_is_arg: false,
         })
-    }
-
-    /// Whether a method signature mentions a generic parameter or a
-    /// projection outside its receiver slot (two levels: the type itself
-    /// and a nominal/tuple's immediate arguments). Such a call needs
-    /// instantiation or normalization and stays silent here.
-    fn sig_mentions_var(&self, sig: fors_fir::sig::FnSigId, recv_slot: u8) -> bool {
-        let n = self.fir.sigs.fn_sigs.count(sig);
-        for i in 0..n {
-            if i as u8 == recv_slot {
-                continue;
-            }
-            if self.ty_mentions_var(self.fir.sigs.fn_sigs.param(sig, i).ty) {
-                return true;
-            }
-        }
-        let r = self.fir.sigs.fn_sigs.result(sig);
-        if self.ty_mentions_var(r) {
-            return true;
-        }
-        let e = self.fir.sigs.fn_sigs.raises(sig);
-        e != NO_TY && self.ty_mentions_var(e)
     }
 
     /// Whether a signature mentions a generic parameter or a projection in
@@ -676,22 +698,66 @@ impl Wf<'_> {
         }
     }
 
-    /// Whether the method's declared self type accepts `recv`: identical
-    /// heads, or the trait's own `Self` (which the receiver supplies).
-    fn self_matches(&mut self, owner: DefId, self_ty: TyId, recv: TyId) -> bool {
+    /// Whether the method's declared self type ACCEPTS `recv` — design
+    /// §7.4 step (b), run here as a filter with the container's parameters
+    /// free to bind. Identical types, the trait's own `Self` (which the
+    /// receiver supplies), or a one-way match that binds the container's
+    /// gparams: `impl[T] Foo for Vec[T] { fn get(let self: Vec[T]) }`
+    /// accepts a `Vec[i32]` receiver. The binding is thrown away — the
+    /// call rebuilds it in `type_call`, where it belongs.
+    fn self_accepts(&mut self, mdef: DefId, owner: DefId, self_ty: TyId, recv: TyId) -> bool {
         if self.fir.tys.unqual(self_ty) == self.fir.tys.unqual(recv) {
             return true;
         }
-        self.fir.tys.tag(self_ty) == TyTag::Param
+        if self.fir.tys.tag(self_ty) == TyTag::Param
             && DefId(self.fir.tys.a(self_ty)) == owner
             && self.fir.sigs.kind(owner) == SigKind::Trait
+        {
+            return true;
+        }
+        // A RIGID receiver (a parameter, or a neutral projection) reaches a
+        // method only through its bounds, where the self type is the trait's
+        // own `Self` — the branch above. Anything else about it is R59's
+        // "nothing is learnt", so the probe does not refuse it here; the
+        // call's own step (b) decides.
+        if matches!(self.fir.tys.tag(recv), TyTag::Param | TyTag::Proj) {
+            return true;
+        }
+        let owners = self.call_owners(owner, mdef);
+        if owners.is_empty() {
+            return false;
+        }
+        let mut b = Binding::new(&owners);
+        self.match_n(self_ty, recv, &mut b)
     }
 
-    fn container_is_trait(&self, mdef: DefId) -> bool {
-        match self.defs.get(mdef).map(|r| r.parent) {
-            Some(p) if p != fors_fir::NO_DEF => self.fir.sigs.kind(p) == SigKind::Trait,
-            _ => false,
+    /// Design §7.4's "parameters to determine" for a method: the owner
+    /// container's gparams (a trait's implicit `Self` is ordinal 0 of them)
+    /// and then the method's own. `Binding` holds at most two owners, which
+    /// is exactly this list.
+    /// `owner` is the inherent impl or the trait the lookup answered from,
+    /// which is where the container's parameters live. It is read from the
+    /// SIGNATURE store rather than from the declaration table, because the
+    /// prelude's traits (`Iterator`, `Index`, ...) have signatures and
+    /// generics but no declaration row at all — `Self` is ordinal 0 of a
+    /// trait's generics there exactly as lowering writes it for a user trait.
+    pub(crate) fn call_owners(&self, owner: DefId, mdef: DefId) -> Vec<(DefId, u16)> {
+        let mut out: Vec<(DefId, u16)> = Vec::new();
+        if owner != fors_fir::NO_DEF {
+            let n = self
+                .fir
+                .sigs
+                .generics_store
+                .count(self.fir.sigs.generics(owner));
+            if n > 0 {
+                out.push((owner, n as u16));
+            }
         }
+        let own = self.arity(mdef);
+        if own > 0 {
+            out.push((mdef, own as u16));
+        }
+        out
     }
 
     /// Tier (2) contribution of one trait: every method it declares under
@@ -712,8 +778,20 @@ impl Wf<'_> {
         saw_generic: &mut bool,
     ) {
         let want = self.fir.tys.intern_trait_ref(trait_def, NO_ARGS);
-        if !matches!(self.holds(recv, want), Holds::Yes) {
-            if self.scope_declares(cx, recv, trait_def, name) {
+        let h = self.holds(recv, want);
+        if h != Holds::Yes {
+            // `holds` was asked with NO trait arguments. For a trait WITH
+            // parameters (`Index[I]`) a `No` may therefore be an artifact of
+            // the missing arguments, and an impl in scope that declares the
+            // name keeps the lookup silent. For a trait WITHOUT parameters
+            // the question was complete and R12's `No` is the answer: the
+            // impl that unified was refused by its own bounds (`impl[T:
+            // Copyable] Tagged for Box2[T]` for a `Box2[I.Item]`), and the
+            // receiver does not implement the trait, so it is no candidate
+            // (R43). `Unknown` stays silent either way.
+            if (h == Holds::Unknown || self.trait_has_params(trait_def))
+                && self.scope_declares(cx, recv, trait_def, name)
+            {
                 *saw_generic = true;
             }
             return;

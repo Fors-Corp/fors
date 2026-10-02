@@ -1005,3 +1005,527 @@ fn a_failed_argument_does_not_cascade_into_t0039() {
         1
     );
 }
+
+// ------------------------------------------------------------- I6 probes
+//
+// One mutation probe per mechanism I6 adds: `normalise.rs`'s
+// `normalise_proj` (the exact impl index, the structural descent, the memo
+// key, the `NoImpl` outcome, the per-query work budget), R20's neutrality,
+// R62's constraint entries at a call, R12 for a projection subject, R43 on
+// a neutral projection, and §7.4's container slots for a generic METHOD
+// call. Each probe pairs an accepted program with the ONE-TOKEN mutation
+// that must flip it, so a mechanism that silently stops working fails here
+// rather than passing by silence.
+
+/// An `Iterator` whose `Item` is `i64`, and a one-parameter adaptor over it.
+const CHAIN: &str = "struct Counter { n: i64, end: i64 }\n\
+     impl Iterator for Counter {\n\
+         type Item = i64;\n\
+         fn next(inout self: Counter) -> Option[i64] { return none; }\n\
+     }\n\
+     struct Skip[I] { inner: I, n: usize }\n\
+     impl[I: Iterator] Iterator for Skip[I] {\n\
+         type Item = I.Item;\n\
+         fn next(inout self: Skip[I]) -> Option[I.Item] { return self.inner.next(); }\n\
+     }\n\
+     fn seed[I: Iterator](inout it: I, let x: I.Item) -> i64 { return 0; }\n";
+
+/// R20 through the real checker: `Skip[Skip[Counter]].Item` collapses to
+/// `i64` by structural descent, and the collapsed type is what the argument
+/// is CHECKED against — so a `u8` there is T0026 and not silence.
+#[test]
+fn i6_normalisation_collapses_a_chain_and_the_result_is_checked() {
+    assert!(
+        check_source(&format!(
+            "{CHAIN}fn f(inout s: Skip[Skip[Counter]]) -> i64 {{ return seed(&s, 7i64); }}"
+        ))
+        .is_empty(),
+        "the chain normalises to i64 and 7i64 fits"
+    );
+    assert_eq!(
+        check_source(&format!(
+            "{CHAIN}fn f(inout s: Skip[Skip[Counter]]) -> i64 {{ return seed(&s, 7u8); }}"
+        )),
+        vec!["T0026"],
+        "the SAME chain rejects a u8: the projection really collapsed"
+    );
+}
+
+/// §17 amendment 1, re-asserted against the real checker: the
+/// normalisation memo is keyed by the substituted HEAD, not by the trait
+/// reference. `Holder[i64].Item` and `Holder[u8].Item` share one
+/// `TraitRefId` and one right-hand side row (`Param(impl, 0)`); if the key
+/// were the trait reference the second query would read the first's answer
+/// and accept the wrong literal.
+#[test]
+fn i6_the_normalisation_memo_key_is_the_head_not_the_trait_ref() {
+    const H: &str = "struct Holder[T] { v: T }\n\
+         impl[T: Droppable] Iterator for Holder[T] {\n\
+             type Item = T;\n\
+             fn next(inout self: Holder[T]) -> Option[T] { return none; }\n\
+         }\n\
+         fn seed[I: Iterator](inout it: I, let x: I.Item) -> i64 { return 0; }\n";
+    assert!(
+        check_source(&format!(
+            "{H}fn a(inout h: Holder[i64]) -> i64 {{ return seed(&h, 1i64); }}\n\
+             fn b(inout h: Holder[u8]) -> i64 {{ return seed(&h, 2u8); }}"
+        ))
+        .is_empty(),
+        "each head gets its own answer"
+    );
+    assert_eq!(
+        check_source(&format!(
+            "{H}fn a(inout h: Holder[i64]) -> i64 {{ return seed(&h, 1i64); }}\n\
+             fn b(inout h: Holder[u8]) -> i64 {{ return seed(&h, 2i64); }}"
+        )),
+        vec!["T0026"],
+        "`Holder[u8].Item` is u8 even after `Holder[i64].Item` was asked first"
+    );
+}
+
+/// R20's neutrality: a projection on a rigid parameter equals only itself.
+/// Nothing is learnt from what the parameter might become (R59), so a
+/// concrete impl for a sibling instantiation does not answer — and the
+/// member lookup that would have found it reports R43 rather than staying
+/// silent.
+#[test]
+fn i6_a_neutral_projection_matches_only_itself() {
+    const T: &str = "trait Tagged { fn tag(let self) -> i64; }\n\
+         struct Bx[T] { v: T }\n\
+         impl Tagged for Bx[i64] { fn tag(let self: Bx[i64]) -> i64 { return 1; } }\n";
+    assert!(
+        check_source(&format!(
+            "{T}fn g(let b: Bx[i64]) -> i64 {{ return b.tag(); }}"
+        ))
+        .is_empty(),
+        "the concrete head resolves"
+    );
+    assert_eq!(
+        check_source(&format!(
+            "{T}fn g[I: Iterator](let b: Bx[I.Item]) -> i64 {{ return b.tag(); }}"
+        )),
+        vec!["T0043"],
+        "`Bx[I.Item]` is not `Bx[i64]`, and the miss is reported, not swallowed"
+    );
+}
+
+/// R20's `NoImpl`: a projection whose head has no impl of the trait has no
+/// type, and design §8's R20 row says the site reports T0012.
+#[test]
+fn i6_a_projection_on_a_head_without_an_impl_is_t0012() {
+    assert_eq!(
+        check_source(
+            "struct Plain { n: i64 }\n\
+             fn seed[I: Iterator](sink it: I, let x: I.Item) -> i64 { return 0; }\n\
+             fn f(sink p: Plain) -> i64 { return seed(move p, 1i64); }"
+        ),
+        vec!["T0012"],
+        "`Plain` implements no `Iterator`, so `Plain.Item` does not exist"
+    );
+}
+
+/// R62's USE side (design §7.4(e)): a constraint entry's subject is
+/// substituted AND normalised at the call, and then every bound of the
+/// entry must hold for the result.
+#[test]
+fn i6_constraint_entries_are_checked_at_the_call() {
+    const S: &str = "struct Circle { r: f64 }\n\
+         struct Ints { n: i64 }\n\
+         impl Iterator for Ints {\n\
+             type Item = i64;\n\
+             fn next(inout self: Ints) -> Option[i64] { return none; }\n\
+         }\n\
+         struct Circles { n: i64 }\n\
+         impl Iterator for Circles {\n\
+             type Item = Circle;\n\
+             fn next(inout self: Circles) -> Option[Circle] { return none; }\n\
+         }\n\
+         fn drain[I: Iterator, I.Item: Add](sink it: I) -> i64 { return 0; }\n";
+    assert!(
+        check_source(&format!(
+            "{S}fn f(sink c: Ints) -> i64 {{ return drain(move c); }}"
+        ))
+        .is_empty(),
+        "`Ints.Item` is `i64`, which has `Add`"
+    );
+    assert_eq!(
+        check_source(&format!(
+            "{S}fn f(sink c: Circles) -> i64 {{ return drain(move c); }}"
+        )),
+        vec!["T0012"],
+        "`Circles.Item` is `Circle`, which has no `Add`"
+    );
+}
+
+/// R12 for a PROJECTION subject plus R43 on it (design §7.6, §7.7): the
+/// bounds a trait declares for its associated type are the operations of
+/// the neutral projection, and nothing else is.
+#[test]
+fn i6_a_neutral_projection_carries_exactly_its_declared_bounds() {
+    assert!(
+        check_source(
+            "trait Keyed2 { type Key: Eq + Ord; fn key(let self) -> Self.Key; }\n\
+             fn less[T: Keyed2](let a: T, let b: T) -> bool { return a.key() < b.key(); }"
+        )
+        .is_empty(),
+        "`Ord` is declared for `Key`, so `<` on `T.Key` is R57-legal"
+    );
+    assert_eq!(
+        check_source(
+            "trait Keyed3 { type Key: Eq; fn key(let self) -> Self.Key; }\n\
+             fn less[T: Keyed3](let a: T, let b: T) -> bool { return a.key() < b.key(); }"
+        ),
+        vec!["T0057"],
+        "drop `Ord` from the declaration and the SAME body loses the operation"
+    );
+}
+
+/// Design §7.4's container slots for a generic METHOD call: the receiver
+/// binds the owner's parameters in step (b), which is what makes a method
+/// whose result is `Self.A` — or the impl's own parameter — typable at all.
+/// I5 left every such method `Candidate::Generic` and the call untyped.
+#[test]
+fn i6_a_generic_method_binds_its_container_from_the_receiver() {
+    const B: &str = "struct Bag[T] { v: T }\n\
+         impl[T] Bag[T] { pub fn get(let self: Bag[T]) -> T { return self.v; } }\n";
+    assert!(
+        check_source(&format!(
+            "{B}fn f(let b: Bag[i64]) -> i64 {{ return b.get(); }}"
+        ))
+        .is_empty(),
+        "`T := i64` comes from the receiver, so `get` returns `i64`"
+    );
+    assert_eq!(
+        check_source(&format!(
+            "{B}fn f(let b: Bag[i64]) -> u8 {{ return b.get(); }}"
+        )),
+        vec!["T0026"],
+        "and the call really has that type: a `u8` result is rejected"
+    );
+}
+
+/// The same, through a TRAIT container, whose `Self` is ordinal 0 of its
+/// generics: `h.get()` on a rigid `H: Has` has type `H.A`, a neutral
+/// projection, and R10 then refuses to coerce it to `dyn Tr`.
+#[test]
+fn i6_a_trait_method_result_is_a_neutral_projection() {
+    const H: &str = "trait Tr2 { fn go(let self); }\n\
+         trait Has2 { type A: Tr2; fn get(let self) -> Self.A; }\n";
+    assert!(
+        check_source(&format!(
+            "{H}fn f[H: Has2](let h: H) -> H.A {{ return h.get(); }}"
+        ))
+        .is_empty(),
+        "`get` on `H` has type `H.A`"
+    );
+    assert_eq!(
+        check_source(&format!(
+            "{H}fn f[H: Has2](let h: H) -> dyn Tr2 {{ return h.get() as dyn Tr2; }}"
+        )),
+        vec!["T0010"],
+        "a neutral projection is not a concrete type and does not coerce to `dyn`"
+    );
+}
+
+/// §17 amendment 3 through the real checker: `k` impls in one
+/// `(trait, HeadKey)` bucket are each one exact probe, and the answer is
+/// the right one — the bucket's size changes neither the answer nor,
+/// per `scale.rs`'s measurement, the match-step count.
+#[test]
+fn i6_the_exact_impl_index_picks_the_right_impl_out_of_a_crowded_bucket() {
+    let mut s = String::new();
+    s.push_str("struct Cell[T] { t: T }\n");
+    for j in 0..16 {
+        s.push_str(&format!("struct Mk{j} {{ z: i64 }}\n"));
+        let item = if j == 7 { "u8" } else { "i64" };
+        s.push_str(&format!(
+            "impl Iterator for Cell[Mk{j}] {{\n\
+                 type Item = {item};\n\
+                 fn next(inout self: Cell[Mk{j}]) -> Option[{item}] {{ return none; }}\n\
+             }}\n"
+        ));
+    }
+    s.push_str("fn seed[I: Iterator](inout it: I, let x: I.Item) -> i64 { return 0; }\n");
+    let ok = format!("{s}fn f(inout c: Cell[Mk7]) -> i64 {{ return seed(&c, 1u8); }}");
+    let bad = format!("{s}fn f(inout c: Cell[Mk7]) -> i64 {{ return seed(&c, 1i64); }}");
+    assert!(
+        check_source(&ok).is_empty(),
+        "row 7 of the bucket says `u8`, and that is the one that answers"
+    );
+    assert_eq!(
+        check_source(&bad),
+        vec!["T0026"],
+        "a neighbouring row's `i64` must not answer for `Cell[Mk7]`"
+    );
+}
+
+/// R59 extended to projections (design §13 I6's "the metamorphic
+/// `no_error_depends_on_instantiation` extended to projections"): a generic
+/// body that mentions a projection is checked ONCE, at its definition, with
+/// the projection neutral. Adding instantiations — and changing which ones
+/// — must not change one diagnostic of it, and a rejection at an
+/// instantiation is the CALLER's.
+#[test]
+fn no_error_depends_on_instantiation_projections() {
+    // (a) A body whose neutral projection lacks the operation is ill-typed
+    // at its definition, identically under every instantiation.
+    const BAD: &str = "trait Keyed4 { type Key: Eq; fn key(let self) -> Self.Key; }\n\
+         struct Rec { k: i64 }\n\
+         impl Keyed4 for Rec { type Key = i64; fn key(let self: Rec) -> i64 { return self.k; } }\n\
+         fn less[T: Keyed4](let a: T, let b: T) -> bool { return a.key() < b.key(); }\n";
+    let alone = check_source(BAD);
+    assert_eq!(
+        alone,
+        vec!["T0057"],
+        "R57 at the definition, `Key` has no `Ord`"
+    );
+    let once = check_source(&format!(
+        "{BAD}fn u1(let a: Rec, let b: Rec) -> bool {{ return less(a, b); }}"
+    ));
+    let twice = check_source(&format!(
+        "{BAD}fn u1(let a: Rec, let b: Rec) -> bool {{ return less(a, b); }}\n\
+         fn u2(let a: Rec, let b: Rec) -> bool {{ return less(b, a); }}"
+    ));
+    assert_eq!(alone, once, "an instantiation adds nothing");
+    assert_eq!(once, twice, "nor does a second one");
+
+    // (b) A body that is well-typed at its definition stays silent under
+    // instantiations whose `Item` differs — the projection is normalised at
+    // the CALL, never inside the callee.
+    assert!(check_source(CHAIN).is_empty(), "the generic body alone");
+    assert!(
+        check_source(&format!(
+            "{CHAIN}fn u1(inout c: Counter) -> i64 {{ return seed(&c, 1i64); }}"
+        ))
+        .is_empty()
+    );
+    assert!(
+        check_source(&format!(
+            "{CHAIN}fn u1(inout c: Counter) -> i64 {{ return seed(&c, 1i64); }}\n\
+             fn u2(inout s: Skip[Counter]) -> i64 {{ return seed(&s, 2i64); }}\n\
+             fn u3(inout s: Skip[Skip[Counter]]) -> i64 {{ return seed(&s, 3i64); }}"
+        ))
+        .is_empty(),
+        "three depths of the same chain, all silent"
+    );
+
+    // (c) A rejection at an instantiation is the caller's one diagnostic;
+    // the callee's own body is unchanged.
+    assert_eq!(
+        check_source(&format!(
+            "{CHAIN}fn u1(inout c: Counter) -> i64 {{ return seed(&c, 1i64); }}\n\
+             fn u2(inout s: Skip[Counter]) -> i64 {{ return seed(&s, 2u8); }}"
+        )),
+        vec!["T0026"],
+        "one diagnostic, at the caller that got the element type wrong"
+    );
+}
+
+/// R31's element type through R20 (design §13 I6's "R31 for-element type
+/// from `Item`"): `body::assoc_item` used to answer only from the EXACT
+/// impl index, so a chain whose outermost impl is generic — the ordinary
+/// adaptor shape — left the element `TY_ERROR` and the loop body unchecked.
+#[test]
+fn i6_the_for_element_type_comes_from_item_through_the_chain() {
+    assert!(
+        check_source(&format!(
+            "{CHAIN}fn f(sink s: Skip[Skip[Counter]]) -> i64 {{\n\
+                 var t: i64 = 0;\n\
+                 for x in s {{ t = t + x; }}\n\
+                 return t;\n\
+             }}"
+        ))
+        .is_empty(),
+        "`Skip[Skip[Counter]].Item` is `i64`, so `t + x` is legal"
+    );
+    assert_eq!(
+        check_source(&format!(
+            "{CHAIN}fn f(sink s: Skip[Skip[Counter]]) -> u8 {{\n\
+                 var t: u8 = 0;\n\
+                 for x in s {{ t = t + x; }}\n\
+                 return t;\n\
+             }}"
+        )),
+        vec!["T0026"],
+        "and the element really is typed: a `u8` accumulator is rejected"
+    );
+}
+
+/// The member-lookup memo must separate SCOPES for a projection receiver.
+/// `I.Item` is one `TyId` for every method of one impl, but R62's
+/// constraint entries live on each method's OWN generics — so `other` and
+/// `show` below ask the same `(module, receiver, name)` question and must
+/// get different answers. `other` is declared first on purpose: a memo
+/// keyed by module alone would cache its silence and leave `show`'s call
+/// untyped, which absorbs the T0026 this asserts.
+#[test]
+fn i6_the_method_memo_separates_scopes_for_a_projection_receiver() {
+    const S: &str = "trait Shw { fn shw(let self) -> i64; }\n\
+         struct Sm[I] { it: I }\n\
+         impl[I: Iterator] Sm[I] {\n\
+             pub fn other(let self: Sm[I], let z: I.Item) -> i64 { return z.shw(); }\n\
+             pub fn show[I.Item: Shw](let self: Sm[I], let z: I.Item) -> u8 { return z.shw(); }\n\
+         }\n";
+    assert_eq!(
+        check_source(S),
+        vec!["T0026"],
+        "`show` resolves `shw` through its own constraint entry and gets `i64`, \
+         which is not the declared `u8`; `other` has no such entry and stays silent"
+    );
+}
+
+// ------------------------------------------------- I6 verifier probes
+//
+// Three over-acceptances the I6 verifier found by mutation and repaired.
+// Each pairs the rejecting program with the one-token change that must be
+// accepted, so the repair cannot regress into silence unnoticed.
+
+/// A parameter-less trait and a one-parameter struct to put impls on.
+const BOX2: &str = "trait Tagged { fn tag(let self) -> i64; }\n\
+     trait Named { fn id(let self) -> i64; }\n\
+     struct Box2[T] { v: T }\n";
+
+/// R43 via R12: an impl that UNIFIES with the receiver but is refused by its
+/// own bounds is no candidate. Before the repair `methods::scope_declares`
+/// read the unifying impl as a trait-argument artifact and kept the lookup
+/// silent — on a neutral-projection subterm, on a bare parameter and on a
+/// concrete type alike. For a trait WITHOUT parameters the `holds` question
+/// was complete, so R12's `No` is the answer; a trait WITH parameters keeps
+/// the silence, because `holds` was asked without its arguments.
+#[test]
+fn i6v_an_impl_refused_by_its_own_bounds_is_no_candidate() {
+    const IMPL: &str =
+        "impl[T: Named] Tagged for Box2[T] { fn tag(let self: Box2[T]) -> i64 { return 1; } }\n";
+    for recv in [
+        "fn g[I: Iterator](let b: Box2[I.Item]) -> i64 { return b.tag(); }",
+        "fn g[T](let b: Box2[T]) -> i64 { return b.tag(); }",
+        "fn g(let b: Box2[i64]) -> i64 { return b.tag(); }",
+    ] {
+        assert_eq!(
+            check_source(&format!("{BOX2}{IMPL}{recv}")),
+            vec!["T0043"],
+            "{recv}: the only impl is refused by `T: Named`, so there is no candidate"
+        );
+    }
+    // The bound holds, three ways: no bound; a constraint entry on the
+    // neutral projection; a concrete type that implements it.
+    assert!(
+        check_source(&format!(
+            "{BOX2}impl[T] Tagged for Box2[T] {{ fn tag(let self: Box2[T]) -> i64 {{ return 1; }} }}\n\
+             fn g[I: Iterator](let b: Box2[I.Item]) -> i64 {{ return b.tag(); }}"
+        ))
+        .is_empty()
+    );
+    assert!(
+        check_source(&format!(
+            "{BOX2}{IMPL}fn g[I: Iterator, I.Item: Named](let b: Box2[I.Item]) -> i64 {{ return b.tag(); }}"
+        ))
+        .is_empty()
+    );
+    assert!(
+        check_source(&format!(
+            "{BOX2}{IMPL}struct C {{ r: i64 }}\n\
+             impl Named for C {{ fn id(let self: C) -> i64 {{ return 2; }} }}\n\
+             fn g(let b: Box2[C]) -> i64 {{ return b.tag(); }}"
+        ))
+        .is_empty()
+    );
+    // A trait WITH parameters: `holds(Foo, Conv[])` misses for want of the
+    // argument, and the impl in scope keeps R43 silent as before.
+    assert!(
+        check_source(
+            "trait Conv[T] { fn conv(let self, let t: T) -> i64; }\n\
+             struct Foo { x: i64 }\n\
+             impl Conv[u8] for Foo { fn conv(let self: Foo, let t: u8) -> i64 { return 1; } }\n\
+             fn g(let f: Foo) -> i64 { return f.conv(1u8); }"
+        )
+        .is_empty()
+    );
+}
+
+/// R43 on a rigid receiver: the candidate traits are EXACTLY its bounds, and
+/// when every one of them is a `trait` declared in this build its member
+/// table is complete, so a missing method is T0043 and not silence. Silence
+/// survives only where absence proves nothing: a prelude trait among the
+/// bounds (its opaque rows need not list every method), or a bound that did
+/// not resolve (ch10 R2's std names in a build without `std`).
+#[test]
+fn i6v_a_rigid_receiver_with_complete_bounds_reports_a_missing_method() {
+    const T: &str = "trait Named { fn id(let self) -> i64; }\n\
+         trait Other { fn other(let self) -> i64; }\n\
+         trait Source { type Item: Named; fn pull(inout self) -> Option[Self.Item]; }\n";
+    assert_eq!(
+        check_source(&format!(
+            "{T}fn f[S: Source](let x: S.Item) -> i64 {{ return x.other(); }}"
+        )),
+        vec!["T0043"],
+        "a neutral projection's only bound is `Named`, which has no `other`"
+    );
+    assert_eq!(
+        check_source(&format!(
+            "{T}fn f[N: Named](let x: N) -> i64 {{ return x.other(); }}"
+        )),
+        vec!["T0043"],
+        "a parameter's only bound is `Named`, which has no `other`"
+    );
+    assert!(
+        check_source(&format!(
+            "{T}fn f[S: Source](let x: S.Item) -> i64 {{ return x.id(); }}"
+        ))
+        .is_empty()
+    );
+    assert!(
+        check_source(&format!(
+            "{T}fn f[S: Source, S.Item: Other](let x: S.Item) -> i64 {{ return x.other(); }}"
+        ))
+        .is_empty(),
+        "R62: the constraint entry adds `Other` to the candidates"
+    );
+    assert!(
+        check_source("fn f[A: brand, L: Allocator[A]](inout a: L) { a.deinit(); }").is_empty(),
+        "`Allocator` is opaque without `std`: the bound did not lower, so nothing is known"
+    );
+}
+
+/// R12 at a call for a subject that merely CONTAINS a neutral projection
+/// (`Box2[I.Item]`): the question is decidable — a generic impl binds its
+/// parameter to the projection, a concrete impl cannot match it (R59), and
+/// the impl's own bounds on what it bound are answered by `holds`'s `Proj`
+/// arm. Before the repair `call::check_bounds` skipped such a subject
+/// altogether, so `h(b)` with `b: Box2[I.Item]` never had `T: Tagged`
+/// checked.
+#[test]
+fn i6v_a_bound_on_a_subject_that_contains_a_neutral_projection_is_decided() {
+    const H: &str = "fn h[T: Tagged](let t: T) -> i64 { return 0; }\n\
+         fn g[I: Iterator](let b: Box2[I.Item]) -> i64 { return h(b); }\n";
+    assert_eq!(
+        check_source(&format!(
+            "{BOX2}impl Tagged for Box2[i64] {{ fn tag(let self: Box2[i64]) -> i64 {{ return 1; }} }}\n{H}"
+        )),
+        vec!["T0012"],
+        "a concrete impl for `Box2[i64]` does not match `Box2[I.Item]`"
+    );
+    assert_eq!(
+        check_source(&format!(
+            "{BOX2}impl[T: Copyable] Tagged for Box2[T] {{ fn tag(let self: Box2[T]) -> i64 {{ return 1; }} }}\n{H}"
+        )),
+        vec!["T0012"],
+        "the generic impl matches but `I.Item: Copyable` has no witness"
+    );
+    assert!(
+        check_source(&format!(
+            "{BOX2}impl[T] Tagged for Box2[T] {{ fn tag(let self: Box2[T]) -> i64 {{ return 1; }} }}\n{H}"
+        ))
+        .is_empty(),
+        "the generic impl binds `T := I.Item`"
+    );
+    assert!(
+        check_source(
+            "struct Box2[T] { v: T }\n\
+             fn h[T: Droppable](sink t: T) { }\n\
+             fn g[I: Iterator](sink b: Box2[I.Item]) { h(move b); }"
+        )
+        .is_empty(),
+        "the structural `Droppable` bound still holds on such a subject"
+    );
+}

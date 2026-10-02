@@ -1464,17 +1464,27 @@ impl Wf<'_> {
         }
         self.impl_scans += 1;
         self.dep(trait_def);
-        let rows = self.impls.exact(trait_def, subject);
+        // I6: R20's `normalise_proj`, not a hand-rolled exact probe. The
+        // exact-only version answered `Counter.Item` and left
+        // `Skip[Counter].Item` as `TY_ERROR`, because a GENERIC impl's self
+        // type never equals a concrete subject and so never shows up in the
+        // exact index — the bucket scan plus the structural descent is what
+        // `normalise.rs` adds. Every impl the lookup could consult is a
+        // dependency of this body (design §9), recorded before the question.
+        let head = self.fir.tys.head_key(subject);
+        let mut rows = self.impls.exact(trait_def, subject);
+        rows.extend(self.impls.bucket(trait_def, head));
+        rows.sort_unstable();
+        rows.dedup();
         for i in rows {
-            let r = self.impls.row(i);
-            self.dep(r.def);
-            let a = self.fir.sigs.assoc(r.def);
-            let rhs = self.fir.sigs.assocs.rhs_of(a, name);
-            if rhs != NO_TY && rhs != TY_ERROR {
-                return rhs;
-            }
+            let d = self.impls.row(i).def;
+            self.dep(d);
         }
-        TY_ERROR
+        let tref = self
+            .fir
+            .tys
+            .intern_trait_ref(trait_def, fors_fir::ty::NO_ARGS);
+        self.norm_proj(subject, tref, name).unwrap_or(TY_ERROR)
     }
 
     /// The place a value-use event names, when the expression is one
