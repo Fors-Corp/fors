@@ -4,12 +4,23 @@
 //! non-generic function, a struct literal of a non-generic struct, a
 //! non-generic variant construction, and a call of a value of `fn` or
 //! closure type. I4 adds [`Callee::Method`] (R43-R46) and, for a generic
-//! callee, R12's bounds at the call ([`Wf::check_bounds`]) WITHOUT
-//! typing it. Every other callee is [`Callee::Undecided`]: silent,
-//! absorbing, and left to I5 (generic calls) and I6 (projections).
+//! callee, R12's bounds at the call WITHOUT typing it.
+//!
+//! I5 replaces that provisional path with R38 proper: [`Wf::type_call`]
+//! runs steps (a)-(f) literally over a [`Binding`] that is a stack local
+//! of the call and is dropped when it returns. The one surface it does
+//! not reach is a GENERIC METHOD: `methods.rs` answers
+//! `Candidate::Generic` (silent) for a method with parameters to
+//! determine, which keeps R43's two tiers out of the inference and is
+//! unchanged here. Projections on a bound head still need R20
+//! (`normalise_proj`, I6): a parameter type whose every slot is bound but
+//! whose substitution still fails is left silent and absorbing — the
+//! difference between "undetermined" (T0039, this increment) and "not
+//! normalised" (I6) is [`fors_fir::subst::first_unbound`].
 
-use fors_fir::sig::{Conv, MemberKind, PayloadKind, SigKind, VIS_PRIVATE};
-use fors_fir::ty::{ArgsId, FnTyId, NO_ARGS, NO_TY, TY_ERROR, TY_UNIT, TyId, TyTag};
+use fors_fir::sig::{Conv, GParamKind, MemberKind, PayloadKind, SigKind, VIS_PRIVATE};
+use fors_fir::subst::{Binding, MatchMode, NeutralOnly, first_unbound, one_way_match, subst_norm};
+use fors_fir::ty::{ArgsId, FnTyId, NO_ARGS, NO_TY, TY_ERROR, TY_NEVER, TY_UNIT, TyId, TyTag};
 use fors_index::Symbol;
 use fors_index::diag::Code;
 use fors_index::ids::DefId;
@@ -26,19 +37,53 @@ use crate::wf::Wf;
 /// What a call's callee turned out to be. `Undecided` is the honest state
 /// for everything this increment does not type.
 enum Callee {
-    /// A function with no parameters to determine.
+    /// A function, generic or not: `arity > 0` makes its own parameters
+    /// R38's slots.
     Fn(DefId),
-    /// A tuple variant of a non-generic enum: `(enum def, member index)`.
+    /// A tuple variant: `(enum def, member index)`. The enum's own
+    /// parameters are R38's slots.
     Variant(DefId, usize),
     /// A value of `fn` or closure type (R7).
     Value(FnTyId),
-    /// A resolved method (I4, R43-R46).
+    /// A resolved method (I4, R43-R46), with nothing to determine.
     Method(MethodHit),
-    /// A generic function: I5 TYPES the call (R38-R39), but its bounds are
-    /// R12's and I4 checks them here ([`Wf::check_bounds`]). Absorbing
-    /// and silent in every other respect, exactly like [`Callee::Undecided`].
-    Generic(DefId),
     Undecided,
+}
+
+/// What R38 has to work with once the callee is known: the slots to
+/// determine (the container's then the callee's own), the declared
+/// parameter row, and the declared result and `raises`.
+struct Shape {
+    /// `(owner, own gparam count)`, in the order R38(a) names them. Empty
+    /// for a callee with nothing to determine.
+    owners: Vec<(DefId, u16)>,
+    /// The declaration whose OWN parameters explicit `[...]` arguments
+    /// supply (R38(a)).
+    gdef: DefId,
+    params: Vec<(Symbol, Conv, TyId)>,
+    result: TyId,
+    raises: TyId,
+    /// Whether R39's argument-count rule applies: the callee's parameter
+    /// row is the whole truth (not a method whose receiver was removed,
+    /// and not a signature that failed to lower).
+    counted: bool,
+}
+
+impl Shape {
+    fn slots(&self) -> usize {
+        self.owners.iter().map(|&(_, n)| n as usize).sum()
+    }
+}
+
+/// One call's syntax, as R38 reads it: the call node, the explicit `[...]`
+/// arguments, the receiver pair (declared self type, receiver type) when
+/// the call is in method form, and the argument nodes.
+#[derive(Clone, Copy)]
+struct Site<'a> {
+    node: usize,
+    explicit: &'a [usize],
+    receiver: Option<(TyId, TyId)>,
+    args: &'a [usize],
 }
 
 impl Wf<'_> {
@@ -88,7 +133,7 @@ impl Wf<'_> {
             .collect();
 
         let try_node = cx.under_try.take();
-        let callee = self.classify_callee(cx, callee_node);
+        let (callee, explicit) = self.classify_callee(cx, callee_node);
         // I3.5 (D2): the classification, before the match moves it. I4
         // refines `Undecided` into method resolutions; I5 adds arguments.
         cx.facts.set_callee(
@@ -104,14 +149,22 @@ impl Wf<'_> {
                     def: hit.def,
                     owner: hit.owner,
                 },
-                Callee::Generic(_) | Callee::Undecided => FactCallee::Undecided,
+                Callee::Undecided => FactCallee::Undecided,
             },
         );
-        let (params, result, raises) = match callee {
+        let mut receiver: Option<(TyId, TyId)> = None;
+        let shape = match callee {
             Callee::Fn(def) => {
                 let sig = self.fir.sigs.fn_sig(def);
                 if sig == fors_fir::NO_FN_SIG {
-                    (Vec::new(), TY_ERROR, NO_TY)
+                    Shape {
+                        owners: Vec::new(),
+                        gdef: def,
+                        params: Vec::new(),
+                        result: TY_ERROR,
+                        raises: NO_TY,
+                        counted: false,
+                    }
                 } else {
                     let n = self.fir.sigs.fn_sigs.count(sig);
                     let mut ps = Vec::with_capacity(n);
@@ -119,11 +172,19 @@ impl Wf<'_> {
                         let p = self.fir.sigs.fn_sigs.param(sig, i);
                         ps.push((p.name, p.conv, p.ty));
                     }
-                    (
-                        ps,
-                        self.fir.sigs.fn_sigs.result(sig),
-                        self.fir.sigs.fn_sigs.raises(sig),
-                    )
+                    let arity = self.arity(def) as u16;
+                    Shape {
+                        owners: if arity == 0 {
+                            Vec::new()
+                        } else {
+                            vec![(def, arity)]
+                        },
+                        gdef: def,
+                        params: ps,
+                        result: self.fir.sigs.fn_sigs.result(sig),
+                        raises: self.fir.sigs.fn_sigs.raises(sig),
+                        counted: true,
+                    }
                 }
             }
             Callee::Variant(def, i) => {
@@ -131,7 +192,29 @@ impl Wf<'_> {
                 let m = self.fir.sigs.member_store.get(ms, i);
                 let xs = self.fir.tys.args(m.args).to_vec();
                 let ps = xs.into_iter().map(|t| (Symbol(0), Conv::Sink, t)).collect();
-                (ps, self.fir.tys.nominal(def, NO_ARGS), NO_TY)
+                let arity = self.arity(def) as u16;
+                let owners = if arity == 0 {
+                    Vec::new()
+                } else {
+                    vec![(def, arity)]
+                };
+                let result = if arity == 0 {
+                    self.fir.tys.nominal(def, NO_ARGS)
+                } else {
+                    // The enum applied to its OWN parameters: R38 then
+                    // substitutes it, which is what makes `some(1)` with an
+                    // expected `Option[u8]` bind `T := u8` in step (c).
+                    let xs = self.own_args(def);
+                    self.fir.tys.nominal_of(def, &xs)
+                };
+                Shape {
+                    owners,
+                    gdef: def,
+                    params: ps,
+                    result,
+                    raises: NO_TY,
+                    counted: true,
+                }
             }
             Callee::Value(id) => {
                 let (convs, tys) = self.fir.tys.fn_tys().params(id);
@@ -141,30 +224,34 @@ impl Wf<'_> {
                     .zip(tys.iter().copied())
                     .map(|(c, t)| (Symbol(0), c, t))
                     .collect();
-                (
-                    ps,
-                    self.fir.tys.fn_tys().result(id),
-                    self.fir.tys.fn_tys().raises(id),
-                )
+                Shape {
+                    owners: Vec::new(),
+                    gdef: fors_fir::NO_DEF,
+                    params: ps,
+                    result: self.fir.tys.fn_tys().result(id),
+                    raises: self.fir.tys.fn_tys().raises(id),
+                    counted: true,
+                }
             }
             Callee::Undecided => {
                 self.undecided_args(cx, &args);
-                self.handler(cx, handler, TY_ERROR, TY_ERROR, false);
-                return TY_ERROR;
-            }
-            Callee::Generic(def) => {
-                // R12's use side (I4). The arguments are synthesised exactly
-                // once — here — and their types are what determines the
-                // callee's parameters for the bound check below.
-                let seen = self.undecided_args_typed(cx, &args);
-                self.check_bounds(cx, def, &seen);
+                for &e in &explicit {
+                    cx.facts.record(e as u32, TY_ERROR);
+                }
                 self.handler(cx, handler, TY_ERROR, TY_ERROR, false);
                 return TY_ERROR;
             }
             Callee::Method(hit) => {
                 let sig = self.fir.sigs.fn_sig(hit.def);
                 if sig == fors_fir::NO_FN_SIG {
-                    (Vec::new(), TY_ERROR, NO_TY)
+                    Shape {
+                        owners: Vec::new(),
+                        gdef: hit.def,
+                        params: Vec::new(),
+                        result: TY_ERROR,
+                        raises: NO_TY,
+                        counted: false,
+                    }
                 } else {
                     // I4 (D2/D3): the resolution lowering reads, recorded
                     // before the match below moves on to the arguments.
@@ -191,18 +278,29 @@ impl Wf<'_> {
                     }
                     if !hit.receiver_is_arg {
                         self.recv_use(cx, node, callee_node, &hit);
+                        // R38(b): the receiver's type faces the declared
+                        // self type. A method this increment resolves has
+                        // nothing to determine, so the match binds nothing
+                        // — but the pair is carried so step (b) is written
+                        // where the design puts it.
+                        let p = self.fir.sigs.fn_sigs.param(sig, hit.recv_slot as usize);
+                        receiver = Some((p.ty, hit.recv_ty));
                     }
-                    (
-                        ps,
-                        self.fir.sigs.fn_sigs.result(sig),
-                        self.fir.sigs.fn_sigs.raises(sig),
-                    )
+                    Shape {
+                        owners: Vec::new(),
+                        gdef: hit.def,
+                        params: ps,
+                        result: self.fir.sigs.fn_sigs.result(sig),
+                        raises: self.fir.sigs.fn_sigs.raises(sig),
+                        counted: true,
+                    }
                 }
             }
         };
+        let (params, raises) = (shape.params.clone(), shape.raises);
         // I3.5 (D3, rest): the parameter convention each typed argument
         // was checked against, in order, one row per typed call (possibly
-        // empty). Extra arguments (R39, I5's) are synthesised and carry no
+        // empty). Extra arguments (R39) are synthesised and carry no
         // convention.
         cx.facts.set_arg_convs(
             node as u32,
@@ -232,55 +330,579 @@ impl Wf<'_> {
             }
         }
 
-        for (i, &arg) in args.iter().enumerate() {
-            match params.get(i) {
-                Some(&(name, conv, ty)) => {
-                    self.named_label(cx, arg, name, i);
-                    let value = self.arg_value(cx, arg);
-                    cx.site(NodeKind::CallExpr, Slot::Argument);
-                    self.check(cx, value, ty);
-                    if let Some(p) = self.place_of(cx, value) {
-                        let kind = match conv {
-                            Conv::Let => {
-                                if self.copyable(ty) {
-                                    UseKind::Copy
-                                } else {
-                                    UseKind::Read
-                                }
-                            }
-                            Conv::Inout => UseKind::MutBorrow,
-                            Conv::Set => UseKind::OutBorrow,
-                            Conv::Sink => {
-                                if self.copyable(ty) {
-                                    UseKind::Copy
-                                } else {
-                                    UseKind::Move
-                                }
-                            }
-                        };
-                        cx.tape.push(
-                            value as u32,
-                            p,
-                            kind,
-                            Cause::Argument {
-                                call: node as u32,
-                                param: i as u16,
-                            },
-                        );
-                    }
-                }
-                // R39's argument-count rule is I5's gate; the extra
-                // arguments are still typed, so nothing is left unvisited.
-                None => {
-                    let value = self.arg_value(cx, arg);
-                    self.synth(cx, value);
-                }
-            }
-        }
+        let site = Site {
+            node,
+            explicit: &explicit,
+            receiver,
+            args: &args,
+        };
+        let (result, raises) = self.type_call(cx, &site, &shape, expected);
         self.handler(cx, handler, result, raises, true);
         match expected {
             Some(w) => self.subsume(cx, node, result, w),
             None => result,
+        }
+    }
+
+    // ------------------------------------------------- R38, steps (a)-(f)
+
+    /// R38 over one call, literally (design §7.4). The [`Binding`] is a
+    /// stack local: it is created here, never stored, and dropped when
+    /// this returns, so a nested call in an argument recurses with its own
+    /// (R38(f), "no variable survives the call").
+    ///
+    /// Returns the call's result type and its `raises` type, both fully
+    /// substituted. Subsumption in CHECK mode is the caller's last step.
+    fn type_call(
+        &mut self,
+        cx: &mut BodyCx,
+        site: &Site,
+        shape: &Shape,
+        expected: Option<TyId>,
+    ) -> (TyId, TyId) {
+        self.live_bindings += 1;
+        let out = self.type_call_inner(cx, site, shape, expected);
+        self.live_bindings -= 1;
+        out
+    }
+
+    fn type_call_inner(
+        &mut self,
+        cx: &mut BodyCx,
+        site: &Site,
+        shape: &Shape,
+        expected: Option<TyId>,
+    ) -> (TyId, TyId) {
+        let Site {
+            node,
+            explicit,
+            receiver,
+            args,
+        } = *site;
+        let slots = shape.slots();
+        let mut b = Binding::new(&shape.owners);
+        self.bindings_created += 1;
+        // One root cause per call: once a slot or a comparison has been
+        // reported, the rest of the procedure runs for its side effects
+        // (every argument is still visited) and says nothing more.
+        let mut bad = false;
+        // Set when something this increment does not own left the call
+        // undecidable: a projection R20 would normalise (I6), an explicit
+        // argument that is not a plain type name, an unbound BRAND slot
+        // (ch01 R15b's inference). The call is then absorbing and silent.
+        let mut unowned = false;
+
+        // (a) explicit `[...]` arguments: all of the callee's OWN
+        // parameters, in order, each of the declared kind.
+        if !explicit.is_empty() {
+            let want = if shape.gdef == fors_fir::NO_DEF {
+                0
+            } else {
+                self.arity(shape.gdef)
+            };
+            if want == 0 || want != explicit.len() {
+                let f = self.head_name(shape.gdef);
+                self.bemit(
+                    cx,
+                    node,
+                    39,
+                    39,
+                    format!(
+                        "`{f}` declares {want} generic argument(s), {} written",
+                        explicit.len()
+                    ),
+                );
+                bad = true;
+            } else {
+                for (o, &arg) in explicit.iter().enumerate() {
+                    let t = self.explicit_arg(cx, arg, shape.gdef, o);
+                    cx.facts.record(arg as u32, t);
+                    if t == TY_ERROR || t == NO_TY {
+                        unowned = true;
+                        continue;
+                    }
+                    b.bind(shape.gdef, o as u16, t);
+                }
+            }
+        }
+
+        // (b) the receiver, matched one-way against the self parameter.
+        if let Some((self_ty, recv_ty)) = receiver
+            && slots > 0
+            && recv_ty != TY_ERROR
+            && recv_ty != NO_TY
+        {
+            one_way_match(&mut self.fir.tys, self_ty, recv_ty, &mut b);
+        }
+
+        // (c) the expected type, in NoFail mode: brand positions are
+        // skipped (R40) and a structural mismatch binds nothing and is not
+        // yet an error — so the attempt runs on a copy and is adopted only
+        // when it succeeds.
+        if slots > 0
+            && let Some(w) = expected
+            && w != TY_ERROR
+            && w != NO_TY
+            && !b.is_complete()
+        {
+            let mut probe = b.clone();
+            let ok = fors_fir::subst::one_way_match_mode(
+                &mut self.fir.tys,
+                shape.result,
+                w,
+                &mut probe,
+                &mut NeutralOnly,
+                MatchMode::NoFail,
+            );
+            if ok {
+                b = probe;
+            }
+        }
+
+        // (d) the arguments, left to right.
+        let mut pending: Vec<(usize, usize, TyId)> = Vec::new();
+        for (i, &arg) in args.iter().enumerate() {
+            let Some(&(name, conv, p)) = shape.params.get(i) else {
+                // R39's argument count is reported once, below; the extra
+                // argument is still typed so nothing is left unvisited.
+                let value = self.arg_value(cx, arg);
+                if !self.check_only_form(cx, value) {
+                    self.synth(cx, value);
+                }
+                continue;
+            };
+            self.named_label(cx, arg, name, i);
+            let value = self.arg_value(cx, arg);
+            // R41: a closure argument for a `fn`-shaped or callable
+            // parameter takes its parameter types from that signature.
+            if slots > 0 && cx.kind(value) == NodeKind::Closure {
+                match self.closure_argument(cx, node, value, (i, conv, p), &mut b) {
+                    Some(true) => continue,
+                    Some(false) => {
+                        // The signature needs R20's normalisation (I6).
+                        // The closure is left unvisited rather than
+                        // SYNTHesised into an R35 error it does not owe.
+                        unowned = true;
+                        continue;
+                    }
+                    None => {}
+                }
+            }
+            match self.subst_now(p, &b) {
+                Some(t) => {
+                    cx.site(NodeKind::CallExpr, Slot::Argument);
+                    self.check(cx, value, t);
+                    self.arg_tape(cx, node, value, conv, t, i);
+                }
+                None => {
+                    if first_unbound(&self.fir.tys, p, &b).is_none() {
+                        // Every slot is bound and the substitution still
+                        // failed: R20's normalisation, which is I6's.
+                        unowned = true;
+                        if !self.check_only_form(cx, value) {
+                            self.synth(cx, value);
+                        }
+                        continue;
+                    }
+                    let s = self.synth(cx, value);
+                    if s == TY_ERROR || s == NO_TY {
+                        // The argument already failed (or is a form another
+                        // increment leaves open): it binds nothing, and a
+                        // slot it alone would have determined must not
+                        // become a second, T0039 diagnostic for one cause
+                        // (design §7.10: `TY_ERROR` absorbs).
+                        unowned = true;
+                        continue;
+                    }
+                    // R33: an argument of type `never` binds nothing.
+                    if s != TY_NEVER {
+                        one_way_match(&mut self.fir.tys, p, s, &mut b);
+                    }
+                    pending.push((i, value, s));
+                }
+            }
+        }
+        // R39: the argument count is checked at the call.
+        if shape.counted && args.len() != shape.params.len() && !bad {
+            self.bemit(
+                cx,
+                node,
+                39,
+                39,
+                format!(
+                    "this call passes {} argument(s), but the callee declares {}",
+                    args.len(),
+                    shape.params.len()
+                ),
+            );
+            bad = true;
+        }
+
+        // (e) every synthesised argument's parameter type, substituted in
+        // full, compared once; then R12's bounds and constraint entries.
+        for (i, value, s) in pending {
+            let p = shape.params[i].2;
+            match self.subst_now(p, &b) {
+                Some(t) => {
+                    if bad {
+                        continue;
+                    }
+                    let got = self.subsume(cx, value, s, t);
+                    if got == TY_ERROR && t != TY_ERROR {
+                        bad = true;
+                    } else {
+                        self.arg_tape(cx, node, value, shape.params[i].1, t, i);
+                    }
+                }
+                None => match first_unbound(&self.fir.tys, p, &b) {
+                    Some((_, _, true)) => unowned = true,
+                    Some((owner, ord, false)) => {
+                        if !bad && !unowned {
+                            self.cannot_infer(cx, value, shape.gdef, owner, ord);
+                            bad = true;
+                        }
+                    }
+                    None => unowned = true,
+                },
+            }
+        }
+        // R39 over the WHOLE binding: a parameter that occurs in no
+        // argument's type and not in the result (`fn make[T]() -> i32`, or
+        // the `U` of `F: fn(..) -> U` with nothing to bind it) is still
+        // "undetermined after Rule 38(d)". Reported at the call, naming the
+        // first such slot. A brand slot is the one carve-out (see
+        // [`Wf::unbound_slot`]).
+        if !bad && !unowned {
+            match self.unbound_slot(&shape.owners, &b) {
+                Some((_, _, true)) => unowned = true,
+                Some((owner, ord, false)) => {
+                    self.cannot_infer(cx, node, shape.gdef, owner, ord);
+                    bad = true;
+                }
+                None => {}
+            }
+        }
+        if !bad && !unowned && slots > 0 {
+            self.check_bounds(cx, node, shape.gdef, &shape.owners, &b);
+        }
+
+        // (f) the result, fully substituted.
+        let raises = if shape.raises == NO_TY {
+            NO_TY
+        } else {
+            self.subst_now(shape.raises, &b).unwrap_or(TY_ERROR)
+        };
+        if bad {
+            return (TY_ERROR, raises);
+        }
+        match self.subst_now(shape.result, &b) {
+            Some(t) => (t, raises),
+            None => {
+                match first_unbound(&self.fir.tys, shape.result, &b) {
+                    Some((owner, ord, false)) if !unowned => {
+                        self.cannot_infer(cx, node, shape.gdef, owner, ord)
+                    }
+                    _ => {}
+                }
+                (TY_ERROR, raises)
+            }
+        }
+    }
+
+    /// The first slot of `b` still unbound once every argument has been
+    /// visited, as `(owner, ordinal, is_brand)`.
+    ///
+    /// A BRAND slot is answered as `is_brand` and the caller leaves it
+    /// silent rather than T0039: R40 binds a brand "only from a receiver
+    /// or argument type", and the one source of a fresh brand that reaches
+    /// a callee without an argument naming it — `one.alloc(Node { val: 1 })`,
+    /// whose literal takes `A` from `alloc`'s receiver-bound `T` — is a
+    /// GENERIC METHOD, which this increment does not type (`methods.rs`
+    /// answers `Candidate::Generic`). Until it does, the literal's expected
+    /// type does not exist here and a T0039 would be the checker's gap,
+    /// not the writer's.
+    fn unbound_slot(&self, owners: &[(DefId, u16)], b: &Binding) -> Option<(DefId, u16, bool)> {
+        let (owner, ord) = b.first_unbound_slot()?;
+        debug_assert!(owners.iter().any(|&(o, _)| o == owner));
+        let g = self.fir.sigs.generics(owner);
+        let is_brand = (ord as usize) < self.fir.sigs.generics_store.count(g)
+            && self.fir.sigs.generics_store.param(g, ord as usize).kind == GParamKind::Brand;
+        Some((owner, ord, is_brand))
+    }
+
+    /// R39's message: "cannot infer `T`; write `f[T](...)`".
+    fn cannot_infer(&mut self, cx: &mut BodyCx, at: usize, gdef: DefId, owner: DefId, ord: u16) {
+        let g = self.fir.sigs.generics(owner);
+        let p = if (ord as usize) < self.fir.sigs.generics_store.count(g) {
+            self.sym(self.fir.sigs.generics_store.param(g, ord as usize).name)
+        } else {
+            "_".to_string()
+        };
+        let f = self.head_name(gdef);
+        self.bemit(
+            cx,
+            at,
+            39,
+            39,
+            format!("cannot infer `{p}`; write `{f}[{p}](...)` with the argument given explicitly"),
+        );
+    }
+
+    /// `subst_norm` over the call's binding, counted like every other
+    /// substitution the body performs.
+    fn subst_now(&mut self, ty: TyId, b: &Binding) -> Option<TyId> {
+        if b.owner_count() == 0 {
+            return Some(ty);
+        }
+        self.subst_calls += 1;
+        subst_norm(&mut self.fir.tys, ty, b)
+    }
+
+    /// The tape event an argument's convention produces (design §7.9).
+    fn arg_tape(
+        &mut self,
+        cx: &mut BodyCx,
+        call: usize,
+        value: usize,
+        conv: Conv,
+        ty: TyId,
+        i: usize,
+    ) {
+        let Some(p) = self.place_of(cx, value) else {
+            return;
+        };
+        let kind = match conv {
+            Conv::Let => {
+                if self.copyable(ty) {
+                    UseKind::Copy
+                } else {
+                    UseKind::Read
+                }
+            }
+            Conv::Inout => UseKind::MutBorrow,
+            Conv::Set => UseKind::OutBorrow,
+            Conv::Sink => {
+                if self.copyable(ty) {
+                    UseKind::Copy
+                } else {
+                    UseKind::Move
+                }
+            }
+        };
+        cx.tape.push(
+            value as u32,
+            p,
+            kind,
+            Cause::Argument {
+                call: call as u32,
+                param: i as u16,
+            },
+        );
+    }
+
+    /// R41. `p` is the declared parameter type of a closure argument. When
+    /// it is `fn`-shaped — written as a `fn` type, or a callable parameter
+    /// `F: fn(...)` (R15) — and every PARAMETER type of that signature is
+    /// complete under `b`, the closure is checked by R35; if the result is
+    /// not complete the body is synthesised and the result matched one-way
+    /// against it.
+    ///
+    /// `Some(true)`: R41 typed the argument. `Some(false)`: the signature
+    /// mentions a projection on a BOUND head, which only R20's
+    /// normalisation (I6) can complete — the closure is left alone, since
+    /// SYNTHesising it would raise an R35 error that belongs to no rule
+    /// (`map-sum-closure-checked-accepted`). `None`: R38(d) applies, and
+    /// the closure is SYNTHed there and fails R35 as R41 says it should
+    /// (`closure-before-its-type-source-rejected`).
+    fn closure_argument(
+        &mut self,
+        cx: &mut BodyCx,
+        call: usize,
+        value: usize,
+        (i, conv, p): (usize, Conv, TyId),
+        b: &mut Binding,
+    ) -> Option<bool> {
+        let (slot, sig) = self.callable_signature(p, b)?;
+        let id = FnTyId(self.fir.tys.a(self.fir.tys.unqual(sig)));
+        let (convs, ptys) = {
+            let (c, t) = self.fir.tys.fn_tys().params(id);
+            (c.to_vec(), t.to_vec())
+        };
+        let mut ps: Vec<(Conv, TyId)> = Vec::with_capacity(ptys.len());
+        for (k, &t) in ptys.iter().enumerate() {
+            match self.subst_now(t, b) {
+                Some(t) => ps.push((convs[k], t)),
+                None => {
+                    return if first_unbound(&self.fir.tys, t, b).is_some() {
+                        // Genuinely incomplete: R38(d) applies.
+                        None
+                    } else {
+                        // Complete but un-normalised: R20, which is I6's.
+                        Some(false)
+                    };
+                }
+            }
+        }
+        let declared_result = self.fir.tys.fn_tys().result(id);
+        let declared_raises = self.fir.tys.fn_tys().raises(id);
+        let raises = if declared_raises == NO_TY {
+            NO_TY
+        } else {
+            self.subst_now(declared_raises, b).unwrap_or(TY_ERROR)
+        };
+        let want_result = self.subst_now(declared_result, b);
+        let ft = match want_result {
+            Some(r) => {
+                let f = self.fir.tys.intern_fn_ty(&ps, r, raises, false);
+                let want = self.fir.tys.fn_ty(f);
+                cx.site(NodeKind::CallExpr, Slot::Argument);
+                self.check(cx, value, want);
+                want
+            }
+            None => {
+                // The result is not complete: the body is SYNTHesised and
+                // the declared result matched one-way against it. This is
+                // the only place a result type flows out of a closure.
+                let got = self.synth_closure_with(cx, value, &ps);
+                let r = self.fir.tys.fn_tys().result(FnTyId(self.fir.tys.a(got)));
+                if r != TY_ERROR && r != NO_TY && r != TY_NEVER {
+                    one_way_match(&mut self.fir.tys, declared_result, r, b);
+                }
+                got
+            }
+        };
+        if let Some((owner, ord)) = slot {
+            // A callable parameter is bound to the signature it accepted
+            // (R41: "accepts a closure type, `fn` item or `fn` value of
+            // that signature"), never to the closure's own row, so the
+            // binding is the same whichever form the argument took.
+            b.bind(owner, ord, ft);
+        }
+        self.arg_tape(cx, call, value, conv, ft, i);
+        Some(true)
+    }
+
+    /// The `fn` signature a parameter type denotes for R41, and the slot
+    /// it binds when it is a callable parameter (R15) rather than a
+    /// written `fn` type.
+    fn callable_signature(&mut self, p: TyId, b: &Binding) -> Option<(Option<(DefId, u16)>, TyId)> {
+        let bare = self.fir.tys.unqual(p);
+        if self.fir.tys.tag(bare) == TyTag::Fn {
+            return Some((None, bare));
+        }
+        if self.fir.tys.tag(bare) != TyTag::Param {
+            return None;
+        }
+        let owner = DefId(self.fir.tys.a(bare));
+        let ord = self.fir.tys.b(bare) as u16;
+        if !b.owns(owner) || b.slot(owner, ord) != NO_TY {
+            return None;
+        }
+        let g = self.fir.sigs.generics(owner);
+        if (ord as usize) >= self.fir.sigs.generics_store.count(g) {
+            return None;
+        }
+        match self.fir.sigs.generics_store.param(g, ord as usize).kind {
+            GParamKind::Callable { fn_ty } => Some((Some((owner, ord)), fn_ty)),
+            _ => None,
+        }
+    }
+
+    /// R12 at the call (R38(e)'s second half): every bound of every slot
+    /// of the callee and its container, with the binding substituted in.
+    /// This is the whole of what I4's provisional form of it did, now
+    /// reached from inside the procedure that knows the binding. A
+    /// generic struct literal (R34) reaches it with the struct as `gdef`.
+    ///
+    /// A CALLABLE parameter's "bound" is its signature (R15: "exactly one
+    /// `fn_type`"; R41: it "accepts a closure type, `fn` item or `fn`
+    /// value of that signature"). R38(d) binds `F` to whatever the argument
+    /// synthesised — a closure, an item, or an `i32` — and nothing before
+    /// this point has compared that with the signature, so the comparison
+    /// is here, where every other bound is: the slot must be a function
+    /// type equal, by R7/R10(b), to the signature with the binding
+    /// substituted in. `U` of `F: fn(..) -> U` still unbound is R39's and
+    /// was reported before this runs.
+    fn check_bounds(
+        &mut self,
+        cx: &mut BodyCx,
+        node: usize,
+        gdef: DefId,
+        owners: &[(DefId, u16)],
+        b: &Binding,
+    ) {
+        use crate::wf::Holds;
+        for &(owner, n) in owners {
+            self.dep(owner);
+            let g = self.fir.sigs.generics(owner);
+            let count = self.fir.sigs.generics_store.count(g);
+            for o in 0..(n as usize).min(count) {
+                let x = b.slot(owner, o as u16);
+                if x == NO_TY || x == TY_ERROR {
+                    continue;
+                }
+                if let GParamKind::Callable { fn_ty } =
+                    self.fir.sigs.generics_store.param(g, o).kind
+                {
+                    let Some(want) = self.subst_now(fn_ty, b) else {
+                        continue;
+                    };
+                    if self.fn_shape_eq(x, want) {
+                        continue;
+                    }
+                    let got = self.show(x);
+                    let sig = self.show(want);
+                    let pname = self.sym(self.fir.sigs.generics_store.param(g, o).name);
+                    let f = self.head_name(gdef);
+                    self.bemit(
+                        cx,
+                        node,
+                        41,
+                        41,
+                        format!(
+                            "`{got}` is not a function of signature `{sig}`, which `{f}`'s callable parameter `{pname}` requires"
+                        ),
+                    );
+                    return;
+                }
+                let bounds = {
+                    let p = self.fir.sigs.generics_store.param(g, o);
+                    self.fir.sigs.bounds.get(p.bounds).to_vec()
+                };
+                if bounds.is_empty() {
+                    continue;
+                }
+                let x = self.fir.tys.unqual(x);
+                // A projection subject is R12's through I6's normalisation.
+                if matches!(self.fir.tys.tag(x), TyTag::Proj | TyTag::Brand)
+                    || fors_fir::impls::contains_proj(&self.fir.tys, x)
+                {
+                    continue;
+                }
+                for want in bounds {
+                    let Some(want) = self.subst_trait_ref(want, b) else {
+                        continue;
+                    };
+                    if self.holds(x, want) != Holds::No {
+                        continue;
+                    }
+                    let subject = self.show(x);
+                    let (tdef, _) = self.fir.tys.trait_ref(want);
+                    let tr = self.head_name(tdef);
+                    let pname = self.sym(self.fir.sigs.generics_store.param(g, o).name);
+                    let f = self.head_name(gdef);
+                    self.bemit(
+                        cx,
+                        node,
+                        12,
+                        12,
+                        format!(
+                            "`{subject}` does not implement `{tr}`, which `{f}`'s parameter `{pname}` requires"
+                        ),
+                    );
+                    return;
+                }
+            }
         }
     }
 
@@ -315,146 +937,37 @@ impl Wf<'_> {
         }
     }
 
+    /// A form that is legal ONLY against an expected type, and so must
+    /// not be SYNTHesised for a call or a literal this increment does not
+    /// type: a closure (R35), a bare operator (R37), a `.variant` literal
+    /// (R34) — and `none`, which R28's table puts in exactly the same
+    /// position ("`none` takes its enum from the expected type"). A
+    /// SYNTH of one of these would raise ITS rule's diagnostic for a call
+    /// the checker simply has not reached.
+    fn check_only_form(&mut self, cx: &mut BodyCx, node: usize) -> bool {
+        match cx.kind(node) {
+            NodeKind::Closure | NodeKind::BareOp | NodeKind::DotLit => true,
+            NodeKind::NameExpr => matches!(
+                cx.f.uses.target_of(node as u32),
+                Some(ResolvedTarget::Entity(Entity::PreludeValue(s)))
+                    if self.names.resolve(s) == b"none"
+            ),
+            _ => false,
+        }
+    }
+
     /// The arguments of a call this increment does not type. They are
     /// SYNTHESISED so nothing in the body is left unvisited — except the
     /// three forms that are legal only against an expected type
     /// (`closure`, `bare_op`, `dot_lit`), which would produce their own
     /// rule's diagnostic for a call the checker simply has not reached.
     fn undecided_args(&mut self, cx: &mut BodyCx, args: &[usize]) {
-        self.undecided_args_typed(cx, args);
-    }
-
-    /// [`Self::undecided_args`] that also reports, per argument, the value
-    /// node and the type synthesis gave it (`None` for the three forms that
-    /// are legal only against an expected type, which stay unvisited).
-    fn undecided_args_typed(
-        &mut self,
-        cx: &mut BodyCx,
-        args: &[usize],
-    ) -> Vec<(usize, Option<TyId>)> {
-        let mut out = Vec::with_capacity(args.len());
         for &a in args {
             let v = self.arg_value(cx, a);
-            if matches!(
-                cx.kind(v),
-                NodeKind::Closure | NodeKind::BareOp | NodeKind::DotLit
-            ) {
-                out.push((v, None));
+            if self.check_only_form(cx, v) {
                 continue;
             }
-            let t = self.synth(cx, v);
-            out.push((v, Some(t)));
-        }
-        out
-    }
-
-    /// R12's use side at a call to a generic function (increment I4).
-    ///
-    /// R12 says bounds MUST hold "at every use", and a call is a use. The
-    /// *typing* of such a call is R38-R39's and is I5's, so this check
-    /// neither types the call nor records a callee: it only determines the
-    /// callee's parameters from the argument positions where a DECLARED
-    /// parameter type is a bare generic parameter — the one binding shape
-    /// that needs none of R38's machinery — and then asks [`Wf::holds`].
-    ///
-    /// Everything undetermined, or whose subject this increment does not
-    /// decide, stays silent: a bounded parameter no argument position binds
-    /// (R38 would get it from the expected type — I5), a projection or brand
-    /// subject (I6/I5), a bound whose trait arguments are still open, and an
-    /// argument count R39 would reject. One root cause: the first bound that
-    /// definitely fails is reported and the walk stops.
-    pub fn check_bounds(&mut self, cx: &mut BodyCx, def: DefId, args: &[(usize, Option<TyId>)]) {
-        use crate::wf::Holds;
-        use fors_fir::sig::GParamKind;
-        use fors_fir::subst::Binding;
-
-        if self.container_arity(def) > 0 {
-            return;
-        }
-        let g = self.fir.sigs.generics(def);
-        let n = self.fir.sigs.generics_store.count(g);
-        if n == 0 {
-            return;
-        }
-        // A `const`, brand or callable parameter is R13/R40/R41's to
-        // determine, and any of them makes the whole instantiation I5's.
-        for o in 0..n {
-            if self.fir.sigs.generics_store.param(g, o).kind != GParamKind::Type {
-                return;
-            }
-        }
-        let sig = self.fir.sigs.fn_sig(def);
-        if sig == fors_fir::NO_FN_SIG || self.fir.sigs.fn_sigs.count(sig) != args.len() {
-            return;
-        }
-        self.dep(def);
-        let mut b = Binding::new(&[(def, n as u16)]);
-        // Which argument bound each slot, for the diagnostic's position.
-        let mut witness = vec![usize::MAX; n];
-        for (i, &(node, ty)) in args.iter().enumerate() {
-            let Some(arg) = ty else { continue };
-            if arg == TY_ERROR || arg == NO_TY {
-                return;
-            }
-            let p = self.fir.sigs.fn_sigs.param(sig, i).ty;
-            if self.fir.tys.tag(p) != TyTag::Param || DefId(self.fir.tys.a(p)) != def {
-                continue;
-            }
-            let o = self.fir.tys.b(p) as usize;
-            if o >= n {
-                return;
-            }
-            let arg = self.fir.tys.unqual(arg);
-            if !b.bind(def, o as u16, arg) {
-                // R38's "a binding is never revised": the disagreement is
-                // T0026 at that argument, and reporting it is I5's.
-                return;
-            }
-            if witness[o] == usize::MAX {
-                witness[o] = node;
-            }
-        }
-        for (o, &at) in witness.iter().enumerate() {
-            let bounds = {
-                let p = self.fir.sigs.generics_store.param(g, o);
-                self.fir.sigs.bounds.get(p.bounds).to_vec()
-            };
-            if bounds.is_empty() {
-                continue;
-            }
-            let x = b.slot(def, o as u16);
-            if x == NO_TY || x == TY_ERROR || at == usize::MAX {
-                continue;
-            }
-            // Projection and brand subjects are I6's and I5's.
-            if matches!(self.fir.tys.tag(x), TyTag::Proj | TyTag::Brand)
-                || fors_fir::impls::contains_proj(&self.fir.tys, x)
-            {
-                continue;
-            }
-            for want in bounds {
-                let Some(want) = self.subst_trait_ref(want, &b) else {
-                    continue;
-                };
-                if self.holds(x, want) != Holds::No {
-                    continue;
-                }
-                let subject = self.show(x);
-                let (tdef, _) = self.fir.tys.trait_ref(want);
-                let tr = self.head_name(tdef);
-                let pname = self.sym(self.fir.sigs.generics_store.param(g, o).name);
-                let f = self.head_name(def);
-                self.bemit(
-                    cx,
-                    at,
-                    12,
-                    12,
-                    format!(
-                        "`{subject}` does not implement `{tr}`, which `{f}`'s parameter `{pname}` requires"
-                    ),
-                );
-                return;
-            }
+            self.synth(cx, v);
         }
     }
 
@@ -486,7 +999,31 @@ impl Wf<'_> {
         }
     }
 
-    fn classify_callee(&mut self, cx: &mut BodyCx, node: usize) -> Callee {
+    /// The callee, and the explicit `[...]` generic arguments written on
+    /// it (R38(a)). The arguments are returned unlowered: R38(a) reads
+    /// them by the callee's declared kinds, which are known only once the
+    /// callee is.
+    fn classify_callee(&mut self, cx: &mut BodyCx, node: usize) -> (Callee, Vec<usize>) {
+        if cx.kind(node) == NodeKind::Bracket {
+            let kids = cx.kids(node);
+            let Some(&operand) = kids.first() else {
+                return (Callee::Undecided, Vec::new());
+            };
+            // R47: a bracket on a path bound to a generic item instantiates.
+            if self.is_instantiation(cx, operand) {
+                let (c, nested) = self.classify_callee(cx, operand);
+                if !nested.is_empty() {
+                    return (Callee::Undecided, Vec::new());
+                }
+                return (c, kids[1..].to_vec());
+            }
+            self.synth(cx, node);
+            return (Callee::Undecided, Vec::new());
+        }
+        (self.classify_head(cx, node), Vec::new())
+    }
+
+    fn classify_head(&mut self, cx: &mut BodyCx, node: usize) -> Callee {
         match cx.kind(node) {
             NodeKind::NameExpr
                 if crate::member::path_segments(cx, node)
@@ -522,24 +1059,35 @@ impl Wf<'_> {
                         return Callee::Undecided;
                     }
                     // R38's "parameters to determine": the container's, then
-                    // the callee's own. Zero of both is this increment's.
+                    // the callee's own. A CONTAINER's parameters are a
+                    // method's (R43's two tiers), which this increment
+                    // leaves silent; the callee's own are R38's slots.
                     self.dep(def);
                     if self.container_arity(def) > 0 {
                         return Callee::Undecided;
-                    }
-                    if self.arity(def) > 0 {
-                        // I5 types it; R12's bounds are still checked (I4).
-                        return Callee::Generic(def);
                     }
                     Callee::Fn(def)
                 }
                 Some(ResolvedTarget::Entity(Entity::Variant { file, decl, index })) => {
                     let def = self.defs.def_of(file, decl);
                     self.dep(def);
-                    if def == fors_fir::NO_DEF || self.arity(def) > 0 {
+                    if def == fors_fir::NO_DEF {
                         return Callee::Undecided;
                     }
                     match self.variant_slot(def, index) {
+                        Some(i) => Callee::Variant(def, i),
+                        None => Callee::Undecided,
+                    }
+                }
+                // `some(x)`: `Option`'s tuple variant, whose `T` is R38's
+                // to determine exactly like a user enum's.
+                Some(ResolvedTarget::Entity(Entity::PreludeValue(sym))) => {
+                    let def = self.prelude.option;
+                    if def == fors_fir::NO_DEF || self.names.resolve(sym) != b"some" {
+                        return Callee::Undecided;
+                    }
+                    self.dep(def);
+                    match self.variant_named(def, sym) {
                         Some(i) => Callee::Variant(def, i),
                         None => Callee::Undecided,
                     }
@@ -771,6 +1319,40 @@ impl Wf<'_> {
         cx.tape.push(recv_node as u32, p, kind, cause);
     }
 
+    /// A declaration applied to its OWN generic parameters, each row of
+    /// the kind R15 gave it: a brand parameter is a `Brand` row, not a
+    /// `Param` one, so `Vec[T, A: brand]` is `Vec[Param(Vec,0),
+    /// Brand(Param{Vec,1})]` and one-way matching it against a written
+    /// `Vec[i32, a]` binds both slots.
+    fn own_args(&mut self, def: DefId) -> Vec<TyId> {
+        let g = self.fir.sigs.generics(def);
+        let n = self.fir.sigs.generics_store.count(g);
+        (0..n)
+            .map(|o| match self.fir.sigs.generics_store.param(g, o).kind {
+                GParamKind::Brand => self.fir.tys.brand_ty(fors_fir::ty::BrandRow::Param {
+                    owner: def,
+                    ordinal: o as u16,
+                }),
+                _ => self.fir.tys.param(def, o as u16),
+            })
+            .collect()
+    }
+
+    /// R38(a): one explicit generic argument, lowered by its slot's kind.
+    fn explicit_arg(&mut self, cx: &mut BodyCx, node: usize, def: DefId, slot: usize) -> TyId {
+        self.lower_generic_arg(cx, node, def, slot)
+    }
+
+    /// The member index of an enum variant by NAME (the prelude values
+    /// `some`/`none` reach `Option`'s members this way).
+    fn variant_named(&mut self, def: DefId, name: Symbol) -> Option<usize> {
+        let ms = self.fir.sigs.members(def);
+        (0..self.fir.sigs.member_store.count(ms)).find(|&i| {
+            let m = self.fir.sigs.member_store.get(ms, i);
+            m.kind == MemberKind::Variant && m.name == name && m.payload == PayloadKind::Tuple
+        })
+    }
+
     /// The member index of an enum's variant given the resolver's ordinal
     /// (which counts distinct variant NAMES, ch08's `Entity::Variant`).
     fn variant_slot(&mut self, def: DefId, ordinal: u32) -> Option<usize> {
@@ -809,10 +1391,7 @@ impl Wf<'_> {
             None => {
                 for &i in &inits {
                     if let Some(v) = cx.f.tree.children(i).next()
-                        && !matches!(
-                            cx.kind(v),
-                            NodeKind::Closure | NodeKind::BareOp | NodeKind::DotLit
-                        )
+                        && !self.check_only_form(cx, v)
                     {
                         self.synth(cx, v);
                     }
@@ -821,19 +1400,39 @@ impl Wf<'_> {
             }
         };
         self.dep(def);
-        if self.arity(def) > 0 {
-            // Determining a struct's own parameters is R38's, which is I5's.
-            for &i in &inits {
-                if let Some(v) = cx.f.tree.children(i).next()
-                    && !matches!(
-                        cx.kind(v),
-                        NodeKind::Closure | NodeKind::BareOp | NodeKind::DotLit
-                    )
-                {
-                    self.synth(cx, v);
+        // R34/R38: a struct literal is a call whose parameters are the
+        // fields. A GENERIC struct's own parameters are determined by the
+        // same procedure, with step (c) — the expected type — doing the
+        // work the written head cannot (`struct-literal-args-from-
+        // expected-accepted`).
+        let arity = self.arity(def) as u16;
+        let owners: Vec<(DefId, u16)> = if arity == 0 {
+            Vec::new()
+        } else {
+            vec![(def, arity)]
+        };
+        let mut b = Binding::new(&owners);
+        self.live_bindings += 1;
+        if arity > 0 {
+            self.bindings_created += 1;
+            let xs = self.own_args(def);
+            let head_ty = self.fir.tys.nominal_of(def, &xs);
+            if let Some(w) = expected
+                && w != TY_ERROR
+                && w != NO_TY
+            {
+                let mut probe = b.clone();
+                if fors_fir::subst::one_way_match_mode(
+                    &mut self.fir.tys,
+                    head_ty,
+                    w,
+                    &mut probe,
+                    &mut NeutralOnly,
+                    MatchMode::NoFail,
+                ) {
+                    b = probe;
                 }
             }
-            return TY_ERROR;
         }
         let ms = self.fir.sigs.members(def);
         let count = self.fir.sigs.member_store.count(ms);
@@ -846,6 +1445,17 @@ impl Wf<'_> {
         }
         let mut seen = vec![false; fields.len()];
         let mut bad = false;
+        // A slot this increment does not determine (an unbound BRAND, see
+        // `unbound_slot`; a projection R20 would normalise; a field whose
+        // value already failed): the literal's type is left open rather
+        // than guessed, and nothing is reported.
+        let mut open = false;
+        // R38(d)'s SYNTH half for the literal: a field whose type is not
+        // yet complete is synthesised and the field type matched one-way
+        // against the result, then compared in full at (e) once every
+        // field has been visited (`Pair { a: 1u8, b: true }` is T0026 at
+        // `true`, with or without an expected type).
+        let mut pending: Vec<(usize, TyId, TyId)> = Vec::new();
         for &init in &inits {
             let Some(name) = self.field_name_of_init(cx, init) else {
                 continue;
@@ -878,9 +1488,34 @@ impl Wf<'_> {
                         bad = true;
                     }
                     if let Some(v) = value {
-                        cx.site(NodeKind::FInit, Slot::FieldInit);
-                        self.check(cx, v, fields[k].2);
-                        self.use_value(cx, v, fields[k].2, Cause::Explicit(node as u32));
+                        match self.subst_now(fields[k].2, &b) {
+                            Some(ft) => {
+                                cx.site(NodeKind::FInit, Slot::FieldInit);
+                                self.check(cx, v, ft);
+                                self.use_value(cx, v, ft, Cause::Explicit(node as u32));
+                            }
+                            None => {
+                                if first_unbound(&self.fir.tys, fields[k].2, &b).is_none() {
+                                    // Every slot bound and still not
+                                    // complete: R20's normalisation (I6).
+                                    open = true;
+                                    if !self.check_only_form(cx, v) {
+                                        self.synth(cx, v);
+                                    }
+                                    continue;
+                                }
+                                let s = self.synth(cx, v);
+                                if s == TY_ERROR || s == NO_TY {
+                                    open = true;
+                                    continue;
+                                }
+                                // R33: a `never` field binds nothing.
+                                if s != TY_NEVER {
+                                    one_way_match(&mut self.fir.tys, fields[k].2, s, &mut b);
+                                }
+                                pending.push((v, fields[k].2, s));
+                            }
+                        }
                     }
                 }
                 None => {
@@ -906,10 +1541,58 @@ impl Wf<'_> {
             self.bemit(cx, node, 34, 34, format!("the struct literal of `{h}` does not name the field `{f}`{more}; a literal names each field exactly once"));
             bad = true;
         }
-        let ty = if bad {
+        // (e) for the literal: every synthesised field's type, substituted
+        // in full, compared once; then every slot determined; then R12's
+        // bounds on the struct's own parameters.
+        for (v, fty, s) in pending {
+            match self.subst_now(fty, &b) {
+                Some(t) => {
+                    if bad || open {
+                        continue;
+                    }
+                    let got = self.subsume(cx, v, s, t);
+                    if got == TY_ERROR && t != TY_ERROR {
+                        bad = true;
+                    } else {
+                        self.use_value(cx, v, t, Cause::Explicit(node as u32));
+                    }
+                }
+                None => match first_unbound(&self.fir.tys, fty, &b) {
+                    Some((owner, ord, false)) => {
+                        if !bad && !open {
+                            self.cannot_infer(cx, v, def, owner, ord);
+                            bad = true;
+                        }
+                    }
+                    _ => open = true,
+                },
+            }
+        }
+        if !bad && !open && arity > 0 {
+            match self.unbound_slot(&owners, &b) {
+                Some((_, _, true)) => open = true,
+                Some((owner, ord, false)) => {
+                    self.cannot_infer(cx, node, def, owner, ord);
+                    bad = true;
+                }
+                None => {}
+            }
+        }
+        if !bad && !open && arity > 0 {
+            self.check_bounds(cx, node, def, &owners, &b);
+        }
+        let ty = if bad || open {
             TY_ERROR
-        } else {
+        } else if arity == 0 {
             self.fir.tys.nominal(def, NO_ARGS)
+        } else {
+            // R38(f) for the literal: the head with every slot substituted.
+            let xs = self.own_args(def);
+            let head_ty = self.fir.tys.nominal_of(def, &xs);
+            match self.subst_now(head_ty, &b) {
+                Some(t) => t,
+                None => TY_ERROR,
+            }
         };
         // D2/D3: a struct literal is typed as a call whose parameters are
         // the fields in written order. It is not a function call, so the
@@ -924,6 +1607,9 @@ impl Wf<'_> {
                 .map(|_| Conv::Let)
                 .collect(),
         );
+        // R38's "nothing survives the call": the literal's `Binding` dies
+        // here, before the result is handed back.
+        self.live_bindings -= 1;
         match expected {
             Some(w) => self.subsume(cx, node, ty, w),
             None => ty,
@@ -1017,6 +1703,19 @@ impl Wf<'_> {
         want: TyId,
     ) -> Option<TyId> {
         let target = cx.f.uses.target_of(node as u32)?;
+        // §7.10: `TY_ERROR` is absorbing. `none` has no type of its own
+        // (R28/R38 take `Option`'s argument from the expected type), so an
+        // expected type that failed to lower must leave it silent, not
+        // send it to SYNTH where R39 would report a parameter the writer
+        // never had a chance to supply.
+        if (want == TY_ERROR || want == NO_TY)
+            && matches!(
+                target,
+                ResolvedTarget::Entity(Entity::PreludeValue(s)) if self.names.resolve(s) == b"none"
+            )
+        {
+            return Some(TY_ERROR);
+        }
         let bare = self.fir.tys.unqual(want);
         if self.fir.tys.tag(bare) != TyTag::Nominal {
             return None;
@@ -1056,10 +1755,11 @@ impl Wf<'_> {
 }
 
 /// R38's "nothing survives the call": a `Binding` is a stack local of
-/// `type_call`. I3 creates none at all — every callee it types has zero
-/// parameters to determine — and this constant records that so the
-/// assertion I5 adds has something to compare against.
-pub const BINDINGS_CREATED_IN_I3: usize = 0;
+/// [`Wf::type_call`] (and of the struct-literal form of the same
+/// procedure). `Wf::live_bindings` counts the ones on the stack right
+/// now, and `body.rs` asserts it is zero at every statement boundary —
+/// the design's one-line statement that no inference state leaks.
+pub const BINDINGS_LIVE_AT_A_STATEMENT_BOUNDARY: u32 = 0;
 
 /// Kept so the `ArgsId`/`FnTyId` imports above stay meaningful to a reader
 /// of this module's signature surface.

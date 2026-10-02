@@ -427,9 +427,10 @@ fn gate_reject_generic_fn() {
 
 #[test]
 fn gate_reject_generic_call() {
-    // Calling a generic function poisons the caller with `TY_ERROR`
-    // (I5 owns inference), so lowering refuses the poisoned body. The
-    // generic declaration itself answers `Generic` (see above).
+    // I5 TYPES the call, so the caller is checked-clean now; lowering
+    // still refuses it, because monomorphisation is ch03 R16-R18's and
+    // the generic callee itself answers `Generic` (see above), so there
+    // would be no body to call.
     let built = build_raw(
         "fn g[T](let a: T) -> T { return a; }\nfn f() -> i32 { var y: i32 = g(1); return y; }\nfn main() { }\n",
     );
@@ -444,7 +445,7 @@ fn gate_reject_generic_call() {
         .find(|d| d.name == "f")
         .expect("an f diag");
     assert!(
-        matches!(f.error, LowerError::CheckErrors),
+        matches!(f.error, LowerError::Generic(_)),
         "got {:?}",
         f.error
     );

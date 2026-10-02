@@ -333,14 +333,22 @@ fn bound_at_a_call_is_metamorphic_in_the_impl() {
         "an impl for a different head must not satisfy the bound"
     );
     // (d) the bounded parameter is not determined by any argument
-    // position: R38 would get it from the expected type, which is I5's, so
-    // this increment stays silent rather than guessing.
-    assert!(
+    // position nor by the result: R39 (I5) reports it as undetermined, ONCE,
+    // and the bound is not also checked on a slot that has no value — one
+    // root cause, never a T0012 guessed from nothing.
+    assert_eq!(
         check_source(&format!(
             "{DECLS}fn g[T: Named]() -> i32 {{ return 1; }}\nfn f() -> i32 {{ return g(); }}"
-        ))
-        .is_empty(),
-        "an undetermined parameter is I5's, not a bound violation"
+        )),
+        vec!["T0039"],
+        "an undetermined parameter is R39's T0039, not a bound violation"
+    );
+    // ...and given explicitly, the bound is checked with that value.
+    assert_eq!(
+        check_source(&format!(
+            "{DECLS}fn g[T: Named]() -> i32 {{ return 1; }}\nfn f() -> i32 {{ return g[Sq](); }}"
+        )),
+        vec!["T0012"]
     );
     // (e) the generic itself never speaks, however many callers it has.
     let one = check_source(&format!(
@@ -517,4 +525,483 @@ fn checking_twice_is_deterministic() {
     assert_eq!(a, b);
     // `PER_DECL_BUDGET` is 1: one diagnostic per declaration, two declarations speak.
     assert_eq!(a.len(), 2);
+}
+
+// ------------------------------------------------------------------- I5
+//
+// One mutation probe per mechanism R38-R41 introduces: each pair is the
+// same program with ONE thing changed, so a probe that passes for the
+// wrong reason shows up as the pair agreeing when it must not.
+
+/// R38(c): the expected type binds a slot before any argument is visited,
+/// and taking the expected type away is the whole difference between a
+/// clean call and T0039.
+#[test]
+fn r38c_expected_type_is_what_binds_the_result_only_parameter() {
+    const MAKE: &str = "fn make[T]() -> Option[T] { return none; }\n";
+    assert!(
+        check_source(&format!("{MAKE}fn f() -> Option[u8] {{ return make(); }}")).is_empty(),
+        "the expected type determines `T`"
+    );
+    assert_eq!(
+        check_source(&format!("{MAKE}fn f() {{ let v = make(); }}")),
+        vec!["T0039"],
+        "without one, `T` occurs nowhere else"
+    );
+    // ...and writing it explicitly is the fix the message names.
+    assert!(
+        check_source(&format!("{MAKE}fn f() {{ let v = make[u8](); }}")).is_empty(),
+        "R38(a): the explicit argument supplies what (c) would have"
+    );
+}
+
+/// R38(d): a binding is never revised — the SECOND argument is the one
+/// that disagrees, and moving the disagreement moves the diagnostic.
+#[test]
+fn r38d_a_binding_is_never_revised_and_the_later_argument_is_blamed() {
+    const PICK: &str = "fn pick[T: Copyable](let a: T, let b: T) -> T { return a; }\n";
+    assert!(check_source(&format!("{PICK}fn f() -> i32 {{ return pick(1, 2); }}")).is_empty());
+    assert_eq!(
+        check_source(&format!("{PICK}fn f() -> i32 {{ return pick(1, true); }}")),
+        vec!["T0026"]
+    );
+    // The same disagreement with the expected type absent is still one
+    // T0026, now from the first argument's binding rather than (c)'s.
+    assert_eq!(
+        check_source(&format!("{PICK}fn f() {{ let x = pick(1i32, true); }}")),
+        vec!["T0026"]
+    );
+}
+
+/// R33 at a call: an argument of type `never` binds nothing, so the slot
+/// stays undetermined. Give the same call a non-`never` argument and it
+/// types.
+#[test]
+fn r33_never_binds_nothing_at_an_argument() {
+    const BASE: &str =
+        "fn id[T](sink x: T) -> T { return x; }\nfn die() -> never { return die(); }\n";
+    assert_eq!(
+        check_source(&format!("{BASE}fn f() {{ id(die()); }}")),
+        vec!["T0039"]
+    );
+    assert!(check_source(&format!("{BASE}fn f() {{ id(1i32); }}")).is_empty());
+    // And with the expected type present, `never` is harmless: (c) bound
+    // the slot before the argument was ever visited.
+    assert!(check_source(&format!("{BASE}fn f() -> i32 {{ return id(die()); }}")).is_empty());
+}
+
+/// R39: the explicit-argument count and the argument count, both at the
+/// call, both T0039.
+#[test]
+fn r39_counts_are_checked_at_the_call() {
+    const G: &str = "fn g[T](let a: T) -> T { return a; }\n";
+    assert!(check_source(&format!("{G}fn f() -> i32 {{ return g[i32](1); }}")).is_empty());
+    assert_eq!(
+        check_source(&format!("{G}fn f() -> i32 {{ return g[i32, u8](1); }}")),
+        vec!["T0039"],
+        "one declared parameter, two written"
+    );
+    assert_eq!(
+        check_source(&format!("{G}fn f() -> i32 {{ return g(1, 2); }}")),
+        vec!["T0039"],
+        "one declared argument, two passed"
+    );
+    assert_eq!(
+        check_source("fn h(let a: i32) { }\nfn f() { h(); }"),
+        vec!["T0039"],
+        "and a non-generic callee counts its arguments too"
+    );
+}
+
+/// R41: the closure pre-test. The ONLY difference between the two
+/// programs is the order of the parameters, which is what decides whether
+/// the closure's parameter type is complete when it is visited.
+#[test]
+fn r41_closure_is_checked_only_when_its_parameter_types_are_complete() {
+    const FWD: &str =
+        "fn apply[T, U, F: fn(let T) -> U](let x: T, let f: F) -> U { return f(x); }\n";
+    const REV: &str =
+        "fn apply[T, U, F: fn(let T) -> U](let f: F, let x: T) -> U { return f(x); }\n";
+    assert!(
+        check_source(&format!(
+            "{FWD}fn demo() -> i32 {{ return apply(2, |let n| n * 2); }}"
+        ))
+        .is_empty(),
+        "`2` binds T, so the closure is CHECKed and its body gives U"
+    );
+    assert_eq!(
+        check_source(&format!(
+            "{REV}fn demo() -> i32 {{ return apply(|let n| n * 2, 2); }}"
+        )),
+        vec!["T0035"],
+        "the closure precedes what binds T, so it is SYNTHed and R35 rejects it"
+    );
+    // Annotating the parameter is the fix: nothing is inferred from a
+    // closure body in SYNTH mode, but an annotated closure has a type.
+    assert!(
+        check_source(&format!(
+            "{REV}fn demo() -> i32 {{ return apply(|let n: i32| n * 2, 2); }}"
+        ))
+        .is_empty()
+    );
+}
+
+/// R40: brands are compared by identity and a `with` block introduces a
+/// FRESH one. Two sibling blocks must not share a brand either.
+#[test]
+fn r40_fresh_with_brands_are_distinct_and_bind_by_identity() {
+    const N: &str = "struct Node[A: brand] { val: i64 }\n\
+                     fn touch[A: brand](inout a: Arena[Node[A], A], let r: Ref[Node[A], A]) -> i64 { return 0; }\n";
+    // One block: the argument types agree, so `A` binds once.
+    assert!(
+        check_source(&format!(
+            "{N}fn f() {{ with arena one: Arena[Node[one]] {{\n\
+               let x: Ref[Node[one], one] = one.alloc(Node {{ val: 1 }});\n\
+               let v: i64 = touch(&one, x);\n}} }}"
+        ))
+        .is_empty()
+    );
+    // Two blocks: the brands differ, so the second argument disagrees
+    // with what the first bound.
+    assert_eq!(
+        check_source(&format!(
+            "{N}fn f() {{ with arena one: Arena[Node[one]] {{\n\
+               let x: Ref[Node[one], one] = one.alloc(Node {{ val: 1 }});\n\
+               with arena two: Arena[Node[two]] {{\n\
+                 let v: i64 = touch(&two, x);\n\
+               }}\n}} }}"
+        )),
+        vec!["T0026"]
+    );
+    // SIBLING blocks each get their OWN brand (the ordinal only ever
+    // rises), so both type cleanly and neither reuses the other's. R40's
+    // "a type mentioning a fresh brand can never reach a binding outside
+    // its `with` block" is the SCOPE: the name is simply not writable
+    // there, which is why this half is an acceptance, not a rejection.
+    assert!(
+        check_source(&format!(
+            "{N}fn f() {{\n\
+               with arena one: Arena[Node[one]] {{\n\
+                 let x: Ref[Node[one], one] = one.alloc(Node {{ val: 1 }});\n\
+                 let v: i64 = touch(&one, x);\n\
+               }}\n\
+               with arena two: Arena[Node[two]] {{\n\
+                 let y: Ref[Node[two], two] = two.alloc(Node {{ val: 2 }});\n\
+                 let w: i64 = touch(&two, y);\n\
+               }}\n}}"
+        ))
+        .is_empty(),
+        "each block binds its own brand"
+    );
+}
+
+/// R7/R28: a generic `fn` item and `none` are the two values with no type
+/// of their own. Each is T0039 in SYNTH and fine in CHECK.
+#[test]
+fn r7_and_r28_values_without_a_type_of_their_own() {
+    const ID: &str = "fn id[T](sink x: T) -> T { return x; }\n";
+    assert_eq!(
+        check_source(&format!("{ID}fn f() {{ let g = id; }}")),
+        vec!["T0039"]
+    );
+    assert!(
+        check_source("fn id(sink x: i32) -> i32 { return x; }\nfn f() { let g = id; }").is_empty(),
+        "a NON-generic `fn` item is a value"
+    );
+    assert_eq!(check_source("fn f() { let c = none; }"), vec!["T0039"]);
+    assert!(check_source("fn f() { let c: Option[u8] = none; }").is_empty());
+}
+
+/// R34/R38: a generic struct literal takes its arguments from the
+/// expected type, and the fields are then CHECKED against the
+/// substituted field types.
+#[test]
+fn r34_struct_literal_arguments_come_from_the_expected_type() {
+    const P: &str = "struct Pair[T] { a: T, b: T }\n";
+    assert!(
+        check_source(&format!(
+            "{P}fn f() -> Pair[u8] {{ let p: Pair[u8] = Pair {{ a: 1, b: 2 }}; return p; }}"
+        ))
+        .is_empty()
+    );
+    assert_eq!(
+        check_source(&format!(
+            "{P}fn f() -> Pair[u8] {{ let p: Pair[u8] = Pair {{ a: 1, b: true }}; return p; }}"
+        )),
+        vec!["T0026"],
+        "the field is checked as `u8`, not merely synthesised"
+    );
+}
+
+/// R12 at a generic call, folded into R38(e): the bound is checked with
+/// the binding R38 determined, not with a guess.
+#[test]
+fn r12_bounds_are_checked_with_the_binding_r38_determined() {
+    const S: &str = "struct Plain { n: i64 }\n\
+                     fn want[T: Copyable](let x: T) -> i64 { return 0; }\n";
+    assert!(check_source(&format!("{S}fn f() -> i64 {{ return want(1i64); }}")).is_empty());
+    assert_eq!(
+        check_source(&format!(
+            "{S}fn f(let p: Plain) -> i64 {{ return want(p); }}"
+        )),
+        vec!["T0012"],
+        "`Plain` is not `Copyable`"
+    );
+    // The same bound, reached through the EXPECTED type rather than an
+    // argument, must fail the same way.
+    assert_eq!(
+        check_source(
+            "struct Plain { n: i64 }\n\
+             fn make[T: Copyable]() -> Option[T] { return none; }\n\
+             fn f() -> Option[Plain] { return make(); }"
+        ),
+        vec!["T0012"]
+    );
+}
+
+/// A generic `Index` impl: the impl's own parameters are determined with
+/// the same machinery, so the index type and `Output` are read with them
+/// substituted rather than left open.
+#[test]
+fn a_generic_index_impl_is_instantiated_not_read_open() {
+    const B: &str = "struct Box[T] { v: T }\n\
+         impl[T] Index[usize] for Box[T] {\n\
+             type Output = T;\n\
+             fn at(let self: Box[T], let i: usize) -> scoped(self) T { return self.v; }\n}\n";
+    assert!(
+        check_source(&format!(
+            "{B}fn f(let b: Box[i64]) -> i64 {{ return b[0]; }}"
+        ))
+        .is_empty(),
+        "`Output` is `T`, which is `i64` here"
+    );
+    assert_eq!(
+        check_source(&format!(
+            "{B}fn f(let b: Box[i64]) -> Str {{ return b[0]; }}"
+        )),
+        vec!["T0026"],
+        "and it really is `i64`, not an unread `T`"
+    );
+}
+
+/// A RECURSIVE generic call: the callee's slots and the caller's rigid
+/// parameters are the same `Param` rows, so the match must not take
+/// equality as "nothing to do".
+#[test]
+fn a_recursive_generic_call_infers_its_own_parameters() {
+    assert!(
+        check_source("fn id[T](sink x: T) -> T { return id(move x); }").is_empty(),
+        "the expected type and the declared result are the same row"
+    );
+    assert!(
+        check_source(
+            "struct SIter[T] { n: usize }\n\
+             fn iter[T: Copyable](let s: Slice[T]) -> SIter[T] { return iter(s); }"
+        )
+        .is_empty()
+    );
+}
+
+/// R59, the metamorphic pair: a generic body is checked ONCE, at its
+/// definition, with rigid parameters and its declared bounds only. Adding
+/// instantiations — and changing which ones — must not change one
+/// diagnostic of it.
+#[test]
+fn no_error_depends_on_instantiation() {
+    // (a) A body that is ill-typed at its definition stays ill-typed, and
+    // identically so, however many ways it is instantiated.
+    const BAD: &str = "fn sum2[T: Copyable](let a: T, let b: T) -> T { return a + b; }\n";
+    let alone = check_source(BAD);
+    assert_eq!(alone, vec!["T0057"], "R57 at the definition");
+    let once = check_source(&format!("{BAD}fn u1() -> i32 {{ return sum2(1, 2); }}"));
+    let twice = check_source(&format!(
+        "{BAD}fn u1() -> i32 {{ return sum2(1, 2); }}\n\
+         fn u2() -> i64 {{ return sum2(1i64, 2i64); }}"
+    ));
+    let three = check_source(&format!(
+        "{BAD}fn u1() -> i32 {{ return sum2(1, 2); }}\n\
+         fn u2() -> i64 {{ return sum2(1i64, 2i64); }}\n\
+         fn u3() -> u8 {{ return sum2(1u8, 2u8); }}"
+    ));
+    assert_eq!(alone, once);
+    assert_eq!(once, twice);
+    assert_eq!(twice, three);
+
+    // (b) A body that is WELL-typed at its definition stays silent under
+    // every instantiation, including one whose argument would make the
+    // body's own operations illegal if it were re-checked per
+    // instantiation.
+    const GOOD: &str = "fn dup[T: Copyable](let x: T) -> T { return x; }\n";
+    assert!(check_source(GOOD).is_empty());
+    assert!(check_source(&format!("{GOOD}fn u1() -> i32 {{ return dup(1); }}")).is_empty());
+    assert!(
+        check_source(&format!(
+            "{GOOD}fn u1() -> i32 {{ return dup(1); }}\n\
+             fn u2() -> Str {{ return dup(\"x\"); }}"
+        ))
+        .is_empty()
+    );
+
+    // (c) The INSTANTIATION may be rejected (R12 at the call), and that
+    // rejection is the caller's, never the callee's: the generic body's
+    // own diagnostics are unchanged.
+    let with_bad_use = check_source(&format!(
+        "struct Plain {{ n: i64 }}\n{GOOD}fn u(let p: Plain) -> Plain {{ return dup(p); }}"
+    ));
+    assert_eq!(with_bad_use, vec!["T0012"], "one diagnostic, at the caller");
+}
+
+/// R38(f)/§7.4: "nothing survives the call". The `debug_assert` in
+/// `body::stmt` checks it at every statement boundary; this probe is the
+/// shape that would trip it — nested generic calls in arguments, each
+/// running the procedure to completion before the outer one continues.
+#[test]
+fn nested_generic_calls_leave_no_binding_behind() {
+    assert!(
+        check_source(
+            "fn id[T](sink x: T) -> T { return x; }\n\
+             fn pair[A: Copyable, B: Copyable](let a: A, let b: B) -> A { return a; }\n\
+             fn f() -> i32 { return pair(id(1i32), pair(2i64, 3u8)); }"
+        )
+        .is_empty()
+    );
+}
+
+// -------------------------------------------- I5, verification round
+//
+// Each probe below is an over-acceptance the producer's R38 let through,
+// written as the pair it failed: the program that MUST be rejected next
+// to the one-token change that makes it clean.
+
+/// R41/R15: a callable parameter "accepts a closure type, `fn` item or `fn`
+/// value OF THAT SIGNATURE". R38(d) binds `F` to whatever the argument
+/// synthesised, so the signature is a bound like any other and is checked
+/// at (e) — a `fn` item of another signature, or a plain `i32`, is not
+/// silently accepted.
+#[test]
+fn a_callable_parameter_checks_the_signature_of_a_non_closure_argument() {
+    const APPLY: &str =
+        "fn apply[U, F: fn (sink i32) -> U](sink x: i32, let f: F) -> U { return f(move x); }\n";
+    assert!(
+        check_source(&format!(
+            "{APPLY}fn double(sink x: i32) -> i32 {{ return x * 2; }}\n\
+             fn go() -> i32 {{ return apply(2, double); }}"
+        ))
+        .is_empty(),
+        "the right signature, with `U` from the expected type"
+    );
+    assert_eq!(
+        check_source(&format!(
+            "{APPLY}fn wrong(sink x: Str) -> Str {{ return x; }}\n\
+             fn go() -> i32 {{ return apply(2, wrong); }}"
+        )),
+        vec!["T0041"],
+        "a `fn` item of another signature"
+    );
+    assert_eq!(
+        check_source(&format!(
+            "{APPLY}fn tostr(sink x: i32) -> Str {{ return \"a\"; }}\n\
+             fn go() -> i32 {{ return apply(2, tostr); }}"
+        )),
+        vec!["T0041"],
+        "the parameters agree and the result does not"
+    );
+    assert_eq!(
+        check_source(&format!("{APPLY}fn go() -> i32 {{ return apply(2, 5); }}")),
+        vec!["T0041"],
+        "not a function at all"
+    );
+    // In SYNTH position nothing binds `U` (R38 never binds through a
+    // bound): R39, before any signature is compared.
+    assert_eq!(
+        check_source(&format!(
+            "{APPLY}fn double(sink x: i32) -> i32 {{ return x * 2; }}\n\
+             fn go() {{ let d = apply(2, double); }}"
+        )),
+        vec!["T0039"]
+    );
+}
+
+/// R39 is about EVERY parameter of the callee: one that occurs in no
+/// argument type and not in the result is undetermined after (d) even
+/// though no substitution ever needed it.
+#[test]
+fn a_parameter_in_no_position_is_undetermined_not_silently_dropped() {
+    const MAKE: &str = "fn make[T]() -> i32 { return 0; }\n";
+    assert_eq!(
+        check_source(&format!("{MAKE}fn f() -> i32 {{ return make(); }}")),
+        vec!["T0039"]
+    );
+    assert!(check_source(&format!("{MAKE}fn f() -> i32 {{ return make[u8](); }}")).is_empty());
+}
+
+/// R34/R38 for a literal in SYNTH position: the fields are the arguments,
+/// so the first binds `T` and the second is compared against it at (e).
+#[test]
+fn a_generic_struct_literal_in_synth_binds_from_its_fields() {
+    const P: &str = "struct Pair[T] { a: T, b: T }\n";
+    assert!(
+        check_source(&format!(
+            "{P}fn f() {{ let p = Pair {{ a: 1u8, b: 2u8 }}; }}"
+        ))
+        .is_empty()
+    );
+    assert_eq!(
+        check_source(&format!(
+            "{P}fn f() {{ let p = Pair {{ a: 1u8, b: true }}; }}"
+        )),
+        vec!["T0026"]
+    );
+    // A struct whose parameter occurs in no field cannot be determined
+    // from the literal alone...
+    const E: &str = "struct Empty[T] { n: i64 }\n";
+    assert_eq!(
+        check_source(&format!("{E}fn f() {{ let e = Empty {{ n: 1 }}; }}")),
+        vec!["T0039"]
+    );
+    // ...and is, from the expected type (R38(c)).
+    assert!(
+        check_source(&format!(
+            "{E}fn f() {{ let e: Empty[u8] = Empty {{ n: 1 }}; }}"
+        ))
+        .is_empty()
+    );
+    // R12 on the struct's own bound, with the binding the fields gave.
+    const B: &str = "struct Plain { n: i64 }\nstruct Box[T: Copyable] { v: T }\n";
+    assert_eq!(
+        check_source(&format!(
+            "{B}fn f(let p: Plain) {{ let b = Box {{ v: p }}; }}"
+        )),
+        vec!["T0012"]
+    );
+}
+
+/// R38(a)/R11: an explicit argument is read by the slot's declared kind,
+/// and a VALUE in a type slot is reported, not lowered to a silent error
+/// that would make the whole call absorbing.
+#[test]
+fn a_value_in_an_explicit_type_slot_is_t0011() {
+    const G: &str = "fn g[T](let a: T) -> T { return a; }\n";
+    assert_eq!(
+        check_source(&format!("{G}fn f() -> i32 {{ return g[1](1); }}")),
+        vec!["T0011"]
+    );
+    assert!(
+        check_source(&format!(
+            "{G}fn f() -> Option[i32] {{ return g[Option[i32]](some(1)); }}"
+        ))
+        .is_empty(),
+        "a compound type argument lowers"
+    );
+}
+
+/// An argument that already failed makes the call absorbing: the slot it
+/// alone would have bound is not a second diagnostic.
+#[test]
+fn a_failed_argument_does_not_cascade_into_t0039() {
+    assert_eq!(
+        check_messages("fn id[T](sink x: T) -> T { return x; }\nfn f() { let v = id(1 + true); }")
+            .len(),
+        1
+    );
 }

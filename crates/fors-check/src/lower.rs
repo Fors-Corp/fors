@@ -528,6 +528,19 @@ pub struct Cx<'f, 'a> {
     impl_assoc: Vec<(Symbol, TyId)>,
     /// The impl whose parameters may head a projection inside `type A = RHS;`.
     assoc_rhs_owner: DefId,
+    /// ch01 R15 / ch09 R40: the fresh brands the enclosing `with arena`
+    /// blocks introduce, innermost last. `with` is a statement, so this is
+    /// a body-local scope `find` (the generic scope) knows nothing about.
+    fresh_brands: Vec<(u32, TyId)>,
+    /// How many `with` blocks this body has opened in total — the next
+    /// fresh brand's ordinal. It only ever rises, so two SIBLING blocks
+    /// get distinct brands, not the same one reused.
+    fresh_brands_opened: u16,
+    /// ch01 R15b, inside a `with arena a: Arena[T]` HEADER only: the
+    /// brand argument a writer leaves off a trailing brand slot is this
+    /// block's own fresh brand. Outside the header the slot stays open
+    /// (`type_args` leaves the type `TY_ERROR` rather than inventing one).
+    header_brand: Option<TyId>,
 }
 
 impl<'f, 'a> Cx<'f, 'a> {
@@ -542,8 +555,44 @@ impl<'f, 'a> Cx<'f, 'a> {
             self_kind: SelfKind::None,
             impl_assoc: Vec::new(),
             assoc_rhs_owner: NO_DEF,
+            fresh_brands: Vec::new(),
+            fresh_brands_opened: 0,
+            header_brand: None,
         }
     }
+
+    /// ch01 R15b: while a `with` HEADER is being lowered, an omitted
+    /// trailing brand argument is the block's own fresh brand.
+    pub fn set_header_brand(&mut self, brand: Option<TyId>) {
+        self.header_brand = brand;
+    }
+
+    /// Enters a `with arena a: ...` block: `a` denotes `brand` for the
+    /// extent of the block and for its own region annotation (ch01 R15).
+    pub fn push_fresh_brand(&mut self, node: u32, brand: TyId) {
+        self.fresh_brands.push((node, brand));
+    }
+
+    pub fn pop_fresh_brand(&mut self) {
+        self.fresh_brands.pop();
+    }
+
+    /// The next fresh brand's ordinal (R40's "two brands for one
+    /// parameter is T0026" needs distinct blocks to have distinct brands).
+    pub fn next_fresh_ordinal(&mut self) -> u16 {
+        let o = self.fresh_brands_opened;
+        self.fresh_brands_opened = self.fresh_brands_opened.saturating_add(1);
+        o
+    }
+
+    fn fresh_brand(&self, node: u32) -> Option<TyId> {
+        self.fresh_brands
+            .iter()
+            .rev()
+            .find(|&&(n, _)| n == node)
+            .map(|&(_, t)| t)
+    }
+
     fn find(&self, node: u32) -> Option<(DefId, u16, GKind)> {
         self.scope
             .iter()
@@ -600,8 +649,50 @@ impl Lowerer<'_> {
     // ------------------------------------------------------------ types
 
     /// Lowers one type node (design §7.2).
+    /// R38(a)/R11/R13: one explicit generic argument written at a CALL
+    /// (`f[i32](x)`). The arguments of an expression bracket are parsed as
+    /// EXPRESSIONS, so a type name arrives as a `NameExpr`; the slot's
+    /// declared kind picks the same three readings a type position has.
+    pub fn generic_arg(&mut self, cx: &mut Cx, node: usize, def: DefId, slot: usize) -> TyId {
+        let k = self
+            .shapes
+            .gkinds(def)
+            .get(slot)
+            .copied()
+            .unwrap_or(GKind::Type);
+        match k {
+            GKind::Const => self.const_arg(cx, node, def, slot),
+            GKind::Brand => self.brand_arg(cx, node),
+            _ => {
+                // R11's "each of the declared kind" at a call: a literal
+                // or any other value expression in a TYPE slot (`g[1](1)`)
+                // is reported, not lowered to a silent `TY_ERROR` that
+                // would make the call absorbing.
+                if !matches!(cx.f.kind(node), NodeKind::NameExpr | NodeKind::Bracket)
+                    && !is_type_node(cx.f.kind(node))
+                {
+                    let r = cx.f.range(node);
+                    self.emit(
+                        cx,
+                        r,
+                        11,
+                        11,
+                        "a value where a type argument is expected".to_string(),
+                    );
+                    return TY_ERROR;
+                }
+                self.ty(cx, node, Pos::Value)
+            }
+        }
+    }
+
     pub fn ty(&mut self, cx: &mut Cx, node: usize, pos: Pos) -> TyId {
         match cx.f.kind(node) {
+            // A type written in EXPRESSION position (R38(a)'s explicit
+            // generic arguments). Everything `type_app` reads — the
+            // resolved target, the own identifiers, the deferred tail —
+            // is recorded for a `NameExpr` exactly as for a `TypeApp`.
+            NodeKind::NameExpr => self.type_app(cx, node, pos),
             NodeKind::QualType => {
                 let mut q = Quals::NONE;
                 let (a, b) = own_span(cx.f.tree, node);
@@ -949,6 +1040,26 @@ impl Lowerer<'_> {
         // writer must supply, and a brand is not one of them. The type is left
         // open (`TY_ERROR`) rather than invented.
         if args.len() < kinds.len() && kinds[args.len()..].iter().all(|&k| k == GKind::Brand) {
+            // ch01 R15b in a `with` HEADER: the omitted brand IS this
+            // block's fresh brand, so `with arena a: Arena[Node[a]]` has
+            // the type `Arena[Node[a], a]` and a call can bind a callee's
+            // brand parameter from it (R40). Anywhere else the type stays
+            // open rather than invented.
+            if let Some(fresh) = cx.header_brand {
+                let mut out = Vec::with_capacity(kinds.len());
+                for (i, &c) in args.iter().enumerate() {
+                    out.push(match kinds[i] {
+                        GKind::Const => self.const_arg(cx, c, def, i),
+                        GKind::Brand => self.brand_arg(cx, c),
+                        _ => self.ty(cx, c, Pos::Value),
+                    });
+                }
+                out.resize(kinds.len(), fresh);
+                if out.contains(&TY_ERROR) {
+                    return None;
+                }
+                return Some(out);
+            }
             for &c in &args {
                 if is_type_node(cx.f.kind(c)) {
                     self.ty(cx, c, Pos::Value);
@@ -1006,8 +1117,16 @@ impl Lowerer<'_> {
     /// brand of a `with` header — so R11's "a value head names the binding"
     /// clause does not apply in this slot and I2 is silent here.
     fn brand_arg(&mut self, cx: &mut Cx, node: usize) -> TyId {
-        if cx.f.kind(node) != NodeKind::TypeApp {
+        if !matches!(cx.f.kind(node), NodeKind::TypeApp | NodeKind::NameExpr) {
             return TY_ERROR;
+        }
+        // ch01 R15's `with arena a: ...`: the region name denotes a FRESH
+        // brand for the extent of the block (I5). It is a body-local
+        // introduction, so it is not in the generic scope `head_of` reads.
+        if let Some(ResolvedTarget::Local { node: n }) = cx.f.target(node)
+            && let Some(t) = cx.fresh_brand(n)
+        {
+            return t;
         }
         match self.head_of(cx, node) {
             Head::GParam(owner, ord, GKind::Brand) => self.fir.tys.brand_ty(BrandRow::Param {
@@ -1025,7 +1144,10 @@ impl Lowerer<'_> {
     /// requires a closed value to FIT the parameter's declared type.
     fn const_arg(&mut self, cx: &mut Cx, node: usize, def: DefId, slot: usize) -> TyId {
         match cx.f.kind(node) {
-            NodeKind::TypeApp => {
+            // R13 at a CALL (`f[N]()`) writes the argument as an
+            // expression, so a bare name arrives as a `NameExpr`; the
+            // readings below are the same ones a type position has.
+            NodeKind::TypeApp | NodeKind::NameExpr => {
                 let head = self.head_of(cx, node);
                 match head {
                     Head::GParam(owner, ord, GKind::Const) => self.fir.tys.param(owner, ord),
