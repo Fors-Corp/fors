@@ -7,7 +7,9 @@ commit history, which predates the Conventional Commits convention.
 
 | Language | Compiler | Meaning |
 |---|---|---|
-| `lang-v0.5.3` | `compiler-v0.16.0` | current |
+| `lang-v0.5.3` | `compiler-v0.18.0` | current |
+| `lang-v0.5.3` | `compiler-v0.17.0` | checker I10c, the prelude names bind to std |
+| `lang-v0.5.3` | `compiler-v0.16.0` | checker I10, the other chapters' obligations |
 | `lang-v0.5.3` | `compiler-v0.15.0` | checker I10b, the silent-TY_ERROR sweep gate |
 | `lang-v0.5.3` | `compiler-v0.14.0` | FMIR F4/F6, defer and arena lowering |
 | `lang-v0.5.3` | `compiler-v0.13.0` | FMIR F-mono, monomorphisation and pattern lowering |
@@ -103,6 +105,80 @@ measurement, the grammar, names and visibility), with a conformance corpus and
 an independent reference parser.
 
 ## Compiler
+
+### compiler-v0.18.0 — 2026-10-03
+
+FMIR increment **F3**, produced by one agent and independently verified
+by another. Implements `lang-v0.5.3`; still no code generator.
+
+- **Failure lowering.** `call?`, `call else |e| { }` and `raise` lower
+  from the checker's published ch02 facts, never from syntax: a `try_br`
+  with an error edge that applies at most one `ErrorFrom` conversion and
+  ends in a typed `raise`, on an exit edge that runs `errdefer` bodies
+  only on the error path and `defer` on both, with every obligation
+  still discharged. Both F4 hold-outs now run.
+- **ch02 R17's exit sequence.** An error escaping `main` flushes stdout,
+  writes exactly one `error: <render>` line to stderr and exits 1;
+  `render` implements R17's clause list in order (enum with payload,
+  struct, tuple, integer, bool, unit, `Str` with escapes, `..` for the
+  rest) using type names the lowering hands to the interpreter.
+- **Numeric family from facts.** The explicit-arithmetic methods and
+  `reduce` are lowered from `BodyFacts::numeric`, not by method spelling
+  — the spelling tables are deleted, a user method named `wrap_add`
+  keeps its body, and `N as T` from a `comptime_int` constant folds (an
+  unrepresentable value is a named refusal per ch03 R6).
+- **Coverage.** Six of the seven F3 gate rows run byte-exact (the seventh
+  is pinned on a corpus/std disagreement, with its rendering covered by
+  a twin); the lowering refusal census over the corpus and std is down
+  from 452 `Failure`s to zero, asserted. 966 Rust tests (16 held out
+  with a stated reason).
+- **Verification before merge** (34 end-to-end programs, byte-compared):
+  defer/errdefer order under `?` in loops, handlers and three-deep
+  propagation, every R17 clause, stdout-before-stderr on one pipe, and a
+  latched stdout then raise; three deliberate mutations each caught by a
+  gate; two permanent probe tests added.
+- **For the owner.** `02-failure/main-raises-std-error-run-error` writes
+  `mem.Counting[mem.Fixed[8]]` where std declares `Counting[N, A]`; a
+  handler-bound linear payload the handler drops is not reported (ch01
+  R22h at the `else |e|` binding); a struct-form variant literal and
+  `N.wrap_as[u8]()` on a comptime constant are silent `TY_ERROR`s;
+  `comptime_float` constants cannot fold (`ConstValue` has no float).
+
+### compiler-v0.17.0 — 2026-10-03
+
+Type checker increment **I10c**, produced by one agent and independently
+verified by another. Implements `lang-v0.5.3`; still no code generator.
+
+- **The prelude-opaque names bind to `std`.** When package `std` is in
+  the build, `Vec`, `Map`, `Buffer`, `String`, `Allocator`,
+  `PageAllocator`, `AllocError` and `Utf8Error` resolve to std's real
+  declarations (ch10 R2, ch08 R17) — in the resolver, bound from each
+  name's declaring module before `use` linking, so `use std.mem.Vec;`
+  beside the prelude name is the same item and never a collision.
+  Without `std` the names stay opaque exactly as before. Expressions
+  over these types are now typed instead of silently absorbed, and the
+  Iterator-adaptor corpus checks for a real reason.
+- **Four checker judgements the opacity had hidden**, fixed where they
+  live: a bare all-brand head in a `with` header takes the block's
+  brand; `defer expr;` is checked as the expression statement it
+  abbreviates (a false T0026 on `deinit` is gone); an `Iterator` bound
+  is satisfied by either the language-known row or `std.mem.seq`'s
+  (ch10 R32, one trait not two); an annotation that itself failed to
+  lower no longer draws a second diagnostic at the call.
+- **Coverage.** The silent-`TY_ERROR` allow-list shrank from 166 to 43
+  rows (123 retired, 14 re-filed under their true reason); a new sweep
+  asserts every std-touching check-ok/run-ok target has at least one
+  node typed against a std declaration; the ch09 harness gains a std
+  mode and two more `PENDING_09` rows are on (6 → 4). 940 Rust tests (20 held out with a stated reason).
+- **Verification found and fixed before merge.** `use std.mem.Vec;`
+  drew a false N0013 (the binding ran after use linking); repaired with
+  a corpus regression guard. Measured and left for the `Iterator` owner:
+  binding `Iterator` itself to std's row would turn on three more
+  pending files but breaks `Self.Item` projection identity.
+- **For the owner.** ch10 S7/S30 say every std error type is `Copyable`
+  but `std` declares no such impls for `AllocError`/`Utf8Error`; one
+  10-std check-error file yields no diagnostic and no gate covers it;
+  three 08-names check-ok files already drew diagnostics with `std`.
 
 ### compiler-v0.16.0 — 2026-10-02
 

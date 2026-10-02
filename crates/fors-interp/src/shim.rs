@@ -9,8 +9,9 @@
 //! trap path has no flush and no error line, dominating everything else).
 //! **F4** added status 1 (`main` raised, ch02 R17): `errdefer` runs on error
 //! exits and nowhere else (ch01 R23b), so F4 needed `Exit::Raise` to have an
-//! error exit to test at all. What stays F3's is the CONTENT of that exit —
-//! `render`'s `error: ` line and `?`/`try_br` — not the status.
+//! error exit to test at all. **F3** added the CONTENT of that exit — ch02
+//! R17's five steps and `render`'s `error: ` line, run by the dispatch
+//! loop's `error_exit` — and [`HostEnv::stderr_fd`], where that line goes.
 //! **F6** added the `ub:` row at status [`crate::ub::UB_EXIT_STATUS`].
 //!
 //! A 536-line spike at
@@ -40,6 +41,11 @@ pub struct HostEnv {
     /// `io.Error.closed` because [`install_sigpipe_ignore`] ran first.
     /// `None`: capture only.
     pub stdout_fd: Option<i32>,
+    /// F3: `Some(fd)`: ch02 R17(b)'s `error: ` line also goes through
+    /// [`host_write`] to this descriptor. A failed write is NOT retried, NOT
+    /// redirected and NOT a trap, and the status stays 1 (R17's last
+    /// paragraph). `None`: capture only ([`crate::exec::Outcome::stderr`]).
+    pub stderr_fd: Option<i32>,
 }
 
 /// Writes `bytes` whole to the raw descriptor `fd`. Any `Err` is the
@@ -86,7 +92,7 @@ pub enum ExitStatus {
 ///
 /// F4 adds the `raise` row (status 1, ch02 R17(c): "Exit status 1, whether
 /// or not 3 or 4 succeeded") because it needs an ERROR EXIT to run an
-/// `errdefer` on at all; `render`'s `error: ` line stays F3's. F6 adds the
+/// `errdefer` on at all; F3 writes `render`'s `error: ` line before it. F6 adds the
 /// `ub:` row: design §5.2's "A `ub:` diagnostic exits with status
 /// [`crate::ub::UB_EXIT_STATUS`]", which is an ordinary exit code and
 /// deliberately NOT a new [`ExitStatus`] variant — ch02 R15's eight trap
@@ -151,6 +157,7 @@ mod tests {
 
     fn outcome(exit: Exit, stdout_latched: bool) -> Outcome {
         Outcome {
+            stderr: Vec::new(),
             exit,
             stdout: Vec::new(),
             stdout_latched,

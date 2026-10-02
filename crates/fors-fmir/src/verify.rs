@@ -32,11 +32,17 @@ pub fn verify(decl: &DeclFmir) -> Vec<Diagnostic> {
 }
 
 /// Every `DeferRow.body` must be a real block whose own sub-CFG ends at
-/// [`crate::scope::BODY_END`] and contains no `ret`/`raise`/`try_br`
-/// (ch01 R23c: a body "MUST NOT contain `return`, `raise`, `?`"). A `trap`
-/// inside a body IS legal — R23c's own escape is "an `else |e| { }` handler
-/// that neither `raise`s nor `return`s: it yields the success value or
-/// traps".
+/// [`crate::scope::BODY_END`] and contains no `ret`/`raise` (ch01 R23c: a
+/// body "MUST NOT contain `return`, `raise`, `?`"). A `trap` inside a body
+/// IS legal — R23c's own escape is "an `else |e| { }` handler that neither
+/// `raise`s nor `return`s: it yields the success value or traps".
+///
+/// F3: a `try_br` is WALKED, not rejected. `?` and `else |e| { }` both
+/// lower to a `try_br` on the call (design §3.6); the two differ only in
+/// where the `err` edge goes. A `?`'s `err` edge propagates — it reaches a
+/// `raise` — so R23c's ban on `?` is enforced on that `raise`, while a
+/// handler's `err` edge enters the handler block, which R23c allows in a
+/// body exactly when it neither raises nor returns.
 fn check_defer_bodies(decl: &DeclFmir, out: &mut Vec<Diagnostic>) {
     let n_defers = decl.defers.len() as u32;
     for (i, row) in decl.defers.get(0..n_defers).iter().enumerate() {
@@ -73,7 +79,7 @@ fn check_defer_bodies(decl: &DeclFmir, out: &mut Vec<Diagnostic>) {
             seen[b.index()] = true;
             match blk.term.op {
                 Op::Br => stack.push(crate::ids::BlockId(blk.term.a)),
-                Op::CondBr => {
+                Op::CondBr | Op::TryBr => {
                     stack.push(crate::ids::BlockId(blk.term.b));
                     stack.push(crate::ids::BlockId(blk.term.c));
                 }
@@ -89,8 +95,9 @@ fn check_defer_bodies(decl: &DeclFmir, out: &mut Vec<Diagnostic>) {
                         }
                     }
                 }
-                // ch01 R23c: none of these may appear inside a body.
-                Op::Ret | Op::Raise | Op::TryBr => out.push(Diagnostic::new(
+                // ch01 R23c: neither may appear inside a body (a `?` is
+                // caught here too: its `err` edge reaches a `raise`).
+                Op::Ret | Op::Raise => out.push(Diagnostic::new(
                     DiagCode::DeferBodyMalformed,
                     Anchor::Block(b),
                     format!(
@@ -1573,6 +1580,75 @@ mod tests {
             stmt_order: 0,
         });
         let diags = verify(&decl);
+        assert!(
+            diags.iter().any(|d| d.code == DiagCode::DeferBodyMalformed),
+            "{diags:?}"
+        );
+    }
+
+    /// A deferred body whose block 1 ends in `try_br _, 2, 3`, with block 2
+    /// `br BODY_END` and block 3 ending in `err_term` (ch01 R23c, F3).
+    fn body_with_try_br(err_term: InstRow) -> DeclFmir {
+        let mut decl = DeclFmir::empty(DeclKeyId(0), FnSigId(0));
+        let mut blocks = crate::block::BlockPool::new();
+        let mut back = plain(Op::Br);
+        back.a = crate::scope::BODY_END.0;
+        blocks.push(BlockRow {
+            first_inst: 0,
+            inst_len: 0,
+            term: plain(Op::Ret),
+            scope: crate::ids::ScopeId(0),
+        });
+        let mut try_br = plain(Op::TryBr);
+        try_br.a = 0;
+        try_br.b = 2;
+        try_br.c = 3;
+        blocks.push(BlockRow {
+            first_inst: 0,
+            inst_len: 0,
+            term: try_br,
+            scope: crate::ids::ScopeId(0),
+        });
+        blocks.push(BlockRow {
+            first_inst: 0,
+            inst_len: 0,
+            term: back,
+            scope: crate::ids::ScopeId(0),
+        });
+        blocks.push(BlockRow {
+            first_inst: 0,
+            inst_len: 0,
+            term: err_term,
+            scope: crate::ids::ScopeId(0),
+        });
+        decl.blocks = blocks;
+        decl.defers.push(crate::scope::DeferRow {
+            kind: crate::scope::DeferKind::Defer,
+            body: crate::ids::BlockId(1),
+            stmt_order: 0,
+        });
+        decl
+    }
+
+    #[test]
+    fn a_handler_inside_a_deferred_body_is_walked_not_rejected() {
+        // ch01 R23c's own escape: "an `else |e| { }` handler that neither
+        // `raise`s nor `return`s". F3 lowers it as a `try_br` whose `err`
+        // edge enters the handler, which here rejoins the body's end.
+        let mut back = plain(Op::Br);
+        back.a = crate::scope::BODY_END.0;
+        let diags = verify(&body_with_try_br(back));
+        assert!(
+            !diags.iter().any(|d| d.code == DiagCode::DeferBodyMalformed),
+            "{diags:?}"
+        );
+    }
+
+    #[test]
+    fn a_question_mark_inside_a_deferred_body_is_rejected_at_its_raise() {
+        // ch01 R23c: "A body MUST NOT contain ... `?`". A `?`'s `err` edge
+        // propagates, so it reaches a `raise` — which is what is rejected.
+        let diags = verify(&body_with_try_br(plain(Op::Raise)));
         assert!(
             diags.iter().any(|d| d.code == DiagCode::DeferBodyMalformed),
             "{diags:?}"

@@ -124,6 +124,7 @@ fn prog_of(
         }],
         entry: 0,
         config: Config::v0_1(),
+        names: Default::default(),
     }
 }
 
@@ -240,6 +241,7 @@ fn call_direct_runs_the_callee() {
         ],
         entry: 1,
         config: Config::v0_1(),
+        names: Default::default(),
     };
     let out = run(&prog, &tys).unwrap();
     assert_eq!(out.exit, Exit::Trap(TrapKind::DivZero));
@@ -381,8 +383,9 @@ fn unsupported_op_is_a_diagnostic_not_a_trap() {
     let mut b = B::new();
     let i32 = b.ty(PrimKind::I32);
     let x = b.const_int(1, i32);
-    // `const_fn` is verifier-clean but outside the F1 execution subset.
-    let _ = b.emit(Op::ConstFn, x.0, NO_OPERAND, NO_OPERAND, i32);
+    // `erase_to_dyn` is verifier-clean but outside the executed subset
+    // (`const_fn`, this test's earlier probe, is F3's: a fn item as a value).
+    let _ = b.emit(Op::EraseToDyn, x.0, NO_OPERAND, NO_OPERAND, i32);
     b.term(Op::Ret, NO_OPERAND, NO_OPERAND, NO_OPERAND);
     let (decl, tys) = b.finish();
     assert!(fors_fmir::verify::is_ok(&decl));

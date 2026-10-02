@@ -1215,8 +1215,14 @@ impl Lowerer<'_> {
         }
         // R11: "a generic item named with no arguments is legal only where
         // Rule 34 or 38 determines them" — which is a BODY question, so I2
-        // says nothing about a bare head and leaves the type open.
-        if args.is_empty() && !kinds.is_empty() {
+        // says nothing about a bare head and leaves the type open. The one
+        // exception is ch01 R15b in a `with` HEADER over a head whose every
+        // parameter is a brand (`with allocator p: PageAllocator`): the
+        // omitted brand IS the block's fresh brand, decided below exactly
+        // as for a trailing brand after written arguments.
+        let header_all_brand =
+            cx.header_brand.is_some() && kinds.iter().all(|&k| k == GKind::Brand);
+        if args.is_empty() && !kinds.is_empty() && !header_all_brand {
             return None;
         }
         // MARC: the ch08 corpus writes `Own[Mine]` and `Own[Hidden]` for the

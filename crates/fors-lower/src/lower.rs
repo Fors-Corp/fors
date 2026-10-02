@@ -52,22 +52,36 @@
 //!   named [`LowerError::Match`]s — a value `match` needs a result slot and a
 //!   guard needs a reachability fact no column carries.
 //!
-//! Three families are lowered by SPELLING rather than from a checker fact,
-//! each because the checker does not type them yet and each confined and
-//! named: `Buffer.fixed`/`<buf>.slice[i] = v` (F2's §5.8 stand-in),
-//! `reduce` ([HOLE-7], F5), and ch03 Rules 4 and 6's language-known numeric
-//! methods (`CH03_ARITH_OPS`). Only the last is the FINAL lowering — the
-//! other two are stand-ins for bodies that will exist. F-mono adds a fourth,
-//! `buffer_uninit_data` (the uninitialised-aggregate primitive behind
-//! `Buffer.empty`, `std/mem.fors`), which is a real primitive rather than a
-//! stand-in: no Fors EXPRESSION names an uninitialised aggregate, because
-//! `[v; N]` needs a `v` and therefore `T: Copyable`.
+//! One family is still lowered by SPELLING rather than from a checker fact,
+//! because the checker does not type it yet: `Buffer.fixed`/`<buf>.slice[i]
+//! = v` (F2's §5.8 stand-in). F-mono adds `buffer_uninit_data` (the
+//! uninitialised-aggregate primitive behind `Buffer.empty`, `std/mem.fors`),
+//! which is a real primitive rather than a stand-in: no Fors EXPRESSION names
+//! an uninitialised aggregate, because `[v; N]` needs a `v` and therefore
+//! `T: Copyable`.
+//!
+//! **F3** retired the other two spelling families. ch03 Rules 4 and 6's
+//! explicit-arithmetic and conversion methods lower from I10's
+//! `BodyFacts::numeric` (D11): a call is one of them iff the checker
+//! published a `NumericCallRow` for it, and the instruction comes from the
+//! row's `kind` and `owner`, never from the method's name — so a user method
+//! that merely shares a spelling is an ordinary call. `reduce` lowers from
+//! its `ReduceRow` the same way. And F3 adds ch02's failure surface, from
+//! `BodyFacts::failure` (D10): `call?` is a `try_br` on the call whose `err`
+//! edge applies the row's propagation (at most ONE `ErrorFrom.from` call) and
+//! `raise`s; `call else |e| { .. }` is a `try_br` whose `err` edge enters the
+//! handler with `e` bound; `raise e` is the `raise` terminator carrying the
+//! static raised type ch02 R17's `render` reads. Both error exits are F4 exit
+//! edges of kind `Error`, so `errdefer` bodies run on them and nowhere else.
 
 use std::collections::{HashMap, HashSet};
 
 use fors_check::CheckOutput;
 use fors_check::defs::DefTable;
-use fors_check::facts::{BodyFacts, FactCallee, MemberTarget, PatFactRow, PatShape};
+use fors_check::facts::{
+    ArithOp, BodyFacts, FactCallee, HandlerRow, MemberTarget, NumericCallRow, NumericMethod,
+    PatFactRow, PatShape, Propagation, ReduceRow as ReduceFact, TryRow,
+};
 use fors_fir::ConstValue;
 use fors_fir::Fir;
 use fors_fir::sig::Conv;
@@ -120,6 +134,11 @@ pub struct LoweredBuild {
     /// monomorphisation interned. This is the store the INTERPRETER must be
     /// handed: an instantiated body's types only exist here.
     pub tys: TyStore,
+    /// F3: the static names ch02 R17's `render` reads, for every type an
+    /// error leaving a function named `main` can contain (the raises type,
+    /// recursively through its components). Keyed by [`LoweredBuild::tys`]'
+    /// ids; hand it to the interpreter's `Program::with_names`.
+    pub names: fors_fmir::names::TypeNames,
 }
 
 /// `TyStore` is not `Debug` (it is a dozen parallel columns), and a build's
@@ -131,6 +150,7 @@ impl std::fmt::Debug for LoweredBuild {
             .field("fns", &self.fns)
             .field("diags", &self.diags)
             .field("tys_len", &self.tys.len())
+            .field("names", &self.names)
             .finish()
     }
 }
@@ -181,6 +201,7 @@ pub fn lower_build(
         // The clone the whole increment rests on: the checker's store is
         // frozen and must stay byte-identical, so instantiation interns here.
         tys: out.fir.tys.clone(),
+        names: fors_fmir::names::TypeNames::default(),
     };
     let Some(defs) = out.defs.as_ref() else {
         return build;
@@ -277,7 +298,270 @@ pub fn lower_build(
             }),
         }
     }
+    // F3: ch02 R17's names, for the error type of every lowered `main`.
+    let env = Env {
+        inputs,
+        fir: &out.fir,
+        defs,
+        facts_all: &out.facts,
+    };
+    let roots: Vec<TyId> = build
+        .fns
+        .iter()
+        .filter(|f| f.name == "main")
+        .map(|f| {
+            let sig = out.fir.sigs.fn_sig(f.def);
+            if sig == fors_fir::NO_FN_SIG {
+                NO_TY
+            } else {
+                out.fir.sigs.fn_sigs.raises(sig)
+            }
+        })
+        .filter(|&t| t != NO_TY && t != TY_ERROR)
+        .collect();
+    for root in roots {
+        type_names_for(&env, &mut build.tys, interner, root, &mut build.names);
+    }
     build
+}
+
+/// ch04 R21's closed root-capability list, as `(module path, type)`: a value
+/// of one renders as `..` under ch02 R17 (its fields are the runtime's, not
+/// the program's). The same twelve `fors-check`'s `authority.rs` keeps
+/// (crate-private there, so restated here; both cite ch04 R21's closed list).
+const ROOT_CAPABILITY_TYPES: [(&str, &str); 12] = [
+    ("std.io", "Stdout"),
+    ("std.io", "Stderr"),
+    ("std.io", "Stdin"),
+    ("std.fs", "Dir"),
+    ("std.net", "Net"),
+    ("std.proc", "Exec"),
+    ("std.time", "Clock"),
+    ("std.rand", "Rng"),
+    ("std.env", "Env"),
+    ("std.env", "Args"),
+    ("std.gpu", "Device"),
+    ("std.mem", "Heap"),
+];
+
+/// F3 (ch02 R17): writes the [`fors_fmir::names::TypeName`] row of every
+/// NOMINAL type reachable from `root` through enum payloads, struct fields
+/// and tuple components — the fully-qualified path (`module.path.Item`), the
+/// variant names with the discriminants `fors-layout` decided, the field
+/// names, and each component's static type, closed over the value type's own
+/// arguments exactly as [`FnLower::field_ty`] closes a field.
+///
+/// A type gets NO row — and so renders as R17's `..` — when R17 lists it as
+/// opaque: a root-capability type (ch04 R21), an allocator type (one with an
+/// `impl Allocator`), and every prelude head with no declaration in any file
+/// of the build (`Own`, `Slice`, `Array`, `Ref`, ...). A component type that
+/// cannot be closed is skipped the same way, never guessed.
+fn type_names_for(
+    env: &Env<'_>,
+    tys: &mut TyStore,
+    interner: &Interner,
+    root: TyId,
+    out: &mut fors_fmir::names::TypeNames,
+) {
+    use fors_fir::sig::{MemberKind, PayloadKind, SigKind};
+    use fors_fmir::names::{TypeName, VariantName, VariantPayload};
+    let text = |sym: Symbol| String::from_utf8_lossy(interner.resolve(sym)).into_owned();
+    let allocator_trait: Option<DefId> = env
+        .defs
+        .user_defs()
+        .find(|(_, r)| {
+            r.kind == DeclKind::Trait
+                && r.name.map(text).as_deref() == Some("Allocator")
+                && env.inputs.get(r.file.0 as usize).is_some_and(|f| {
+                    f.name.iter().map(|s| text(*s)).collect::<Vec<_>>() == ["std", "mem", "alloc"]
+                })
+        })
+        .map(|(d, _)| d);
+    let mut seen: HashSet<TyId> = HashSet::new();
+    let mut work = vec![root];
+    while let Some(t) = work.pop() {
+        if t == NO_TY || t.0 as usize >= tys.len() {
+            continue;
+        }
+        let bare = tys.unqual(t);
+        if !seen.insert(bare) {
+            continue;
+        }
+        match tys.tag(bare) {
+            TyTag::Tuple => work.extend(tys.args_vec(ArgsId(tys.b(bare)))),
+            TyTag::Nominal => {
+                let head = DefId(tys.a(bare));
+                let Some(row) = env.defs.get(head) else {
+                    continue;
+                };
+                let Some(file) = env.inputs.get(row.file.0 as usize) else {
+                    continue;
+                };
+                let Some(name) = row.name.map(text) else {
+                    continue;
+                };
+                let module = file
+                    .name
+                    .iter()
+                    .map(|s| text(*s))
+                    .collect::<Vec<_>>()
+                    .join(".");
+                if ROOT_CAPABILITY_TYPES
+                    .iter()
+                    .any(|&(m, n)| m == module && n == name)
+                {
+                    continue;
+                }
+                let is_allocator = allocator_trait.is_some_and(|tr| {
+                    env.defs.user_defs().any(|(d, r)| {
+                        r.kind == DeclKind::Impl && {
+                            let tref = env.fir.sigs.trait_ref(d);
+                            tref != fors_fir::NO_TRAIT_REF && tys.trait_ref(tref).0 == tr && {
+                                let st = env.fir.sigs.self_ty(d);
+                                st != NO_TY && {
+                                    let sb = tys.unqual(st);
+                                    tys.tag(sb) == TyTag::Nominal && DefId(tys.a(sb)) == head
+                                }
+                            }
+                        }
+                    })
+                });
+                if is_allocator {
+                    continue;
+                }
+                let path = format!("{module}.{name}");
+                // Close a member type over the value's own arguments.
+                let n = env
+                    .fir
+                    .sigs
+                    .generics_store
+                    .count(env.fir.sigs.generics(head));
+                let args = if n > 0 {
+                    tys.args(ArgsId(tys.b(bare))).to_vec()
+                } else {
+                    Vec::new()
+                };
+                let close = |tys: &mut TyStore, mt: TyId| -> Option<TyId> {
+                    if tys.is_monomorphic(mt) {
+                        return Some(mt);
+                    }
+                    if args.len() != n {
+                        return None;
+                    }
+                    let mut b = Binding::new(&[(head, n as u16)]);
+                    for (i, a) in args.iter().enumerate() {
+                        if !b.bind(head, i as u16, *a) {
+                            return None;
+                        }
+                    }
+                    let mut solver = LowerSolver {
+                        fir: env.fir,
+                        defs: env.defs,
+                        depth: 0,
+                    };
+                    fors_fir::subst::subst_norm_with(tys, mt, &b, &mut solver)
+                };
+                let ms = env.fir.sigs.members(head);
+                let count = env.fir.sigs.member_store.count(ms);
+                match env.fir.sigs.kind(head) {
+                    SigKind::Enum => {
+                        let nvariants = (0..count)
+                            .filter(|&i| {
+                                env.fir.sigs.member_store.get(ms, i).kind == MemberKind::Variant
+                            })
+                            .count();
+                        let mut variants = Vec::new();
+                        let mut index = 0u32;
+                        let mut complete = true;
+                        for i in 0..count {
+                            let m = env.fir.sigs.member_store.get(ms, i);
+                            if m.kind != MemberKind::Variant {
+                                continue;
+                            }
+                            let Some(discr) = discriminant(index, nvariants) else {
+                                complete = false;
+                                break;
+                            };
+                            index += 1;
+                            let payload = match m.payload {
+                                PayloadKind::None => VariantPayload::Unit,
+                                PayloadKind::Tuple => {
+                                    let parts = tys.args_vec(m.args);
+                                    let mut closed = Vec::with_capacity(parts.len());
+                                    for p in parts {
+                                        match close(tys, p) {
+                                            Some(c) => closed.push(c),
+                                            None => complete = false,
+                                        }
+                                    }
+                                    VariantPayload::Tuple(closed)
+                                }
+                                PayloadKind::Record => {
+                                    let sub = m.sub;
+                                    let k = env.fir.sigs.member_store.count(sub);
+                                    let mut fields = Vec::with_capacity(k);
+                                    for j in 0..k {
+                                        let f = env.fir.sigs.member_store.get(sub, j);
+                                        match close(tys, f.ty) {
+                                            Some(c) => fields.push((text(f.name), c)),
+                                            None => complete = false,
+                                        }
+                                    }
+                                    VariantPayload::Fields(fields)
+                                }
+                            };
+                            variants.push(VariantName {
+                                discr,
+                                name: text(m.name),
+                                payload,
+                            });
+                        }
+                        if !complete {
+                            continue;
+                        }
+                        for v in &variants {
+                            match &v.payload {
+                                VariantPayload::Unit => {}
+                                VariantPayload::Tuple(ps) => work.extend(ps.iter().copied()),
+                                VariantPayload::Fields(fs) => work.extend(fs.iter().map(|f| f.1)),
+                            }
+                        }
+                        out.insert(bare, TypeName::Enum { path, variants });
+                    }
+                    SigKind::Struct => {
+                        let mut fields = Vec::new();
+                        let mut complete = true;
+                        for i in 0..count {
+                            let m = env.fir.sigs.member_store.get(ms, i);
+                            if m.kind != MemberKind::Field {
+                                continue;
+                            }
+                            match close(tys, m.ty) {
+                                Some(c) => fields.push((text(m.name), c)),
+                                None => complete = false,
+                            }
+                        }
+                        if !complete {
+                            continue;
+                        }
+                        work.extend(fields.iter().map(|f| f.1));
+                        out.insert(bare, TypeName::Struct { path, fields });
+                    }
+                    _ => {}
+                }
+            }
+            _ => {}
+        }
+    }
+}
+
+/// The discriminant `fors-layout`'s rule (owner Q1) gives variant `index` of
+/// an enum with `count` variants — the integer slot 0 of the interpreter's
+/// variant cell holds. Routed through `fors-layout`'s own encode/decode pair,
+/// like [`FnLower::discriminant_of`], so the two cannot drift apart.
+fn discriminant(index: u32, count: usize) -> Option<u64> {
+    let bytes = fors_layout::encode_discriminant(index, count)?;
+    fors_layout::decode_discriminant(&bytes, count).map(|v| v as u64)
 }
 
 /// The generic parameter slots one declaration's body sees, in R38(a)'s
@@ -595,8 +879,6 @@ fn prescan(
     // entirely for exactly those statements (see `buffer_stub_ranges`),
     // never for anything else.
     let mut stub_ranges = buffer_stub_ranges(file, decl_node);
-    stub_ranges.extend(reduce_stub_ranges(file, decl_node));
-    stub_ranges.extend(ch03_prim_stub_ranges(file, facts, decl_node));
     stub_ranges.extend(with_stub_ranges(file, decl_node));
     'scan: for n in start..end {
         for &(s, e) in &stub_ranges {
@@ -613,13 +895,10 @@ fn prescan(
         let end_sub = file.tree.subtree_end(decl_node).min(file.tree.len());
         for n in decl_node..end_sub {
             match file.tree.kinds[n] {
-                // F4 lowers `defer`/`errdefer` from I8b's D7 facts; a
-                // statement the checker published no row for is still a
-                // named diagnostic, raised at the statement in
-                // `lower_defer` rather than here.
-                NodeKind::TryExpr | NodeKind::Handler | NodeKind::RaiseStmt => {
-                    return Err(LowerError::Failure);
-                }
+                // F4 lowers `defer`/`errdefer` from I8b's D7 facts and F3
+                // lowers `?`/`else |e|`/`raise` from I10's D10; a statement
+                // the checker published no row for is still a named
+                // diagnostic, raised at the statement rather than here.
                 NodeKind::Closure => return Err(LowerError::Closure),
                 // `for`/`while`/`break`/`continue` and `match` lower from
                 // F1-completion on; the M3 concurrency statements do not
@@ -654,6 +933,12 @@ fn prescan(
             TyTag::Param => return Err(LowerError::Generic("rigid parameter type".into())),
             TyTag::Proj => return Err(LowerError::Projection),
             TyTag::Dyn => return Err(LowerError::Unsupported("dyn type".into())),
+            // F3: a NAME of `fn` type is a value — a function item used as
+            // one (`E.wrapped(zero)`) or a `fn`-typed parameter — and lowers
+            // (`const_fn`, or a read of the parameter). Anything else of `fn`
+            // type is a closure literal or a call through one, which stays
+            // I9's (`call_closure`, captures).
+            TyTag::Fn if file.tree.kinds.get(n as usize) == Some(&NodeKind::NameExpr) => {}
             TyTag::Fn => return Err(LowerError::Closure),
             TyTag::Brand => return Err(LowerError::Generic("brand parameter".into())),
             TyTag::ConstVal => {
@@ -762,63 +1047,9 @@ fn with_region_name<'t>(file: &FileInput<'t>, with_stmt: usize) -> Option<&'t [u
     }
 }
 
-/// Every `reduce(...)` call in the declaration, as `(start, end)` node
-/// ranges `prescan` holds out of its `TY_ERROR` scan.
-///
-/// **[HOLE-7]** (design §11.3): *no checker increment types ch03 R11's
-/// `reduce`* — it is a language primitive, not a function, and neither I3's
-/// gate list nor I10's rule list claims it. So the checker leaves the call
-/// poisoned and F5 hard-codes the typing in lowering, exactly as F2 did for
-/// `Buffer.fixed` (design §5.8's "minimal intrinsic-backed stub"). The
-/// hard-coding is deliberately confined to three places, all named here so
-/// the adopting increment can find them in one grep for `HOLE-7`:
-///   1. this hold-out (so `prescan` does not reject the body),
-///   2. [`FnLower::lower_reduce`] (the element type comes from the operand,
-///      the `op` from the declared binary operator, the optional identity
-///      from the `identity:` argument), and
-///   3. `fors-interp::reduce`'s `ReduceOp::resolve` (the executor end of
-///      the opcode-name convention `reduce_op_name` writes).
-///
-/// The cheapest fix design §11.3 names is one line in I10's rule list: add
-/// ch03 R11. When that lands, (1) and (2) delete and (3) stays.
-fn reduce_stub_ranges(file: &FileInput<'_>, decl_node: usize) -> Vec<(u32, u32)> {
-    let mut out = Vec::new();
-    if decl_node >= file.tree.len() {
-        return out;
-    }
-    let end = file.tree.subtree_end(decl_node).min(file.tree.len());
-    for n in decl_node..end {
-        if call_names_reduce(file.tree, file.tokens, file.source, n) {
-            out.push((n as u32, file.tree.subtree_end(n) as u32));
-        }
-    }
-    out
-}
-
-/// Is `call` a `CallExpr` whose callee is the bare prelude value `reduce`
-/// (ch08 R17's `PRELUDE_VALUES`)? Matched by shape and spelling, like the
-/// F2 `Buffer` stand-in, because there is no checker fact to read.
-fn call_names_reduce(tree: &Tree, tokens: &Tokens, source: &[u8], call: usize) -> bool {
-    if call >= tree.len() || tree.kinds[call] != NodeKind::CallExpr {
-        return false;
-    }
-    let Some(callee) = tree.children(call).next() else {
-        return false;
-    };
-    if tree.kinds[callee] != NodeKind::NameExpr {
-        return false;
-    }
-    let (a, b) = tree.token_range(callee);
-    let idents: Vec<&[u8]> = (a..b)
-        .filter(|&t| tokens.kinds[t as usize] == TokenKind::Ident)
-        .map(|t| tokens.text(t as usize, source))
-        .collect();
-    idents == [b"reduce".as_slice()]
-}
-
 /// The FMIR opcode spelling `fors-interp::reduce::ReduceOp::resolve` reads
-/// back. The two ends of this convention are the whole of `reduce`'s
-/// "which function does it apply" story in F5 ([HOLE-7]).
+/// back for a `reduce_tree` row's `op`: the two ends of this convention are
+/// the whole of "which function does `reduce` apply" for a bare operator.
 fn reduce_op_name(op: Op) -> Option<&'static str> {
     Some(match op {
         Op::Add(_) => "add",
@@ -833,131 +1064,6 @@ fn reduce_op_name(op: Op) -> Option<&'static str> {
         Op::Frem(_) => "frem",
         _ => return None,
     })
-}
-
-/// ch03 Rule 4's `wrap_`/`sat_`/`unchecked_` counterpart of each Rule 2
-/// trapping operator, and Rule 6's three lossy conversions: the SAME closed
-/// family `fors-check`'s `methods.rs::CH03_PRIM_METHODS` lists, from the
-/// other end. The checker cannot resolve these (they are declared by no
-/// file, and `type-checker.md` §13 reaches ch03 at I10, so the lookup
-/// answers `LookupError::Silent` and the call node stays `TY_ERROR`), which
-/// makes them F1's to lower by SPELLING — the third instance of design
-/// §5.8's "minimal intrinsic-backed stub" pattern, after `Buffer.fixed`
-/// (F2) and `reduce` ([HOLE-7], F5).
-///
-/// Unlike those two this one is not a stand-in for a missing body: ch03
-/// Rules 4 and 6 ARE the FMIR opcodes `ArithMode::{Wrap,Sat,Unchecked}` and
-/// `conv_wrap`/`conv_sat`/`conv_trunc`, so the lowering here is the real and
-/// final one. What I10 will supply is the TYPING (so `prescan` stops having
-/// to hold the call out of its `TY_ERROR` scan and the operand types come
-/// from `facts` instead of from the receiver).
-const CH03_ARITH_OPS: &[(&[u8], TokenKind)] = &[
-    (b"add", TokenKind::Plus),
-    (b"sub", TokenKind::Minus),
-    (b"mul", TokenKind::Star),
-    (b"div", TokenKind::Slash),
-    (b"rem", TokenKind::Percent),
-    (b"shl", TokenKind::Shl),
-    (b"shr", TokenKind::Shr),
-];
-
-/// The three conversion spellings of ch03 Rule 6, with the opcode each one
-/// names. `as` itself is `conv_checked` (`lower_cast`).
-const CH03_CONVS: &[(&[u8], Op)] = &[
-    (b"wrap_as", Op::ConvWrap),
-    (b"sat_as", Op::ConvSat),
-    (b"trunc_as", Op::ConvTrunc),
-];
-
-/// Splits a ch03 Rule 4 method name into `(mode, operator token)`:
-/// `wrap_add` → `(Wrap, +)`, `unchecked_neg` → `(Unchecked, -)` (unary).
-/// `None` for anything outside the family.
-fn ch03_arith_method(name: &[u8]) -> Option<(ArithMode, TokenKind, bool)> {
-    const MODES: &[(&[u8], ArithMode)] = &[
-        (b"wrap_", ArithMode::Wrap),
-        (b"sat_", ArithMode::Sat),
-        (b"unchecked_", ArithMode::Unchecked),
-    ];
-    let (mode, rest) = MODES
-        .iter()
-        .find_map(|&(prefix, m)| name.strip_prefix(prefix).map(|r| (m, r)))?;
-    if rest == b"neg" {
-        return Some((mode, TokenKind::Minus, true));
-    }
-    CH03_ARITH_OPS
-        .iter()
-        .find(|(n, _)| *n == rest)
-        .map(|&(_, tok)| (mode, tok, false))
-}
-
-/// Is `name` one of ch03 Rules 4 and 6's language-known numeric methods?
-fn is_ch03_prim_method(name: &[u8]) -> bool {
-    ch03_arith_method(name).is_some() || CH03_CONVS.iter().any(|(n, _)| *n == name)
-}
-
-/// The last `Ident` of a `CallExpr`'s callee, when the callee is a method
-/// path (`x.wrap_add`) or that path under an explicit type argument
-/// (`x.wrap_as[u8]`). Structural, like [`call_names_reduce`].
-fn call_method_name<'t>(file: &FileInput<'t>, call: usize) -> Option<&'t [u8]> {
-    if call >= file.tree.len() || file.tree.kinds[call] != NodeKind::CallExpr {
-        return None;
-    }
-    let callee = file.tree.children(call).next()?;
-    let path = match file.tree.kinds[callee] {
-        NodeKind::NameExpr => callee,
-        // `x.wrap_as[u8]()`: the callee is `Bracket(NameExpr, targ)`.
-        NodeKind::Bracket => file
-            .tree
-            .children(callee)
-            .next()
-            .filter(|&p| file.tree.kinds[p] == NodeKind::NameExpr)?,
-        _ => return None,
-    };
-    let idents = node_own_idents(file, path);
-    (idents.len() >= 2).then(|| *idents.last().expect("len >= 2"))
-}
-
-/// Is this call node one the ch03 Rule 4 / Rule 6 lowering owns? Two
-/// conditions, and BOTH are needed:
-///
-/// 1. the callee path's last segment is in the closed family, and
-/// 2. the checker resolved NO callee for it.
-///
-/// Condition 2 is what keeps a user method that merely shares a spelling
-/// (`impl B { fn wrap_add(..) }`) running its own body — the same scoping
-/// F7 gave `Str`'s byte stand-ins. The family is only ever reached through
-/// `LookupError::Silent` on a PRIMITIVE receiver, which leaves
-/// `FactCallee::Undecided`/`None`; a resolved `Method`/`Direct` callee means
-/// the writer meant a real declaration and lowering must call it.
-fn is_ch03_prim_site(file: &FileInput<'_>, facts: &BodyFacts, node: usize) -> bool {
-    if !call_method_name(file, node).is_some_and(is_ch03_prim_method) {
-        return false;
-    }
-    matches!(
-        facts.callee_of(node as u32),
-        FactCallee::Undecided | FactCallee::None
-    )
-}
-
-/// Every ch03 Rule 4 / Rule 6 method call in the declaration, as `(start,
-/// end)` node ranges `prescan` holds out of its `TY_ERROR` scan (see
-/// [`CH03_ARITH_OPS`]).
-fn ch03_prim_stub_ranges(
-    file: &FileInput<'_>,
-    facts: &BodyFacts,
-    decl_node: usize,
-) -> Vec<(u32, u32)> {
-    let mut out = Vec::new();
-    if decl_node >= file.tree.len() {
-        return out;
-    }
-    let end = file.tree.subtree_end(decl_node).min(file.tree.len());
-    for n in decl_node..end {
-        if is_ch03_prim_site(file, facts, n) {
-            out.push((n as u32, file.tree.subtree_end(n) as u32));
-        }
-    }
-    out
 }
 
 /// Significant `Ident` token texts `node` owns directly (not its
@@ -1174,6 +1280,11 @@ struct FnLower<'a> {
     /// aggregate's cell by handle, so it is passed by value under the
     /// `Inout` convention exactly as a method receiver is.
     indirect_roots: Vec<u32>,
+    /// F3: the CST node of the `return`/`raise`/`?` whose exit edge is being
+    /// recorded, so D8's discharge row is read from THAT exit
+    /// (`DischargeRow::exit` -> `ExitEdge::node`) rather than from whichever
+    /// exit the checker happened to list first.
+    exit_node: Option<u32>,
 }
 
 /// F6: one open `with arena` / `with allocator` block (ch01 R15, R18).
@@ -1224,23 +1335,6 @@ struct LoopTargets {
     mark: ScopeId,
     latch: BlockId,
     exit: BlockId,
-}
-
-/// The three argument positions of a `reduce(...)` call, found by shape
-/// (ch03 R11/R11a: a bare binary operator, the operand sequence, and the
-/// optional `identity:`).
-struct ReduceArgs {
-    op_tok: Option<TokenKind>,
-    xs: Option<usize>,
-    identity: Option<usize>,
-}
-
-/// One ch03 Rule 4 / Rule 6 method call, by shape: the callee path's own
-/// `Ident` segments (`[x, wrap_add]`) and the explicit type argument
-/// `wrap_as`/`sat_as`/`trunc_as` carry (`x.wrap_as[u8]()`).
-struct Ch03Site<'t> {
-    targ: Option<usize>,
-    segs: Vec<&'t [u8]>,
 }
 
 /// Which contract clause a `Contract` CST node spells — read off its own
@@ -1321,6 +1415,7 @@ impl<'a> FnLower<'a> {
             oblig_roots: Vec::new(),
             node_inst: Vec::new(),
             indirect_roots: Vec::new(),
+            exit_node: None,
         })
     }
 
@@ -1560,26 +1655,6 @@ impl<'a> FnLower<'a> {
         let root = self.next_root;
         self.next_root += 1;
         root
-    }
-
-    /// The `TyId` a TYPE-argument node names, for the one shape ch03 Rule 6
-    /// needs: a bare primitive (`x.wrap_as[u8]()`). The parser leaves a
-    /// bare-path type argument as a `NameExpr`/`TypeApp` leaf (see
-    /// `node_kind.rs`'s note on `TypeApp`), so the name is read off the
-    /// node's own `Ident` tokens; anything else is not a primitive and the
-    /// caller reports.
-    fn prim_type_arg(&self, node: usize) -> Option<PrimKind> {
-        let (a, b) = self.tree.token_range(node);
-        let mut name: Option<&[u8]> = None;
-        for t in a..b {
-            if self.tokens.kinds[t as usize] == TokenKind::Ident {
-                if name.is_some() {
-                    return None; // a dotted or applied type, not a primitive
-                }
-                name = Some(self.tokens.text(t as usize, self.source));
-            }
-        }
-        prim_kind_named(name?)
     }
 
     // -- FMIR emission -----------------------------------------------------
@@ -2178,14 +2253,15 @@ impl<'a> FnLower<'a> {
     /// nothing here: the checker named the consuming NODE and the kind of
     /// consumption, and this maps them onto design §3.5's four variants.
     ///
-    /// [decision: the checker's `DischargeRow` is keyed by `(exit, root)`
-    /// and lowering has no map from an FMIR edge back to a checker exit
-    /// index — that correspondence arrives with F3's error-edge table — so
-    /// when a root's discharges disagree across exits the FIRST is taken.
-    /// Nothing observable depends on the choice: `verify()` and the
-    /// interpreter both check that a discharge EXISTS for each obligation
-    /// and that none is duplicated, and `how` is payload for the reducer
-    /// and the diagnostic.]
+    /// [decision: the checker's `DischargeRow` is keyed by `(exit, root)`.
+    /// F3 maps a `return`/`raise`/`?` edge back to its checker exit through
+    /// the exit's own node (`ExitEdge::node`, carried in
+    /// [`FnLower::exit_node`] while the edge is recorded), and that exit's
+    /// row wins. A block-end, `break` or `continue` edge has no such node
+    /// here, and then the FIRST row for the root is taken. Nothing
+    /// observable depends on the choice: `verify()` and the interpreter both
+    /// check that a discharge EXISTS for each obligation and that none is
+    /// duplicated, and `how` is payload for the reducer and the diagnostic.]
     fn discharge_of(
         &self,
         place: PlaceId,
@@ -2194,12 +2270,22 @@ impl<'a> FnLower<'a> {
         use fors_check::facts::Discharge as D8;
         use fors_fmir::scope::Discharge;
         let root = self.place_root_node(place);
+        let exits = &self.facts.defer_regions.exits;
+        let this_exit = |d: &&fors_check::facts::DischargeRow| {
+            self.exit_node
+                .is_some_and(|n| exits.get(d.exit as usize).is_some_and(|e| e.node == n))
+        };
         let published = root.and_then(|r| {
-            self.facts
-                .linear_obligations
-                .discharges
-                .iter()
-                .find(|d| d.root == r)
+            let rows = || {
+                self.facts
+                    .linear_obligations
+                    .discharges
+                    .iter()
+                    .filter(move |d| d.root == r)
+            };
+            rows()
+                .find(this_exit)
+                .or_else(|| rows().next())
                 .map(|d| d.how)
         });
         let inst_of = |node: u32| {
@@ -2737,6 +2823,7 @@ impl<'a> FnLower<'a> {
                 }
             }
             NodeKind::ReturnStmt => self.lower_return(node),
+            NodeKind::RaiseStmt => self.lower_raise(node),
             NodeKind::IfExpr => self.lower_if_stmt(node),
             NodeKind::AttrBlockStmt => self.lower_attr_block(node),
             NodeKind::ForStmt => self.lower_for(node),
@@ -2873,18 +2960,10 @@ impl<'a> FnLower<'a> {
         Ok(())
     }
 
-    /// The type an initialiser produces. Normally the checker's answer; for
-    /// a `reduce(...)` call the checker has none ([HOLE-7]), so the operand
-    /// decides.
+    /// The type an initialiser produces: the checker's answer (I10 types
+    /// `reduce` and ch03's numeric methods too, so no call shape needs a
+    /// type of its own any more).
     fn initialiser_ty(&mut self, e: usize) -> TyId {
-        if call_names_reduce(self.tree, self.tokens, self.source, e) {
-            return self.reduce_elem_ty(e).unwrap_or(TY_UNIT);
-        }
-        if self.ch03_method_call(e).is_some()
-            && let Some(t) = self.ch03_result_ty(e)
-        {
-            return t;
-        }
         let t = self.ty_of(e);
         if t == TY_ERROR || t == NO_TY {
             TY_UNIT
@@ -3134,7 +3213,9 @@ impl<'a> FnLower<'a> {
         // is ch01 R23a's "`e` is evaluated and moved into the result BEFORE
         // any body runs" — structural, by block order.
         let leaving = self.scopes_left_to(ScopeId::NONE);
+        self.exit_node = Some(node as u32);
         self.record_exit(from, BlockId::NONE, ExitKind::Normal, &leaving);
+        self.exit_node = None;
         Ok(())
     }
 
@@ -4057,17 +4138,16 @@ impl<'a> FnLower<'a> {
     }
 
     fn lower_expr_inner(&mut self, node: usize) -> Result<ValId, LowerError> {
-        // [HOLE-7]: a `reduce(...)` call is poisoned by the checker, so it
-        // is intercepted before the `TY_ERROR` gate (see
-        // `reduce_stub_ranges` for the whole hard-coding).
-        if call_names_reduce(self.tree, self.tokens, self.source, node) {
-            return self.lower_reduce(node);
+        // ch03 R11 (D11): a `reduce(...)` call is the checker's `ReduceRow`,
+        // decided there and lowered from the row.
+        if let Some(row) = self.facts.numeric.reduce_of(node as u32).copied() {
+            return self.lower_reduce(row);
         }
-        // ch03 Rules 4 and 6 (see `CH03_ARITH_OPS`): the checker's lookup is
-        // silent on them, so the call node is `TY_ERROR` and this too has to
-        // run before the gate below.
-        if self.ch03_method_call(node).is_some() {
-            return self.lower_ch03_prim_method(node);
+        // ch03 Rules 4 and 6 (D11): a call IS one of the language-known
+        // numeric methods iff the checker published a `NumericCallRow` for
+        // it — never because of how the method is spelled.
+        if let Some(row) = self.facts.numeric.call_of(node as u32).copied() {
+            return self.lower_numeric_call(node, row);
         }
         // F6's `Arena` surface stand-in, for the same reason: `a.alloc(..)`,
         // `a.reset()` and `a[r].f` are `TY_ERROR` until I4's `Index` impl on
@@ -4101,6 +4181,14 @@ impl<'a> FnLower<'a> {
             }
             NodeKind::UnaryExpr => self.lower_unary(node, ty),
             NodeKind::CastExpr => self.lower_cast(node, ty),
+            NodeKind::CallExpr
+                if self
+                    .kids(node)
+                    .iter()
+                    .any(|&c| self.kind(c) == NodeKind::Handler) =>
+            {
+                self.lower_handler_call(node, ty)
+            }
             NodeKind::CallExpr => self.lower_call(node, ty),
             NodeKind::StructLit => self.lower_struct_lit(node, ty),
             NodeKind::TupleOrParen => {
@@ -4127,7 +4215,12 @@ impl<'a> FnLower<'a> {
             NodeKind::IfExpr => Err(LowerError::Unsupported("value if".into())),
             NodeKind::MatchExpr => Err(LowerError::Match),
             NodeKind::Closure => Err(LowerError::Closure),
-            NodeKind::TryExpr | NodeKind::Handler | NodeKind::RaiseStmt => Err(LowerError::Failure),
+            NodeKind::TryExpr => self.lower_try(node),
+            // A handler is reached through its call; `raise` is a statement.
+            NodeKind::Handler | NodeKind::RaiseStmt => Err(LowerError::Unsupported(format!(
+                "`{}` in expression position",
+                kind_name(self.kind(node))
+            ))),
             NodeKind::ArrayLit => self.lower_array_lit(node, ty),
             NodeKind::Bracket => self.lower_bracket(node, ty),
             NodeKind::RangeExpr => Err(LowerError::Unsupported("range".into())),
@@ -4429,67 +4522,10 @@ impl<'a> FnLower<'a> {
         Ok(self.fresh(TY_UNIT, inst))
     }
 
-    /// The three argument positions ch03 R11/R11a give `reduce`: the binary
-    /// `op` (a bare operator token), the operand sequence, and the optional
-    /// `identity:`.
-    fn reduce_args(&mut self, node: usize) -> Result<ReduceArgs, LowerError> {
-        let kids = self.kids(node);
-        let mut out = ReduceArgs {
-            op_tok: None,
-            xs: None,
-            identity: None,
-        };
-        for &a in kids.iter().skip(1) {
-            match self.kind(a) {
-                NodeKind::BareOp => {
-                    let (t, _) = self
-                        .leaf_token(a)
-                        .ok_or_else(|| LowerError::Unresolved("reduce op".into()))?;
-                    out.op_tok = Some(t);
-                }
-                NodeKind::NamedArg => {
-                    let named = self
-                        .own_tokens(a)
-                        .into_iter()
-                        .find(|&(_, k)| k == TokenKind::Ident)
-                        .map(|(t, _)| self.tokens.text(t, self.source).to_vec());
-                    if named.as_deref() != Some(b"identity".as_slice()) {
-                        return Err(LowerError::Unsupported("reduce named argument".into()));
-                    }
-                    out.identity = self.kids(a).into_iter().next();
-                }
-                NodeKind::Closure => return Err(LowerError::Closure),
-                _ => {
-                    if out.xs.is_some() {
-                        return Err(LowerError::Unsupported("reduce arity".into()));
-                    }
-                    out.xs = Some(a);
-                }
-            }
-        }
-        Ok(out)
-    }
-
-    /// The element type a `reduce(...)` call produces — read off the
-    /// operand's own type, never from a checker fact ([HOLE-7]).
-    fn reduce_elem_ty(&mut self, node: usize) -> Option<TyId> {
-        let args = self.reduce_args(node).ok()?;
-        let xs = args.xs?;
-        if self.kind(xs) != NodeKind::NameExpr {
-            return None;
-        }
-        let segs = self.path_segments(xs);
-        let [base] = segs.as_slice() else {
-            return None;
-        };
-        let (_, base_ty) = self.lookup(*base)?;
-        self.seq_elem_ty(base_ty)
-    }
-
-    /// **[HOLE-7], site 2 of 3** (see [`reduce_stub_ranges`]): `reduce`'s
-    /// whole typing, hard-coded here because no checker increment claims
-    /// ch03 R11 — the element type is the operand's, the `op` is the
-    /// declared binary operator, and the `identity:` is optional.
+    /// `reduce(op, xs [, identity: e])` (ch03 R11-R14), from the checker's
+    /// D11 `ReduceRow`: the element type, the operand and the identity are
+    /// the row's, and the operator is the row's `op` node's own token (D1
+    /// gives a bare operator no `fn` type, by design — see `ReduceRow::op_fn`).
     ///
     /// Shape, per ch03 R12 as reworded by owner decision Q3 (2026-10-02):
     /// *"`reduce` MUST be given its final shape in FMIR, as a function of
@@ -4504,34 +4540,30 @@ impl<'a> FnLower<'a> {
     ///   shape as a function of `(n, B, L)` with `B`/`L` as LITERAL
     ///   operands. The shape is fixed before parallel lowering either way,
     ///   which is what R12 buys.
-    fn lower_reduce(&mut self, node: usize) -> Result<ValId, LowerError> {
-        let args = self.reduce_args(node)?;
-        let (Some(op_tok), Some(xs_node)) = (args.op_tok, args.xs) else {
-            return Err(LowerError::Unsupported("reduce arguments".into()));
-        };
-        if self.kind(xs_node) != NodeKind::NameExpr {
-            return Err(LowerError::Unsupported("reduce over a temporary".into()));
+    fn lower_reduce(&mut self, row: ReduceFact) -> Result<ValId, LowerError> {
+        let op_node = row.op as usize;
+        // A `fn` value or a closure as `op` needs `call_closure` (I9's).
+        if self.kind(op_node) != NodeKind::BareOp {
+            return Err(LowerError::Closure);
         }
-        let segs = self.path_segments(xs_node);
-        let [base_sym] = segs.as_slice() else {
-            return Err(LowerError::Unsupported("long projection".into()));
-        };
-        let (root, base_ty) = self.resolve_name(*base_sym)?;
-        let elem_ty = self
-            .seq_elem_ty(base_ty)
-            .ok_or_else(|| LowerError::Unsupported("reduce over a non-sequence".into()))?;
+        let (op_tok, _) = self
+            .leaf_token(op_node)
+            .ok_or_else(|| LowerError::Unresolved("a `reduce` operator with no token".into()))?;
+        let elem_ty = self.subst_ty(row.elem, "a `reduce` element type")?;
+        let xs_node = row.xs as usize;
+        let xs_ty = self.ty_of(xs_node);
         let binop = binop_for(op_tok, self.is_float_ty(elem_ty), self.relax)
             .ok_or_else(|| LowerError::Unsupported("reduce operator".into()))?;
         let name = reduce_op_name(binop)
             .ok_or_else(|| LowerError::Unsupported("reduce operator".into()))?;
-        let xs_val = self.read_root(root, base_ty, base_ty);
-        let identity = match args.identity {
-            Some(e) => Some(self.lower_elem(e, elem_ty)?),
+        let xs_val = self.lower_expr(xs_node)?;
+        let identity = match row.identity {
+            Some(e) => Some(self.lower_elem(e as usize, elem_ty)?),
             None => None,
         };
 
         // Comptime-known `n`: the explicit tree (ch03 R12 / Q3).
-        if let Some(n) = self.seq_const_len(base_ty) {
+        if let Some(n) = self.seq_const_len(xs_ty) {
             if n == 0 {
                 // R11a with a statically empty operand: the identity IS the
                 // answer, and without one the program traps.
@@ -4672,6 +4704,13 @@ impl<'a> FnLower<'a> {
                     let inst = self.emit(Op::ConstInt, v as u32, (v >> 32) as u32, NO_OPERAND, ty);
                     return Ok(self.fresh(ty, inst));
                 }
+                // F3: a FUNCTION ITEM used as a value (`E.wrapped(zero)`):
+                // `const_fn` of its declaration key. A local always wins (it
+                // was looked up first); the item is this file's top-level `fn`
+                // of that name, the one ch08's resolver bound the name to.
+                if self.lookup(*base).is_none() && self.tys.tag(self.tys.unqual(ty)) == TyTag::Fn {
+                    return self.lower_fn_item_value(*base, ty);
+                }
                 let (root, base_ty) = self.resolve_name(*base)?;
                 Ok(self.read_root(root, base_ty, ty))
             }
@@ -4702,6 +4741,29 @@ impl<'a> FnLower<'a> {
             }
             _ => Err(LowerError::Unsupported("long projection".into())),
         }
+    }
+
+    /// F3: a function item in value position, as `const_fn` of its key. A
+    /// generic item has no single key (one per instance, and a value
+    /// position determines no arguments): named, never guessed.
+    fn lower_fn_item_value(&mut self, sym: Symbol, ty: TyId) -> Result<ValId, LowerError> {
+        let mut hits = self.defs.user_defs().filter(|(_, r)| {
+            r.kind == DeclKind::Fn
+                && r.name == Some(sym)
+                && r.file.0 == self.file_idx
+                && r.parent == fors_fir::NO_DEF
+        });
+        let (def, key) = match (hits.next(), hits.next()) {
+            (Some((d, r)), None) => (d, r.key),
+            _ => return Err(LowerError::Unresolved(display_sym(&*self.interner, sym))),
+        };
+        if !generic_owners(self.fir, self.defs, def).is_empty() {
+            return Err(LowerError::Generic(
+                "a generic function item used as a value".into(),
+            ));
+        }
+        let inst = self.emit(Op::ConstFn, key.0, NO_OPERAND, NO_OPERAND, ty);
+        Ok(self.fresh(ty, inst))
     }
 
     fn lower_binary(&mut self, node: usize, ty: TyId) -> Result<ValId, LowerError> {
@@ -4850,15 +4912,15 @@ impl<'a> FnLower<'a> {
         let Some(&x) = kids.first() else {
             return Err(LowerError::Unsupported("cast".into()));
         };
+        // F3 (ch03 R9): `N as T` where `N` is a `comptime_int` constant is
+        // the converted CONSTANT, folded here.
+        if let Some(v) = self.fold_comptime_cast(x, ty)? {
+            return Ok(v);
+        }
         let a = self.lower_expr(x)?;
-        // The operand's type: the checker's, or — for a ch03 R4/R6 call,
-        // which `facts` leaves `TY_ERROR` — the one its receiver and type
-        // argument decide (`x.wrap_as[u32]() as u64`).
         let xt = match self.ty_of(x) {
             t if t != TY_ERROR && t != NO_TY => t,
-            _ => self
-                .ch03_result_ty(x)
-                .ok_or_else(|| LowerError::Unresolved("cast operand".into()))?,
+            _ => return Err(LowerError::Unresolved("cast operand".into())),
         };
         if num_kind_of(self.prim_of(xt)).is_none() || num_kind_of(self.prim_of(ty)).is_none() {
             return Err(LowerError::Unsupported("non-numeric cast".into()));
@@ -4867,10 +4929,8 @@ impl<'a> FnLower<'a> {
         Ok(self.fresh(ty, inst))
     }
 
-    // -- ch03 Rules 4 and 6: explicit arithmetic and the lossy conversions --
-
     /// The `Ident` texts `node` owns directly, in order — [`node_own_idents`]
-    /// without a `FileInput` and without interning (the ch03 family is
+    /// without a `FileInput` and without interning (attribute words are
     /// matched against byte-string literals, so interning would be wasted).
     fn own_ident_texts(&self, node: usize) -> Vec<&'a [u8]> {
         let source = self.source;
@@ -4892,162 +4952,6 @@ impl<'a> FnLower<'a> {
         out
     }
 
-    /// `node` as a ch03 Rule 4 / Rule 6 method call: the receiver-and-method
-    /// path segments plus the optional explicit type argument. `None` for
-    /// every other call — the shape test [`call_method_name`] runs in
-    /// `prescan`, this is the same test from inside the walk.
-    fn ch03_method_call(&self, node: usize) -> Option<Ch03Site<'a>> {
-        if self.kind(node) != NodeKind::CallExpr {
-            return None;
-        }
-        let callee = self.tree.children(node).next()?;
-        let (path, targ) = match self.kind(callee) {
-            NodeKind::NameExpr => (callee, None),
-            NodeKind::Bracket => {
-                let kids = self.kids(callee);
-                let p = *kids.first()?;
-                if self.kind(p) != NodeKind::NameExpr {
-                    return None;
-                }
-                (p, kids.get(1).copied())
-            }
-            _ => return None,
-        };
-        let segs = self.own_ident_texts(path);
-        if segs.len() < 2 || !is_ch03_prim_method(segs[segs.len() - 1]) {
-            return None;
-        }
-        // Condition 2 of `is_ch03_prim_site`: a call the checker RESOLVED
-        // is a real declaration's, whatever it is spelled.
-        if !matches!(
-            self.facts.callee_of(node as u32),
-            FactCallee::Undecided | FactCallee::None
-        ) {
-            return None;
-        }
-        Some(Ch03Site { targ, segs })
-    }
-
-    /// The type a ch03 Rule 4 / Rule 6 method call produces: Rule 4's
-    /// explicit arithmetic keeps the receiver's type, Rule 6's conversions
-    /// take the explicit target type. Read from the receiver and the type
-    /// argument rather than from `facts`, which has `TY_ERROR` here
-    /// ([`CH03_ARITH_OPS`]).
-    fn ch03_result_ty(&mut self, node: usize) -> Option<TyId> {
-        let site = self.ch03_method_call(node)?;
-        if site.segs.len() != 2 {
-            return None;
-        }
-        let name = site.segs[1];
-        if CH03_CONVS.iter().any(|(n, _)| *n == name) {
-            let k = self.prim_type_arg(site.targ?)?;
-            return self.prim_ty(k);
-        }
-        let sym = self.interner.intern(site.segs[0]);
-        self.lookup(sym).map(|(_, t)| t)
-    }
-
-    /// ch03 Rule 4's `wrap_`/`sat_`/`unchecked_<op>` and Rule 6's
-    /// `wrap_as`/`sat_as`/`trunc_as`, lowered to the FMIR mode field and the
-    /// three conversion opcodes that ARE them (see [`CH03_ARITH_OPS`] for
-    /// why lowering, not the checker, owns the spelling today).
-    fn lower_ch03_prim_method(&mut self, node: usize) -> Result<ValId, LowerError> {
-        let site = self
-            .ch03_method_call(node)
-            .ok_or_else(|| LowerError::Unresolved("explicit-arithmetic method".into()))?;
-        if site.segs.len() != 2 {
-            return Err(LowerError::Unsupported(
-                "an explicit-arithmetic receiver that is a projection".into(),
-            ));
-        }
-        let name = site.segs[1];
-        let recv_sym = self.interner.intern(site.segs[0]);
-        let (root, recv_ty) = self.resolve_name(recv_sym)?;
-        let recv = self.read_root(root, recv_ty, recv_ty);
-        let args: Vec<usize> = self.kids(node).into_iter().skip(1).collect();
-        if args.iter().any(|&a| !is_expr(self.kind(a))) {
-            return Err(LowerError::Unsupported(
-                "a named or by-reference argument to an explicit-arithmetic method".into(),
-            ));
-        }
-        if let Some((mode, tok, unary)) = ch03_arith_method(name) {
-            if site.targ.is_some() {
-                return Err(LowerError::Unsupported(
-                    "a type argument on ch03 Rule 4 explicit arithmetic".into(),
-                ));
-            }
-            // ch03 Rule 4: `unchecked_<op>` MUST NOT appear outside a
-            // declaration carrying `@unsafe(invariant: "...")` (ch04 Rule
-            // 10). The checker's rejection is I10's; until it speaks,
-            // lowering does not build what the rule forbids — an
-            // `unchecked_` op is wrapping plus a UB report (design §5.5),
-            // and accepting it here would let the invariant-free form run.
-            if mode == ArithMode::Unchecked && !self.unsafe_decl {
-                return Err(LowerError::Unsupported(format!(
-                    "`{}` outside a declaration carrying `@unsafe(invariant: ..)` \
-                     (ch03 Rule 4, ch04 Rule 10)",
-                    String::from_utf8_lossy(name)
-                )));
-            }
-            // Rule 4 is the counterpart of Rule 2's TRAPPING operators,
-            // which are the integer ones: a float has no wrapping form.
-            if !self.is_int_ty(recv_ty) {
-                return Err(LowerError::Unsupported(
-                    "ch03 Rule 4 explicit arithmetic on a non-integer receiver".into(),
-                ));
-            }
-            if unary {
-                if !args.is_empty() {
-                    return Err(LowerError::Unsupported(
-                        "arguments to a unary explicit-arithmetic method".into(),
-                    ));
-                }
-                let inst = self.emit(Op::Neg(mode), recv.0, NO_OPERAND, NO_OPERAND, recv_ty);
-                return Ok(self.fresh(recv_ty, inst));
-            }
-            let op = arith_op_for(tok, mode)
-                .ok_or_else(|| LowerError::Unsupported("explicit-arithmetic operator".into()))?;
-            let [arg] = args.as_slice() else {
-                return Err(LowerError::Unsupported(
-                    "explicit-arithmetic method arity".into(),
-                ));
-            };
-            let rhs = self.lenient_operand(*arg, recv_ty)?;
-            let inst = self.emit(op, recv.0, rhs.0, NO_OPERAND, recv_ty);
-            return Ok(self.fresh(recv_ty, inst));
-        }
-        let Some(&(_, conv)) = CH03_CONVS.iter().find(|(n, _)| *n == name) else {
-            return Err(LowerError::Unresolved("explicit-arithmetic method".into()));
-        };
-        if !args.is_empty() {
-            return Err(LowerError::Unsupported(
-                "arguments to a ch03 Rule 6 conversion".into(),
-            ));
-        }
-        let targ = site.targ.ok_or_else(|| {
-            LowerError::Unsupported(
-                "a ch03 Rule 6 conversion without its explicit target type".into(),
-            )
-        })?;
-        let kind = self.prim_type_arg(targ).ok_or_else(|| {
-            LowerError::Unsupported(
-                "a ch03 Rule 6 conversion whose target type is not a primitive".into(),
-            )
-        })?;
-        if num_kind_of(Some(kind)).is_none() || num_kind_of(self.prim_of(recv_ty)).is_none() {
-            return Err(LowerError::Unsupported(
-                "a non-numeric explicit conversion".into(),
-            ));
-        }
-        let to = self.prim_ty(kind).ok_or_else(|| {
-            LowerError::Unresolved(
-                "the target type of an explicit conversion is not interned in this build".into(),
-            )
-        })?;
-        let inst = self.emit(conv, recv.0, NO_OPERAND, NO_OPERAND, to);
-        Ok(self.fresh(to, inst))
-    }
-
     /// An operand inside a node range `prescan` held out of its `TY_ERROR`
     /// scan: the checker's type when it has one, else the two shapes a
     /// hard-coded stand-in can type itself from `hint` (a literal and a
@@ -5061,6 +4965,481 @@ impl<'a> FnLower<'a> {
             NodeKind::Literal => self.lower_literal(node, hint),
             NodeKind::NameExpr => self.lower_path(node, hint),
             k => Err(LowerError::Unresolved(kind_name(k).into())),
+        }
+    }
+
+    // -- ch03 Rules 4 and 6, from D11 ---------------------------------------
+
+    /// ch03 Rule 4's `wrap_`/`sat_`/`unchecked_<op>` and Rule 6's
+    /// `wrap_as`/`sat_as`/`trunc_as`, lowered from the checker's
+    /// `NumericCallRow` to the FMIR mode field and the three conversion
+    /// opcodes that ARE them (design §3.10). The instruction is chosen from
+    /// the row's `kind`; the operand class from its `owner` (the numeric
+    /// primitive's prelude impl, `fors_fir::prelude`) — never from the
+    /// method's spelling, so a user method named `wrap_add` has no row and
+    /// stays an ordinary call.
+    fn lower_numeric_call(
+        &mut self,
+        node: usize,
+        row: NumericCallRow,
+    ) -> Result<ValId, LowerError> {
+        let kids = self.kids(node);
+        let callee = *kids.first().ok_or_else(|| {
+            LowerError::Unresolved("an explicit-arithmetic call with no callee".into())
+        })?;
+        // `x.wrap_add(y)` is a path; `x.wrap_as[u8]()` is that path under
+        // the explicit type argument (`Bracket(NameExpr, targ)`).
+        let path = match self.kind(callee) {
+            NodeKind::NameExpr => callee,
+            NodeKind::Bracket => self
+                .kids(callee)
+                .into_iter()
+                .next()
+                .filter(|&p| self.kind(p) == NodeKind::NameExpr)
+                .ok_or_else(|| {
+                    LowerError::Unsupported(
+                        "an explicit-arithmetic callee that is not a method path".into(),
+                    )
+                })?,
+            _ => {
+                return Err(LowerError::Unsupported(
+                    "an explicit-arithmetic callee that is not a method path".into(),
+                ));
+            }
+        };
+        let recv_ty = self.subst_ty(row.recv, "an explicit-arithmetic receiver type")?;
+        let result = self.subst_ty(row.result, "an explicit-arithmetic result type")?;
+        // `owner` is the prelude impl the lookup resolved: its self type is
+        // the primitive the method belongs to, and it must be the receiver's.
+        let owner_self = self.fir.sigs.self_ty(row.owner);
+        if owner_self == NO_TY || self.prim_of(owner_self) != self.prim_of(recv_ty) {
+            return Err(LowerError::Unresolved(
+                "an explicit-arithmetic call whose resolved impl is not its receiver's \
+                 primitive"
+                    .into(),
+            ));
+        }
+        let segs = self.path_segments(path);
+        let args: Vec<usize> = kids.iter().skip(1).copied().collect();
+        if args.iter().any(|&a| !is_expr(self.kind(a))) {
+            return Err(LowerError::Unsupported(
+                "a named or by-reference argument to an explicit-arithmetic method".into(),
+            ));
+        }
+        // Method position (`x.wrap_add(y)`): the receiver is the bound local
+        // the path starts with. R45's qualified form (`i32.wrap_add(x, y)`):
+        // the receiver is the first argument.
+        let (recv, rest): (ValId, &[usize]) = match segs.as_slice() {
+            [base, _method] if self.lookup(*base).is_some() => {
+                let (root, base_ty) = self.resolve_name(*base)?;
+                (self.read_root(root, base_ty, recv_ty), &args[..])
+            }
+            [_ty, _method] if !args.is_empty() => (self.lower_expr(args[0])?, &args[1..]),
+            _ => {
+                return Err(LowerError::Unsupported(
+                    "an explicit-arithmetic receiver that is a projection".into(),
+                ));
+            }
+        };
+        let mode = match row.kind {
+            NumericMethod::Wrap(_) => Some(ArithMode::Wrap),
+            NumericMethod::Sat(_) => Some(ArithMode::Sat),
+            NumericMethod::Unchecked(_) => Some(ArithMode::Unchecked),
+            NumericMethod::WrapAs | NumericMethod::SatAs | NumericMethod::TruncAs => None,
+        };
+        if let (
+            Some(mode),
+            NumericMethod::Wrap(op) | NumericMethod::Sat(op) | NumericMethod::Unchecked(op),
+        ) = (mode, row.kind)
+        {
+            // ch03 Rule 4 / ch04 Rule 10: the checker rejects `unchecked_`
+            // outside an `@unsafe` declaration (D0004); lowering does not
+            // build what the rule forbids either, because an `unchecked_` op
+            // is wrapping plus a UB report (design §5.5).
+            if mode == ArithMode::Unchecked && !self.unsafe_decl {
+                return Err(LowerError::Unsupported(
+                    "an `unchecked_` method outside a declaration carrying \
+                     `@unsafe(invariant: ..)` (ch03 Rule 4, ch04 Rule 10)"
+                        .into(),
+                ));
+            }
+            // Rule 4 is the counterpart of Rule 2's TRAPPING operators,
+            // which are the integer ones: a float has no wrapping form.
+            if !self.is_int_ty(recv_ty) {
+                return Err(LowerError::Unsupported(
+                    "ch03 Rule 4 explicit arithmetic on a non-integer receiver".into(),
+                ));
+            }
+            let fop = arith_op_of(op, mode);
+            if op == ArithOp::Neg {
+                if !rest.is_empty() {
+                    return Err(LowerError::Unsupported(
+                        "arguments to a unary explicit-arithmetic method".into(),
+                    ));
+                }
+                let inst = self.emit(fop, recv.0, NO_OPERAND, NO_OPERAND, result);
+                return Ok(self.fresh(result, inst));
+            }
+            let [arg] = rest else {
+                return Err(LowerError::Unsupported(
+                    "explicit-arithmetic method arity".into(),
+                ));
+            };
+            let rhs = self.lower_expr(*arg)?;
+            let inst = self.emit(fop, recv.0, rhs.0, NO_OPERAND, result);
+            return Ok(self.fresh(result, inst));
+        }
+        let conv = match row.kind {
+            NumericMethod::WrapAs => Op::ConvWrap,
+            NumericMethod::SatAs => Op::ConvSat,
+            _ => Op::ConvTrunc,
+        };
+        if !rest.is_empty() {
+            return Err(LowerError::Unsupported(
+                "arguments to a ch03 Rule 6 conversion".into(),
+            ));
+        }
+        if num_kind_of(self.prim_of(result)).is_none()
+            || num_kind_of(self.prim_of(recv_ty)).is_none()
+        {
+            return Err(LowerError::Unsupported(
+                "a non-numeric explicit conversion".into(),
+            ));
+        }
+        let inst = self.emit(conv, recv.0, NO_OPERAND, NO_OPERAND, result);
+        Ok(self.fresh(result, inst))
+    }
+
+    /// ch03 R9: `N as T` where `N` names a `const` whose declared type is
+    /// `comptime_int` (the only comptime type whose value FIR records —
+    /// `ConstValue` has no float form). The value is the checker's own fold
+    /// (`fors_fir::sig::SigStore::const_val`), and the conversion happens
+    /// HERE: a `comptime_int` has no run-time representation, so the cast is
+    /// the converted constant, not a `conv_checked` at run time.
+    ///
+    /// `None` when `x` is not such a name (the ordinary `as` path). A value
+    /// the target cannot represent exactly, a `comptime_float` constant, and
+    /// a constant the checker could not fold are NAMED `LowerError::Comptime`
+    /// rows, never a silently truncated constant.
+    fn fold_comptime_cast(&mut self, x: usize, ty: TyId) -> Result<Option<ValId>, LowerError> {
+        if self.kind(x) != NodeKind::NameExpr {
+            return Ok(None);
+        }
+        let segs = self.path_segments(x);
+        let [sym] = segs.as_slice() else {
+            return Ok(None);
+        };
+        if self.lookup(*sym).is_some() {
+            return Ok(None);
+        }
+        let Some(def) = self
+            .defs
+            .user_defs()
+            .find(|(_, r)| r.kind == DeclKind::Const && r.name == Some(*sym))
+            .map(|(d, _)| d)
+        else {
+            return Ok(None);
+        };
+        // A constant of a PRIMITIVE type is an ordinary typed value (F9's
+        // comptime evaluator owns reading it); only the comptime-only types
+        // — nominal heads with no declaration in any file — fold here.
+        let cty = self.fir.sigs.const_ty(def);
+        if cty == NO_TY || cty == TY_ERROR || self.prim_of(cty).is_some() {
+            return Ok(None);
+        }
+        let bare = self.tys.unqual(cty);
+        if self.tys.tag(bare) != TyTag::Nominal || self.defs.get(DefId(self.tys.a(bare))).is_some()
+        {
+            return Ok(None);
+        }
+        let name = display_sym(&*self.interner, *sym);
+        let cid = self.fir.sigs.const_val(def);
+        if cid == fors_fir::ty::NO_CONST {
+            return Err(LowerError::Comptime(format!(
+                "const `{name}` has no folded value (a `comptime_float` constant, or an \
+                 initialiser the checker does not fold)"
+            )));
+        }
+        let Some(v) = self.fir.tys.const_value(cid).as_int() else {
+            return Err(LowerError::Comptime(format!(
+                "const `{name}` is not an integer"
+            )));
+        };
+        let prim = self.prim_of(ty);
+        let (bits, op) = match prim {
+            Some(p) if p.is_integer() => {
+                let (lo, hi) = int_bounds(p).ok_or_else(|| {
+                    LowerError::Unsupported("an integer type with no bounds".into())
+                })?;
+                if v < lo || v > hi {
+                    return Err(LowerError::Comptime(format!(
+                        "`{name} as` an integer type that cannot represent {v} (ch03 R6: `as` \
+                         is exact)"
+                    )));
+                }
+                (narrow_int(v, prim), Op::ConstInt)
+            }
+            Some(PrimKind::F64) => {
+                let f = v as f64;
+                if f as i128 != v {
+                    return Err(LowerError::Comptime(format!(
+                        "`{name} as f64`: {v} is not exactly representable (ch03 R6)"
+                    )));
+                }
+                (f.to_bits(), Op::ConstFloat)
+            }
+            Some(PrimKind::F32) => {
+                let f = v as f32;
+                if f as i128 != v {
+                    return Err(LowerError::Comptime(format!(
+                        "`{name} as f32`: {v} is not exactly representable (ch03 R6)"
+                    )));
+                }
+                (u64::from(f.to_bits()), Op::ConstFloat)
+            }
+            _ => {
+                return Err(LowerError::Comptime(format!(
+                    "`{name} as` a non-numeric type"
+                )));
+            }
+        };
+        let inst = self.emit(op, bits as u32, (bits >> 32) as u32, NO_OPERAND, ty);
+        Ok(Some(self.fresh(ty, inst)))
+    }
+
+    // -- F3: `?`, `else |e| { }`, `raise` (ch02 R1-R5, R16), from D10 ---------
+
+    /// The call instruction that defined `v`: what a `try_br` names (design
+    /// §3.6). A `?` or a handler on anything that did not lower to a call is
+    /// reported by name — ch02 R2/R5 make both legal only directly after a
+    /// call, and the checker rejected the rest.
+    fn call_inst_of(&self, v: ValId) -> Result<u32, LowerError> {
+        let row = self
+            .decl
+            .vals
+            .try_row(v)
+            .ok_or_else(|| LowerError::Unresolved("the value of a raising call".into()))?;
+        let ValDef::Inst(id) = row.def() else {
+            return Err(LowerError::Unsupported(
+                "`?` or `else |e|` on a value that is not a call's result".into(),
+            ));
+        };
+        let op = self
+            .insts
+            .get(id.0 as usize)
+            .map(|(r, _)| r.op)
+            .ok_or_else(|| LowerError::Unresolved("a call instruction".into()))?;
+        if !matches!(
+            op,
+            Op::CallDirect | Op::CallWitness | Op::CallClosure | Op::Intrinsic
+        ) {
+            return Err(LowerError::Unsupported(
+                "`?` or `else |e|` on a call that lowered to something other than a call \
+                 instruction"
+                    .into(),
+            ));
+        }
+        // `seal` hands a block every instruction emitted since the last
+        // seal, so the call must be the LAST one for the `try_br` that
+        // follows to be the very next thing (the interpreter checks this).
+        if id.0 as usize + 1 != self.insts.len() {
+            return Err(LowerError::Unsupported(
+                "a raising call whose lowering emitted instructions after the call".into(),
+            ));
+        }
+        Ok(id.0)
+    }
+
+    /// Ends the current block with `raise v` (static type `ty`, which ch02
+    /// R17's `render` reads when this is `main`) and records the ERROR exit
+    /// edge out of every scope up to the body's own: ch02 R16 makes every
+    /// block between the raise site and the function body an error exit,
+    /// so the edge carries the pending `defer` AND `errdefer` bodies (ch01
+    /// R23b) and D8's discharges. The operand was evaluated above, before
+    /// the edge — ch01 R23a's "`e` is evaluated, and moved into the result,
+    /// BEFORE any body runs", structural by block order.
+    fn emit_raise(&mut self, v: ValId, ty: TyId, node: usize) {
+        let mut t = self.term(Op::Raise, v.0, NO_OPERAND, NO_OPERAND);
+        t.ty = ty;
+        let from = BlockId(self.cur as u32);
+        self.seal(t);
+        let leaving = self.scopes_left_to(ScopeId::NONE);
+        self.exit_node = Some(node as u32);
+        self.record_exit(from, BlockId::NONE, ExitKind::Error, &leaving);
+        self.exit_node = None;
+    }
+
+    /// `raise e;` (ch02 R1), from its D10 `RaiseRow`: the operand — the
+    /// raised variant when it names one (`E.a`, `E.b(x)`), any value of the
+    /// `raises` type otherwise — then the `raise` terminator.
+    fn lower_raise(&mut self, node: usize) -> Result<(), LowerError> {
+        self.ensure_open();
+        let row = *self.facts.failure.raise_of(node as u32).ok_or_else(|| {
+            LowerError::Failure("a `raise` the checker published no D10 row for".into())
+        })?;
+        let v = self.lower_expr(row.value as usize)?;
+        let ty = self.subst_ty(row.ty, "a `raise`'s type")?;
+        self.emit_raise(v, ty, node);
+        Ok(())
+    }
+
+    /// `call?` (ch02 R2, R3), from its D10 `TryRow`: the call, then
+    /// `try_br call, ok, err`. On `err` the call's own value IS the callee's
+    /// error (the interpreter defines it so — exactly one of the abstract
+    /// `(ok, err)` pair is live on each edge); the edge applies the row's
+    /// propagation — nothing for R2's equal types, exactly ONE
+    /// `ErrorFrom.from` call for R3 — and raises. The value of `call?` is the
+    /// call's value on `ok`.
+    fn lower_try(&mut self, node: usize) -> Result<ValId, LowerError> {
+        self.ensure_open();
+        let row = *self.facts.failure.try_of(node as u32).ok_or_else(|| {
+            LowerError::Failure("a `?` the checker published no D10 row for".into())
+        })?;
+        let v = self.lower_expr(row.call as usize)?;
+        let call = self.call_inst_of(v)?;
+        let ok = self.reserve_block();
+        let err = self.reserve_block();
+        self.seal(self.term(Op::TryBr, call, ok.0, err.0));
+        self.cur = err.index();
+        let e = self.propagate(&row, v)?;
+        let target = self.subst_ty(row.target, "a `?`'s enclosing `raises` type")?;
+        self.emit_raise(e, target, node);
+        self.cur = ok.index();
+        Ok(v)
+    }
+
+    /// The error a `?` edge raises (ch02 R2, R3): `e` itself, or the ONE
+    /// `ErrorFrom.from` call the checker resolved. R3's "MUST NOT chain a
+    /// second conversion" is structural: this emits at most one call.
+    fn propagate(&mut self, row: &TryRow, e: ValId) -> Result<ValId, LowerError> {
+        match row.edge {
+            Propagation::Same => Ok(e),
+            Propagation::ErrorFrom { from_fn, .. } => {
+                if !generic_owners(self.fir, self.defs, from_fn).is_empty() {
+                    return Err(LowerError::Failure(
+                        "a `?` edge through a GENERIC `ErrorFrom` impl: the `from` call has no \
+                         `generic_args` row to name its instance"
+                            .into(),
+                    ));
+                }
+                let key = self
+                    .defs
+                    .get(from_fn)
+                    .map(|r| r.key)
+                    .ok_or_else(|| LowerError::Unresolved(format!("def{}", from_fn.0)))?;
+                let sig = self.fir.sigs.fn_sig(from_fn);
+                let conv = if sig != fors_fir::NO_FN_SIG && self.fir.sigs.fn_sigs.count(sig) > 0 {
+                    self.fir.sigs.fn_sigs.param(sig, 0).conv
+                } else {
+                    Conv::Let
+                };
+                let target = self.subst_ty(row.target, "a `?`'s enclosing `raises` type")?;
+                Ok(self.emit_call(Callee::Direct(key), vec![e], vec![conv], target))
+            }
+            Propagation::ErrorFromBound => Err(LowerError::Failure(
+                "a `?` edge through an `ErrorFrom` BOUND on a rigid `raises` type: the impl \
+                 is the instantiation's, and D10 names no impl for lowering to call"
+                    .into(),
+            )),
+        }
+    }
+
+    /// `call else |e| { .. }` (ch02 R5, R16), from its D10 `HandlerRow`: the
+    /// call, then `try_br call, ok, err`. `ok` carries the call's value to
+    /// the join; `err` binds `e` to the call's value (the error, on that
+    /// edge) and runs the handler block, whose value — when it yields one
+    /// rather than diverging — is the expression's value. Neither edge
+    /// leaves a scope, so neither is an exit of anything: R16's "a handler
+    /// decides" is structural — a handler that `raise`s or `return`s makes
+    /// its exit through that statement's own edge, and one that yields a
+    /// value runs no `errdefer` at all.
+    fn lower_handler_call(&mut self, node: usize, ty: TyId) -> Result<ValId, LowerError> {
+        self.ensure_open();
+        let row: HandlerRow =
+            *self
+                .facts
+                .failure
+                .handler_of_call(node as u32)
+                .ok_or_else(|| {
+                    LowerError::Failure(
+                        "an `else |e|` handler the checker published no D10 row for".into(),
+                    )
+                })?;
+        let v = self.lower_call(node, ty)?;
+        let call = self.call_inst_of(v)?;
+        let res = self.fresh_root();
+        let ok = self.reserve_block();
+        let err = self.reserve_block();
+        let join = self.reserve_block();
+        self.seal(self.term(Op::TryBr, call, ok.0, err.0));
+        self.cur = ok.index();
+        self.write_place(res, &[], ty, v);
+        self.seal(self.term(Op::Br, join.0, NO_OPERAND, NO_OPERAND));
+        self.cur = err.index();
+        self.scopes.push(HashMap::new());
+        let binding_ty = self.subst_ty(row.binding, "an `else |e|` binding's type")?;
+        if let Some(sym) = self.handler_binding(row.node as usize) {
+            let root = self.bind(sym, binding_ty);
+            self.write_place(root, &[], binding_ty, v);
+        }
+        let mark = self.scope_cur;
+        let r = self.lower_block_value(row.block as usize);
+        let r = match r {
+            Ok(Some(val)) if self.is_open() => {
+                self.write_place(res, &[], ty, val);
+                Ok(())
+            }
+            Ok(None) if self.is_open() => {
+                if self.tys.unqual(ty) == TY_UNIT {
+                    let inst = self.emit(Op::ConstUnit, NO_OPERAND, NO_OPERAND, NO_OPERAND, ty);
+                    let u = self.fresh(ty, inst);
+                    self.write_place(res, &[], ty, u);
+                    Ok(())
+                } else {
+                    Err(LowerError::Unsupported(
+                        "an `else |e|` block that neither diverges nor ends in a tail value".into(),
+                    ))
+                }
+            }
+            Ok(_) => Ok(()),
+            Err(e) => Err(e),
+        };
+        self.close_scope_region(mark);
+        self.scopes.pop();
+        r?;
+        if self.is_open() {
+            self.seal(self.term(Op::Br, join.0, NO_OPERAND, NO_OPERAND));
+        }
+        self.cur = join.index();
+        Ok(self.read_root(res, ty, ty))
+    }
+
+    /// The name an `else |e|` handler binds: the `Handler` node's own
+    /// `Ident` (`_` is not an `Ident`, and binds nothing).
+    fn handler_binding(&mut self, handler: usize) -> Option<Symbol> {
+        let name = self.own_ident_texts(handler).first().copied()?;
+        Some(self.interner.intern(name))
+    }
+
+    /// A block in VALUE position (an `else |e|` handler's): its statements,
+    /// then its tail expression's value. `None` when it has no tail value
+    /// (it ends in a statement, or diverged). The caller owns the scope.
+    fn lower_block_value(&mut self, block: usize) -> Result<Option<ValId>, LowerError> {
+        let kids = self.kids(block);
+        let tail = kids.last().copied().filter(|&t| {
+            is_expr(self.kind(t)) && !matches!(self.kind(t), NodeKind::IfExpr | NodeKind::MatchExpr)
+        });
+        let stmts = if tail.is_some() {
+            &kids[..kids.len() - 1]
+        } else {
+            &kids[..]
+        };
+        for &s in stmts {
+            self.lower_child(s)?;
+        }
+        match tail {
+            Some(t) if self.is_open() => Ok(Some(self.lower_expr(t)?)),
+            _ => Ok(None),
         }
     }
 
@@ -5143,13 +5522,13 @@ impl<'a> FnLower<'a> {
         let Some(&callee_node) = kids.first() else {
             return Err(LowerError::Unsupported("call".into()));
         };
-        if kids.iter().any(|&c| self.kind(c) == NodeKind::Handler) {
-            return Err(LowerError::Failure);
-        }
         let mut argv: Vec<ValId> = Vec::new();
         let mut convs: Vec<Conv> = Vec::new();
         for &a in kids.iter().skip(1) {
             match self.kind(a) {
+                // F3: the `else |e| { }` handler is the call's own child, not
+                // an argument; `lower_handler_call` lowers it.
+                NodeKind::Handler => {}
                 NodeKind::NamedArg => return Err(LowerError::Unsupported("named argument".into())),
                 NodeKind::InoutArg | NodeKind::SetArg => {
                     argv.push(self.lower_by_ref_arg(a)?);
@@ -5839,33 +6218,6 @@ enum NumKind {
     Float,
 }
 
-/// ch09 Rule 1's fifteen primitive spellings, by name. The one place
-/// `fors-lower` maps a type NAME to a [`PrimKind`]: a type argument the
-/// checker did not type (ch03 Rule 6's `wrap_as[u8]`, whose whole call it
-/// leaves `TY_ERROR`). `Str`/`rawptr` are listed for completeness even
-/// though no conversion names them — a caller that gets one still has to
-/// find the conversion legal.
-fn prim_kind_named(name: &[u8]) -> Option<PrimKind> {
-    Some(match name {
-        b"i8" => PrimKind::I8,
-        b"i16" => PrimKind::I16,
-        b"i32" => PrimKind::I32,
-        b"i64" => PrimKind::I64,
-        b"isize" => PrimKind::Isize,
-        b"u8" => PrimKind::U8,
-        b"u16" => PrimKind::U16,
-        b"u32" => PrimKind::U32,
-        b"u64" => PrimKind::U64,
-        b"usize" => PrimKind::Usize,
-        b"f32" => PrimKind::F32,
-        b"f64" => PrimKind::F64,
-        b"bool" => PrimKind::Bool,
-        b"Str" => PrimKind::Str,
-        b"rawptr" => PrimKind::RawPtr,
-        _ => return None,
-    })
-}
-
 fn num_kind_of(p: Option<PrimKind>) -> Option<NumKind> {
     match p {
         Some(k) if k.is_integer() => Some(NumKind::Int),
@@ -5891,6 +6243,22 @@ fn prim_bytes(k: PrimKind) -> Option<u32> {
         | PrimKind::Isize
         | PrimKind::Usize
         | PrimKind::RawPtr => 8,
+        _ => return None,
+    })
+}
+
+/// The inclusive value range of an integer primitive (v0.1's targets are
+/// 64-bit, so `isize`/`usize` are `i64`/`u64`, design §5.1).
+fn int_bounds(p: PrimKind) -> Option<(i128, i128)> {
+    Some(match p {
+        PrimKind::I8 => (i128::from(i8::MIN), i128::from(i8::MAX)),
+        PrimKind::I16 => (i128::from(i16::MIN), i128::from(i16::MAX)),
+        PrimKind::I32 => (i128::from(i32::MIN), i128::from(i32::MAX)),
+        PrimKind::I64 | PrimKind::Isize => (i128::from(i64::MIN), i128::from(i64::MAX)),
+        PrimKind::U8 => (0, i128::from(u8::MAX)),
+        PrimKind::U16 => (0, i128::from(u16::MAX)),
+        PrimKind::U32 => (0, i128::from(u32::MAX)),
+        PrimKind::U64 | PrimKind::Usize => (0, i128::from(u64::MAX)),
         _ => return None,
     })
 }
@@ -6013,26 +6381,28 @@ fn kind_name(k: NodeKind) -> &'static str {
     }
 }
 
-/// Maps one gap operator to its FMIR op. Integer operators are ch03 Rule
-/// 2's TRAPPING mode (Rule 4's explicit modes are method spellings, not
-/// operators: see [`ch03_arith_method`]); float operators carry `relax`,
-/// which is `Relax::NONE` outside an `@fastmath` block (design §5.6(6)).
-/// One INTEGER operator in an explicit ch03 Rule 4 mode. Separate from
-/// [`binop_for`] because Rule 4's forms are method spellings, never
-/// operators, and because `&`/`|`/`^` have no mode (they cannot overflow).
-fn arith_op_for(op: TokenKind, mode: ArithMode) -> Option<Op> {
-    Some(match op {
-        TokenKind::Plus => Op::Add(mode),
-        TokenKind::Minus => Op::Sub(mode),
-        TokenKind::Star => Op::Mul(mode),
-        TokenKind::Slash => Op::Div(mode),
-        TokenKind::Percent => Op::Rem(mode),
-        TokenKind::Shl => Op::Shl(mode),
-        TokenKind::Shr => Op::Shr(mode),
-        _ => return None,
-    })
+/// One of ch03 Rule 2's trapping operators, as D11's `NumericMethod` names
+/// it, in an explicit ch03 Rule 4 mode: the FMIR opcode IS the operator plus
+/// the mode field (design §3.10). Separate from [`binop_for`] because Rule
+/// 4's forms are methods, never operators, and because `&`/`|`/`^` have no
+/// mode (they cannot overflow).
+fn arith_op_of(op: ArithOp, mode: ArithMode) -> Op {
+    match op {
+        ArithOp::Add => Op::Add(mode),
+        ArithOp::Sub => Op::Sub(mode),
+        ArithOp::Mul => Op::Mul(mode),
+        ArithOp::Div => Op::Div(mode),
+        ArithOp::Rem => Op::Rem(mode),
+        ArithOp::Shl => Op::Shl(mode),
+        ArithOp::Shr => Op::Shr(mode),
+        ArithOp::Neg => Op::Neg(mode),
+    }
 }
 
+/// Maps one gap operator to its FMIR op. Integer operators are ch03 Rule
+/// 2's TRAPPING mode (Rule 4's explicit modes are methods, lowered by
+/// [`arith_op_of`]); float operators carry `relax`, which is `Relax::NONE`
+/// outside an `@fastmath` block (design §5.6(6)).
 fn binop_for(op: TokenKind, float: bool, relax: fors_fmir::op::Relax) -> Option<Op> {
     let trap = ArithMode::Trap;
     match (op, float) {

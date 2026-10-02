@@ -365,6 +365,7 @@ pub fn program(decl: DeclFmir, strings: Vec<(u32, Vec<u8>)>) -> Program {
         }],
         entry: 0,
         config: Config::v0_1(),
+        names: Default::default(),
     }
 }
 

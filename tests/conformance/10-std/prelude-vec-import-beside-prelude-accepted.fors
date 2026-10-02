@@ -1,0 +1,9 @@
+//! name: prelude_vec_import_beside_prelude_accepted
+//! rule: 10.S2
+//! expect: check-ok
+//! detail: ch10 R2 -- the prelude `Vec` and its module path `mem.Vec` denote the SAME item, "so the two spellings never collide under Rule 13": `use std.mem.Vec;` beside the prelude name is ch08 R13's same-entity import, not N0013, and with std in the build `v.len()` types against std's declaration
+
+needs { };
+use std.mem.Vec;
+
+fn f[A: brand](let v: Vec[i32, A]) -> usize { return v.len(); }

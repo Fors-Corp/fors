@@ -4,9 +4,10 @@
 //! source checks clean with I3.5+I4a facts only, lowers without diagnostics,
 //! verifies clean under `fors-fmir::verify`, and runs to the pinned
 //! observable — `return` with exact stdout bytes, or a trap of the pinned
-//! kind. The rejection tests pin the current scope edge: `defer`, the M3
-//! concurrency statements, `?`/`raise`, closures and const refs each produce a
-//! clean [`LowerError`](fors_lower::LowerError), never a panic.
+//! kind. The rejection tests pin the current scope edge: the M3 concurrency
+//! statements, closures and const refs each produce a clean
+//! [`LowerError`](fors_lower::LowerError), never a panic (`defer` lowers as
+//! of F4, and `?`/`else |e|`/`raise` as of F3).
 //!
 //! F-mono adds the monomorphisation and pattern rows at the end of the file:
 //! generic functions, generic structs and trait methods through a bound are
@@ -125,6 +126,7 @@ fn build(src: &str) -> Built {
     // F-mono: the program runs against the LOWERING-OWNED store, because an
     // instantiated body's types were interned there (see `fors_lower::mono`).
     let tys = lowered.tys;
+    let names = lowered.names;
     let fns: Vec<ProgFn> = lowered
         .fns
         .into_iter()
@@ -135,7 +137,9 @@ fn build(src: &str) -> Built {
             intrinsics: f.intrinsics,
         })
         .collect();
-    let prog = Program::entry_by_name(fns, "main", Config::v0_1()).expect("a main");
+    let prog = Program::entry_by_name(fns, "main", Config::v0_1())
+        .expect("a main")
+        .with_names(names);
     let outcome = run(&prog, &tys).expect("well-formed program runs");
     Built {
         outcome: Some(outcome),
@@ -566,58 +570,105 @@ fn gate_defer_lowers_to_a_pool_row_a_scope_and_an_exit_edge() {
     );
 }
 
-/// The two F4 gate rows that are HELD OUT, and the exact reason: both need
-/// F3's failure edges (`else |e|` and `raise`), which wait on I10's ch02
-/// typing. Asserted rather than commented, so the hold-out cannot rot into
-/// silence — the day F3 lands, this test fails and the two gate rows get
-/// wired.
+/// The two F4 gate rows that WERE held out on F3, at FMIR level: the
+/// handler is a `try_br` on the call whose edges leave no scope (so the
+/// callee's `errdefer`, reached only by normal exits, is on no edge at all),
+/// and `raise` out of `main` is an ERROR exit edge carrying the `defer` body.
 #[test]
-fn gate_f4_held_out_cases_are_named_failure_edges() {
-    // `01-ownership/errdefer-skipped-on-return-run-ok`'s shape: the
-    // `errdefer` body itself is F4's and lowers, but the caller's
-    // `else |e| { }` handler is F3's, so `main` has no FMIR and the gate
-    // row cannot run.
+fn f3_former_f4_hold_outs_lower_to_try_br_and_an_error_edge() {
+    use fors_fmir::exit::ExitKind;
+    use fors_fmir::op::Op;
+    // `01-ownership/errdefer-skipped-on-return-run-ok`'s shape.
     let built = build_raw(
         "enum E { boom }\nfn g() { }\nfn w(inout o: Out) raises E { errdefer g(); return; }\n         fn main(inout out: Out) { w(&out) else |e| { return; }; }\n",
     );
+    assert!(built.check_diags.is_empty(), "{:?}", built.check_diags);
+    assert!(built.lower_diags.is_empty(), "{:?}", built.lower_diags);
+    let main = &built.decls.iter().find(|(n, _)| n == "main").unwrap().1;
     assert!(
-        built.check_diags.is_empty(),
-        "check diags: {:?}",
-        built.check_diags
+        main.blocks.all_rows().any(|(_, b)| b.term.op == Op::TryBr),
+        "the handler is a `try_br` on the call"
     );
+    let w = &built.decls.iter().find(|(n, _)| n == "w").unwrap().1;
     assert!(
-        matches!(
-            built
-                .lower_diags
-                .iter()
-                .find(|d| d.name == "main")
-                .map(|d| &d.error),
-            Some(LowerError::Failure)
-        ),
-        "the handler form is F3's: {:?}",
-        built.lower_diags
+        w.exits.all_rows().all(|(_, e)| e.kind == ExitKind::Normal),
+        "`w` has no error exit"
     );
-    // `02-failure/main-raises-after-defer-run-error`'s shape: `raise`
-    // propagation out of `main`, also F3's.
+    assert_eq!(built.outcome.as_ref().unwrap().exit, Exit::Return);
+    // `02-failure/main-raises-after-defer-run-error`'s shape.
     let built =
         build_raw("enum E { boom }\nfn main() raises E { defer g(); raise E.boom; }\nfn g() { }\n");
-    assert!(
-        built.check_diags.is_empty(),
-        "check diags: {:?}",
-        built.check_diags
+    assert!(built.check_diags.is_empty(), "{:?}", built.check_diags);
+    assert!(built.lower_diags.is_empty(), "{:?}", built.lower_diags);
+    let main = &built.decls.iter().find(|(n, _)| n == "main").unwrap().1;
+    let raise_edges: Vec<_> = main
+        .exits
+        .all_rows()
+        .filter(|(_, e)| main.blocks.row(e.from).term.op == Op::Raise)
+        .collect();
+    assert_eq!(raise_edges.len(), 1, "one `raise` edge");
+    let (_, edge) = &raise_edges[0];
+    assert_eq!(edge.kind, ExitKind::Error);
+    assert_eq!(
+        main.exits.pending(edge.pending.clone()),
+        &[fors_fmir::ids::DeferId(0)],
+        "the `defer` body runs on the error exit"
     );
-    assert!(
-        matches!(
-            built
-                .lower_diags
-                .iter()
-                .find(|d| d.name == "main")
-                .map(|d| &d.error),
-            Some(LowerError::Failure)
-        ),
-        "`raise` is F3's: {:?}",
-        built.lower_diags
+    let out = built.outcome.unwrap();
+    assert_eq!(out.exit, Exit::Raise);
+    assert_eq!(out.stderr, b"error: m.E.boom\n");
+}
+
+/// ch02 R3: a `?` across two error types applies exactly ONE `ErrorFrom`
+/// conversion, on the `err` edge, and nothing chains a second. Asserted on
+/// the FMIR (the `err` block holds one call, then the `raise`) and on the
+/// run (the converted error is what `main` renders).
+#[test]
+fn f3_question_mark_applies_exactly_one_error_from_conversion() {
+    use fors_fmir::op::Op;
+    let built = build_raw(
+        "enum NetError { timeout }\nenum AppError { net(i64) }\n\
+         impl ErrorFrom[NetError] for AppError {\n    fn from(let e: NetError) -> AppError { return AppError.net(7); }\n}\n\
+         fn get(let n: i64) -> i64 raises NetError {\n    if n == 0 { raise NetError.timeout; }\n    return n;\n}\n\
+         fn main() raises AppError { get(0)?; }\n",
     );
+    assert!(built.check_diags.is_empty(), "{:?}", built.check_diags);
+    assert!(built.lower_diags.is_empty(), "{:?}", built.lower_diags);
+    let main = &built.decls.iter().find(|(n, _)| n == "main").unwrap().1;
+    let (_, try_block) = main
+        .blocks
+        .all_rows()
+        .find(|(_, b)| b.term.op == Op::TryBr)
+        .expect("a try_br");
+    let err = main.blocks.row(fors_fmir::ids::BlockId(try_block.term.c));
+    assert_eq!(err.term.op, Op::Raise, "the `err` edge raises");
+    let calls = (err.first_inst..err.first_inst + err.inst_len)
+        .filter(|&i| main.insts.row(fors_fmir::ids::InstId(i)).op == Op::CallDirect)
+        .count();
+    assert_eq!(
+        calls, 1,
+        "exactly one `ErrorFrom.from` call on the edge (ch02 R3)"
+    );
+    let out = built.outcome.unwrap();
+    assert_eq!(out.exit, Exit::Raise);
+    assert_eq!(out.stderr, b"error: m.AppError.net(7)\n");
+}
+
+/// ch02 R16: a `raise` inside a handler makes an ERROR exit, so the
+/// enclosing function's `errdefer` runs; a handler yielding a value makes a
+/// normal one, so it does not.
+#[test]
+fn f3_a_handler_that_raises_is_an_error_exit() {
+    // `write_line` is F1's stdout stand-in whatever its owner, so the
+    // `errdefer` body's line reaching stdout is the observation.
+    let out = run_main(
+        "enum E { boom }\nfn step() raises E { raise E.boom; }\n\
+         fn work(inout o: Out) raises E { errdefer o.write_line(\"undone\"); step() else |e| { raise e; }; }\n\
+         fn keep(inout o: Out) raises E { errdefer o.write_line(\"wrong\"); step() else |e| { }; }\n\
+         fn main(inout out: Out) { work(&out) else |e| { }; keep(&out) else |e| { }; out.write_line(\"ok\"); }\n",
+    );
+    assert_eq!(out.exit, Exit::Return);
+    assert_eq!(out.stdout, b"undone\nok\n");
 }
 
 #[test]
@@ -866,11 +917,19 @@ fn gate_trunc_as_rounds_toward_zero() {
 
 #[test]
 fn gate_user_method_named_like_a_ch03_method_keeps_its_body() {
-    // The ch03 family is reached only through a SILENT lookup on a
-    // primitive receiver; a user method the checker resolved runs its own
-    // body, whatever it is spelled (`is_ch03_prim_site` condition 2).
-    run_ok(
-        "struct B { n: i32 }\nimpl B { fn wrap_add(let self: B, let k: i32) -> i32 { return 100; } }\nfn main(inout out: Out) { var b: B = B { n: 1 }; if b.wrap_add(2) == 100 { out.write_line(\"ok\"); } }\n",
+    // F3: a call is a ch03 numeric primitive iff the checker published a
+    // D11 `NumericCallRow` for it; a user method that merely shares the
+    // spelling has none and lowers as an ORDINARY call to its own body.
+    let src = "struct B { n: i32 }\nimpl B { fn wrap_add(let self: B, let k: i32) -> i32 { return 100; } }\nfn main(inout out: Out) { var b: B = B { n: 1 }; if b.wrap_add(2) == 100 { out.write_line(\"ok\"); } }\n";
+    run_ok(src);
+    let built = build_raw(src);
+    let main = &built.decls.iter().find(|(n, _)| n == "main").unwrap().1;
+    assert!(
+        !main
+            .insts
+            .all_rows()
+            .any(|(_, r)| r.op == fors_fmir::op::Op::Add(fors_fmir::op::ArithMode::Wrap)),
+        "no wrapping add was emitted for the user's `wrap_add`"
     );
 }
 
@@ -1879,5 +1938,31 @@ fn f6_with_allocator_opens_a_branded_scope_and_no_region() {
     assert!(
         decl.regions.is_empty(),
         "no `region_enter` is needed for `with allocator`"
+    );
+}
+
+/// ch03 R9 (F3): `N as T` from a `comptime_int` constant is the converted
+/// CONSTANT, folded at lowering — to an integer and to a float.
+#[test]
+fn f3_comptime_int_as_folds_to_the_converted_constant() {
+    run_ok(
+        "const N: comptime_int = 300;\nfn main(inout out: Out) { var x: i32 = N as i32; var f: f64 = N as f64; if x == 300 { if f == 300.0 { out.write_line(\"ok\"); } } }\n",
+    );
+}
+
+/// ch03 R6/R9 (F3): a `comptime_int` the target cannot represent exactly is
+/// a NAMED comptime refusal at lowering, never a silently truncated constant.
+#[test]
+fn f3_comptime_int_as_out_of_range_is_a_named_refusal() {
+    let built = build_raw(
+        "const N: comptime_int = 300;\nfn f() -> u8 { var x: u8 = N as u8; return x; }\n",
+    );
+    assert!(built.check_diags.is_empty(), "{:?}", built.check_diags);
+    assert!(
+        built.lower_diags.iter().any(
+            |d| matches!(&d.error, LowerError::Comptime(w) if w.contains("cannot represent 300"))
+        ),
+        "lower diags: {:?}",
+        built.lower_diags
     );
 }

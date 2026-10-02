@@ -39,22 +39,22 @@ type Offender = String;
 // are the ONLY reasons [`ALLOWED`] may cite: a new kind of absorption needs a
 // new named constant here, written down before its rows are added.
 
-/// ch10 R2 / ch08 R17. The prelude NAMES the eight std types `Allocator`,
-/// `AllocError`, `PageAllocator`, `Buffer`, `Vec`, `Map`, `String` and
-/// `Utf8Error`, but binds them to no declaration: `fors_fir::prelude`'s
-/// `OPAQUE` row is `PreludeEntity::Opaque` and its own comment says "the
-/// resolver binds them to real items" when package `std` is in the build —
-/// which `fors_resolve`'s `build_prelude` does not do (every name in
-/// `PRELUDE_TYPES5` becomes `Entity::PreludeType` unconditionally). So
-/// `lower::head_of` answers `Head::Opaque`, `Vec[i32, A]` lowers to
-/// `TY_ERROR`, and §7.10's absorbing `TY_ERROR` swallows every expression
-/// over such a value — with std's real sources in the build, which this sweep
-/// provides. Owner: the increment that binds ch10 R2's prelude names to
-/// package `std`'s declarations; until then these rows are the inventory of
-/// what it will unlock.
-const R2_OPAQUE: &str = "ch10 R2: the prelude names this std type but binds it to no declaration \
-                         (PreludeEntity::Opaque), so its type is TY_ERROR and §7.10 absorbs the \
-                         expression; owner: ch10 R2's prelude binding";
+/// ch10 R17 / ch01 R15: `main`'s `inout heap: mem.Heap` ("the heap's brand
+/// is named by `main`'s parameter", ch10 R17, which makes it behave like a
+/// `with allocator heap:` header). Signature lowering fills an omitted
+/// trailing brand only inside a `with` HEADER (ch01 R15b, `lower::type_args`)
+/// and has no brand named by a VALUE parameter at all (the
+/// [`R15_BRAND_PARAM`] gap), so `heap`'s own type, and `Own[i64, heap]` /
+/// `Vec[i32, heap]`, lower to `TY_ERROR` and every use absorbs. These rows
+/// were filed under ch10 R2 until I10c bound the prelude names to std: with
+/// `Vec`, `AllocError` and `mem.Heap`'s `Allocator` impl now real, what is
+/// left silent is exactly the brand. Owner: ch10 R17's main-heap brand, on
+/// top of ch01 R15's brand-by-parameter form.
+const R17_MAIN_HEAP: &str = "ch10 R17/ch01 R15: `main`'s `inout heap: mem.Heap` names the heap's \
+                             brand by the PARAMETER; lowering fills an omitted brand only in a \
+                             `with` header and has no brand-by-parameter, so `heap` and the types \
+                             it brands are TY_ERROR and their uses absorb; owner: ch10 R17's \
+                             main-heap brand";
 
 /// R43 tier (2) on a RIGID receiver bounded by the PRELUDE trait
 /// `Iterator`. `lookup_on_rigid` marks the table incomplete whenever a
@@ -63,6 +63,16 @@ const R2_OPAQUE: &str = "ch10 R2: the prelude names this std type but binds it t
 /// `LookupError::Silent`, so `it.count()` / `it.take(2)` on an `I: Iterator`
 /// absorbs. Owner: the increment that gives `Iterator` its full prelude
 /// surface (the same one `prelude_head_table_incomplete` waits for).
+///
+/// Re-justified by I10c, with `std` in the build: a user's `I: Iterator`
+/// names the LANGUAGE-KNOWN row, and the provided adaptors are declared on
+/// `std.mem.seq`'s row of the same trait (ch10 R32: "one trait, not two").
+/// I10c identifies the two rows for BOUND satisfaction (`Wf::holds`, so
+/// `zip[J: Iterator]` accepts a user's `I`), but not for member lookup or
+/// for projections: offering `seq`'s `map` on a rigid `I` would type its
+/// `Self.Item` as `seq`'s projection, which is a different neutral type from
+/// the user's `I.Item` (`adaptor-chain-rigid-receiver-accepted` would then
+/// be a false T0026). That identity is this owner's, not ch10 R2's.
 const R43_RIGID_ITERATOR: &str = "R43 tier (2) on a rigid receiver bounded by the prelude trait \
                                   `Iterator`: the prelude's rows do not list the adaptors, so \
                                   `lookup_on_rigid` stays silent; owner: `Iterator`'s prelude \
@@ -126,41 +136,6 @@ const R11_QUALS: &str = "`subsume`: same bare type, different `iso`/`imm`/`secre
 /// own SPAN, which is what tells the nested calls of one chain apart.
 const ALLOWED: &[(&str, &str, &str, &str, &str)] = &[
     (
-        "01-ownership/closure-capture-keeps-local-in-chain-accepted.fors",
-        "m",
-        "11:50-11:58",
-        "CallExpr",
-        R2_OPAQUE,
-    ),
-    (
-        "01-ownership/closure-capture-keeps-local-in-chain-accepted.fors",
-        "m",
-        "11:50-11:78",
-        "CallExpr",
-        R2_OPAQUE,
-    ),
-    (
-        "01-ownership/defer-with-block-allocator-live-accepted.fors",
-        "m",
-        "10:30-10:41",
-        "CallExpr",
-        R2_OPAQUE,
-    ),
-    (
-        "01-ownership/defer-with-block-allocator-live-accepted.fors",
-        "m",
-        "10:30-10:42",
-        "TryExpr",
-        R2_OPAQUE,
-    ),
-    (
-        "01-ownership/defer-with-block-allocator-live-accepted.fors",
-        "m",
-        "11:15-11:31",
-        "CallExpr",
-        R2_OPAQUE,
-    ),
-    (
         "01-ownership/linear-spawn-move-accepted.fors",
         "m",
         "21:22-21:33",
@@ -168,172 +143,11 @@ const ALLOWED: &[(&str, &str, &str, &str, &str)] = &[
         R11_QUALS,
     ),
     (
-        "01-ownership/scoped-rvalue-extent-is-the-for-accepted.fors",
-        "m",
-        "10:14-10:22",
-        "CallExpr",
-        R2_OPAQUE,
-    ),
-    (
-        "01-ownership/scoped-rvalue-extent-is-the-for-accepted.fors",
-        "m",
-        "13:12-13:15",
-        "NameExpr",
-        R2_OPAQUE,
-    ),
-    (
-        "01-ownership/scoped-rvalue-extent-is-the-for-accepted.fors",
-        "m",
-        "13:5-13:6",
-        "NameExpr",
-        R2_OPAQUE,
-    ),
-    (
-        "01-ownership/scoped-rvalue-extent-is-the-for-accepted.fors",
-        "m",
-        "13:5-13:9",
-        "Bracket",
-        R2_OPAQUE,
-    ),
-    (
-        "01-ownership/scoped-rvalue-extent-is-the-statement-accepted.fors",
-        "m",
-        "10:12-10:13",
-        "NameExpr",
-        R2_OPAQUE,
-    ),
-    (
-        "01-ownership/scoped-rvalue-extent-is-the-statement-accepted.fors",
-        "m",
-        "10:5-10:6",
-        "NameExpr",
-        R2_OPAQUE,
-    ),
-    (
-        "01-ownership/scoped-rvalue-extent-is-the-statement-accepted.fors",
-        "m",
-        "10:5-10:9",
-        "Bracket",
-        R2_OPAQUE,
-    ),
-    (
-        "01-ownership/scoped-rvalue-extent-is-the-statement-accepted.fors",
-        "m",
-        "9:20-9:28",
-        "CallExpr",
-        R2_OPAQUE,
-    ),
-    (
-        "01-ownership/scoped-rvalue-extent-is-the-statement-accepted.fors",
-        "m",
-        "9:20-9:36",
-        "CallExpr",
-        R2_OPAQUE,
-    ),
-    (
-        "01-ownership/scoped-through-generic-sink-consumed-accepted.fors",
-        "m",
-        "9:12-9:20",
-        "CallExpr",
-        R2_OPAQUE,
-    ),
-    (
-        "01-ownership/scoped-through-generic-sink-consumed-accepted.fors",
-        "m",
-        "9:12-9:28",
-        "CallExpr",
-        R2_OPAQUE,
-    ),
-    (
-        "01-ownership/scoped-through-generic-sink-returned-under-scoped-accepted.fors",
-        "m",
-        "10:12-10:20",
-        "CallExpr",
-        R2_OPAQUE,
-    ),
-    (
-        "01-ownership/scoped-through-generic-sink-returned-under-scoped-accepted.fors",
-        "m",
-        "10:12-10:28",
-        "CallExpr",
-        R2_OPAQUE,
-    ),
-    (
-        "01-ownership/zip-scoped-and-owned-accepted.fors",
-        "m",
-        "9:12-9:20",
-        "CallExpr",
-        R2_OPAQUE,
-    ),
-    (
-        "01-ownership/zip-scoped-and-owned-accepted.fors",
-        "m",
-        "9:12-9:36",
-        "CallExpr",
-        R2_OPAQUE,
-    ),
-    (
-        "01-ownership/zip-scoped-and-owned-accepted.fors",
-        "m",
-        "9:12-9:44",
-        "CallExpr",
-        R2_OPAQUE,
-    ),
-    (
-        "01-ownership/zip-two-scoped-sources-local-accepted.fors",
-        "m",
-        "9:12-9:20",
-        "CallExpr",
-        R2_OPAQUE,
-    ),
-    (
-        "01-ownership/zip-two-scoped-sources-local-accepted.fors",
-        "m",
-        "9:12-9:34",
-        "CallExpr",
-        R2_OPAQUE,
-    ),
-    (
-        "01-ownership/zip-two-scoped-sources-local-accepted.fors",
-        "m",
-        "9:12-9:42",
-        "CallExpr",
-        R2_OPAQUE,
-    ),
-    (
-        "01-ownership/zip-two-scoped-sources-local-accepted.fors",
-        "m",
-        "9:25-9:33",
-        "CallExpr",
-        R2_OPAQUE,
-    ),
-    (
         "08-names/param-in-scope-in-later-param-type-accepted.fors",
         "m",
         "9:12-9:13",
         "NameExpr",
         R15_BRAND_PARAM,
-    ),
-    (
-        "09-types/adaptor-annotated-binding-accepted.fors",
-        "m",
-        "12:61-12:69",
-        "CallExpr",
-        R2_OPAQUE,
-    ),
-    (
-        "09-types/adaptor-annotated-binding-accepted.fors",
-        "m",
-        "12:61-12:81",
-        "CallExpr",
-        R2_OPAQUE,
-    ),
-    (
-        "09-types/adaptor-annotated-binding-accepted.fors",
-        "m",
-        "12:61-12:89",
-        "CallExpr",
-        R2_OPAQUE,
     ),
     (
         "09-types/adaptor-by-ref-for-then-reuse-accepted.fors",
@@ -406,104 +220,6 @@ const ALLOWED: &[(&str, &str, &str, &str, &str)] = &[
         R43_RIGID_ITERATOR,
     ),
     (
-        "09-types/adaptor-chain-across-question-accepted.fors",
-        "m",
-        "13:20-13:28",
-        "CallExpr",
-        R2_OPAQUE,
-    ),
-    (
-        "09-types/adaptor-chain-across-question-accepted.fors",
-        "m",
-        "13:20-13:36",
-        "CallExpr",
-        R2_OPAQUE,
-    ),
-    (
-        "09-types/adaptor-chain-across-question-accepted.fors",
-        "m",
-        "13:20-13:44",
-        "CallExpr",
-        R2_OPAQUE,
-    ),
-    (
-        "09-types/adaptor-chain-as-for-iterable-accepted.fors",
-        "m",
-        "12:14-12:22",
-        "CallExpr",
-        R2_OPAQUE,
-    ),
-    (
-        "09-types/adaptor-chain-as-for-iterable-accepted.fors",
-        "m",
-        "12:14-12:34",
-        "CallExpr",
-        R2_OPAQUE,
-    ),
-    (
-        "09-types/adaptor-chain-as-for-iterable-accepted.fors",
-        "m",
-        "12:14-12:42",
-        "CallExpr",
-        R2_OPAQUE,
-    ),
-    (
-        "09-types/adaptor-chain-closure-accepted.fors",
-        "m",
-        "9:20-9:28",
-        "CallExpr",
-        R2_OPAQUE,
-    ),
-    (
-        "09-types/adaptor-chain-closure-accepted.fors",
-        "m",
-        "9:20-9:48",
-        "CallExpr",
-        R2_OPAQUE,
-    ),
-    (
-        "09-types/adaptor-chain-closure-accepted.fors",
-        "m",
-        "9:20-9:56",
-        "CallExpr",
-        R2_OPAQUE,
-    ),
-    (
-        "09-types/adaptor-chain-method-accepted.fors",
-        "m",
-        "12:12-12:20",
-        "CallExpr",
-        R2_OPAQUE,
-    ),
-    (
-        "09-types/adaptor-chain-method-accepted.fors",
-        "m",
-        "12:12-12:32",
-        "CallExpr",
-        R2_OPAQUE,
-    ),
-    (
-        "09-types/adaptor-chain-method-accepted.fors",
-        "m",
-        "12:12-12:46",
-        "CallExpr",
-        R2_OPAQUE,
-    ),
-    (
-        "09-types/adaptor-chain-method-accepted.fors",
-        "m",
-        "12:12-12:54",
-        "CallExpr",
-        R2_OPAQUE,
-    ),
-    (
-        "09-types/adaptor-chain-method-accepted.fors",
-        "m",
-        "12:12-12:62",
-        "CallExpr",
-        R2_OPAQUE,
-    ),
-    (
         "09-types/adaptor-chain-on-adaptor-receiver-accepted.fors",
         "m",
         "9:12-9:22",
@@ -536,21 +252,21 @@ const ALLOWED: &[(&str, &str, &str, &str, &str)] = &[
         "m",
         "11:12-11:32",
         "CallExpr",
-        R2_OPAQUE,
+        R43_RIGID_ITERATOR,
     ),
     (
         "09-types/adaptor-chain-rigid-receiver-accepted.fors",
         "m",
         "11:12-11:40",
         "CallExpr",
-        R2_OPAQUE,
+        R43_RIGID_ITERATOR,
     ),
     (
         "09-types/adaptor-chain-rigid-receiver-accepted.fors",
         "m",
         "11:19-11:31",
         "Bracket",
-        R2_OPAQUE,
+        R43_RIGID_ITERATOR,
     ),
     (
         "09-types/adaptor-name-clash-qualified-accepted.fors",
@@ -565,20 +281,6 @@ const ALLOWED: &[(&str, &str, &str, &str, &str)] = &[
         "9:12-9:45",
         "CallExpr",
         R45_TRAIT_HEAD,
-    ),
-    (
-        "09-types/adaptor-stored-then-chained-accepted.fors",
-        "m",
-        "12:50-12:58",
-        "CallExpr",
-        R2_OPAQUE,
-    ),
-    (
-        "09-types/adaptor-stored-then-chained-accepted.fors",
-        "m",
-        "12:50-12:70",
-        "CallExpr",
-        R2_OPAQUE,
     ),
     (
         "09-types/brand-inferred-for-callee-accepted.fors",
@@ -658,634 +360,81 @@ const ALLOWED: &[(&str, &str, &str, &str, &str)] = &[
         R45_TRAIT_HEAD,
     ),
     (
-        "09-types/try-fold-method-accepted.fors",
-        "m",
-        "16:12-16:20",
-        "CallExpr",
-        R2_OPAQUE,
-    ),
-    (
-        "09-types/try-fold-method-accepted.fors",
-        "m",
-        "16:12-16:37",
-        "CallExpr",
-        R2_OPAQUE,
-    ),
-    (
-        "09-types/try-fold-method-accepted.fors",
-        "m",
-        "16:12-16:38",
-        "TryExpr",
-        R2_OPAQUE,
-    ),
-    (
-        "10-std/adaptor-chain-accepted.fors",
-        "m",
-        "13:12-13:20",
-        "CallExpr",
-        R2_OPAQUE,
-    ),
-    (
-        "10-std/adaptor-chain-accepted.fors",
-        "m",
-        "13:12-13:32",
-        "CallExpr",
-        R2_OPAQUE,
-    ),
-    (
-        "10-std/adaptor-chain-accepted.fors",
-        "m",
-        "13:12-13:46",
-        "CallExpr",
-        R2_OPAQUE,
-    ),
-    (
-        "10-std/adaptor-chain-accepted.fors",
-        "m",
-        "13:12-13:54",
-        "CallExpr",
-        R2_OPAQUE,
-    ),
-    (
-        "10-std/adaptor-chain-accepted.fors",
-        "m",
-        "13:12-13:62",
-        "CallExpr",
-        R2_OPAQUE,
-    ),
-    (
-        "10-std/buffer-fields-public-accepted.fors",
-        "m",
-        "11:20-11:21",
-        "NameExpr",
-        R2_OPAQUE,
-    ),
-    (
-        "10-std/buffer-fields-public-accepted.fors",
-        "m",
-        "11:5-11:17",
-        "Bracket",
-        R2_OPAQUE,
-    ),
-    (
-        "10-std/buffer-in-module-without-allocator-accepted.fors",
-        "m",
-        "10:12-10:21",
-        "CallExpr",
-        R2_OPAQUE,
-    ),
-    (
-        "10-std/buffer-in-module-without-allocator-accepted.fors",
-        "m",
-        "9:31-9:45",
-        "CallExpr",
-        R2_OPAQUE,
-    ),
-    (
-        "10-std/consumer-count-method-accepted.fors",
-        "m",
-        "10:5-10:18",
-        "CallExpr",
-        R2_OPAQUE,
-    ),
-    (
-        "10-std/consumer-count-method-accepted.fors",
-        "m",
-        "10:5-10:19",
-        "TryExpr",
-        R2_OPAQUE,
-    ),
-    (
-        "10-std/consumer-count-method-accepted.fors",
-        "m",
-        "9:20-9:28",
-        "CallExpr",
-        R2_OPAQUE,
-    ),
-    (
-        "10-std/consumer-count-method-accepted.fors",
-        "m",
-        "9:20-9:36",
-        "CallExpr",
-        R2_OPAQUE,
-    ),
-    (
-        "10-std/consumer-fold-method-accepted.fors",
-        "m",
-        "11:12-11:20",
-        "CallExpr",
-        R2_OPAQUE,
-    ),
-    (
-        "10-std/consumer-fold-method-accepted.fors",
-        "m",
-        "11:12-11:33",
-        "CallExpr",
-        R2_OPAQUE,
-    ),
-    (
-        "10-std/fixed-allocator-in-needs-empty-module-accepted.fors",
-        "m",
-        "11:36-11:45",
-        "CallExpr",
-        R2_OPAQUE,
-    ),
-    (
-        "10-std/fixed-allocator-in-needs-empty-module-accepted.fors",
-        "m",
-        "12:15-12:33",
-        "CallExpr",
-        R2_OPAQUE,
-    ),
-    (
-        "10-std/fixed-allocator-in-needs-empty-module-accepted.fors",
-        "m",
-        "13:9-13:28",
-        "CallExpr",
-        R2_OPAQUE,
-    ),
-    (
-        "10-std/fixed-allocator-in-needs-empty-module-accepted.fors",
-        "m",
-        "13:9-13:29",
-        "TryExpr",
-        R2_OPAQUE,
-    ),
-    (
-        "10-std/fs-name-dotdot-invalid-run-ok.fors",
-        "app",
-        "11:31-11:45",
-        "CallExpr",
-        R2_OPAQUE,
-    ),
-    (
         "10-std/heap-brand-named-by-parameter-accepted.fors",
         "app",
         "11:29-11:38",
         "CallExpr",
-        R2_OPAQUE,
+        R17_MAIN_HEAP,
     ),
     (
         "10-std/heap-brand-named-by-parameter-accepted.fors",
         "app",
         "12:11-12:26",
         "CallExpr",
-        R2_OPAQUE,
+        R17_MAIN_HEAP,
     ),
     (
         "10-std/heap-brand-named-by-parameter-accepted.fors",
         "app",
         "12:21-12:25",
         "NameExpr",
-        R2_OPAQUE,
+        R17_MAIN_HEAP,
     ),
     (
         "10-std/heap-brand-named-by-parameter-accepted.fors",
         "app",
         "13:13-13:17",
         "NameExpr",
-        R2_OPAQUE,
+        R17_MAIN_HEAP,
     ),
     (
         "10-std/heap-brand-named-by-parameter-accepted.fors",
         "app",
         "13:5-13:21",
         "CallExpr",
-        R2_OPAQUE,
+        R17_MAIN_HEAP,
     ),
     (
         "10-std/heap-brand-named-by-parameter-accepted.fors",
         "app",
         "13:5-13:22",
         "TryExpr",
-        R2_OPAQUE,
-    ),
-    (
-        "10-std/index-loop-mutates-accepted.fors",
-        "m",
-        "10:11-10:12",
-        "NameExpr",
-        R2_OPAQUE,
-    ),
-    (
-        "10-std/index-loop-mutates-accepted.fors",
-        "m",
-        "10:16-10:17",
-        "NameExpr",
-        R2_OPAQUE,
-    ),
-    (
-        "10-std/index-loop-mutates-accepted.fors",
-        "m",
-        "10:16-10:20",
-        "Bracket",
-        R2_OPAQUE,
-    ),
-    (
-        "10-std/index-loop-mutates-accepted.fors",
-        "m",
-        "10:16-10:24",
-        "MulExpr",
-        R2_OPAQUE,
-    ),
-    (
-        "10-std/index-loop-mutates-accepted.fors",
-        "m",
-        "10:18-10:19",
-        "NameExpr",
-        R2_OPAQUE,
-    ),
-    (
-        "10-std/index-loop-mutates-accepted.fors",
-        "m",
-        "10:23-10:24",
-        "Literal",
-        R2_OPAQUE,
-    ),
-    (
-        "10-std/index-loop-mutates-accepted.fors",
-        "m",
-        "10:9-10:10",
-        "NameExpr",
-        R2_OPAQUE,
-    ),
-    (
-        "10-std/index-loop-mutates-accepted.fors",
-        "m",
-        "10:9-10:13",
-        "Bracket",
-        R2_OPAQUE,
-    ),
-    (
-        "10-std/index-loop-mutates-accepted.fors",
-        "m",
-        "9:14-9:15",
-        "Literal",
-        R2_OPAQUE,
-    ),
-    (
-        "10-std/index-loop-mutates-accepted.fors",
-        "m",
-        "9:14-9:27",
-        "RangeExpr",
-        R2_OPAQUE,
-    ),
-    (
-        "10-std/index-loop-mutates-accepted.fors",
-        "m",
-        "9:20-9:27",
-        "CallExpr",
-        R2_OPAQUE,
-    ),
-    (
-        "10-std/linear-moved-to-caller-accepted.fors",
-        "m",
-        "10:14-10:26",
-        "CallExpr",
-        R2_OPAQUE,
-    ),
-    (
-        "10-std/linear-moved-to-caller-accepted.fors",
-        "m",
-        "11:5-11:18",
-        "CallExpr",
-        R2_OPAQUE,
-    ),
-    (
-        "10-std/linear-moved-to-caller-accepted.fors",
-        "m",
-        "11:5-11:19",
-        "TryExpr",
-        R2_OPAQUE,
-    ),
-    (
-        "10-std/linear-moved-to-caller-accepted.fors",
-        "m",
-        "12:12-12:18",
-        "UnaryExpr",
-        R2_OPAQUE,
-    ),
-    (
-        "10-std/linear-moved-to-caller-accepted.fors",
-        "m",
-        "12:17-12:18",
-        "NameExpr",
-        R2_OPAQUE,
-    ),
-    (
-        "10-std/linear-moved-to-caller-accepted.fors",
-        "m",
-        "9:26-9:35",
-        "CallExpr",
-        R2_OPAQUE,
+        R17_MAIN_HEAP,
     ),
     (
         "10-std/main-heap-parameter-accepted.fors",
         "app",
         "11:29-11:43",
         "CallExpr",
-        R2_OPAQUE,
+        R17_MAIN_HEAP,
     ),
     (
         "10-std/main-heap-parameter-accepted.fors",
         "app",
         "11:29-11:44",
         "TryExpr",
-        R2_OPAQUE,
+        R17_MAIN_HEAP,
     ),
     (
         "10-std/main-heap-parameter-accepted.fors",
         "app",
         "12:17-12:23",
         "UnaryExpr",
-        R2_OPAQUE,
+        R17_MAIN_HEAP,
     ),
     (
         "10-std/main-heap-parameter-accepted.fors",
         "app",
         "12:22-12:23",
         "NameExpr",
-        R2_OPAQUE,
+        R17_MAIN_HEAP,
     ),
     (
         "10-std/main-heap-parameter-accepted.fors",
         "app",
         "12:5-12:24",
         "CallExpr",
-        R2_OPAQUE,
-    ),
-    (
-        "10-std/prelude-alloc-error-without-import-accepted.fors",
-        "m",
-        "9:23-9:43",
-        "NameExpr",
-        R2_OPAQUE,
-    ),
-    (
-        "10-std/prelude-page-allocator-without-import-accepted.fors",
-        "m",
-        "10:33-10:47",
-        "CallExpr",
-        R2_OPAQUE,
-    ),
-    (
-        "10-std/prelude-page-allocator-without-import-accepted.fors",
-        "m",
-        "10:33-10:48",
-        "TryExpr",
-        R2_OPAQUE,
-    ),
-    (
-        "10-std/prelude-page-allocator-without-import-accepted.fors",
-        "m",
-        "11:9-11:28",
-        "CallExpr",
-        R2_OPAQUE,
-    ),
-    (
-        "10-std/prelude-vec-without-import-accepted.fors",
-        "m",
-        "8:54-8:61",
-        "CallExpr",
-        R2_OPAQUE,
-    ),
-    (
-        "10-std/try-collect-into-is-free-function-accepted.fors",
-        "m",
-        "12:26-12:36",
-        "CallExpr",
-        R2_OPAQUE,
-    ),
-    (
-        "10-std/try-collect-into-is-free-function-accepted.fors",
-        "m",
-        "12:39-12:42",
-        "NameExpr",
-        R2_OPAQUE,
-    ),
-    (
-        "10-std/try-for-each-error-propagates-run-ok.fors",
-        "app",
-        "11:22-11:46",
-        "NameExpr",
-        R2_OPAQUE,
-    ),
-    (
-        "10-std/try-for-each-method-accepted.fors",
-        "m",
-        "13:5-13:13",
-        "CallExpr",
-        R2_OPAQUE,
-    ),
-    (
-        "10-std/try-for-each-method-accepted.fors",
-        "m",
-        "13:5-13:32",
-        "CallExpr",
-        R2_OPAQUE,
-    ),
-    (
-        "10-std/try-for-each-method-accepted.fors",
-        "m",
-        "13:5-13:33",
-        "TryExpr",
-        R2_OPAQUE,
-    ),
-    (
-        "10-std/vec-consumed-by-defer-accepted.fors",
-        "m",
-        "10:11-10:23",
-        "CallExpr",
-        R2_OPAQUE,
-    ),
-    (
-        "10-std/vec-consumed-by-defer-accepted.fors",
-        "m",
-        "11:5-11:18",
-        "CallExpr",
-        R2_OPAQUE,
-    ),
-    (
-        "10-std/vec-consumed-by-defer-accepted.fors",
-        "m",
-        "11:5-11:19",
-        "TryExpr",
-        R2_OPAQUE,
-    ),
-    (
-        "10-std/vec-consumed-by-defer-accepted.fors",
-        "m",
-        "9:26-9:35",
-        "CallExpr",
-        R2_OPAQUE,
-    ),
-    (
-        "10-std/vec-consumed-by-errdefer-then-returned-accepted.fors",
-        "m",
-        "10:14-10:26",
-        "CallExpr",
-        R2_OPAQUE,
-    ),
-    (
-        "10-std/vec-consumed-by-errdefer-then-returned-accepted.fors",
-        "m",
-        "11:5-11:18",
-        "CallExpr",
-        R2_OPAQUE,
-    ),
-    (
-        "10-std/vec-consumed-by-errdefer-then-returned-accepted.fors",
-        "m",
-        "11:5-11:19",
-        "TryExpr",
-        R2_OPAQUE,
-    ),
-    (
-        "10-std/vec-consumed-by-errdefer-then-returned-accepted.fors",
-        "m",
-        "12:5-12:18",
-        "CallExpr",
-        R2_OPAQUE,
-    ),
-    (
-        "10-std/vec-consumed-by-errdefer-then-returned-accepted.fors",
-        "m",
-        "12:5-12:19",
-        "TryExpr",
-        R2_OPAQUE,
-    ),
-    (
-        "10-std/vec-consumed-by-errdefer-then-returned-accepted.fors",
-        "m",
-        "13:12-13:18",
-        "UnaryExpr",
-        R2_OPAQUE,
-    ),
-    (
-        "10-std/vec-consumed-by-errdefer-then-returned-accepted.fors",
-        "m",
-        "13:17-13:18",
-        "NameExpr",
-        R2_OPAQUE,
-    ),
-    (
-        "10-std/vec-consumed-by-errdefer-then-returned-accepted.fors",
-        "m",
-        "9:26-9:35",
-        "CallExpr",
-        R2_OPAQUE,
-    ),
-    (
-        "10-std/vec-linear-always-empty-deinit-accepted.fors",
-        "m",
-        "10:5-10:17",
-        "CallExpr",
-        R2_OPAQUE,
-    ),
-    (
-        "10-std/vec-linear-always-empty-deinit-accepted.fors",
-        "m",
-        "9:26-9:35",
-        "CallExpr",
-        R2_OPAQUE,
-    ),
-    (
-        "10-std/vec-linear-element-pop-then-deinit-empty-accepted.fors",
-        "m",
-        "10:11-10:18",
-        "CallExpr",
-        R2_OPAQUE,
-    ),
-    (
-        "10-std/vec-linear-element-pop-then-deinit-empty-accepted.fors",
-        "m",
-        "10:21-10:22",
-        "Literal",
-        R2_OPAQUE,
-    ),
-    (
-        "10-std/vec-linear-element-pop-then-deinit-empty-accepted.fors",
-        "m",
-        "11:15-11:22",
-        "CallExpr",
-        R2_OPAQUE,
-    ),
-    (
-        "10-std/vec-linear-element-pop-then-deinit-empty-accepted.fors",
-        "m",
-        "12:30-12:46",
-        "CallExpr",
-        R2_OPAQUE,
-    ),
-    (
-        "10-std/vec-linear-element-pop-then-deinit-empty-accepted.fors",
-        "m",
-        "16:5-16:23",
-        "CallExpr",
-        R2_OPAQUE,
-    ),
-    (
-        "10-std/vec-linear-element-pop-then-deinit-empty-accepted.fors",
-        "m",
-        "9:34-9:40",
-        "UnaryExpr",
-        R2_OPAQUE,
-    ),
-    (
-        "10-std/vec-linear-element-pop-then-deinit-empty-accepted.fors",
-        "m",
-        "9:39-9:40",
-        "NameExpr",
-        R2_OPAQUE,
-    ),
-    (
-        "10-std/zip-scoped-and-owned-accepted.fors",
-        "m",
-        "9:12-9:20",
-        "CallExpr",
-        R2_OPAQUE,
-    ),
-    (
-        "10-std/zip-scoped-and-owned-accepted.fors",
-        "m",
-        "9:12-9:36",
-        "CallExpr",
-        R2_OPAQUE,
-    ),
-    (
-        "10-std/zip-scoped-and-owned-accepted.fors",
-        "m",
-        "9:12-9:44",
-        "CallExpr",
-        R2_OPAQUE,
-    ),
-    (
-        "10-std/zip-two-scoped-sources-local-accepted.fors",
-        "m",
-        "9:12-9:20",
-        "CallExpr",
-        R2_OPAQUE,
-    ),
-    (
-        "10-std/zip-two-scoped-sources-local-accepted.fors",
-        "m",
-        "9:12-9:34",
-        "CallExpr",
-        R2_OPAQUE,
-    ),
-    (
-        "10-std/zip-two-scoped-sources-local-accepted.fors",
-        "m",
-        "9:12-9:42",
-        "CallExpr",
-        R2_OPAQUE,
-    ),
-    (
-        "10-std/zip-two-scoped-sources-local-accepted.fors",
-        "m",
-        "9:25-9:33",
-        "CallExpr",
-        R2_OPAQUE,
+        R17_MAIN_HEAP,
     ),
 ];
 
@@ -1521,6 +670,80 @@ fn corpus_targets() -> Vec<PathBuf> {
     out
 }
 
+/// One corpus target as a build: its own files first (module names from the
+/// directory layout, or the header / file stem for a single file), then
+/// every `std/` module, exactly as `fors-lower`'s `build_and_run_with_std`
+/// does it. Without `std` there is no `impl Str`, no `impl Slice` and no
+/// `seq`, so the documented carve-outs (`prim_table_incomplete`,
+/// `prelude_head_table_incomplete`) make silence the CORRECT answer for a
+/// hundred more nodes and the sweep would be measuring the missing sources
+/// rather than the judgement. Returns `(names, sources, root, own)`, where
+/// `own` is how many of the files are the target's.
+fn corpus_build(
+    target: &Path,
+    interner: &mut Interner,
+) -> (Vec<Segments>, Vec<Vec<u8>>, Option<usize>, usize) {
+    let mut names: Vec<Segments> = Vec::new();
+    let mut sources: Vec<Vec<u8>> = Vec::new();
+    let mut root = None;
+    if target.is_dir() {
+        let mut paths = Vec::new();
+        walk(target, &mut paths);
+        for p in &paths {
+            let src = fs::read(p).unwrap();
+            let rel = p.strip_prefix(target).unwrap_or(p);
+            let comps: Vec<_> = rel.components().collect();
+            let mut segs = Vec::new();
+            for (i, c) in comps.iter().enumerate() {
+                let os = c.as_os_str().to_string_lossy();
+                let seg = if i + 1 == comps.len() {
+                    os.strip_suffix(".fors").unwrap_or(&os).to_string()
+                } else {
+                    os.to_string()
+                };
+                segs.push(interner.intern(seg.as_bytes()));
+            }
+            if comps.len() == 1 && rel.file_stem().is_some_and(|s| s == "main") {
+                root = Some(sources.len());
+            }
+            names.push(segs);
+            sources.push(src);
+        }
+    } else {
+        let src = fs::read(target).unwrap();
+        let name = header_name(&src, interner).unwrap_or_else(|| {
+            let stem = target.file_stem().unwrap().to_string_lossy().into_owned();
+            let stem = if is_legal_segment(stem.as_bytes()) {
+                stem
+            } else {
+                "m".to_string()
+            };
+            vec![interner.intern(stem.as_bytes())]
+        });
+        names.push(name);
+        sources.push(src);
+        root = Some(0);
+    }
+    let own = sources.len();
+    for (segs, s) in std_module_sources() {
+        names.push(
+            segs.iter()
+                .map(|b| interner.intern(b))
+                .collect::<Segments>(),
+        );
+        sources.push(s);
+    }
+    (names, sources, Some(root.unwrap_or(0)), own)
+}
+
+fn label_of(target: &Path) -> String {
+    target
+        .strip_prefix(repo_root().join("tests/conformance"))
+        .unwrap_or(target)
+        .to_string_lossy()
+        .into_owned()
+}
+
 fn corpus_offenders() -> (usize, Vec<Offender>) {
     let mut targets = 0usize;
     let mut offenders = Vec::new();
@@ -1531,73 +754,20 @@ fn corpus_offenders() -> (usize, Vec<Offender>) {
         }
         targets += 1;
         let mut interner = Interner::new();
-        let mut names: Vec<Segments> = Vec::new();
-        let mut sources: Vec<Vec<u8>> = Vec::new();
-        let mut root = None;
-        if target.is_dir() {
-            let mut paths = Vec::new();
-            walk(&target, &mut paths);
-            for p in &paths {
-                let src = fs::read(p).unwrap();
-                let rel = p.strip_prefix(&target).unwrap_or(p);
-                let comps: Vec<_> = rel.components().collect();
-                let mut segs = Vec::new();
-                for (i, c) in comps.iter().enumerate() {
-                    let os = c.as_os_str().to_string_lossy();
-                    let seg = if i + 1 == comps.len() {
-                        os.strip_suffix(".fors").unwrap_or(&os).to_string()
-                    } else {
-                        os.to_string()
-                    };
-                    segs.push(interner.intern(seg.as_bytes()));
-                }
-                if comps.len() == 1 && rel.file_stem().is_some_and(|s| s == "main") {
-                    root = Some(sources.len());
-                }
-                names.push(segs);
-                sources.push(src);
-            }
-        } else {
-            let src = fs::read(&target).unwrap();
-            let name = header_name(&src, &mut interner).unwrap_or_else(|| {
-                let stem = target.file_stem().unwrap().to_string_lossy().into_owned();
-                let stem = if is_legal_segment(stem.as_bytes()) {
-                    stem
-                } else {
-                    "m".to_string()
-                };
-                vec![interner.intern(stem.as_bytes())]
-            });
-            names.push(name);
-            sources.push(src);
-            root = Some(0);
-        }
-        // `std/` goes in the build too, exactly as `fors-lower`'s
-        // `build_and_run_with_std` does it. Without it there is no `impl Str`,
-        // no `impl Slice` and no `seq`, so the documented carve-outs
-        // (`prim_table_incomplete`, `prelude_head_table_incomplete`) make
-        // silence the CORRECT answer for a hundred more nodes and the sweep
-        // would be measuring the missing sources rather than the judgement.
-        for (segs, s) in std_module_sources() {
-            names.push(
-                segs.iter()
-                    .map(|b| interner.intern(b))
-                    .collect::<Segments>(),
-            );
-            sources.push(s);
-        }
-        let label = target
-            .strip_prefix(repo_root().join("tests/conformance"))
-            .unwrap_or(&target)
-            .to_string_lossy()
-            .into_owned();
-        let root = Some(root.unwrap_or(0));
+        let (names, sources, root, _) = corpus_build(&target, &mut interner);
         offenders.extend(
-            sweep(&label, names, sources, root, None, &mut interner)
-                .into_iter()
-                // `std`'s own bodies are swept once, by `std_offenders`.
-                .filter(|l| !l.contains("/std."))
-                .collect::<Vec<_>>(),
+            sweep(
+                &label_of(&target),
+                names,
+                sources,
+                root,
+                None,
+                &mut interner,
+            )
+            .into_iter()
+            // `std`'s own bodies are swept once, by `std_offenders`.
+            .filter(|l| !l.contains("/std."))
+            .collect::<Vec<_>>(),
         );
     }
     offenders.sort();
@@ -1655,10 +825,259 @@ fn no_silent_ty_error_anywhere() {
         unexplained.len(),
         unexplained.join("\n")
     );
-    for (i, row) in ALLOWED.iter().enumerate() {
-        assert!(
-            hit[i],
-            "the ALLOWED row {row:?} is no longer silent: DELETE it instead of leaving it stale"
-        );
+    // Every stale row at once, so one fix that retires a family of rows is
+    // one edit, not one rerun per row.
+    let stale: Vec<String> = ALLOWED
+        .iter()
+        .zip(&hit)
+        .filter(|&(_, &h)| !h)
+        .map(|(&(target, module, at, kind, _), _)| format!("{target}/{module}:{at} {kind}"))
+        .collect();
+    assert!(
+        stale.is_empty(),
+        "{} ALLOWED row(s) are no longer silent: DELETE them instead of leaving them stale:\n{}",
+        stale.len(),
+        stale.join("\n")
+    );
+}
+
+// ------------------------------------- I10c: std-touching files, for real
+
+/// ch10 R2's eight prelude names: the std types and traits a program names
+/// with no `use`.
+const R2_NAMES: [&str; 8] = [
+    "Allocator",
+    "AllocError",
+    "PageAllocator",
+    "Buffer",
+    "Vec",
+    "Map",
+    "String",
+    "Utf8Error",
+];
+
+/// Whether `word` occurs in `src` as a whole identifier.
+fn mentions_word(src: &str, word: &str) -> bool {
+    let is_ident = |c: u8| c.is_ascii_alphanumeric() || c == b'_';
+    let b = src.as_bytes();
+    src.match_indices(word).any(|(i, _)| {
+        let before = i == 0 || !is_ident(b[i - 1]);
+        let j = i + word.len();
+        let after = j >= b.len() || !is_ident(b[j]);
+        before && after
+    })
+}
+
+/// A target "touches std" when one of its own files names one of ch10 R2's
+/// prelude names or calls `.iter()` (std's `Slice`/`Vec`/`Buffer` iterator
+/// and the `Iterator` adaptors chained on it), or it is a `09-types`
+/// `adaptor-*` file (the ch09 corpus of `Iterator`'s provided methods).
+fn touches_std(label: &str, own_sources: &[Vec<u8>]) -> bool {
+    label.starts_with("09-types/adaptor-")
+        || own_sources.iter().any(|s| {
+            let s = String::from_utf8_lossy(s);
+            s.contains(".iter()") || R2_NAMES.iter().any(|w| mentions_word(&s, w))
+        })
+}
+
+/// std-touching `check-ok`/`run-ok` targets on which the checker speaks with
+/// `std` in the build, each a conflict that predates I10c (it spoke the same
+/// before the prelude binding) between a test written against ch08 R17's
+/// signature-only `std` table and the real `std` sources. Listed with the
+/// clause rather than silenced; a row that goes quiet fails and is deleted.
+const STD_SURFACE_CONFLICTS: &[(&str, &str)] = &[(
+    "08-names/use-std-mem-accepted.fors",
+    "ch08 R17 resolver-view test: `fn f(inout a: mem.Allocator)` uses std's `Allocator`, a TRAIT, as a \
+     parameter type, which ch09 R11 rejects (T0011) once `std.mem.alloc`'s real declaration is in the \
+     build; ch08 only asserts that the member access is deferred",
+)];
+
+/// std-touching `check-ok`/`run-ok` targets with NO node typed against a std
+/// declaration, each for a named reason; the test asserts each row is still
+/// true, so a fix deletes it.
+const NO_STD_TYPED_NODE: &[(&str, &str)] = &[
+    (
+        "01-ownership/linear-with-block-defer-accepted.fors",
+        "names `PageAllocator` only in a `with allocator a:` header whose binding the body never uses, so \
+         no expression has a std type (the header itself lowers to `PageAllocator[<fresh>]` since I10c's \
+         R15b fix)",
+    ),
+    (
+        "02-failure/error-exit-through-nested-blocks.fors",
+        "same shape as the row above: an unused `with allocator a: PageAllocator` binding",
+    ),
+    (
+        "09-types/adaptor-by-ref-for-then-reuse-accepted.fors",
+        R43_RIGID_ITERATOR,
+    ),
+    (
+        "09-types/adaptor-by-ref-on-field-accepted.fors",
+        R43_RIGID_ITERATOR,
+    ),
+    (
+        "09-types/adaptor-by-ref-on-inout-accepted.fors",
+        R43_RIGID_ITERATOR,
+    ),
+    (
+        "09-types/adaptor-chain-on-adaptor-receiver-accepted.fors",
+        R43_RIGID_ITERATOR,
+    ),
+    (
+        "09-types/adaptor-chain-rigid-receiver-accepted.fors",
+        R43_RIGID_ITERATOR,
+    ),
+    (
+        "09-types/adaptor-name-clash-qualified-accepted.fors",
+        R43_RIGID_ITERATOR,
+    ),
+    ("10-std/main-heap-parameter-accepted.fors", R17_MAIN_HEAP),
+];
+
+/// I10c's "for a REAL reason": every `check-ok`/`run-ok` corpus target that
+/// touches std (see [`touches_std`]), built WITH `std`, (1) draws no
+/// diagnostic in its own files, and (2) has at least one node in its own
+/// bodies the checker typed against a `std` DECLARATION — a nominal type
+/// whose head is declared in a `std/` file, or a call resolved to one. (2)
+/// is what the prelude binding changed: before it, `Vec[i32, A]` was
+/// `TY_ERROR` and such a file passed `check-ok` vacuously, by §7.10's
+/// absorption. That nothing in these bodies is still silently `TY_ERROR`
+/// is [`no_silent_ty_error_anywhere`]'s aggregate assertion (its
+/// [`ALLOWED`] rows are the named exceptions).
+#[test]
+fn std_touching_corpus_is_typed_against_std() {
+    use fors_check::facts::{FactCallee, MemberTarget};
+    use fors_fir::ty::TyTag;
+    use fors_index::ids::DefId;
+
+    let mut checked = 0usize;
+    let mut failures = Vec::new();
+    let mut conflict_hit = vec![false; STD_SURFACE_CONFLICTS.len()];
+    let mut vacuous_hit = vec![false; NO_STD_TYPED_NODE.len()];
+    for target in corpus_targets() {
+        let expect = expect_of(&target);
+        if expect != "check-ok" && expect != "run-ok" {
+            continue;
+        }
+        let label = label_of(&target);
+        let mut interner = Interner::new();
+        let (names, sources, root, own) = corpus_build(&target, &mut interner);
+        if !touches_std(&label, &sources[..own]) {
+            continue;
+        }
+        checked += 1;
+        let parsed: Vec<_> = sources.iter().map(|s| parse_file(s)).collect();
+        let inputs: Vec<FileInput> = parsed
+            .iter()
+            .zip(sources.iter())
+            .zip(names.iter())
+            .map(|((p, s), n)| FileInput {
+                tree: &p.tree,
+                tokens: &p.tokens,
+                source: s,
+                name: n.clone(),
+            })
+            .collect();
+        let resolved = fors_resolve::resolve_in_package(&mut interner, &inputs, root, None);
+        let out = fors_check::check_build(&inputs, &resolved, &mut interner);
+        let own_diags: Vec<String> = out
+            .diagnostics
+            .iter()
+            .filter(|d| d.file.index() < own)
+            .map(|d| format!("{} {}", d.code.as_string(), d.message))
+            .collect();
+        match STD_SURFACE_CONFLICTS.iter().position(|&(n, _)| n == label) {
+            Some(i) => {
+                conflict_hit[i] = !own_diags.is_empty();
+                continue;
+            }
+            None if !own_diags.is_empty() => {
+                failures.push(format!(
+                    "{label}: the checker spoke with std in the build: {own_diags:?}"
+                ));
+                continue;
+            }
+            None => {}
+        }
+        let Some(defs) = out.defs.as_ref() else {
+            failures.push(format!("{label}: no definition table"));
+            continue;
+        };
+        let in_std = |d: DefId| defs.get(d).is_some_and(|r| r.file.index() >= own);
+        let mut typed = 0usize;
+        for (def, facts) in &out.facts {
+            if !defs.get(*def).is_some_and(|r| r.file.index() < own) {
+                continue;
+            }
+            let (start, end) = facts.range();
+            for n in start..end {
+                let t = facts.ty_of(n);
+                if t != TY_ERROR && t != fors_fir::ty::NO_TY {
+                    let bare = out.fir.tys.unqual(t);
+                    if out.fir.tys.tag(bare) == TyTag::Nominal && in_std(DefId(out.fir.tys.a(bare)))
+                    {
+                        typed += 1;
+                        continue;
+                    }
+                }
+                match facts.callee_of(n) {
+                    FactCallee::Direct(d) | FactCallee::Method { def: d, .. } if in_std(d) => {
+                        typed += 1;
+                        continue;
+                    }
+                    _ => {}
+                }
+                // `b.len` on a `b: Buffer[u8, 16]` is ONE path node whose
+                // type is `usize`: the std declaration it was typed against
+                // is the field's head.
+                match facts.member_of(n) {
+                    MemberTarget::Field { head: d, .. } | MemberTarget::IndexImpl { at: d, .. }
+                        if in_std(d) =>
+                    {
+                        typed += 1
+                    }
+                    _ => {}
+                }
+            }
+        }
+        match NO_STD_TYPED_NODE.iter().position(|&(n, _)| n == label) {
+            Some(i) => {
+                vacuous_hit[i] = true;
+                if typed > 0 {
+                    failures.push(format!(
+                        "{label}: listed in NO_STD_TYPED_NODE but {typed} node(s) are now typed \
+                         against std: delete the row"
+                    ));
+                }
+            }
+            None if typed == 0 => failures.push(format!(
+                "{label}: no node of its bodies is typed against a std declaration, so it passes \
+                 vacuously"
+            )),
+            None => {}
+        }
     }
+    for (i, &(n, _)) in NO_STD_TYPED_NODE.iter().enumerate() {
+        if !vacuous_hit[i] {
+            failures.push(format!(
+                "{n}: listed in NO_STD_TYPED_NODE but no longer a std-touching check-ok target"
+            ));
+        }
+    }
+    assert!(
+        checked >= 45,
+        "only {checked} std-touching check-ok/run-ok targets: the filter found nothing to check"
+    );
+    for (i, &(n, _)) in STD_SURFACE_CONFLICTS.iter().enumerate() {
+        if !conflict_hit[i] {
+            failures.push(format!(
+                "{n}: listed in STD_SURFACE_CONFLICTS but the checker is silent on it now: delete the row"
+            ));
+        }
+    }
+    assert!(
+        failures.is_empty(),
+        "{} std-touching target(s) do not check against std for a real reason:\n{}",
+        failures.len(),
+        failures.join("\n")
+    );
 }
