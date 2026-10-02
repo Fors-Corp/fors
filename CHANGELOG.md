@@ -7,7 +7,8 @@ commit history, which predates the Conventional Commits convention.
 
 | Language | Compiler | Meaning |
 |---|---|---|
-| `lang-v0.5.3` | `compiler-v0.9.0` | current |
+| `lang-v0.5.3` | `compiler-v0.10.0` | current |
+| `lang-v0.5.3` | `compiler-v0.9.0` | checker I8b, the round-6 flow |
 | `lang-v0.5.2` | `compiler-v0.8.0` | FMIR F7 in part |
 | `lang-v0.5.2` | `compiler-v0.7.0` | checker I8, the flow pass |
 | `lang-v0.5.2` | `compiler-v0.6.0` | checker I7 |
@@ -96,6 +97,51 @@ measurement, the grammar, names and visibility), with a conformance corpus and
 an independent reference parser.
 
 ## Compiler
+
+### compiler-v0.10.0 — 2026-10-02
+
+FMIR increment **F1-completion**, produced by one agent and independently
+verified by another. Implements `lang-v0.5.3`; still no code generator.
+
+- **Loops.** `for` over ranges, arrays and slices, `while`, `break` and
+  `continue`, with loop-carried values in frame-local slots and the
+  induction advance in the latch block, so `continue` advances exactly
+  once and nested loops keep their own advance.
+- **Scalar index.** Reads on arrays and slices (`Op::Index`) and through a
+  resolved non-generic `Index::at` (F7's `IndexImpl` fact, now read);
+  bounds-trapping writes including the two-segment `self.data[i]` place;
+  slice bases that are a field projection; ch10 R42's `len`.
+- **Scalar `match`** through `switch_discr` with literal and wildcard arms.
+- **ch03 R4 and R6.** Explicit arithmetic (`wrap_`/`sat_`/`unchecked_` over
+  add, sub, mul, div, rem, shl, shr, neg) and the three lossy conversions
+  (`wrap_as`/`sat_as`/`trunc_as`), intercepted only for calls the checker
+  resolved no callee for (the family's typing is I10's); `unchecked_*` is
+  refused outside an `@unsafe(invariant:)` declaration.
+- **`@fastmath(flags)` blocks** carry the Relax mask on every float
+  instruction and restore it at the brace; the interpreter computes strict
+  throughout (design E7).
+- **Coverage.** 18 of F1's 19 gate tests wired and green (the 19th fails at
+  resolve: `comptime_int` is unknown to every crate — I10 and F9); F2's 8,
+  F5's 8 and F7's `str-index-is-bytes` unchanged; 35 new lowering gate
+  tests; 797 Rust tests.
+- **Not landed, with the evidence.** Generic monomorphisation (the checker
+  records no call-site type arguments, and the FIR is frozen during
+  lowering — two decisions for the next checker increment); enum and
+  struct `match` (I7's pattern facts are not published); `Buffer.empty`'s
+  uninitialised-aggregate primitive.
+- **Verification found and fixed before merge.** The claimed
+  `self.data[i] = v` shape panicked the compiler (a `NO_TY` index);
+  an assignment `total = total.wrap_add(..)` retyped the local;
+  `wrap_as`/`trunc_as` zero-extended a negative source; `sat_shl` wrapped
+  instead of clamping; `unchecked_add` ran outside `@unsafe`;
+  `0.1f64 as f32` did not trap although ch03 R6 requires exact
+  representability (pre-existing F1 code); `verify.rs` never saw a secret
+  `switch_discr` scrutinee.
+- **Documented limitations.** A ch03 R4/R6 call inside a compound
+  expression is refused (`CheckErrors`) until I10 types the family; a
+  by-reference free-function argument and a three-segment projection are
+  `Unsupported`. `wrap_shl`/`sat_shl` at `count >= width` still trap
+  (design §11.1 Q4) — an owner call against ch03 R3's wording.
 
 ### compiler-v0.9.0 — 2026-10-02
 
