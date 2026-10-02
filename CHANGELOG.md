@@ -7,7 +7,8 @@ commit history, which predates the Conventional Commits convention.
 
 | Language | Compiler | Meaning |
 |---|---|---|
-| `lang-v0.5.2` | `compiler-v0.3.0` | current |
+| `lang-v0.5.2` | `compiler-v0.4.0` | current |
+| `lang-v0.5.2` | `compiler-v0.3.0` | FMIR F5 |
 | `lang-v0.5.1` | `compiler-v0.2.0` | checker I3.5–I4b, FMIR F1–F2 |
 | `lang-v0.5.0` | `compiler-v0.1.1` | type checker I2–I3 |
 | `lang-v0.5.0` | `compiler-v0.1.0` | first tagged front end |
@@ -82,6 +83,34 @@ measurement, the grammar, names and visibility), with a conformance corpus and
 an independent reference parser.
 
 ## Compiler
+
+### compiler-v0.4.0 — 2026-10-02
+
+Type checker increment **I5**, generic calls and generic bodies, produced by
+one agent and independently verified by another. Implements `lang-v0.5.2`;
+still no code generator.
+
+- **R38 literally.** Explicit `[..]` arguments with R39's count and kind
+  checks and R13 const arguments; receiver match; expected-type pre-binding
+  that skips brand positions (R40) and is adopted only on success; the
+  argument pass with R41's closure rule; the pending re-check with the bound
+  check folded in (one path); the substituted result or T0039. Bindings are
+  never revised; `never` binds nothing; generic struct literals take their
+  arguments from the expected type; `with arena a:` introduces a fresh brand.
+- **`fors-fir`.** `one_way_match` gains a match mode and `first_unbound`,
+  and loses an equality fast path that had made every recursive generic
+  call un-inferable.
+- **Coverage.** 208 of chapter 09's 246 conformance tests on, 38 pending
+  (was 51); R38–R41, R59, R60 enforced; `no_error_depends_on_instantiation`
+  is a real 0/1/2/3-instantiation metamorphic test.
+- **Verification found and fixed before merge (all over-acceptance):** a
+  callable parameter's signature was never compared with what the call
+  bound (`apply(2, 5)` passed); R39 fired only for slots a pending argument
+  mentioned; a generic struct literal in synthesis position was silent; a
+  value in a type slot absorbed the call instead of T0011.
+- **Open for the owner.** `callable-bound-cannot-bind-result-rejected`
+  expects T0039 in a check position where R38(c) binds `U` from the expected
+  type; kept pending rather than papered over.
 
 ### compiler-v0.3.0 — 2026-10-02
 
