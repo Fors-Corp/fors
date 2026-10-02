@@ -526,12 +526,98 @@ fn gate_generic_call_lowers_to_an_instance() {
     );
 }
 
+/// F4 replaces F1's `gate_reject_defer`: `defer` is lowered now, from I8b's
+/// published D7 rows. The scope edge it used to pin is gone, so this is the
+/// same program asserted POSITIVELY — a `DeferRow` in the pool, one FMIR
+/// scope per `defer` statement, and the function exit carrying it.
 #[test]
-fn gate_reject_defer() {
-    assert!(matches!(
-        lower_error("fn g() { }\nfn f() { defer g(); }\n"),
-        LowerError::Defer
-    ));
+fn gate_defer_lowers_to_a_pool_row_a_scope_and_an_exit_edge() {
+    let built = build("fn g() { }\nfn f() { defer g(); }\nfn main() { }\n");
+    assert!(
+        !built.lower_diags.iter().any(|d| d.name == "f"),
+        "`defer` lowers as of F4: {:?}",
+        built.lower_diags
+    );
+    let decl = &built
+        .decls
+        .iter()
+        .find(|(n, _)| n == "f")
+        .expect("f is lowered")
+        .1;
+    assert_eq!(decl.defers.len(), 1, "one `DeferRow` for one `defer`");
+    assert_eq!(
+        decl.defers.get(0..1)[0].kind,
+        fors_fmir::scope::DeferKind::Defer
+    );
+    assert_eq!(
+        decl.scopes.len(),
+        2,
+        "the body's root scope plus one per `defer` statement (ch01 R23a's textual cut, \
+         made structural)"
+    );
+    let edges: Vec<_> = decl.exits.all_rows().collect();
+    assert_eq!(edges.len(), 1, "one exit edge: the function exit");
+    let (_, row) = &edges[0];
+    assert!(row.is_function_exit());
+    assert_eq!(
+        decl.exits.pending(row.pending.clone()),
+        &[fors_fmir::ids::DeferId(0)],
+        "the `ret` carries the body, in R23a's order"
+    );
+}
+
+/// The two F4 gate rows that are HELD OUT, and the exact reason: both need
+/// F3's failure edges (`else |e|` and `raise`), which wait on I10's ch02
+/// typing. Asserted rather than commented, so the hold-out cannot rot into
+/// silence — the day F3 lands, this test fails and the two gate rows get
+/// wired.
+#[test]
+fn gate_f4_held_out_cases_are_named_failure_edges() {
+    // `01-ownership/errdefer-skipped-on-return-run-ok`'s shape: the
+    // `errdefer` body itself is F4's and lowers, but the caller's
+    // `else |e| { }` handler is F3's, so `main` has no FMIR and the gate
+    // row cannot run.
+    let built = build_raw(
+        "enum E { boom }\nfn g() { }\nfn w(inout o: Out) raises E { errdefer g(); return; }\n         fn main(inout out: Out) { w(&out) else |e| { return; }; }\n",
+    );
+    assert!(
+        built.check_diags.is_empty(),
+        "check diags: {:?}",
+        built.check_diags
+    );
+    assert!(
+        matches!(
+            built
+                .lower_diags
+                .iter()
+                .find(|d| d.name == "main")
+                .map(|d| &d.error),
+            Some(LowerError::Failure)
+        ),
+        "the handler form is F3's: {:?}",
+        built.lower_diags
+    );
+    // `02-failure/main-raises-after-defer-run-error`'s shape: `raise`
+    // propagation out of `main`, also F3's.
+    let built =
+        build_raw("enum E { boom }\nfn main() raises E { defer g(); raise E.boom; }\nfn g() { }\n");
+    assert!(
+        built.check_diags.is_empty(),
+        "check diags: {:?}",
+        built.check_diags
+    );
+    assert!(
+        matches!(
+            built
+                .lower_diags
+                .iter()
+                .find(|d| d.name == "main")
+                .map(|d| &d.error),
+            Some(LowerError::Failure)
+        ),
+        "`raise` is F3's: {:?}",
+        built.lower_diags
+    );
 }
 
 #[test]
@@ -1351,4 +1437,435 @@ fn gate_two_instances_differ_in_trap_behaviour() {
     );
     assert_eq!(out.exit, Exit::Trap(fors_fmir::op::TrapKind::Bounds));
     assert_eq!(out.stdout, b"four\n");
+}
+
+// ---------------------------------------------------------------- F6's gate
+//
+// design §9's F6 list, the LOWERING half. The interpreter half landed earlier
+// on hand-written FMIR (`crates/fors-interp/tests/ub.rs`); what follows is
+// the SOURCE-level twin of each case the surface can express today, plus the
+// scope/brand/region assertions on the lowering itself.
+//
+// HELD OUT, each with the reason:
+//
+// - `ub_use_after_free` and `ub_allocator_mismatch` — the heap pair needs
+//   `Own[T, A]` through `h.create(..)`/`h.deinit(move b)` (ch01 R18), and
+//   reading the pointee back needs a `[Deref, Field]` place FMIR does not
+//   have before F7/M2 plus D12's layout ([HOLE-6]). For the MISMATCH the
+//   hold-out is permanent at source level by design: ch01 R18 makes the
+//   typed case a COMPILE error, so the interpreter's row exists for the
+//   erased case only and no accepted program can reach it.
+// - `ub_uninit_read_through_out` — a `set` parameter read before it is
+//   written is rejected by the checker, so no accepted source reaches it;
+//   `&out x` lowering (`borrow_out`, which marks the slot uninitialised) is
+//   here and is what the fixture test drives.
+// - `arena_gen_wraps_safely` ([HOLE-2]) — it needs `u32::MAX` resets of one
+//   arena; no source program expresses that, and `ArenaVal::reset` is the
+//   unit under test. `f6_arena_reset_then_a_fresh_ref_is_live` is the
+//   source-reachable half of the same mechanism.
+// - D9's closure case ("a closure capturing a scoped place carries the
+//   source set into its FMIR fn") — a closure literal is still
+//   `LowerError::Closure`, and D9 publishes no row for any body in the
+//   corpus that lowers.
+
+/// `with arena` gives its block a FRESH brand and a `WithArena` region;
+/// `with allocator` gives it a brand and NO region, because an allocator's
+/// identity IS the brand `@alloc`/`@free` compare (ch01 R15, R18; design
+/// §3.7, §3.4a).
+#[test]
+fn f6_with_blocks_open_a_branded_scope() {
+    let built = build(
+        "struct N[A: brand] { val: i64 }\n\
+         fn main() { with arena a: Arena[N[a]] { let r: Ref[N[a], a] = a.alloc(N { val: 1 }); } }\n",
+    );
+    assert!(
+        built.check_diags.is_empty(),
+        "check diags: {:?}",
+        built.check_diags
+    );
+    assert!(
+        built.lower_diags.is_empty(),
+        "lower diags: {:?}",
+        built.lower_diags
+    );
+    let decl = &built
+        .decls
+        .iter()
+        .find(|(n, _)| n == "main")
+        .expect("main lowers")
+        .1;
+    let branded: Vec<_> = decl
+        .scopes
+        .all_rows()
+        .filter(|(_, s)| s.brand != fors_fmir::ids::BrandId::NONE)
+        .collect();
+    assert_eq!(branded.len(), 1, "one `with` block, one fresh brand");
+    let (_, scope) = &branded[0];
+    assert_ne!(
+        scope.region,
+        fors_fmir::ids::RegionId::NONE,
+        "a `with arena` block is a region (design §3.7)"
+    );
+    assert_eq!(
+        decl.regions.row(scope.region).kind,
+        fors_fmir::region::RegionKind::WithArena
+    );
+    assert_eq!(
+        decl.regions.row(scope.region).brand,
+        scope.brand,
+        "the region and its scope name the same brand"
+    );
+    // §3.4a: every `arena_alloc`/`arena_deref` result carries the brand as
+    // its alias seed — compile-time IR metadata only, which no execution
+    // reads (`arena_brand_survives_lowering`).
+    let seeds: Vec<_> = decl
+        .insts
+        .all_rows()
+        .filter(|(_, r)| {
+            matches!(
+                r.op,
+                fors_fmir::op::Op::ArenaAlloc | fors_fmir::op::Op::ArenaDeref
+            )
+        })
+        .map(|(id, _)| decl.insts.aliases.get(id.index()))
+        .collect();
+    assert!(!seeds.is_empty(), "the arena surface lowered");
+    for seed in &seeds {
+        assert_eq!(*seed, fors_fmir::alias::AliasSeed::Arena(scope.brand));
+    }
+}
+
+/// ch01 R17's other half, from source: after `reset` a FRESH `Ref` is at the
+/// new generation and dereferences cleanly. (`arena_gen_wraps_safely` is the
+/// `u32::MAX` end of the same counter and has no source surface — see the
+/// hold-out list above.)
+#[test]
+fn f6_arena_reset_then_a_fresh_ref_is_live() {
+    let out = run_main(
+        "struct N[A: brand] { val: i64 }\n\
+         fn main(inout out: Out) {\n\
+           with arena a: Arena[N[a]] {\n\
+             let r: Ref[N[a], a] = a.alloc(N { val: 1 });\n\
+             a.reset();\n\
+             let s: Ref[N[a], a] = a.alloc(N { val: 7 });\n\
+             let v: i64 = a[s].val;\n\
+             if v == 7 { out.write_line(\"ok\"); } else { out.write_line(\"bad\"); }\n\
+           }\n\
+         }\n",
+    );
+    assert_eq!(out.exit, Exit::Return, "{:?}", out.ub);
+    assert!(out.ub.is_none(), "a live `Ref` is not UB: {:?}", out.ub);
+    assert_eq!(out.stdout, b"ok\n");
+}
+
+/// A `Ref` dereferenced after its arena was `reset` is ch01 R17's **program
+/// trap**, in every build mode — the source twin of the interpreter half's
+/// `arena_generation_trap_on_a_stale_ref`, and the mechanism the corpus row
+/// `01-ownership/arena-generation-trap` pins.
+#[test]
+fn f6_stale_ref_after_reset_traps_arena_generation() {
+    let out = run_main(
+        "struct N[A: brand] { val: i64 }\n\
+         fn main(inout out: Out) {\n\
+           with arena a: Arena[N[a]] {\n\
+             let r: Ref[N[a], a] = a.alloc(N { val: 1 });\n\
+             a.reset();\n\
+             let v: i64 = a[r].val;\n\
+             out.write_line(\"unreachable\");\n\
+           }\n\
+         }\n",
+    );
+    assert_eq!(
+        out.exit,
+        Exit::Trap(fors_fmir::op::TrapKind::ArenaGeneration)
+    );
+    assert!(
+        out.ub.is_none(),
+        "R17 makes this a TRAP, not a `ub:` report"
+    );
+}
+
+/// ch01 R7, from source: "Two overlapping `let` accesses MUST be ACCEPTED".
+/// The shape is the corpus's own `01-ownership/excl-let-let-overlap-
+/// accepted` (a `parse-ok` row there), RUN — which is the property E14 ranks
+/// above the positive detections: a false `ub: aliasing` exits 70 and would
+/// fail the corpus on accepted code.
+///
+/// The borrow STACK itself (two shared tags in one SharedRO group) is driven
+/// by the interpreter half's `ub_aliasing_accepts_two_let_borrows`: a `let`
+/// argument is passed by value here, so no `let` borrow reaches the stack
+/// from source until `Op::Borrow` lowering arrives with F7/M2's sub-range
+/// borrow stacks.
+#[test]
+fn f6_source_twin_aliasing_accepts_two_let_borrows() {
+    let out = run_main(
+        "fn combine(let x: i64, let y: i64) -> i64 { return x + y; }\n\
+         struct Pair { b: i64 }\n\
+         fn main(inout out: Out) {\n\
+           let a: Pair = Pair { b: 5 };\n\
+           if combine(a.b, a.b) == 10 { out.write_line(\"ok\"); } else { out.write_line(\"bad\"); }\n\
+         }\n",
+    );
+    assert_eq!(out.exit, Exit::Return);
+    assert!(
+        out.ub.is_none(),
+        "accepted code must not report UB: {:?}",
+        out.ub
+    );
+    assert_eq!(out.stdout, b"ok\n");
+}
+
+/// The nested shape of the same rule: a second `let` access opens inside the
+/// first's extent and the FIRST is read again afterwards.
+#[test]
+fn f6_source_twin_aliasing_accepts_nested_let_under_let() {
+    let out = run_main(
+        "fn combine(let x: i64, let y: i64) -> i64 { return x + y; }\n\
+         fn main(inout out: Out) {\n\
+           var x: i64 = 9;\n\
+           let outer: i64 = x;\n\
+           {\n\
+             let inner: i64 = x;\n\
+             var t: i64 = combine(outer, inner);\n\
+           }\n\
+           if combine(outer, x) == 18 { out.write_line(\"ok\"); } else { out.write_line(\"bad\"); }\n\
+         }\n",
+    );
+    assert_eq!(out.exit, Exit::Return);
+    assert!(
+        out.ub.is_none(),
+        "accepted code must not report UB: {:?}",
+        out.ub
+    );
+    assert_eq!(out.stdout, b"ok\n");
+}
+
+/// By-reference arguments (ch07 Rule 4's `&x` / `&out x`), design §3.3:
+/// a SCALAR place is passed as a pointer — `&x` is one `borrow_mut`, `&out
+/// x` one `borrow_out` (which marks the slot uninitialised so §5.2's
+/// "uninitialised read (incl. through `&out`)" can fire) — each carrying
+/// §3.4a's "parameter convention" alias seed. An AGGREGATE is a cell shared
+/// by handle in FMIR's value model, so `&c` passes the handle by value under
+/// the `Inout` convention on the call row, exactly as a method receiver
+/// does; no unique tag is pushed for it. A plain `let` argument carries NO
+/// tag either (ch01 R7: "no-alias facts therefore never come from a `let`
+/// parameter").
+#[test]
+fn f6_by_reference_arguments_lower_to_borrows_with_a_convention_seed() {
+    // Scalar: a pointer.
+    let built = build(
+        "fn inc(inout n: i32) { n = n + 1; }\nfn fill(set n: i32) { n = 5; }\n\
+         fn main(inout out: Out) { var a: i32 = 1; inc(&a); var b: i32 = 0; fill(&out b); }\n",
+    );
+    assert!(
+        built.lower_diags.is_empty(),
+        "lower diags: {:?}",
+        built.lower_diags
+    );
+    let decl = &built
+        .decls
+        .iter()
+        .find(|(n, _)| n == "main")
+        .expect("main lowers")
+        .1;
+    let muts: Vec<_> = decl
+        .insts
+        .all_rows()
+        .filter(|(_, r)| r.op == fors_fmir::op::Op::BorrowMut)
+        .collect();
+    assert_eq!(muts.len(), 1, "`&a` on a scalar is one `borrow_mut`");
+    assert_eq!(
+        decl.insts.aliases.get(muts[0].0.index()),
+        fors_fmir::alias::AliasSeed::Conv(fors_fir::sig::Conv::Inout)
+    );
+    let outs: Vec<_> = decl
+        .insts
+        .all_rows()
+        .filter(|(_, r)| r.op == fors_fmir::op::Op::BorrowOut)
+        .collect();
+    assert_eq!(outs.len(), 1, "`&out b` on a scalar is one `borrow_out`");
+    assert_eq!(
+        decl.insts.aliases.get(outs[0].0.index()),
+        fors_fmir::alias::AliasSeed::Conv(fors_fir::sig::Conv::Set)
+    );
+    // The callee reaches the caller's slot THROUGH the pointer: every place
+    // rooted at the parameter carries one `Deref`.
+    let inc = &built
+        .decls
+        .iter()
+        .find(|(n, _)| n == "inc")
+        .expect("inc lowers")
+        .1;
+    let derefs = inc
+        .places
+        .all_rows()
+        .filter(|(id, _)| inc.places.segs(*id) == [fors_fmir::place::Seg::Deref])
+        .count();
+    assert!(
+        derefs >= 1,
+        "`inc`'s `n` is read and written through `[Deref]`"
+    );
+
+    // Aggregate: the shared cell, by value, under the `Inout` convention.
+    let built = build("fn g(inout a: Out) { }\nfn main(inout out: Out) { g(&out); }\n");
+    assert!(
+        built.lower_diags.is_empty(),
+        "lower diags: {:?}",
+        built.lower_diags
+    );
+    let decl = &built
+        .decls
+        .iter()
+        .find(|(n, _)| n == "main")
+        .expect("main lowers")
+        .1;
+    assert!(
+        !decl.insts.all_rows().any(|(_, r)| matches!(
+            r.op,
+            fors_fmir::op::Op::BorrowMut | fors_fmir::op::Op::BorrowOut
+        )),
+        "an aggregate `&out` pushes no unique tag: its cell is shared by handle"
+    );
+    let call = decl
+        .insts
+        .calls
+        .iter()
+        .find(|c| matches!(c.callee, fors_fmir::inst::Callee::Direct(_)))
+        .expect("the call to `g`");
+    let convs = &decl.insts.arg_convs[call.args.start as usize..call.args.end as usize];
+    assert_eq!(
+        convs,
+        &[fors_fir::sig::Conv::Inout],
+        "the call row carries the access"
+    );
+}
+
+/// The run-time half of the same contract, which is what the verifier found
+/// MISSING: a callee's write to a scalar `inout`/`set` parameter must land in
+/// the CALLER's slot (before this, `inc(&n)` lowered, ran, and silently left
+/// `n` unchanged). Forwarding a by-reference parameter passes the caller's
+/// pointer on rather than re-borrowing a `[Deref]` place.
+#[test]
+fn f6_scalar_inout_and_set_arguments_write_the_callers_slot() {
+    let out = run_main(
+        "fn inc(inout n: i32) { n = n + 1; }\n\
+         fn twice(inout n: i32) { inc(&n); inc(&n); n = n + 4; }\n\
+         fn fill(set n: i32) { n = 5; }\n\
+         fn main(inout out: Out) {\n\
+           var n: i32 = 1;\n\
+           inc(&n);\n\
+           inc(&n);\n\
+           var m: i32 = 1;\n\
+           twice(&m);\n\
+           var k: i32 = 0;\n\
+           fill(&out k);\n\
+           var hits: i32 = 0;\n\
+           if n == 3 { hits = hits + 1; }\n\
+           if m == 7 { hits = hits + 1; }\n\
+           if k == 5 { hits = hits + 1; }\n\
+           if hits == 3 { out.write_line(\"ok\"); } else { out.write_line(\"bad\"); }\n\
+         }\n",
+    );
+    assert_eq!(out.exit, Exit::Return, "{:?}", out.ub);
+    assert!(
+        out.ub.is_none(),
+        "accepted code must not report UB: {:?}",
+        out.ub
+    );
+    assert_eq!(out.stdout, b"ok\n");
+}
+
+/// An aggregate under `&c` is the method-receiver contract: the callee's
+/// field write lands in the shared cell.
+#[test]
+fn f6_aggregate_inout_argument_shares_the_cell() {
+    run_ok(
+        "struct C { n: i64 }\nfn bump(inout c: C) { c.n = c.n + 1; }\n\
+         fn main(inout out: Out) { var c: C = C { n: 41 }; bump(&c); if c.n == 42 { out.write_line(\"ok\"); } else { out.write_line(\"bad\"); } }\n",
+    );
+}
+
+/// ch01 R23c: "Bodies MAY NEST: a `defer` written inside a body is a
+/// statement of that body's block and runs when that block exits." The body
+/// is lowered as a region of its own, so the nested body's edge sits inside
+/// the sub-CFG before `br BODY_END`.
+#[test]
+fn f4_a_defer_body_may_nest_a_defer() {
+    let out = run_main(
+        "fn main(inout out: Out) {\n\
+           defer { defer out.write_line(\"inner\"); out.write_line(\"outer\"); }\n\
+           out.write_line(\"main\");\n\
+         }\n",
+    );
+    assert_eq!(out.exit, Exit::Return);
+    assert_eq!(out.stdout, b"main\nouter\ninner\n");
+}
+
+/// ch01 R23a's textual cut, end to end: a `defer` whose statement does NOT
+/// precede the exit is not pending there. `B` is registered after the
+/// `break`, so the breaking iteration runs `A` only; the first iteration
+/// runs both, in reverse textual order. (The structural guard is the
+/// one-scope-per-`defer` assertion in `conformance_f2.rs`; this is the
+/// observable it protects.)
+#[test]
+fn f4_a_defer_after_the_break_is_not_pending_on_it() {
+    let out = run_main(
+        "fn main(inout out: Out) {\n\
+           for i in 0 ..< 3 {\n\
+             defer out.write_line(\"A\");\n\
+             if i == 1 { break; }\n\
+             defer out.write_line(\"B\");\n\
+             out.write_line(\"body\");\n\
+           }\n\
+           out.write_line(\"done\");\n\
+         }\n",
+    );
+    assert_eq!(out.exit, Exit::Return);
+    assert_eq!(out.stdout, b"body\nB\nA\nA\ndone\n");
+}
+
+/// `with allocator` (ch01 R15, R18): the block opens a branded scope and NO
+/// region, because an allocator's identity IS the scope's brand — which is
+/// exactly what `fors-interp`'s `allocator_at` reads off the executing
+/// block's scope so `@free` can compare it against `@alloc`'s
+/// `AllocKind::Heap(owner)` (design §3.7, §5.2's allocator-mismatch row).
+///
+/// The `Own[T, A]` surface on top of it (`h.create(n)`, `h.deinit(move b)`,
+/// and reading the pointee back) is HELD OUT: it needs a `[Deref, Field]`
+/// place FMIR does not have before F7/M2 plus D12's layout ([HOLE-6]), so
+/// the body here is the brand itself and nothing more.
+#[test]
+fn f6_with_allocator_opens_a_branded_scope_and_no_region() {
+    let built = build("fn main() { with allocator h: Out { } }\n");
+    assert!(
+        built.check_diags.is_empty(),
+        "check diags: {:?}",
+        built.check_diags
+    );
+    assert!(
+        built.lower_diags.is_empty(),
+        "lower diags: {:?}",
+        built.lower_diags
+    );
+    let decl = &built
+        .decls
+        .iter()
+        .find(|(n, _)| n == "main")
+        .expect("main lowers")
+        .1;
+    let branded: Vec<_> = decl
+        .scopes
+        .all_rows()
+        .filter(|(_, s)| s.brand != fors_fmir::ids::BrandId::NONE)
+        .collect();
+    assert_eq!(branded.len(), 1, "one `with` block, one fresh brand");
+    assert_eq!(
+        branded[0].1.region,
+        fors_fmir::ids::RegionId::NONE,
+        "an allocator block is not a region: its identity is the brand"
+    );
+    assert!(
+        decl.regions.is_empty(),
+        "no `region_enter` is needed for `with allocator`"
+    );
 }
