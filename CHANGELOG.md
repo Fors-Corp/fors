@@ -7,7 +7,8 @@ commit history, which predates the Conventional Commits convention.
 
 | Language | Compiler | Meaning |
 |---|---|---|
-| `lang-v0.5.3` | `compiler-v0.13.0` | current |
+| `lang-v0.5.3` | `compiler-v0.14.0` | current |
+| `lang-v0.5.3` | `compiler-v0.13.0` | FMIR F-mono, monomorphisation and pattern lowering |
 | `lang-v0.5.3` | `compiler-v0.12.0` | checker I9, the query engine and the M1 exit |
 | `lang-v0.5.3` | `compiler-v0.11.0` | checker I10a |
 | `lang-v0.5.3` | `compiler-v0.10.0` | FMIR F1-completion |
@@ -100,6 +101,55 @@ measurement, the grammar, names and visibility), with a conformance corpus and
 an independent reference parser.
 
 ## Compiler
+
+### compiler-v0.14.0 — 2026-10-02
+
+FMIR increments **F4** and **F6**, the lowering halves, produced by one
+agent and independently verified by another. Implements `lang-v0.5.3`;
+still no code generator.
+
+- **`defer` / `errdefer` lowering (F4).** Lowering builds the FMIR scope
+  tree and the defer pool from the checker's published D7 rows, emits
+  each defer body once as its own sub-CFG, and records an exit edge on
+  every static exit (block end, `return`, fall-through, `break`,
+  `continue`, loop-body end, branch and arm ends). The textual cut of
+  ch01 R23a is structural: one scope per `defer` statement, so a
+  scope's pending bodies at an edge are exactly those whose statement
+  precedes it, innermost first. The return operand is read before any
+  body runs; a trap-terminated block has no edge; bodies nest.
+- **By-reference arguments.** `f(&x)` and `f(&out x)` lower to the
+  borrow instructions with the parameter-convention alias seed; scalar
+  `inout`/`set` parameters are indirect roots read and written through
+  `[Deref]`. The F1 `LowerError::Defer` refusal is gone.
+- **Arenas and allocators (F6).** `with arena` / `with allocator` open a
+  branded scope; the arena form is a region whose entry mints the one
+  live arena value and whose exit retires it. D8 obligations are wired:
+  a linear `let` opens a scope that owes its obligation and every exit
+  edge discharges it as the checker published (moved, deferred,
+  destructured or tail value); a corpus-wide test asserts no obligation
+  is left undischarged on any edge.
+- **Coverage.** 27 new lowering gate tests (F4's run-ok rows, trap runs
+  no defer, arena-generation trap, aliasing and reset twins, the
+  whole-corpus pending/discharge checks); 905 Rust tests (20 held out
+  with a stated reason). Growth counter for design risk R6: the
+  one-copy form adds 0.020× of body size over the corpus, against
+  0.019× for inlining every body at every edge.
+- **Verification found and fixed before merge.** `inc(&n); inc(&n);`
+  left `n` unchanged — the callee read its own root slot while the
+  caller passed a pointer (silent wrong result on accepted code);
+  every function with a `set` parameter failed to lower because the
+  lexer's contextual `set` was bound as the parameter name
+  (pre-existing); a nested `defer` was refused; the corpus-wide pending
+  assertion was tautological; a by-reference gate test asserted the
+  wrong contract.
+- **Held out, with the evidence.** `errdefer`-skipped-on-return and
+  main-raises-after-defer need `else |e|` / `raise` propagation (F3,
+  after I10's ch02 typing) and are pinned as named refusals; the
+  use-after-free, allocator-mismatch and uninitialised-read twins stay
+  fixture-driven with the reason beside each. Known: lowered
+  instructions still carry site 0, so traps from source programs render
+  at `0:0`; a `return`/`break` out of a `with arena` block emits no
+  region exit on that path.
 
 ### compiler-v0.13.0 — 2026-10-02
 
