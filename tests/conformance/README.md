@@ -46,7 +46,25 @@ Run tests assume `io.Writer.write_line`, which no chapter defines. A
 `Slice[T]` is obtained only by range-indexing a bound array (ch03 Rule 24);
 `main` takes root capabilities by type (ch04 Rules 8, 21).
 
-## Counts: 921 tests, 1010 files
+## Counts: 944 tests, 1033 files
+
+(Q5 verification (2026-10-02): corrected a pre-existing off-by-one. The
+07-grammar row read 172 tests / 97 `parse-error` since commit 67f7a65 added
+`fuzz-empty-parens-binding-rejected.fors` without updating this table; the
+directory holds 173 files, 98 of them `parse-error`, so the pre-Q5 baseline
+was 922 tests / 1011 files, not 921 / 1010. Every other row was recounted
+from disk and matches.)
+
+(Owner Q5 (2026-10-02): +22 tests, new directory `05-ir`. ch05 names exactly
+22 conformance tests (`docs/spec/05-ir-contract.md`'s "Conformance tests"
+section) and none existed as a file (`docs/design/fmir-interpreter.md`
+section 8.1's gap 1); F0 wrote all 22 as single files, 16 `parse-ok`
+(IR-only or lowering-reachable placeholders citing the `fors-fmir` unit test
+or negative-corpus fixture that pins the rule at the IR level) and 6
+`check-error` (real, FMIR-pinned violations `fors check` cannot see yet,
+since it never runs `fors-lower`/`fors-fmir::verify` — listed in the new
+`PENDING_05`, `crates/fors-check/tests/data/pending_05.rs`, which mirrors
+`PENDING_09`'s shrinking invariant). See `05-ir/README.md`.)
 
 (Round-6 verification (2026-09-20): +26 tests. 01-ownership +19 — the
 five `run-ok` `defer`/`errdefer` behaviour tests ch01 listed but the
@@ -136,11 +154,12 @@ on the others (crates/fors-resolve/tests/conformance.rs).)
 | 02-failure (36) | 8 | 1 | 2 | 10 | 2 | 7 | 6 |
 | 03-numerics (46) | 7 | 0 | 0 | 13 | 19 | 0 | 7 |
 | 04-authority (34) | 9 | 1 | 0 | 21 | 3 | 0 | 0 |
-| 07-grammar (172) | 71 | 0 | 97 | 4 | 0 | 0 | 0 |
+| 05-ir (22) | 16 | 0 | 0 | 6 | 0 | 0 | 0 |
+| 07-grammar (173) | 71 | 0 | 98 | 4 | 0 | 0 | 0 |
 | 08-names (176) | 0 | 61 | 0 | 115 | 0 | 0 | 0 |
 | 09-types (246) | 0 | 95 | 0 | 151 | 0 | 0 | 0 |
 | 10-std (83) | 0 | 26 | 0 | 44 | 6 | 2 | 5 |
-| total (921) | 119 | 209 | 101 | 428 | 36 | 9 | 19 |
+| total (944) | 135 | 209 | 102 | 434 | 36 | 9 | 19 |
 
 ## Change rule
 

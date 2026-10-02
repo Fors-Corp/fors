@@ -1,0 +1,17 @@
+//! name: serial_elision_always_legal
+//! rule: 05.R10
+//! expect: parse-ok
+//! detail: IR-ONLY -- "every accepted program typechecks with every `detach` rewritten to a branch" is a corpus-wide differential property (`--serial-elide`), not a single file's assertion; no per-file F0 fixture exists for it (design doc section 8.1, milestone M3's gate). This is a plain spawn/sync-region program representative of the property's subject.
+
+module serial_elision_always_legal;
+needs { };
+
+fn process(sink data: i64) {
+    discard data;
+}
+
+fn spawn_one(sink a: i64) {
+    parallel {
+        spawn process(move a);
+    }
+}

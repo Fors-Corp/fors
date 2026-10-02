@@ -1,0 +1,19 @@
+//! name: asm_opaque_region_effects
+//! rule: 05.R19
+//! expect: parse-ok
+//! detail: IR-ONLY -- "an optimizer pass observes only an asm block's declared in/out/clobber effects" is an optimizer-pass invariant; no optimizer exists yet to honor or violate it (unbuilt, no F0 fixture). This is the smallest source program whose lowering produces the opaque asm region the rule will eventually police, using the full in/out/clobber form (ch07's asm-full-block-parse-ok.fors pattern).
+
+module app;
+needs { asm };
+
+@unsafe(invariant: "x1 receives x0 verbatim; x2/x3 are scratch")
+fn opaque_region(let v: i64) -> i64 {
+    let r: i64 = asm(aarch64) {
+        in(x0) = v,
+        out(x1),
+        clobber(x2, x3),
+        "mov x1, x0",
+        "add x1, x1, #1",
+    };
+    return r;
+}

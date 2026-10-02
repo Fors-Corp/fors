@@ -1,0 +1,11 @@
+//! name: backend_bitforbit_agreement
+//! rule: 05.R17
+//! expect: parse-ok
+//! detail: IR-ONLY -- "interp/dev/release outputs are byte-identical on the differential corpus" is a cross-backend differential-runner property across {interp, dev, release -O1/-O2/-O3, --serial-elide}, not a single file's assertion; design doc section 8.1 notes `backend_bitforbit_agreement` has no file yet (milestone M2's gate; needs ch05's own OracleRecord, design section 7). This is a plain arithmetic function representative of the differential corpus's subject matter.
+
+module backend_bitforbit_agreement;
+needs { };
+
+fn add_one(let n: i64) -> i64 {
+    return n + 1;
+}

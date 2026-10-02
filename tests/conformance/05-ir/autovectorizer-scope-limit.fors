@@ -1,0 +1,15 @@
+//! name: autovectorizer_scope_limit
+//! rule: 05.R14
+//! expect: parse-ok
+//! detail: IR-ONLY -- the autovectorizer does not exist yet (unbuilt optimizer pass; no gate or fixture names it, design doc section 8.1). This is a plain counted loop over a slice, the shape the rule will eventually judge for trusted-length/affine access and cross-iteration dependence; nothing inspects it today.
+
+module autovectorizer_scope_limit;
+needs { };
+
+fn sum_loop(let xs: Slice[f64]) -> f64 {
+    var acc: f64 = 0.0;
+    for x in xs {
+        acc = acc + x;
+    }
+    return acc;
+}

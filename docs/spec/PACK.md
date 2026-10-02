@@ -5,7 +5,7 @@ regenerate. Source: `docs/spec/*.md` (normative), `tests/conformance/`
 (corpus) and `std/**/*.fors` (standard library).
 
 Language version: 0.5.2 (`docs/spec/VERSION`)
-Inputs SHA-256: f1c5536806e9b8d4495d9409ef81911b7bb5dff7d79920b2524743737c250be4
+Inputs SHA-256: 93ab666cb3d450c7b2a7e660fbf2dc76e3e54f3dcea62349bd65d78b88ea432c
 
 This pack exists because no model has seen Fors before: guessing from
 Rust/Zig/Swift/C is wrong more often than it is right. Read section 1 first.

@@ -220,6 +220,7 @@ fn directive_source(target: &Path) -> String {
 }
 
 include!("data/pending_09.rs");
+include!("data/pending_05.rs");
 
 #[test]
 fn ch09_types_corpus_checker_view() {
@@ -306,6 +307,98 @@ fn ch09_types_corpus_checker_view() {
     );
 }
 
+/// The ch05 (`05-ir`) corpus, checker view (owner Q5). `fors-cli check`
+/// never runs `fors-lower`/`fors-fmir::verify` (see `data/pending_05.rs`'s
+/// header), so every one of these 22 files must be SILENT under it today:
+/// the six `check-error` tests because [`PENDING_05`] says so (their rule is
+/// real and FMIR-enforced, cited there; `fors check` just cannot see it
+/// yet), and the sixteen `parse-ok` tests because they are IR-only or
+/// lowering-reachable placeholders that assert nothing is checker-visible
+/// at all. A `check-ok`/`run-ok` ch05 test would be a corpus mistake: ch05
+/// names no such tests.
+#[test]
+fn ch05_ir_corpus_checker_view() {
+    let dir = repo_root().join("tests/conformance/05-ir");
+    let targets = corpus_targets(&dir);
+    assert_eq!(
+        targets.len(),
+        22,
+        "05-ir corpus not found or changed size: {} (ch05 names exactly 22 conformance tests)",
+        targets.len()
+    );
+    let mut failures = Vec::new();
+    let mut on = 0usize;
+    let mut pending = 0usize;
+    for target in &targets {
+        let src = directive_source(target);
+        let case = parse_directives(&src);
+        assert_eq!(
+            case.chapter, 5,
+            "{}: every 05-ir test cites 05.Rk",
+            case.name
+        );
+        let key = case.name.replace('_', "-");
+        if PENDING_05.iter().any(|&(n, _)| n == key) {
+            pending += 1;
+            assert_eq!(
+                case.expect, "check-error",
+                "{key}: PENDING_05 lists a test whose own file does not expect check-error"
+            );
+            let (got, _) = check_target(target);
+            if !got.is_empty() {
+                failures.push(format!("{key}: PENDING, but the checker spoke: {got:?}"));
+            }
+            continue;
+        }
+        on += 1;
+        if case.expect != "parse-ok" {
+            failures.push(format!(
+                "{key}: expected parse-ok for a non-pending 05-ir test, got {:?}",
+                case.expect
+            ));
+            continue;
+        }
+        let (got, _) = check_target(target);
+        if !got.is_empty() {
+            failures.push(format!("{key}: expected silence, got {got:?}"));
+        }
+    }
+    eprintln!(
+        "ch05 checker view: {on} on (IR-only/lowering-reachable), {pending} pending, {} total",
+        targets.len()
+    );
+    assert!(
+        failures.is_empty(),
+        "05-ir corpus (checker view) failures ({}):\n{}",
+        failures.len(),
+        failures.join("\n")
+    );
+}
+
+#[test]
+fn pending_05_is_shrinking() {
+    assert!(
+        PENDING_05.len() <= PENDING_05_MAX,
+        "PENDING_05 grew to {} (bound {PENDING_05_MAX}); an increment must lower it, never raise it",
+        PENDING_05.len()
+    );
+    let dir = repo_root().join("tests/conformance/05-ir");
+    let names: Vec<String> = corpus_targets(&dir)
+        .iter()
+        .map(|t| {
+            parse_directives(&directive_source(t))
+                .name
+                .replace('_', "-")
+        })
+        .collect();
+    for (n, _) in PENDING_05 {
+        assert!(
+            names.iter().any(|x| x == n),
+            "PENDING_05 names a test that is not in the corpus: {n}"
+        );
+    }
+}
+
 /// A non-ch09 `check-ok` test that ch09 rejects anyway. Each of these is a
 /// corpus conflict, not a checker bug: the test is accepted by ITS OWN
 /// chapter's rules and violates a ch09 rule the same corpus asserts
@@ -379,6 +472,7 @@ fn no_new_diagnostics_outside_ch09() {
         root.join("tests/conformance/02-failure"),
         root.join("tests/conformance/03-numerics"),
         root.join("tests/conformance/04-authority"),
+        root.join("tests/conformance/05-ir"),
         root.join("tests/conformance/07-grammar"),
         root.join("tests/conformance/08-names"),
         root.join("tests/conformance/10-std"),

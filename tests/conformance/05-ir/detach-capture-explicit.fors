@@ -1,0 +1,18 @@
+//! name: detach_capture_explicit
+//! rule: 05.R9
+//! expect: parse-ok
+//! detail: IR-ONLY -- `detach`'s explicit typed capture list is computed by FMIR-to-OIR lowering from a surface `spawn`'s captures, never written by hand, so no Fors program can omit it -- pinned by crates/fors-fmir/tests/negative_corpus/03-detach-without-captures.fmir (rejected) and 18-spawn-empty-captures-accepted.fmir (an explicit EMPTY list is legal), run by verify.rs's spawn_region_without_captures_is_rejected and spawn_region_with_an_explicit_empty_capture_list_is_accepted. This is the smallest source program whose lowering reaches a spawn region at all.
+
+module detach_capture_explicit;
+needs { };
+
+fn process(sink data: i64) {
+    discard data;
+}
+
+fn spawn_two(sink a: i64, sink b: i64) {
+    parallel {
+        spawn process(move a);
+        process(move b);
+    }
+}

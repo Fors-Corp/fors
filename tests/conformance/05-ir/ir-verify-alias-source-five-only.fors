@@ -1,0 +1,11 @@
+//! name: ir_verify_alias_source_five_only
+//! rule: 05.R5
+//! expect: parse-ok
+//! detail: IR-ONLY -- Rule 5's five sources are parameter convention, affine ownership, arena brand id, split-token provenance and SoA field identity. crates/fors-fmir/src/alias.rs's `AliasSeed` enum today carries four of them (Conv/Own/Arena/Split) plus `None` for a non-memory instruction; SoA field identity and Rule 19's `unknown` class for an asm `in` pointer are not represented yet (design doc section 8's row for 05 R5: seeds are carried, never computed -- GAP, milestone M5). Because the seed is a closed enum, a sixth untraceable source cannot be constructed at all, so no corpus-visible rejection exists for it: the rule is enforced structurally, and only the "every memory op carries a seed" half is pinned by a test (crates/fors-fmir/tests/gates.rs's alias_seed_present_on_every_memory_op, with Rule 4's fixtures 06-memory-op-missing-alias-seed.fmir and 17-arena-deref-missing-seed.fmir). Flagged honestly as a structural, not test, guarantee.
+
+module ir_verify_alias_source_five_only;
+needs { };
+
+fn halves(let n: i64) -> i64 {
+    return n;
+}

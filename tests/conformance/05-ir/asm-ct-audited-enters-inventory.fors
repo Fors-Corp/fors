@@ -1,0 +1,13 @@
+//! name: asm_ct_audited_enters_inventory
+//! rule: 05.R20
+//! expect: parse-ok
+//! detail: IR-ONLY -- the constant-time inventory (keyed by declaration and architecture) is a build artifact with no Fors-observable output yet; unimplemented, no F0 fixture or gate names it. `@ct_audited(by: "...")` parses as an ordinary attribute today (ch04's generic attribute grammar); this is the smallest source program that carries it on an asm-containing declaration, the shape the rule will eventually index.
+
+module app;
+needs { asm };
+
+@ct_audited(by: "owner, 2026-10-02")
+@unsafe(invariant: "single nop, no side effects")
+fn audited() {
+    asm(aarch64) { "nop" };
+}

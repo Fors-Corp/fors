@@ -1,0 +1,12 @@
+//! name: declassify_requires_unsafe
+//! rule: 05.R6a
+//! expect: parse-ok
+//! detail: IR-ONLY -- `@declassify(reason)` has no surface-language binding yet (no std or grammar entry), so no Fors program can reach the declassify operation itself -- pinned purely at FMIR by crates/fors-fmir/tests/negative_corpus/13-declassify-outside-unsafe.fmir and 14-declassify-inside-unsafe-accepted.fmir (DiagCode::DeclassifyRequiresUnsafe), run by verify.rs's declassify_outside_unsafe_is_rejected_but_accepted_inside_it and ch05_secret_rules.rs's declassify_requires_unsafe. This file carries a secret value through an `@unsafe` declaration, the nearest source-level shape, without declassifying it.
+
+module declassify_requires_unsafe;
+needs { };
+
+@unsafe(invariant: "no declassification performed; placeholder for the IR-only rule")
+fn holder(let s: secret u64) -> secret u64 {
+    return s;
+}

@@ -1,0 +1,11 @@
+//! name: ir_verify_alias_missing_rejected
+//! rule: 05.R4
+//! expect: parse-ok
+//! detail: IR-ONLY -- an OIR memory op's alias-class operand is assigned by lowering, never source syntax, so no Fors program can omit it -- pinned by crates/fors-fmir/tests/negative_corpus/06-memory-op-missing-alias-seed.fmir and 17-arena-deref-missing-seed.fmir (DiagCode::MemoryOpMissingAliasSeed), run by negative_corpus_matches_its_directives and verify.rs's memory_op_without_alias_seed_is_rejected. `fors check` does not lower to FMIR, so this ordinary program is silent on ch05's behalf.
+
+module ir_verify_alias_missing_rejected;
+needs { };
+
+fn identity(let n: i64) -> i64 {
+    return n;
+}
