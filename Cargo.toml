@@ -5,7 +5,7 @@ members = ["crates/*"]
 # The COMPILER version (tag `compiler-vX.Y.Z`); every crate inherits it. The
 # LANGUAGE version is a separate stream and lives in `docs/spec/VERSION`.
 [workspace.package]
-version = "0.17.0"
+version = "0.18.0"
 license = "Apache-2.0"
 repository = "https://github.com/Fors-Corp/fors"
 
