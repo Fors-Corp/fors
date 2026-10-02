@@ -273,6 +273,7 @@ impl Wf<'_> {
             if saw_generic
                 || self.recv_hides_projection(recv)
                 || self.prim_table_incomplete(recv, name)
+                || self.prelude_head_table_incomplete(recv, name)
             {
                 return Err(LookupError::Silent);
             }
@@ -395,6 +396,42 @@ impl Wf<'_> {
         }
         let n = self.names.resolve(name);
         CH03_PRIM_METHODS.contains(&n)
+    }
+
+    /// ch10 R2's counterpart of [`Self::prim_table_incomplete`] for a
+    /// prelude GENERIC head (`Arena`, `Own`, `Ref`, `Array`, ...). The
+    /// language declares the head; its method surface is package `std`'s
+    /// (`a.alloc(..)` on an `Arena`), and a build without `std` has none
+    /// of it, so an empty tier proves nothing.
+    ///
+    /// The carve-out is by EVIDENCE, not by receiver, exactly as the
+    /// primitive one is: silence holds only while the build has NO
+    /// inherent impl for that head AND no inherent impl anywhere in the
+    /// build declares a method of that NAME. Once the name is declared
+    /// somewhere inherent, the writer plainly meant a method this build
+    /// knows and the miss is real — which is what makes
+    /// `no-auto-deref-own-rejected` (`peek` is `Builder`'s, reached
+    /// through an `Own[Builder, A]`) still T0043.
+    fn prelude_head_table_incomplete(&mut self, recv: TyId, name: Symbol) -> bool {
+        if self.fir.tys.tag(recv) != TyTag::Nominal {
+            return false;
+        }
+        let def = DefId(self.fir.tys.a(recv));
+        if self.prelude.generic_index(def).is_none() {
+            return false;
+        }
+        let key = self.fir.tys.head_key(recv);
+        if !self.impls.inherent(key).is_empty() {
+            return false;
+        }
+        let inherent: Vec<DefId> = (0..self.impls.len() as u32)
+            .map(|r| self.impls.row(r))
+            .filter(|row| row.inherent)
+            .map(|row| row.def)
+            .collect();
+        !inherent
+            .into_iter()
+            .any(|d| self.impl_method_names(d).iter().any(|&(n, _)| n == name))
     }
 
     /// Whether `recv` mentions a projection anywhere in its arguments: a

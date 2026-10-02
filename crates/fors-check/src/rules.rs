@@ -327,13 +327,13 @@ pub const CH09_RULES: [RuleEntry; 62] = [
             "call::named_arg",
         ],
     ),
-    r(
+    imp(
         38,
         Some(38),
         "generic-call-type-call-steps",
         &["call::type_call"],
     ),
-    r(
+    imp(
         39,
         Some(39),
         "unbound-slot-and-arg-and-conv-marker-checks",
@@ -344,13 +344,13 @@ pub const CH09_RULES: [RuleEntry; 62] = [
             "call::conv_marker",
         ],
     ),
-    r(
+    imp(
         40,
         Some(40),
         "brand-matching-and-fresh-brand-scope",
         &["subst::one_way_match", "call::match_expected"],
     ),
-    r(
+    imp(
         41,
         Some(41),
         "closure-argument-pre-test",
@@ -440,13 +440,13 @@ pub const CH09_RULES: [RuleEntry; 62] = [
         "brand-as-type-and-const-param-value",
         &["lower::brand_as_type", "expr::const_param_value"],
     ),
-    r(
+    imp(
         59,
         None,
         "bodies-checked-once-no-instantiation-dependence",
         &[],
     ),
-    r(
+    imp(
         60,
         Some(60),
         "raises-type-and-fn-ty-equality-and-never-binds-never",
@@ -653,11 +653,27 @@ mod tests {
         // positions R12's bound check needs), and so does R46: its typing
         // side is in, but the rule's normative message is I8's, over a
         // tape this increment only writes.
+        //
+        // I5 adds R38-R41 (`call::type_call`'s steps (a)-(f), the
+        // expected-type pre-binding, R40's brand identity and fresh
+        // `with` brands, R41's closure pre-test), R59 (bodies checked
+        // once — `no_error_depends_on_instantiation` in `probes.rs` is
+        // the statement of it) and R60 (`raises` as a type through a
+        // call, and `one_way_match`'s "`never` binds nothing"). R39's
+        // row keeps `call::conv_marker` among its sites: that half is
+        // ch01 R2's, reported with ch01's own `O0002` at I8 (§8's
+        // inherited-obligations table), while the three T0039 sites —
+        // the unbound slot, the explicit-argument count and the argument
+        // count — are this increment's and are in. R57 and R58 stay
+        // unimplemented: their remaining sites are `pat::check_pat`
+        // (I7), the tape's rigid `Move` (I8) and `lower::brand_as_type`
+        // (`brand-param-as-value-type-rejected`, still pending).
         assert_eq!(
             implemented,
             vec![
                 1, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 21, 22, 23, 24, 25,
-                26, 27, 28, 29, 30, 31, 32, 33, 34, 35, 36, 37, 42, 43, 44, 45, 47, 48, 49, 61, 62
+                26, 27, 28, 29, 30, 31, 32, 33, 34, 35, 36, 37, 38, 39, 40, 41, 42, 43, 44, 45, 47,
+                48, 49, 59, 60, 61, 62
             ]
         );
         // NoCode rows, exactly as design §8 marks them.

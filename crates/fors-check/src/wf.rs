@@ -67,6 +67,12 @@ pub struct Wf<'a> {
     pub holds_misses: u64,
     pub impl_scans: u64,
     pub tape_events: u64,
+    /// R38's `Binding`s: how many this build created (one per generic
+    /// call or generic literal) and how many are LIVE right now. The
+    /// second is the design's "`debug_assert!` at every statement
+    /// boundary that no `Binding` is live" — nothing survives a call.
+    pub bindings_created: u64,
+    pub live_bindings: u32,
     /// Bodies typed, and bodies skipped because their own declaration (or
     /// its `impl`/`trait` head) had already produced a diagnostic.
     pub bodies_checked: u64,
@@ -136,6 +142,8 @@ impl<'a> Wf<'a> {
             holds_misses: 0,
             impl_scans: 0,
             tape_events: 0,
+            bindings_created: 0,
+            live_bindings: 0,
             bodies_checked: 0,
             bodies_skipped: 0,
             check_sites: Vec::new(),

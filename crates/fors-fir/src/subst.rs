@@ -95,6 +95,18 @@ impl Binding {
         self.slots.iter().all(|&s| s != NO_TY)
     }
 
+    /// The first slot, in R38(a)'s owner order, that is still unbound —
+    /// R39's "a parameter still undetermined after Rule 38(d)", which is
+    /// about every parameter of the callee, not only those the result or
+    /// a pending argument mentions.
+    pub fn first_unbound_slot(&self) -> Option<(DefId, u16)> {
+        self.owners.iter().find_map(|o| {
+            (0..o.len)
+                .find(|&i| self.slots[o.start as usize + i as usize] == NO_TY)
+                .map(|i| (o.owner, i))
+        })
+    }
+
     pub fn slots(&self) -> &[TyId] {
         &self.slots
     }
@@ -360,6 +372,97 @@ fn subst_args(
     Some(xs)
 }
 
+/// Which of ch09 R38's two match modes a walk runs in.
+///
+/// [`MatchMode::Strict`] is steps (b) and (d): every position is compared and a
+/// brand position is bound by identity (R40). [`MatchMode::NoFail`] is step (c),
+/// the expected-type pre-binding: brand positions are SKIPPED (R40 — "step (c)
+/// skips brand positions and the final subsumption compares them"). The
+/// "mismatch binds nothing" half of step (c) is the caller's: design §7.4 drops
+/// the whole attempt, which `call.rs` does by matching into a clone and adopting
+/// it only on success.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum MatchMode {
+    Strict,
+    NoFail,
+}
+
+/// The first slot of `b` that `ty` mentions and that is still unbound, as
+/// `(owner, ordinal, is_brand)`.
+///
+/// R38(e)/(f) report T0039 for an UNDETERMINED parameter; a substitution that
+/// fails although every slot it mentions is bound failed for R20's reason (a
+/// projection on a concrete head with no impl), which is a different rule and a
+/// different increment. `None` here is what tells the two apart.
+pub fn first_unbound(store: &TyStore, ty: TyId, b: &Binding) -> Option<(DefId, u16, bool)> {
+    first_unbound_at(store, ty, b, 0)
+}
+
+fn first_unbound_at(
+    store: &TyStore,
+    ty: TyId,
+    b: &Binding,
+    depth: u32,
+) -> Option<(DefId, u16, bool)> {
+    if depth > 64 || store.flags(ty) & crate::ty::F_OPEN == 0 {
+        return None;
+    }
+    let base = store.unqual(ty);
+    let a = store.a(base);
+    let bb = store.b(base);
+    match store.tag(base) {
+        TyTag::Param => {
+            let owner = DefId(a);
+            let ord = bb as u16;
+            (b.owns(owner) && b.slot(owner, ord) == NO_TY).then_some((owner, ord, false))
+        }
+        TyTag::Brand => match store.brand(BrandId(bb)) {
+            BrandRow::Param { owner, ordinal }
+                if b.owns(owner) && b.slot(owner, ordinal) == NO_TY =>
+            {
+                Some((owner, ordinal, true))
+            }
+            _ => None,
+        },
+        TyTag::Nominal | TyTag::Tuple => store
+            .args(ArgsId(bb))
+            .to_vec()
+            .into_iter()
+            .find_map(|x| first_unbound_at(store, x, b, depth + 1)),
+        TyTag::Dyn => {
+            let (_, args) = store.trait_ref(TraitRefId(a));
+            store
+                .args(args)
+                .to_vec()
+                .into_iter()
+                .find_map(|x| first_unbound_at(store, x, b, depth + 1))
+        }
+        TyTag::Fn => {
+            let id = FnTyId(a);
+            let tys = store.fn_tys().params(id).1.to_vec();
+            let result = store.fn_tys().result(id);
+            let raises = store.fn_tys().raises(id);
+            tys.into_iter()
+                .chain(std::iter::once(result))
+                .chain(if raises == NO_TY { None } else { Some(raises) })
+                .find_map(|x| first_unbound_at(store, x, b, depth + 1))
+        }
+        TyTag::Proj => {
+            let (tr, _) = store.proj_key(ProjKeyId(bb));
+            let (_, targs) = store.trait_ref(tr);
+            first_unbound_at(store, TyId(a), b, depth + 1).or_else(|| {
+                store
+                    .args(targs)
+                    .to_vec()
+                    .into_iter()
+                    .find_map(|x| first_unbound_at(store, x, b, depth + 1))
+            })
+        }
+        TyTag::ConstVal => first_unbound_at(store, TyId(bb), b, depth + 1),
+        _ => None,
+    }
+}
+
 /// ch09 Definitions' one-way match. `pattern` may mention unbound parameters of
 /// `b`'s owners; `target` is complete. A projection in `pattern` whose head is
 /// already bound is resolved with [`NeutralOnly`] (see [`one_way_match_with`]).
@@ -394,14 +497,32 @@ pub fn one_way_match_with(
     b: &mut Binding,
     solver: &mut dyn ProjSolver,
 ) -> bool {
-    // Hash-consing: the common case is one integer comparison.
-    if pattern == target {
-        return true;
-    }
-    // Nothing to bind and not equal: nothing to do. One byte load (§7.4's fast
-    // path; a Brand parameter carries F_BRAND, a projection F_PROJ).
+    one_way_match_mode(store, pattern, target, b, solver, MatchMode::Strict)
+}
+
+/// [`one_way_match_with`] in a chosen [`MatchMode`] (R38(c)'s NoFail walk).
+pub fn one_way_match_mode(
+    store: &mut TyStore,
+    pattern: TyId,
+    target: TyId,
+    b: &mut Binding,
+    solver: &mut dyn ProjSolver,
+    mode: MatchMode,
+) -> bool {
+    // Nothing to bind: one byte load, then one integer comparison (§7.4's
+    // fast path; a Brand parameter carries F_BRAND, a projection F_PROJ).
+    //
+    // MARC (I5): the equality test used to come FIRST, which silently made a
+    // RECURSIVE generic call un-inferable. `fn iter[T](let s: Slice[T]) ->
+    // SliceIter[T] { return iter(s); }` matches the callee's declared result
+    // against the caller's expected type, and both are the row
+    // `SliceIter[Param(iter, 0)]` — the same id, because a callee's slot and
+    // the caller's rigid parameter are the same `Param` row when the callee
+    // IS the caller. Short-circuiting on equality bound nothing, and R38(f)
+    // then reported T0039 on a call that is obviously well-typed. Equality
+    // may decide only when the pattern has no slot to fill.
     if store.flags(pattern) & crate::ty::F_OPEN == 0 {
-        return false;
+        return pattern == target;
     }
     let tag = store.tag(pattern);
     let a = store.a(pattern);
@@ -430,7 +551,7 @@ pub fn one_way_match_with(
     if tag == TyTag::Param {
         let owner = DefId(a);
         if !b.owns(owner) {
-            return false; // rigid: equality was already tested
+            return pattern == target; // rigid: only equality will do
         }
         // A bare position takes the target whole, qualifiers included
         // (`fn f[T](let x: T)` accepts an `iso Buf`). A qualified position
@@ -456,22 +577,25 @@ pub fn one_way_match_with(
     }
 
     match tag {
+        // R40: step (c) SKIPS brand positions — the final subsumption compares
+        // them — so a brand faces anything and binds nothing in `NoFail`.
+        TyTag::Brand if mode == MatchMode::NoFail => true,
         TyTag::Brand => match store.brand(BrandId(bb)) {
             // R40: bound by identity, and only from a receiver or argument.
             BrandRow::Param { owner, ordinal } if b.owns(owner) => b.bind(owner, ordinal, target),
-            _ => false,
+            _ => pattern == target,
         },
         TyTag::Nominal => {
             if store.tag(target) != TyTag::Nominal || store.a(target) != a {
                 return false;
             }
-            match_args(store, ArgsId(bb), ArgsId(store.b(target)), b, solver)
+            match_args(store, ArgsId(bb), ArgsId(store.b(target)), b, solver, mode)
         }
         TyTag::Tuple => {
             if store.tag(target) != TyTag::Tuple {
                 return false;
             }
-            match_args(store, ArgsId(bb), ArgsId(store.b(target)), b, solver)
+            match_args(store, ArgsId(bb), ArgsId(store.b(target)), b, solver, mode)
         }
         TyTag::Dyn => {
             if store.tag(target) != TyTag::Dyn {
@@ -479,7 +603,7 @@ pub fn one_way_match_with(
             }
             let (pd, pa) = store.trait_ref(TraitRefId(a));
             let (td, ta) = store.trait_ref(TraitRefId(store.a(target)));
-            pd == td && match_args(store, pa, ta, b, solver)
+            pd == td && match_args(store, pa, ta, b, solver, mode)
         }
         TyTag::Fn => {
             if store.tag(target) != TyTag::Fn {
@@ -508,18 +632,18 @@ pub fn one_way_match_with(
                     let (c, x) = store.fn_tys().params(t);
                     (c[i], x[i])
                 };
-                if pc != tc || !one_way_match_with(store, pt, tt, b, solver) {
+                if pc != tc || !one_way_match_mode(store, pt, tt, b, solver, mode) {
                     return false;
                 }
             }
             let (pr, tr) = (store.fn_tys().result(p), store.fn_tys().result(t));
-            if !one_way_match_with(store, pr, tr, b, solver) {
+            if !one_way_match_mode(store, pr, tr, b, solver, mode) {
                 return false;
             }
             let (pe, te) = (store.fn_tys().raises(p), store.fn_tys().raises(t));
             match (pe == NO_TY, te == NO_TY) {
                 (true, true) => true,
-                (false, false) => one_way_match_with(store, pe, te, b, solver),
+                (false, false) => one_way_match_mode(store, pe, te, b, solver, mode),
                 // R7: absent is distinct from every `raises E`.
                 _ => false,
             }
@@ -530,11 +654,12 @@ pub fn one_way_match_with(
             if store.tag(target) != TyTag::ConstVal || store.a(target) != a {
                 return false;
             }
-            one_way_match_with(store, TyId(bb), TyId(store.b(target)), b, solver)
+            one_way_match_mode(store, TyId(bb), TyId(store.b(target)), b, solver, mode)
         }
         // A primitive, unit, never, an error or a rigid parameter: equality
-        // was the whole test, and it already failed.
-        _ => false,
+        // is the whole test (such a row carries no `F_OPEN` bit, so it was
+        // already decided above; this arm is the belt).
+        _ => pattern == target,
     }
 }
 
@@ -544,6 +669,7 @@ fn match_args(
     t: ArgsId,
     b: &mut Binding,
     solver: &mut dyn ProjSolver,
+    mode: MatchMode,
 ) -> bool {
     let n = store.args(p).len();
     if store.args(t).len() != n {
@@ -551,7 +677,7 @@ fn match_args(
     }
     for i in 0..n {
         let (pi, ti) = (store.args(p)[i], store.args(t)[i]);
-        if !one_way_match_with(store, pi, ti, b, solver) {
+        if !one_way_match_mode(store, pi, ti, b, solver, mode) {
             return false;
         }
     }
@@ -771,6 +897,175 @@ mod tests {
             Some(u8_ty)
         );
         assert_eq!(memo.len(), 2);
+    }
+
+    // ------------------------------------------- I5: the §7.4 corpus
+    //
+    // Design §7.4 writes `one_way_match` as a four-way answer — Bound,
+    // Equal, Skipped, Mismatch — over a fixed table of pattern shapes.
+    // The implementation returns a bool and reports "bound" through the
+    // binding, so the corpus below asserts the PAIR (answer, binding) for
+    // one case of every row of that table, plus the two R38 modes.
+
+    #[test]
+    fn one_way_match_corpus_covers_every_row_of_the_table() {
+        use crate::sig::Conv;
+        let mut s = TyStore::new();
+        let i32_ty = s.prim(PrimKind::I32);
+        let u8_ty = s.prim(PrimKind::U8);
+
+        // Row "Param, unbound": Bound.
+        let mut b = Binding::new(&[(IMPL, 2)]);
+        let p0 = s.param(IMPL, 0);
+        assert!(one_way_match(&mut s, p0, i32_ty, &mut b));
+        assert_eq!(b.slot(IMPL, 0), i32_ty);
+        // Row "Param, bound, agrees": Equal, and nothing is revised.
+        assert!(one_way_match(&mut s, p0, i32_ty, &mut b));
+        assert_eq!(b.slot(IMPL, 0), i32_ty);
+        // Row "Param, bound, disagrees": Mismatch, still not revised.
+        assert!(!one_way_match(&mut s, p0, u8_ty, &mut b));
+        assert_eq!(b.slot(IMPL, 0), i32_ty);
+
+        // Row "Param of another owner": rigid, equality is the whole test.
+        let mut b2 = Binding::new(&[(IMPL, 2)]);
+        let other = s.param(DefId(200), 0);
+        assert!(one_way_match(&mut s, other, other, &mut b2));
+        assert!(!one_way_match(&mut s, other, i32_ty, &mut b2));
+        assert!(b2.slots().iter().all(|&x| x == NO_TY));
+
+        // Row "Proj on an unbound head": Skipped — faces anything, binds
+        // nothing (R38(e) compares it later).
+        let mut b3 = Binding::new(&[(IMPL, 2)]);
+        let h0 = s.param(IMPL, 0);
+        let proj = s.proj_of(h0, DefId(9), &[], Symbol(0));
+        assert!(one_way_match(&mut s, proj, i32_ty, &mut b3));
+        assert_eq!(b3.slot(IMPL, 0), NO_TY);
+
+        // Row "constructor": tags, heads and arguments pairwise.
+        let mut b4 = Binding::new(&[(IMPL, 2)]);
+        let (q0, q1) = (s.param(IMPL, 0), s.param(IMPL, 1));
+        let pat = s.nominal_of(DefId(7), &[q0, q1]);
+        let tgt = s.nominal_of(DefId(7), &[i32_ty, u8_ty]);
+        assert!(one_way_match(&mut s, pat, tgt, &mut b4));
+        assert!(b4.is_complete());
+        let wrong_head = s.nominal_of(DefId(8), &[i32_ty, u8_ty]);
+        let mut b5 = Binding::new(&[(IMPL, 2)]);
+        assert!(!one_way_match(&mut s, pat, wrong_head, &mut b5));
+
+        // Row "Fn": conventions, parameters, result and `raises` pairwise
+        // (the detailed cases are the test below this corpus).
+        let mut b6 = Binding::new(&[(IMPL, 2)]);
+        let f0 = s.param(IMPL, 0);
+        let pf = s.intern_fn_ty(&[(Conv::Let, f0)], TY_UNIT, NO_TY, false);
+        let pfn = s.fn_ty(pf);
+        let tf = s.intern_fn_ty(&[(Conv::Let, i32_ty)], TY_UNIT, NO_TY, false);
+        let tfn = s.fn_ty(tf);
+        assert!(one_way_match(&mut s, pfn, tfn, &mut b6));
+        assert_eq!(b6.slot(IMPL, 0), i32_ty);
+
+        // R33 is NOT applied here: `never` is an ordinary target for the
+        // matcher, and "an argument of type `never` binds nothing" is a
+        // property of a call ARGUMENT, enforced in `call.rs`.
+        let mut b7 = Binding::new(&[(IMPL, 2)]);
+        assert!(one_way_match(&mut s, p0, crate::ty::TY_NEVER, &mut b7));
+        assert_eq!(b7.slot(IMPL, 0), crate::ty::TY_NEVER);
+    }
+
+    #[test]
+    fn nofail_mode_skips_brand_positions_and_strict_mode_binds_them() {
+        // R40: step (c) — the expected-type pre-binding — skips brand
+        // positions; steps (b) and (d) bind them by identity.
+        let mut s = TyStore::new();
+        let i32_ty = s.prim(PrimKind::I32);
+        let brand_param = s.brand_ty(BrandRow::Param {
+            owner: IMPL,
+            ordinal: 1,
+        });
+        let fresh = s.brand_ty(BrandRow::Fresh {
+            owner: crate::defpath::DeclKeyId(3),
+            ordinal: 0,
+        });
+        let b0 = s.param(IMPL, 0);
+        let pat = s.nominal_of(DefId(7), &[b0, brand_param]);
+        let tgt = s.nominal_of(DefId(7), &[i32_ty, fresh]);
+
+        let mut strict = Binding::new(&[(IMPL, 2)]);
+        assert!(one_way_match(&mut s, pat, tgt, &mut strict));
+        assert_eq!(strict.slot(IMPL, 1), fresh);
+
+        let mut nofail = Binding::new(&[(IMPL, 2)]);
+        assert!(one_way_match_mode(
+            &mut s,
+            pat,
+            tgt,
+            &mut nofail,
+            &mut NeutralOnly,
+            MatchMode::NoFail
+        ));
+        assert_eq!(nofail.slot(IMPL, 0), i32_ty, "the type slot still binds");
+        assert_eq!(
+            nofail.slot(IMPL, 1),
+            NO_TY,
+            "R40: step (c) skips brand positions"
+        );
+    }
+
+    #[test]
+    fn an_identical_open_pattern_still_binds() {
+        // A RECURSIVE generic call matches the callee's declared result
+        // against the caller's expected type, and both are the same row
+        // because the callee IS the caller. Equality may short-circuit
+        // only when the pattern has no slot to fill.
+        let mut s = TyStore::new();
+        let mut b = Binding::new(&[(IMPL, 1)]);
+        let p0 = s.param(IMPL, 0);
+        let same = s.nominal_of(DefId(7), &[p0]);
+        assert!(one_way_match(&mut s, same, same, &mut b));
+        assert_eq!(b.slot(IMPL, 0), p0, "the slot binds to the rigid row");
+        assert_eq!(subst_norm(&mut s, same, &b), Some(same));
+
+        // A closed pattern still decides by one integer comparison.
+        let mut b2 = Binding::new(&[(IMPL, 1)]);
+        let i32_ty = s.prim(PrimKind::I32);
+        let closed = s.nominal_of(DefId(7), &[i32_ty]);
+        assert!(one_way_match(&mut s, closed, closed, &mut b2));
+        assert!(!one_way_match(&mut s, closed, same, &mut b2));
+    }
+
+    #[test]
+    fn first_unbound_separates_undetermined_from_un_normalised() {
+        // R38(e)/(f) report T0039 only for an UNDETERMINED parameter; a
+        // substitution that fails with every slot bound failed for R20's
+        // reason, which is a different rule and a different increment.
+        let mut s = TyStore::new();
+        let i32_ty = s.prim(PrimKind::I32);
+        let mut b = Binding::new(&[(IMPL, 2)]);
+        let p0 = s.param(IMPL, 0);
+        let p1 = s.param(IMPL, 1);
+        let open = s.nominal_of(DefId(7), &[p0, p1]);
+        assert_eq!(first_unbound(&s, open, &b), Some((IMPL, 0, false)));
+        b.bind(IMPL, 0, i32_ty);
+        assert_eq!(first_unbound(&s, open, &b), Some((IMPL, 1, false)));
+        b.bind(IMPL, 1, i32_ty);
+        assert_eq!(first_unbound(&s, open, &b), None);
+
+        // A projection on a BOUND head mentions no unbound slot, yet
+        // `subst_norm` with the neutral-only solver cannot complete it.
+        let proj = s.proj_of(p0, DefId(9), &[], Symbol(0));
+        assert_eq!(first_unbound(&s, proj, &b), None);
+        assert_eq!(subst_norm(&mut s, proj, &b), None);
+
+        // A brand slot is reported as a brand, which `call.rs` reads as
+        // ch01 R15b's inference rather than as R39's T0039.
+        let mut b2 = Binding::new(&[(IMPL, 2)]);
+        let brand = s.brand_ty(BrandRow::Param {
+            owner: IMPL,
+            ordinal: 1,
+        });
+        let withbrand = s.nominal_of(DefId(7), &[i32_ty, brand]);
+        assert_eq!(first_unbound(&s, withbrand, &b2), Some((IMPL, 1, true)));
+        b2.bind(IMPL, 1, brand);
+        assert_eq!(first_unbound(&s, withbrand, &b2), None);
     }
 
     #[test]

@@ -144,9 +144,20 @@ impl Wf<'_> {
                     SigKind::Const => PathHead::Value(self.fir.sigs.const_ty(def)),
                     SigKind::Fn | SigKind::ExternFn => {
                         // R7: a NON-GENERIC `fn` item used as a value has the
-                        // matching `fn` type; a generic one must be written
-                        // with all its arguments (T0039, I5).
-                        if self.arity(def) > 0 || self.container_arity(def) > 0 {
+                        // matching `fn` type. A generic one must be written
+                        // with all its arguments: there is no `fn` type to
+                        // give it, and R38 determines a parameter only AT a
+                        // call, never from the place a value is stored
+                        // (R28's table: "a generic `fn` ... with no
+                        // arguments is T0039").
+                        if self.arity(def) > 0 {
+                            let f = self.head_name(def);
+                            let g = self.fir.sigs.generics(def);
+                            let p = self.sym(self.fir.sigs.generics_store.param(g, 0).name);
+                            self.bemit(cx, node, 39, 39, format!("`{f}` is generic, so it has no `fn` type of its own; write its arguments (`{f}[{p}]`)"));
+                            return PathHead::Silent;
+                        }
+                        if self.container_arity(def) > 0 {
                             return PathHead::Silent;
                         }
                         let t = self.fn_item_ty(def);
@@ -166,6 +177,21 @@ impl Wf<'_> {
                 self.dep(def);
                 let t = self.fir.tys.nominal(def, NO_ARGS);
                 PathHead::Value(t)
+            }
+            // R28/R38: `none` in SYNTH mode has nothing to determine
+            // `Option`'s argument from. In CHECK mode `check_prelude_value`
+            // answers before this is reached.
+            ResolvedTarget::Entity(Entity::PreludeValue(sym))
+                if self.names.resolve(sym) == b"none" =>
+            {
+                self.bemit(
+                    cx,
+                    node,
+                    39,
+                    39,
+                    "cannot infer `Option`'s argument for `none` here; write `Option[T].none` or give the binding a type".to_string(),
+                );
+                PathHead::Silent
             }
             _ => PathHead::Silent,
         }
@@ -507,26 +533,63 @@ impl Wf<'_> {
         }
         let r = self.impls.row(rows[0]);
         self.dep(r.def);
-        if r.self_ty != s {
+        // I5: the impl may be GENERIC (`impl[T] Index[usize] for Box[T]`),
+        // in which case its self type is not the subject but one-way
+        // matches it. Determining the impl's parameters is the same
+        // `Binding` machinery R38 uses at a call, and without it both the
+        // index type and `Output` would be read with the impl's own
+        // parameters still in them.
+        let Some(b) = self.impl_binding(&r, s) else {
             if let Some(i) = index {
                 self.synth(cx, i);
             }
             return TY_ERROR;
-        }
-        let want = self
+        };
+        let declared = self
             .fir
             .tys
             .args(r.trait_args)
             .first()
             .copied()
             .unwrap_or(TY_ERROR);
+        let want = self.subst_impl(declared, &b);
         if let Some(i) = index {
             cx.site(NodeKind::Bracket, Slot::IndexOperand);
             self.check(cx, i, want);
         }
         let out = self.fir.sigs.assoc(r.def);
         let rhs = self.fir.sigs.assocs.rhs_of(out, self.prelude.output_name);
-        if rhs == NO_TY { TY_ERROR } else { rhs }
+        if rhs == NO_TY {
+            TY_ERROR
+        } else {
+            self.subst_impl(rhs, &b)
+        }
+    }
+
+    /// The impl's own parameters, determined from its self type against
+    /// the subject (design §7.6's `impl_lookup`, one candidate). `None`
+    /// when the impl does not match, or when a slot is left unbound (R18
+    /// forbids that for a well-formed impl, so it means the head failed
+    /// to lower).
+    fn impl_binding(&mut self, r: &fors_fir::impls::ImplRow, s: TyId) -> Option<Binding> {
+        let n = self
+            .fir
+            .sigs
+            .generics_store
+            .count(self.fir.sigs.generics(r.def));
+        let mut b = Binding::new(&[(r.def, n as u16)]);
+        if !fors_fir::subst::one_way_match(&mut self.fir.tys, r.self_ty, s, &mut b) {
+            return None;
+        }
+        b.is_complete().then_some(b)
+    }
+
+    fn subst_impl(&mut self, ty: TyId, b: &Binding) -> TyId {
+        if b.owner_count() == 0 {
+            return ty;
+        }
+        self.subst_calls += 1;
+        subst_norm(&mut self.fir.tys, ty, b).unwrap_or(TY_ERROR)
     }
 
     /// R29's "Several" clause (increment I4). With more than one `Index`
@@ -579,25 +642,33 @@ impl Wf<'_> {
             return TY_ERROR;
         }
         // The result is the chosen impl's `Output`, never a ranked guess.
+        // A GENERIC impl is selected by the same one-way match `holds`
+        // just used, so its `Index[I]` and `Output` are read with its
+        // parameters determined, not with the impl's own rows still in
+        // them (I5).
         for &r in rows {
             let row = self.impls.row(r);
-            if row.self_ty != s {
+            let Some(b) = self.impl_binding(&row, s) else {
                 continue;
-            }
-            let ra = self
+            };
+            let declared = self
                 .fir
                 .tys
                 .args(row.trait_args)
                 .first()
                 .copied()
                 .unwrap_or(TY_ERROR);
-            if ra != it {
+            if self.subst_impl(declared, &b) != it {
                 continue;
             }
             self.dep(row.def);
             let out = self.fir.sigs.assoc(row.def);
             let rhs = self.fir.sigs.assocs.rhs_of(out, self.prelude.output_name);
-            return if rhs == NO_TY { TY_ERROR } else { rhs };
+            return if rhs == NO_TY {
+                TY_ERROR
+            } else {
+                self.subst_impl(rhs, &b)
+            };
         }
         TY_ERROR
     }
@@ -619,7 +690,7 @@ impl Wf<'_> {
     /// R47's reading test, which never looks at the arguments: the operand
     /// must be a path bound to a GENERIC item (a non-generic one has nothing
     /// to instantiate, so its bracket indexes).
-    fn is_instantiation(&mut self, cx: &mut BodyCx, operand: usize) -> bool {
+    pub(crate) fn is_instantiation(&mut self, cx: &mut BodyCx, operand: usize) -> bool {
         match cx.kind(operand) {
             NodeKind::NameExpr => match cx.f.uses.target_of(operand as u32) {
                 Some(ResolvedTarget::Entity(Entity::Item { file, decl })) => {

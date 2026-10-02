@@ -760,6 +760,25 @@ impl Wf<'_> {
     /// it (R31's "a block ends in `never`"), [`TY_UNIT`] otherwise.
     fn stmt(&mut self, cx: &mut BodyCx, node: usize) -> TyId {
         cx.nodes += 1;
+        // R38(f), design §7.4: "`debug_assert!` at every statement boundary
+        // that no `Binding` is live". A `Binding` is a stack local of
+        // `call::type_call`, so a live one here would mean inference state
+        // outlived the call that created it.
+        debug_assert_eq!(
+            self.live_bindings,
+            crate::call::BINDINGS_LIVE_AT_A_STATEMENT_BOUNDARY,
+            "a call's `Binding` outlived the call"
+        );
+        let out = self.stmt_inner(cx, node);
+        debug_assert_eq!(
+            self.live_bindings,
+            crate::call::BINDINGS_LIVE_AT_A_STATEMENT_BOUNDARY,
+            "a call's `Binding` outlived the statement"
+        );
+        out
+    }
+
+    fn stmt_inner(&mut self, cx: &mut BodyCx, node: usize) -> TyId {
         match cx.kind(node) {
             NodeKind::LetStmt => self.let_stmt(cx, node),
             NodeKind::AssignStmt => self.assign_stmt(cx, node),
@@ -1108,15 +1127,36 @@ impl Wf<'_> {
         TY_UNIT
     }
 
+    /// ch01 R15 / ch09 R40: `with arena a: Arena[T]` introduces a FRESH
+    /// brand for the extent of the block. The brand is in scope for the
+    /// region's own annotation (`Arena[Node[a]]` names it), so it is
+    /// pushed before the annotation is lowered and popped at the `}`.
+    /// R40's "a type mentioning a fresh brand can never reach a binding,
+    /// field or signature outside its `with` block" is the consequence of
+    /// the scope, not of a separate check: outside it the name resolves
+    /// to nothing and the brand is a different row from every other.
     fn with_stmt(&mut self, cx: &mut BodyCx, node: usize) -> TyId {
         let kids = cx.kids(node);
+        let ordinal = cx.lcx.next_fresh_ordinal();
+        let owner = self.fir.defs.key_of(cx.home);
+        let brand = self
+            .fir
+            .tys
+            .brand_ty(fors_fir::ty::BrandRow::Fresh { owner, ordinal });
+        cx.lcx.push_fresh_brand(node as u32, brand);
+        // ch01 R15b: inside the HEADER an omitted trailing brand argument
+        // is this block's own brand (`Arena[Node[a]]` is `Arena[Node[a], a]`).
+        cx.lcx.set_header_brand(Some(brand));
         let mut region = TY_ERROR;
         for &c in &kids {
             if is_type_node(cx.kind(c)) {
                 region = self.lower_annotation(cx, c);
             }
         }
+        cx.lcx.set_header_brand(None);
         // The region identifier's introducing node is the `WithStmt` itself.
+        // The name is a VALUE (the arena) as well as a brand: `one.alloc(..)`
+        // is an ordinary receiver. The brand reading lives in `lcx`.
         cx.bind(node as u32, region, LocalKind::Value);
         for &c in &kids {
             if cx.kind(c) == NodeKind::Block {
@@ -1124,6 +1164,7 @@ impl Wf<'_> {
                 self.check(cx, c, TY_UNIT);
             }
         }
+        cx.lcx.pop_fresh_brand();
         TY_UNIT
     }
 
@@ -1371,6 +1412,27 @@ impl Wf<'_> {
             }
         }
         ty
+    }
+
+    /// R38(a): one explicit generic argument written at a call, read by
+    /// the slot's declared kind (R11: type / const / brand).
+    pub fn lower_generic_arg(
+        &mut self,
+        cx: &mut BodyCx,
+        node: usize,
+        def: DefId,
+        slot: usize,
+    ) -> TyId {
+        let mut l = lower::Lowerer {
+            sites: lower::Sites::default(),
+            fir: self.fir,
+            names: self.names,
+            prelude: self.prelude,
+            defs: self.defs,
+            shapes: self.shapes,
+            sink: self.sink,
+        };
+        l.generic_arg(&mut cx.lcx, node, def, slot)
     }
 
     /// `Copyable` (R23), for the tape's `Move`-vs-`Copy` decision. Never a

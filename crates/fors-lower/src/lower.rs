@@ -1885,6 +1885,20 @@ impl<'a> FnLower<'a> {
                 {
                     return Err(LowerError::Unresolved("call target".into()));
                 }
+                // I5 TYPES a call to a generic function, so the body is
+                // checked-clean and reaches here; monomorphisation (ch03
+                // R16-R18) is still not F1's, and the callee itself was
+                // refused above as "generic function", so there would be
+                // no body to call.
+                if self
+                    .fir
+                    .sigs
+                    .generics_store
+                    .count(self.fir.sigs.generics(def))
+                    > 0
+                {
+                    return Err(LowerError::Generic("call to a generic function".into()));
+                }
                 let key = self
                     .defs
                     .get(def)

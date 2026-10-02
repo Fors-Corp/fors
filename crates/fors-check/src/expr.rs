@@ -155,7 +155,7 @@ impl Wf<'_> {
     /// R10(b): a closure type or `fn` item coerces to an EQUAL `fn` type.
     /// "Equal" is R7's equality; the only slack is that a closure row and a
     /// `fn` row with the same shape are the same function type.
-    fn fn_shape_eq(&mut self, s: TyId, want: TyId) -> bool {
+    pub(crate) fn fn_shape_eq(&mut self, s: TyId, want: TyId) -> bool {
         let (s, want) = (self.fir.tys.unqual(s), self.fir.tys.unqual(want));
         if self.fir.tys.tag(s) != TyTag::Fn || self.fir.tys.tag(want) != TyTag::Fn {
             return false;
@@ -1036,6 +1036,75 @@ impl Wf<'_> {
             return TY_ERROR;
         }
         let id = self.fir.tys.intern_fn_ty(&ps, result, NO_TY, true);
+        self.fir.tys.fn_ty(id)
+    }
+
+    /// R41's second half: the signature's PARAMETER types are complete
+    /// but its result is not, so the closure's parameters are bound from
+    /// the signature (R35) and its body is SYNTHESISED. The caller then
+    /// matches the declared result one-way against what came out — "the
+    /// only place a result type flows out of a closure".
+    pub fn synth_closure_with(
+        &mut self,
+        cx: &mut BodyCx,
+        node: usize,
+        ps: &[(Conv, TyId)],
+    ) -> TyId {
+        let kids = cx.kids(node);
+        let cparams: Vec<usize> = kids
+            .iter()
+            .copied()
+            .filter(|&c| cx.kind(c) == NodeKind::CParam)
+            .collect();
+        let body = kids
+            .iter()
+            .copied()
+            .find(|&c| cx.kind(c) != NodeKind::CParam);
+        if cparams.len() != ps.len() {
+            self.bemit(
+                cx,
+                node,
+                35,
+                35,
+                format!(
+                    "this closure takes {} parameter(s), but the expected signature declares {}",
+                    cparams.len(),
+                    ps.len()
+                ),
+            );
+            return TY_ERROR;
+        }
+        for (i, &p) in cparams.iter().enumerate() {
+            if let Some(a) = cx.f.tree.children(p).find(|&c| is_type_node(cx.kind(c))) {
+                let written = self.lower_annotation(cx, a);
+                if written != TY_ERROR && written != ps[i].1 {
+                    let a1 = self.show(written);
+                    let b1 = self.show(ps[i].1);
+                    self.bemit(cx, p, 35, 35, format!("this closure parameter is written `{a1}`, but the expected signature declares `{b1}`"));
+                }
+            }
+            if conv_written(cx, p).is_some_and(|c| c != ps[i].0) {
+                self.bemit(
+                    cx,
+                    p,
+                    35,
+                    35,
+                    "this closure parameter's convention disagrees with the expected signature"
+                        .to_string(),
+                );
+            }
+            cx.bind(p as u32, ps[i].1, LocalKind::Value);
+        }
+        // SYNTH mode: the result type is exactly what is not known yet, so
+        // a `return` inside is R35's error and `?` has nowhere to go.
+        let saved = cx.enter_closure(true, TY_ERROR, NO_TY);
+        let result = match body {
+            Some(b) if cx.kind(b) == NodeKind::Block => self.synth_block(cx, b),
+            Some(b) => self.synth(cx, b),
+            None => TY_UNIT,
+        };
+        cx.leave_closure(saved);
+        let id = self.fir.tys.intern_fn_ty(ps, result, NO_TY, true);
         self.fir.tys.fn_ty(id)
     }
 
