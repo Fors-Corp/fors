@@ -7,7 +7,8 @@ commit history, which predates the Conventional Commits convention.
 
 | Language | Compiler | Meaning |
 |---|---|---|
-| `lang-v0.5.2` | `compiler-v0.7.0` | current |
+| `lang-v0.5.2` | `compiler-v0.8.0` | current |
+| `lang-v0.5.2` | `compiler-v0.7.0` | checker I8, the flow pass |
 | `lang-v0.5.2` | `compiler-v0.6.0` | checker I7 |
 | `lang-v0.5.2` | `compiler-v0.5.0` | checker I6, F4/F6 interpreter halves, ch05 corpus |
 | `lang-v0.5.2` | `compiler-v0.4.0` | checker I5 |
@@ -86,6 +87,46 @@ measurement, the grammar, names and visibility), with a conformance corpus and
 an independent reference parser.
 
 ## Compiler
+
+### compiler-v0.8.0 — 2026-10-02
+
+FMIR increment **F7** in part, `std` in Fors, produced by one agent and
+independently verified by another, then checked under I8's flow pass on
+the branch. Implements `lang-v0.5.2`; still no code generator.
+
+- **`Str` has real bodies** (`len`, `at`, `is_boundary`, `slice`, `eq`,
+  `starts_with`, `find`, `from_utf8` with the overlong, surrogate and range
+  checks) over three interpreter intrinsics scoped to the prelude `Str`
+  impl; a string literal's `\xHH` escapes are validated as UTF-8 in
+  lowering (ch10 R26).
+- **`MemberTarget::IndexImpl`.** `BodyFacts` records which `Index`/`IndexMut`
+  impl an `a[i]` on a user type resolved to — the fact `fors-lower` needs
+  for `Buffer` and `Vec`.
+- **`std` checks clean the way a consumer builds it** (`std`-prefixed
+  module names, real cross-module resolution), pinned by `std_checks_clean`;
+  the cross-chapter conflict list for `std` is empty. `fors check std`, the
+  CLI's package-`std` mode, is a false negative for cross-submodule
+  resolution and is not that gate.
+- **Four latent bugs fixed.** `fors-resolve` rejected a real item under one
+  of ch10 R2's eight prelude names even inside package `std`, poisoning
+  every cross-submodule `std` import; `is_trait_impl` took a `for` loop in a
+  method body for an `impl … for`; `lower::trait_ref` lowered a brand
+  argument of a trait application as a type, so every `impl[A: brand]
+  alloc.Allocator[A] for …` in `std` was ch01 R15d's O0015 the moment the
+  flow pass saw it; and `std`'s two partial moves are gone
+  (`Buffer.into_iter` in the destructuring form ch01 R22d(ii) prescribes;
+  `BufferIter.take_at` a documented stand-in, since `move self.data[i]` is
+  the partial move R4a(c) forbids).
+- **Scope, stated plainly.** 1 of F7's 6 gate tests runs end to end
+  (`str-index-is-bytes-run-ok`); five are held out with their reason:
+  `fors-lower` lowers no loop, no generic call, no scalar index, no handler
+  or `try`, and `Buffer.empty` needs an uninitialised-aggregate primitive.
+  Those are F1-era gaps and the next FMIR increment.
+- **Coverage.** 706 Rust tests (14 held out with a stated reason).
+- **Verification found and fixed before merge.** A name-only intrinsic
+  interception hijacked any user method spelled `str_byte_len`; `Str.slice`
+  bottomed out in a self-recursive stand-in; two `trap.rs` tests raced on
+  the process-global `FORS_BACKTRACE`.
 
 ### compiler-v0.7.0 — 2026-10-02
 
