@@ -58,10 +58,13 @@ impl Wf<'_> {
             NodeKind::MatchExpr => self.match_expr(cx, node, Some(want)),
             NodeKind::ComptimeBlock => {
                 let kids = cx.kids(node);
-                match kids.first() {
+                cx.regions.push((NodeKind::ComptimeBlock, node as u32));
+                let t = match kids.first() {
                     Some(&b) => self.check(cx, b, want),
                     None => TY_UNIT,
-                }
+                };
+                cx.regions.pop();
+                t
             }
             NodeKind::TupleOrParen => self.check_tuple(cx, node, want),
             NodeKind::ArrayLit => self.check_array(cx, node, want),
@@ -107,9 +110,11 @@ impl Wf<'_> {
                 }
             }
             NodeKind::Error => TY_ERROR,
-            NodeKind::AsmExpr | NodeKind::BareOp => {
-                // ch04 R27 and R37: CHECK-only forms this increment does not
-                // decide. Silent, absorbing.
+            // I10 (ch04 R27): an `asm_expr` takes its type from `want` only.
+            NodeKind::AsmExpr => self.asm_expr(cx, node, Some(want)),
+            NodeKind::BareOp => {
+                // R37: a CHECK-only form this increment does not decide.
+                // Silent, absorbing.
                 TY_ERROR
             }
             _ => {
@@ -148,7 +153,64 @@ impl Wf<'_> {
         }
         let sn = self.show(s);
         let wn = self.show(want);
-        self.bemit(cx, node, 26, 26, format!("expected `{wn}`, found `{sn}`"));
+        if let Some((code, why)) = cx.yield_code(node) {
+            // I10: a value position ch02 owns (a `raise` operand, a handler
+            // block's value) reports under ch02's code.
+            self.bemit_code(
+                cx,
+                node,
+                code,
+                26,
+                format!("expected `{wn}`, found `{sn}`: {why}"),
+            );
+            return TY_ERROR;
+        }
+        // I10: ch03 R5's and R9's mismatches are chapter 3's to report.
+        let r5_site = cx.r5_sites.contains(&(node as u32));
+        if let Some((code, msg)) = self.numeric_mismatch(s, want, r5_site) {
+            let before = self.sink.len();
+            self.bemit_code(cx, node, code, 26, msg);
+            if self.sink.len() > before {
+                // The conversion the rule asks for, written out.
+                let (a, b) = cx.range(node);
+                let simple = matches!(
+                    cx.kind(node),
+                    NodeKind::NameExpr
+                        | NodeKind::Literal
+                        | NodeKind::CallExpr
+                        | NodeKind::FieldExpr
+                        | NodeKind::Bracket
+                        | NodeKind::TupleOrParen
+                );
+                let edits = if simple {
+                    vec![fors_diag::Edit::insert(b, format!(" as {wn}"))]
+                } else {
+                    vec![
+                        fors_diag::Edit::insert(a, "("),
+                        fors_diag::Edit::insert(b, format!(") as {wn}")),
+                    ]
+                };
+                self.sink.attach_fix(fors_diag::Fix::new(
+                    fors_diag::FixKind::ConvertWithAs,
+                    format!("convert explicitly with `as {wn}`"),
+                    edits,
+                ));
+            }
+            return TY_ERROR;
+        }
+        // I10 (ch01 R15, R15d): a mismatch in nothing but brands is still
+        // ch09's T0026 (`09-types/two-brands-one-param-rejected` and
+        // `brand-identity-mismatch-rejected` assert it), and says why.
+        let msg = if self.brand_only_mismatch(s, want, 0) {
+            format!(
+                "expected `{wn}`, found `{sn}`: a brand equals only itself, with no brand \
+                 subtyping, coercion or join, so one call cannot carry two brands for one \
+                 parameter (ch01 R15, R15d)"
+            )
+        } else {
+            format!("expected `{wn}`, found `{sn}`")
+        };
+        self.bemit(cx, node, 26, 26, msg);
         TY_ERROR
     }
 
@@ -267,10 +329,13 @@ impl Wf<'_> {
             NodeKind::MatchExpr => self.match_expr(cx, node, None),
             NodeKind::ComptimeBlock => {
                 let kids = cx.kids(node);
-                match kids.first() {
+                cx.regions.push((NodeKind::ComptimeBlock, node as u32));
+                let t = match kids.first() {
                     Some(&b) => self.synth(cx, b),
                     None => TY_UNIT,
-                }
+                };
+                cx.regions.pop();
+                t
             }
             NodeKind::TupleOrParen => self.synth_tuple(cx, node),
             NodeKind::ArrayLit => self.synth_array(cx, node),
@@ -289,14 +354,14 @@ impl Wf<'_> {
                         t
                     }
                     Some(&c) => {
-                        // R36: `e?` requires `e` to be a call.
+                        // R36 / ch02 R2: `e?` requires `e` to be a call.
                         if cx.kind(c) != NodeKind::Error {
-                            self.bemit(
+                            self.bemit_code(
                                 cx,
                                 node,
+                                fors_index::diag::Code::F(2),
                                 36,
-                                36,
-                                "`?` applies only to a call of a `raises` function".to_string(),
+                                "`?` applies only to a call of a `raises` function, and this is not a call (ch02 R2)".to_string(),
                             );
                         }
                         self.synth(cx, c);
@@ -325,7 +390,9 @@ impl Wf<'_> {
                 );
                 TY_ERROR
             }
-            NodeKind::AsmExpr | NodeKind::Error => TY_ERROR,
+            // I10 (ch04 R27): SYNTH position, A0027.
+            NodeKind::AsmExpr => self.asm_expr(cx, node, None),
+            NodeKind::Error => TY_ERROR,
             _ => TY_ERROR,
         }
     }
@@ -361,6 +428,17 @@ impl Wf<'_> {
     fn check_literal(&mut self, cx: &mut BodyCx, node: usize, want: TyId) -> TyId {
         let lit = self.lit_of(cx, node);
         let bare = self.fir.tys.unqual(want);
+        // I10 (ch03 R9): an unsuffixed literal checks against the
+        // comptime type of its own kind — the arbitrary-precision value a
+        // `const N: comptime_int = 5;` holds.
+        if self.fir.tys.tag(bare) == TyTag::Nominal {
+            let d = DefId(self.fir.tys.a(bare));
+            if (d == self.prelude.comptime_int && lit == Lit::IntUnsuffixed)
+                || (d == self.prelude.comptime_float && lit == Lit::FloatUnsuffixed)
+            {
+                return want;
+            }
+        }
         match lit {
             Lit::IntUnsuffixed | Lit::FloatUnsuffixed if want != TY_ERROR && want != NO_TY => {
                 let prim = if self.fir.tys.tag(bare) == TyTag::Prim {
@@ -479,6 +557,8 @@ impl Wf<'_> {
         match own_first(cx, node) {
             Some(TokenKind::KwMove) => {
                 let t = self.synth(cx, c);
+                // I10 (ch01 R15a): never an arena or allocator as a whole.
+                self.arena_move(cx, node, c, t);
                 if let Some(p) = self.place_of(cx, c) {
                     cx.tape.push(
                         node as u32,
@@ -669,7 +749,14 @@ impl Wf<'_> {
             if !is_type_node(cx.kind(ty_node)) {
                 continue;
             }
+            // I10 (ch03 R20): inside a `simd` body a cast may name `SVec[T]`
+            // at its top, like a local's annotation; whether the conversion
+            // exists is R30's question below.
+            if cx.in_region(NodeKind::SimdForStmt).is_some() {
+                cx.lcx.svec_local = ty_node as u32;
+            }
             let u = self.lower_annotation(cx, ty_node);
+            cx.lcx.svec_local = u32::MAX;
             if u == TY_ERROR || s == TY_ERROR {
                 s = TY_ERROR;
                 continue;
@@ -692,6 +779,20 @@ impl Wf<'_> {
             if self.numeric(s) && self.numeric(u) {
                 s = u;
                 continue;
+            }
+            // I10 (ch03 R9): the explicit conversion out of a comptime type
+            // — `comptime_int` to any fixed-width integer or float,
+            // `comptime_float` to a float.
+            if self.is_comptime_ty(s) && self.numeric(u) {
+                let bare = self.fir.tys.unqual(s);
+                let float_src = DefId(self.fir.tys.a(bare)) == self.prelude.comptime_float;
+                let ub = self.fir.tys.unqual(u);
+                let float_dst =
+                    PrimKind::from_u8(self.fir.tys.a(ub) as u8).is_some_and(|p| p.is_float());
+                if !float_src || float_dst {
+                    s = u;
+                    continue;
+                }
             }
             let a = self.show(s);
             let b = self.show(u);
@@ -921,11 +1022,19 @@ impl Wf<'_> {
     fn synth_array(&mut self, cx: &mut BodyCx, node: usize) -> TyId {
         let kids = cx.kids(node);
         if kids.is_empty() {
-            // ch03 R22's empty-literal rejection is ch03's (I10).
+            // I10 (ch03 R22): nothing to synthesise `T` from.
+            self.bemit_code(
+                cx,
+                node,
+                fors_index::diag::Code::D(22),
+                32,
+                "an empty array literal `[]` has no element to take its element type from; give the binding a type annotation (ch03 R22)".to_string(),
+            );
             return TY_ERROR;
         }
         if is_repeat(cx, node) {
             let elem = self.synth(cx, kids[0]);
+            self.repeat_element(cx, node, kids[0], elem);
             let n = kids.get(1).and_then(|&c| self.const_usize(cx, c));
             return self.array_of(elem, n);
         }
@@ -939,9 +1048,47 @@ impl Wf<'_> {
         }
         for &c in kids.iter().skip(i) {
             cx.site(NodeKind::ArrayLit, Slot::ArrayElement);
+            cx.synth_elems.push(c as u32);
             self.check(cx, c, elem);
+            cx.synth_elems.pop();
         }
         self.array_of(elem, Some(kids.len() as i128))
+    }
+
+    /// ch03 R24a: the repeat form's element is `Copyable` and its count a
+    /// comptime-constant `usize`. A count that names a runtime local is the
+    /// one shape decided here; a const parameter or a `const` is comptime.
+    fn repeat_element(&mut self, cx: &mut BodyCx, node: usize, x: usize, elem: TyId) {
+        let kids = cx.kids(node);
+        if let Some(&count) = kids.get(1)
+            && cx.kind(count) == NodeKind::NameExpr
+            && let Some(ResolvedTarget::Local { node: intro }) = cx.f.uses.target_of(count as u32)
+            && matches!(cx.local(intro), Some((_, LocalKind::Value)))
+        {
+            self.bemit_code(
+                cx,
+                count,
+                fors_index::diag::Code::D(24),
+                32,
+                "the count of a repeat literal `[x; n]` must be a comptime-constant `usize`, not a runtime value (ch03 R24a)".to_string(),
+            );
+            return;
+        }
+        if elem != TY_ERROR
+            && elem != NO_TY
+            && elem != TY_NEVER
+            && !matches!(self.fir.tys.tag(self.fir.tys.unqual(elem)), TyTag::Proj)
+            && !self.copyable(elem)
+        {
+            let shown = self.show(elem);
+            self.bemit_code(
+                cx,
+                x,
+                fors_index::diag::Code::D(24),
+                32,
+                format!("the element of a repeat literal `[x; n]` is copied `n` times, so it must be `Copyable`; `{shown}` is not (ch03 R24a)"),
+            );
+        }
     }
 
     /// ch03 R21: against `Array[E, N]`, `vector[E, N]` or `mask[N]`.
@@ -959,14 +1106,76 @@ impl Wf<'_> {
             None
         };
         let Some(elem) = elem else {
+            // I10 (ch03 R24): "an array literal never checks against
+            // `Slice[T]`: bind the array, then range-index it."
+            if self.fir.tys.tag(bare) == TyTag::Nominal
+                && self.prelude.generic_index(DefId(self.fir.tys.a(bare))) == Some(gty::SLICE)
+            {
+                let w = self.show(want);
+                self.bemit_code(
+                    cx,
+                    node,
+                    fors_index::diag::Code::D(24),
+                    32,
+                    format!("an array literal never checks against `{w}`: a slice comes only from range-indexing an array or a slice, so bind the array and write `a[0 ..< n]` (ch03 R24)"),
+                );
+                cx.quiet += 1;
+                self.synth_array(cx, node);
+                cx.quiet -= 1;
+                return TY_ERROR;
+            }
             let s = self.synth_array(cx, node);
             return self.subsume(cx, node, s, want);
         };
         let kids = cx.kids(node);
-        let take = if is_repeat(cx, node) { 1 } else { kids.len() };
+        let repeat = is_repeat(cx, node);
+        // I10 (ch03 R21/R24a/R25): the element count equals `N`.
+        let lanes = {
+            let args = self.fir.tys.args(ArgsId(self.fir.tys.b(bare))).to_vec();
+            match self.prelude.generic_index(DefId(self.fir.tys.a(bare))) {
+                Some(gty::MASK) => args.first().copied(),
+                _ => args.get(1).copied(),
+            }
+        };
+        let want_n = lanes.and_then(|t| crate::lower::const_int(self.fir, t));
+        let got_n = if repeat {
+            kids.get(1).and_then(|&c| self.const_usize(cx, c))
+        } else {
+            Some(kids.len() as i128)
+        };
+        if let (Some(w), Some(g)) = (want_n, got_n)
+            && w != g
+        {
+            let ws = self.show(want);
+            let (code, rule) = if cx.synth_elems.contains(&(node as u32)) {
+                (
+                    25,
+                    "ch03 R25: every element after the first of a SYNTH-mode literal is CHECKED against the first's type",
+                )
+            } else {
+                (21, "ch03 R21")
+            };
+            self.bemit_code(
+                cx,
+                node,
+                fors_index::diag::Code::D(code),
+                32,
+                format!("this array literal has {g} element(s), but `{ws}` has {w} ({rule})"),
+            );
+            cx.quiet += 1;
+            for &c in kids.iter() {
+                self.synth(cx, c);
+            }
+            cx.quiet -= 1;
+            return TY_ERROR;
+        }
+        let take = if repeat { 1 } else { kids.len() };
         for &c in kids.iter().take(take) {
             cx.site(NodeKind::ArrayLit, Slot::ArrayElement);
             self.check(cx, c, elem);
+        }
+        if repeat && let Some(&x) = kids.first() {
+            self.repeat_element(cx, node, x, elem);
         }
         want
     }

@@ -56,23 +56,6 @@ const R2_OPAQUE: &str = "ch10 R2: the prelude names this std type but binds it t
                          (PreludeEntity::Opaque), so its type is TY_ERROR and §7.10 absorbs the \
                          expression; owner: ch10 R2's prelude binding";
 
-/// ch03 R4/R6 and ch03's `reduce`. `wrap_`/`sat_`/`unchecked_` per trapping
-/// operator and `wrap_as`/`sat_as`/`trunc_as` are methods of every numeric
-/// primitive that NO file declares (`methods.rs`'s `CH03_PRIM_METHODS` is the
-/// stand-in and `Wf::prim_table_incomplete` keeps the lookup silent), and
-/// `reduce` is ch03's own free function, a prelude VALUE that
-/// `call.rs::classify_head` has no row for beyond `some`. Owner: the
-/// increment that declares ch03's surface (design §13 reaches ch03 at I10).
-const CH03_SURFACE: &str = "ch03 R4/R6: a language-known numeric method or `reduce`, declared by \
-                            no file; silent by `prim_table_incomplete`; owner: ch03's surface";
-
-/// ch03's `comptime_int`. A `const N: comptime_int` has no runtime type in
-/// the store, so reading it in a body answers `TY_ERROR`; CHECK mode hides
-/// that (§7.10's absorbing `subsume` returns the expected type) and the `as`
-/// operand does not. Owner: ch03's surface, with [`CH03_SURFACE`].
-const CH03_COMPTIME_INT: &str = "ch03: `comptime_int` has no value type in the store, so reading a \
-                                 `const N: comptime_int` absorbs; owner: ch03's surface";
-
 /// R43 tier (2) on a RIGID receiver bounded by the PRELUDE trait
 /// `Iterator`. `lookup_on_rigid` marks the table incomplete whenever a
 /// candidate trait is a prelude one — its rows need not list every method,
@@ -325,158 +308,11 @@ const ALLOWED: &[(&str, &str, &str, &str, &str)] = &[
         R2_OPAQUE,
     ),
     (
-        "03-numerics/comptime-int-explicit-conversion-accepted.fors",
-        "m",
-        "13:18-13:19",
-        "NameExpr",
-        CH03_COMPTIME_INT,
-    ),
-    (
-        "03-numerics/reduce-identity-no-effect-n3-run-ok.fors",
-        "m",
-        "13:19-13:32",
-        "CallExpr",
-        CH03_SURFACE,
-    ),
-    (
-        "03-numerics/reduce-identity-no-effect-n3-run-ok.fors",
-        "m",
-        "14:19-14:49",
-        "CallExpr",
-        CH03_SURFACE,
-    ),
-    (
-        "03-numerics/reduce-n0-with-identity-run-ok.fors",
-        "m",
-        "13:18-13:46",
-        "CallExpr",
-        CH03_SURFACE,
-    ),
-    (
-        "03-numerics/reduce-n1-shape-run-ok.fors",
-        "m",
-        "13:18-13:31",
-        "CallExpr",
-        CH03_SURFACE,
-    ),
-    (
-        "03-numerics/reduce-n257-shape-run-ok.fors",
-        "m",
-        "13:18-13:31",
-        "CallExpr",
-        CH03_SURFACE,
-    ),
-    (
-        "03-numerics/reduce-n7-shape-run-ok.fors",
-        "m",
-        "13:18-13:31",
-        "CallExpr",
-        CH03_SURFACE,
-    ),
-    (
-        "03-numerics/reduce-n8-shape-run-ok.fors",
-        "m",
-        "13:18-13:31",
-        "CallExpr",
-        CH03_SURFACE,
-    ),
-    (
-        "03-numerics/reduce-n9-shape-run-ok.fors",
-        "m",
-        "13:18-13:31",
-        "CallExpr",
-        CH03_SURFACE,
-    ),
-    (
-        "03-numerics/sat-add-saturates-run-ok.fors",
-        "m",
-        "13:18-13:30",
-        "CallExpr",
-        CH03_SURFACE,
-    ),
-    (
-        "03-numerics/sat-as-clamps-run-ok.fors",
-        "m",
-        "12:17-12:29",
-        "Bracket",
-        CH03_SURFACE,
-    ),
-    (
-        "03-numerics/sat-as-clamps-run-ok.fors",
-        "m",
-        "12:17-12:31",
-        "CallExpr",
-        CH03_SURFACE,
-    ),
-    (
-        "03-numerics/sat-as-clamps-run-ok.fors",
-        "m",
-        "12:26-12:28",
-        "NameExpr",
-        CH03_SURFACE,
-    ),
-    (
-        "03-numerics/trunc-as-truncates-run-ok.fors",
-        "m",
-        "12:18-12:33",
-        "Bracket",
-        CH03_SURFACE,
-    ),
-    (
-        "03-numerics/trunc-as-truncates-run-ok.fors",
-        "m",
-        "12:18-12:35",
-        "CallExpr",
-        CH03_SURFACE,
-    ),
-    (
-        "03-numerics/trunc-as-truncates-run-ok.fors",
-        "m",
-        "12:29-12:32",
-        "NameExpr",
-        CH03_SURFACE,
-    ),
-    (
-        "03-numerics/wrap-add-no-trap-run-ok.fors",
-        "m",
-        "13:18-13:31",
-        "CallExpr",
-        CH03_SURFACE,
-    ),
-    (
-        "03-numerics/wrap-as-truncates-run-ok.fors",
-        "m",
-        "12:17-12:30",
-        "Bracket",
-        CH03_SURFACE,
-    ),
-    (
-        "03-numerics/wrap-as-truncates-run-ok.fors",
-        "m",
-        "12:17-12:32",
-        "CallExpr",
-        CH03_SURFACE,
-    ),
-    (
-        "03-numerics/wrap-as-truncates-run-ok.fors",
-        "m",
-        "12:27-12:29",
-        "NameExpr",
-        CH03_SURFACE,
-    ),
-    (
         "08-names/param-in-scope-in-later-param-type-accepted.fors",
         "m",
         "9:12-9:13",
         "NameExpr",
         R15_BRAND_PARAM,
-    ),
-    (
-        "08-names/prelude-usable-without-use-accepted.fors",
-        "m",
-        "10:27-10:51",
-        "CallExpr",
-        CH03_SURFACE,
     ),
     (
         "09-types/adaptor-annotated-binding-accepted.fors",
@@ -756,13 +592,6 @@ const ALLOWED: &[(&str, &str, &str, &str, &str)] = &[
         "m",
         "12:48-12:63",
         "StructLit",
-        R40_BRAND,
-    ),
-    (
-        "09-types/brand-inferred-for-callee-accepted.fors",
-        "m",
-        "9:88-9:92",
-        "Bracket",
         R40_BRAND,
     ),
     (

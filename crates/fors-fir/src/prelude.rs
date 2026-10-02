@@ -99,6 +99,55 @@ pub enum PreludeEntity {
     /// source: its declaration is not in this build, so its arity and its
     /// members are unknown and every rule that would need them stays silent.
     Opaque,
+    /// I10 (ch03 R1): a name that spells an integer width v1 does not have
+    /// (`i128`, `u128`). It is known so that the checker can say WHY it is
+    /// not a type (D0001) instead of the generic unresolved-name error.
+    RejectedWidth,
+}
+
+/// I10 (ch03 R1): the widths "no 128-bit in v1" rejects, known by name so
+/// that the rejection cites the rule.
+pub const REJECTED_WIDTHS: [&[u8]; 2] = [b"i128", b"u128"];
+
+/// I10 (ch03 Rules 4 and 6): one of the language-known numeric methods a
+/// primitive's prelude inherent impl declares.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum NumericMethodKind {
+    /// `wrap_<op>`, `sat_<op>`, `unchecked_<op>`: `mode` is 0, 1, 2; `op`
+    /// indexes [`NUMERIC_OPS`].
+    Arith { mode: u8, op: u8 },
+    /// `wrap_as[U]`, `sat_as[U]`, `trunc_as[U]`: 0, 1, 2.
+    Conv(u8),
+}
+
+/// ch03 Rule 4's mode prefixes, in [`NumericMethodKind::Arith`]'s `mode`
+/// order.
+pub const NUMERIC_MODES: [&[u8]; 3] = [b"wrap_", b"sat_", b"unchecked_"];
+/// ch03 Rule 2's trapping operators, by their method suffix, in
+/// [`NumericMethodKind::Arith`]'s `op` order. `neg` is unary and declared
+/// only on the signed types.
+pub const NUMERIC_OPS: [&[u8]; 8] = [
+    b"add", b"sub", b"mul", b"div", b"rem", b"shl", b"shr", b"neg",
+];
+/// ch03 Rule 6's lossy conversions, in [`NumericMethodKind::Conv`] order.
+pub const NUMERIC_CONVS: [&[u8]; 3] = [b"wrap_as", b"sat_as", b"trunc_as"];
+
+/// Which ch03 method `name` spells, if any.
+pub fn numeric_method_kind(name: &[u8]) -> Option<NumericMethodKind> {
+    if let Some(i) = NUMERIC_CONVS.iter().position(|&n| n == name) {
+        return Some(NumericMethodKind::Conv(i as u8));
+    }
+    for (m, prefix) in NUMERIC_MODES.iter().enumerate() {
+        if let Some(rest) = name.strip_prefix(*prefix)
+            && let Some(o) = NUMERIC_OPS.iter().position(|&n| n == rest)
+        {
+            return Some(NumericMethodKind::Arith {
+                mode: m as u8,
+                op: o as u8,
+            });
+        }
+    }
+    None
 }
 
 /// Every prelude row, built once per build before any user signature is
@@ -117,6 +166,19 @@ pub struct PreludeDefs {
     pub item_name: Symbol,
     pub output_name: Symbol,
     pub self_name: Symbol,
+    /// I10 (ch03 R9): the comptime-only arbitrary-precision types. Nominal
+    /// heads with no parameters and no members; a value of one exists only
+    /// at compile time.
+    pub comptime_int: DefId,
+    pub comptime_float: DefId,
+    /// I10 (ch03 R20): the reserved scalable vector `SVec[T]`.
+    pub svec: DefId,
+    /// I10 (ch03 Rules 4 and 6): each numeric primitive's inherent impl
+    /// declaring its explicit-arithmetic and conversion methods, as `(self
+    /// type, impl)`. The impl rows join the index in
+    /// [`push_builtin_impls`]; the declarations are made in [`build`] so
+    /// their `DefId`s are the prelude's (stable across revisions).
+    pub numeric_impls: Vec<(TyId, DefId)>,
 }
 
 /// Index into [`PreludeDefs::traits`] for each language-known trait.
@@ -581,6 +643,130 @@ pub fn build(fir: &mut Fir, names: &mut Interner) -> PreludeDefs {
         table.push((s, PreludeEntity::Opaque));
     }
 
+    // I10 (ch03 R9, R20): `comptime_int`, `comptime_float` and `SVec[T]`.
+    let mut ch03_head = |fir: &mut Fir, name: &[u8], arity: u8| -> DefId {
+        let s = names.intern(name);
+        let def = decl(fir, module, DeclKind::Struct, s, SigKind::Struct);
+        let mut ps: Vec<GParam> = Vec::new();
+        for _ in 0..arity {
+            ps.push(GParam {
+                name: names.intern(b"T"),
+                kind: GParamKind::Type,
+                bounds: NO_BOUNDS,
+            });
+        }
+        let g = fir.sigs.generics_store.push(&ps, NO_CONSTRAINTS);
+        fir.sigs.set_generics(def, g);
+        let l = fir.sigs.member_store.push(&[]);
+        fir.sigs.set_members(def, l);
+        table.push((s, PreludeEntity::Generic { def, arity }));
+        def
+    };
+    let comptime_int = ch03_head(fir, b"comptime_int", 0);
+    let comptime_float = ch03_head(fir, b"comptime_float", 0);
+    let svec = ch03_head(fir, b"SVec", 1);
+    for n in REJECTED_WIDTHS {
+        let s = names.intern(n);
+        table.push((s, PreludeEntity::RejectedWidth));
+    }
+
+    // I10 (ch03 Rules 4 and 6): every numeric primitive's inherent impl.
+    // Rule 4's `wrap_`/`sat_`/`unchecked_<op>` exist for the INTEGER types
+    // (Rule 2's trapping operators are theirs; a float never traps), `neg`
+    // on the signed ones; Rule 6's three conversions on every numeric type,
+    // generic in the target `U` (whose numeric-ness the checker enforces at
+    // the call, D0006: no prelude trait says "numeric").
+    let rhs_name2 = names.intern(b"rhs");
+    let recv_name2 = names.intern(b"self");
+    let u_name = names.intern(b"U");
+    let mut numeric_impls: Vec<(TyId, DefId)> = Vec::new();
+    for (i, &(_, k)) in PRIMS.iter().enumerate() {
+        if !(k.is_integer() || k.is_float()) {
+            continue;
+        }
+        let t = prims[i];
+        let ikey = fir.keys.intern(DeclKey {
+            parent: NO_DECL_KEY,
+            module,
+            kind: DeclKind::Impl,
+            name: None,
+            // Distinct from `push_builtin_impls`' `0..` range.
+            disamb: 0x4000_0000 + i as u32,
+        });
+        let imp = fir.declare(ikey, SigKind::Impl);
+        fir.sigs.set_self_ty(imp, t);
+        let mut ms: Vec<Member> = Vec::new();
+        if k.is_integer() {
+            let signed = matches!(
+                k,
+                PrimKind::I8 | PrimKind::I16 | PrimKind::I32 | PrimKind::I64 | PrimKind::Isize
+            );
+            for mode in NUMERIC_MODES {
+                for op in NUMERIC_OPS {
+                    let unary = op == b"neg";
+                    if unary && !signed {
+                        continue;
+                    }
+                    let mut full = mode.to_vec();
+                    full.extend_from_slice(op);
+                    let mn = names.intern(&full);
+                    let recv = Param {
+                        name: recv_name2,
+                        conv: Conv::Let,
+                        ty: t,
+                    };
+                    let rhs = Param {
+                        name: rhs_name2,
+                        conv: Conv::Let,
+                        ty: t,
+                    };
+                    let ps: &[Param] = if unary { &[recv] } else { &[recv, rhs] };
+                    let d = method(fir, module, imp, ikey, mn, ps, t, true, NO_SLOT);
+                    ms.push(Member::item(mn, crate::sig::VIS_PUBLIC, d));
+                }
+            }
+        }
+        for conv in NUMERIC_CONVS {
+            let mn = names.intern(conv);
+            let key = fir.keys.intern(DeclKey {
+                parent: ikey,
+                module,
+                kind: DeclKind::Fn,
+                name: Some(mn),
+                disamb: 0,
+            });
+            let d = fir.declare(key, SigKind::Fn);
+            let g = fir.sigs.generics_store.push(
+                &[GParam {
+                    name: u_name,
+                    kind: GParamKind::Type,
+                    bounds: NO_BOUNDS,
+                }],
+                NO_CONSTRAINTS,
+            );
+            fir.sigs.set_generics(d, g);
+            let u = fir.tys.param(d, 0);
+            let sig = fir.sigs.fn_sigs.push(
+                &[Param {
+                    name: recv_name2,
+                    conv: Conv::Let,
+                    ty: t,
+                }],
+                u,
+                NO_TY,
+                NO_SLOT,
+                0,
+                (u32::MAX, u32::MAX),
+                0,
+            );
+            fir.sigs.set_fn_sig(d, sig);
+            ms.push(Member::item(mn, crate::sig::VIS_PUBLIC, d));
+        }
+        let l = fir.sigs.member_store.push(&ms);
+        fir.sigs.set_members(imp, l);
+        numeric_impls.push((t, imp));
+    }
+
     table.sort_by_key(|&(s, _)| s.0);
     table.dedup_by_key(|&mut (s, _)| s.0);
     PreludeDefs {
@@ -593,6 +779,10 @@ pub fn build(fir: &mut Fir, names: &mut Interner) -> PreludeDefs {
         item_name,
         output_name,
         self_name,
+        comptime_int,
+        comptime_float,
+        svec,
+        numeric_impls,
     }
 }
 
@@ -688,6 +878,32 @@ pub fn push_builtin_impls(fir: &mut Fir, p: &PreludeDefs, index: &mut crate::imp
     }
     add(fir, index, TY_UNIT, tr::COPYABLE);
     add(fir, index, TY_NEVER, tr::COPYABLE);
+    // I10 (ch03 R9): the comptime types compute like the scalars they stand
+    // for (arbitrary precision, at compile time), and are copied.
+    for def in [p.comptime_int, p.comptime_float] {
+        let t = fir.tys.nominal(def, NO_ARGS);
+        for w in arith
+            .iter()
+            .chain([tr::NEG, tr::EQ, tr::ORD, tr::COPYABLE].iter())
+        {
+            add(fir, index, t, *w);
+        }
+    }
+    // I10 (ch03 Rules 4 and 6): the numeric primitives' inherent impls,
+    // declared by `build`.
+    for &(self_ty, def) in &p.numeric_impls {
+        let head = fir.tys.head_key(self_ty);
+        index.push(crate::impls::ImplRow {
+            def,
+            trait_def: NO_DEF,
+            inherent: true,
+            trait_args: NO_ARGS,
+            self_ty,
+            head,
+            order,
+        });
+        order += 1;
+    }
 }
 
 #[cfg(test)]

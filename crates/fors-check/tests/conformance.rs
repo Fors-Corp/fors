@@ -221,6 +221,9 @@ fn directive_source(target: &Path) -> String {
 
 include!("data/pending_09.rs");
 include!("data/pending_05.rs");
+include!("data/pending_02.rs");
+include!("data/pending_03.rs");
+include!("data/pending_04.rs");
 
 #[test]
 fn ch09_types_corpus_checker_view() {
@@ -418,6 +421,435 @@ fn pending_05_is_shrinking() {
             "PENDING_05 names a test that is not in the corpus: {n}"
         );
     }
+}
+
+// ------------------------------------------------- increment I10's gate
+
+/// A `check-error` test of chapter 2 or 3 whose code is NOT its own
+/// chapter's `F00nn`/`D00nn`, because another chapter's corpus asserts a
+/// different code for the very same fault: `(test, code, why)`.
+const CH02_CODED_ELSEWHERE: &[(&str, &str, &str)] = &[(
+    "handler-block-mismatched-type-rejected",
+    "T0026",
+    "`09-types/handler-block-type-rejected` is the same program (a handler block yielding `true` \
+     for an `i64` call) and its detail line names T0026 (ch09 R36: the block is checked against \
+     the success type, R26's mismatch); this file names only `02.R5`. The message cites ch02 R5. \
+     One code per fault is the owner's call (the I10 report flags it)",
+)];
+const CH03_CODED_ELSEWHERE: &[(&str, &str, &str)] = &[];
+
+/// Diagnostics a ch02/ch03 file draws BESIDE its own (or, for an accepted
+/// file, at all), each because the file itself breaks another chapter's
+/// rule the checker already enforces: `(test, code, count, why)`. A row
+/// whose code stops appearing fails the view, so none can go stale.
+const CH02_ALSO_SPEAKS: &[(&str, &str, usize, &str)] = &[
+    (
+        "error-from-single-hop-two-hops-rejected",
+        "O0003",
+        2,
+        "ch01 R3: both `fn from(let e: ..) { return X.wrapped(e); }` move the `let` parameter `e` \
+         into a payload, and neither error enum is `Copyable`",
+    ),
+    (
+        "error-from-single-hop",
+        "O0003",
+        1,
+        "ch01 R3: `fn from(let e: NetError) -> AppError { return AppError.wrapped(e); }` moves the \
+         `let` parameter `e`; `NetError` is not `Copyable`",
+    ),
+];
+const CH03_ALSO_SPEAKS: &[(&str, &str, usize, &str)] = &[
+    (
+        "generics-specialize-enforced-in-simd",
+        "T0057",
+        1,
+        "ch09 R57: `fn add[T](let a: T, let b: T) -> T { return a + b; }` declares no `Add` bound",
+    ),
+    (
+        "generics-specialize-applied-accepted",
+        "T0057",
+        1,
+        "ch09 R57: the same unbounded `add[T]` as its rejected twin",
+    ),
+    (
+        "generics-specialize-applied-accepted",
+        "T0026",
+        1,
+        "ch09 R29/R47: `v[i]` indexes with the `i32` the range `0 ..< 8` synthesises, and an index \
+         is a `usize` (the rejected twin's per-declaration budget is spent on D0018 first)",
+    ),
+    (
+        "svec-accepted-as-simd-local",
+        "T0030",
+        1,
+        "ch09 R30: `v as SVec[f64]` — `as` converts between numeric primitives only, and no rule \
+         converts a `vector` into an `SVec`; the `SVec[f64]` local itself is accepted (ch03 R20)",
+    ),
+    (
+        "array-lit-generic-argument-synthesised",
+        "O0004",
+        1,
+        "ch01 R4a(c): `return a[0];` moves an element out of `Array[T, N]` for an unbounded `T`",
+    ),
+];
+
+/// The ch02/ch03 checker view (design §13's I10 GATE). A `check-error`
+/// test reports exactly its code — its chapter's letter and its rule's
+/// number, unless [`CH02_CODED_ELSEWHERE`]/[`CH03_CODED_ELSEWHERE`] says
+/// otherwise — at its site, beside nothing but its listed `ALSO_SPEAKS`
+/// rows; every `check-ok`, `run-ok`, `run-error`, `trap` and `parse-ok`
+/// test is silent save for those rows (a program that must run, or that
+/// the corpus calls accepted, type-checks); a `parse-error` test is the
+/// parser's.
+///
+/// `resolver_letter`: chapter 4's rules are split between the phases —
+/// `fors_resolve::authority` decides what names alone decide (A0001, A0008)
+/// and the checker the rest — so its view reads the resolver's diagnostics
+/// of the chapter's OWN letter too (never another chapter's: a resolver
+/// N-code is ch08's harness's business).
+struct View<'t> {
+    dir: &'t str,
+    chapter: u8,
+    letter: char,
+    resolver_letter: Option<char>,
+    count: usize,
+    pending: &'t [(&'t str, &'t str)],
+    coded: &'t [(&'t str, &'t str, &'t str)],
+    also: &'t [(&'t str, &'t str, usize, &'t str)],
+}
+
+fn chapter_checker_view(v: View<'_>) {
+    let View {
+        dir,
+        chapter,
+        letter,
+        resolver_letter,
+        count,
+        pending,
+        coded,
+        also,
+    } = v;
+    let targets = corpus_targets(&repo_root().join("tests/conformance").join(dir));
+    assert_eq!(
+        targets.len(),
+        count,
+        "{dir} corpus not found or changed size: {}",
+        targets.len()
+    );
+    let mut failures = Vec::new();
+    let (mut on, mut pend) = (0usize, 0usize);
+    for target in &targets {
+        let src = directive_source(target);
+        let case = parse_directives(&src);
+        // `02.Definitions` (the trap kinds) cites the chapter, not a rule.
+        assert!(
+            case.chapter == chapter || src.contains(&format!("//! rule: {chapter:02}.Definitions")),
+            "{}: every {dir} test cites {chapter:02}.Rk",
+            case.name
+        );
+        let key = case.name.replace('_', "-");
+        if case.expect == "parse-error" {
+            continue;
+        }
+        let (chk, res) = check_target(target);
+        let mut got = chk.clone();
+        if let Some(l) = resolver_letter {
+            got.extend(res.iter().filter(|c| c.starts_with(l)).cloned());
+        }
+        let mut rest = got.clone();
+        for &(n, code, k, _) in also.iter().filter(|r| r.0 == key) {
+            for _ in 0..k {
+                match rest.iter().position(|c| c == code) {
+                    Some(i) => {
+                        rest.remove(i);
+                    }
+                    None => failures.push(format!(
+                        "{n}: ALSO_SPEAKS lists {k} x {code}, but the checker said {got:?}"
+                    )),
+                }
+            }
+        }
+        if pending.iter().any(|&(n, _)| n == key) {
+            pend += 1;
+            if !rest.is_empty() {
+                failures.push(format!("{key}: PENDING, but the checker spoke: {got:?}"));
+            }
+            continue;
+        }
+        on += 1;
+        match case.expect.as_str() {
+            "check-error" => {
+                let want = coded
+                    .iter()
+                    .find(|r| r.0 == key)
+                    .map(|r| r.1.to_string())
+                    .or_else(|| expected_code(&case.detail).map(|(c, n)| format!("{c}{n:04}")))
+                    .unwrap_or_else(|| format!("{letter}{:04}", case.rule));
+                if rest != [want.clone()] {
+                    failures.push(format!(
+                        "{key} ({chapter:02}.R{}): expected exactly {want}, got {got:?}",
+                        case.rule
+                    ));
+                }
+                // The code's rule has its `rules.rs` row, implemented —
+                // when it is the CHECKER's code (the resolver's ch04 codes
+                // are traced in `fors_resolve::authority`).
+                if want.starts_with(letter) && chk.contains(&want) {
+                    let table: &[fors_check::rules::RuleEntry] = match letter {
+                        'F' => &fors_check::rules::CH02_RULES,
+                        'D' => &fors_check::rules::CH03_RULES,
+                        _ => &fors_check::rules::CH04_RULES,
+                    };
+                    let n: u16 = want[1..].parse().unwrap_or(0);
+                    if !table.iter().any(|e| {
+                        e.code == Some(n) && e.status == fors_check::rules::RuleStatus::Implemented
+                    }) {
+                        failures.push(format!("{key}: {want} has no implemented row in rules.rs"));
+                    }
+                }
+            }
+            "check-ok" | "run-ok" | "run-error" | "trap" | "parse-ok" => {
+                if !rest.is_empty() {
+                    failures.push(format!(
+                        "{key}: a {} test must type-check, got {got:?}",
+                        case.expect
+                    ));
+                }
+            }
+            other => failures.push(format!("{key}: unexpected expectation {other:?}")),
+        }
+    }
+    eprintln!(
+        "{dir} checker view: {on} on, {pend} pending, {} total",
+        targets.len()
+    );
+    assert!(
+        failures.is_empty(),
+        "{dir} corpus (checker view) failures ({}):\n{}",
+        failures.len(),
+        failures.join("\n")
+    );
+}
+
+/// ch02 (`02-failure`, 36 files), checker view: every `check-error` test
+/// reports `F00nn` (design §14 Q1) — or the code [`CH02_CODED_ELSEWHERE`]
+/// names — and every program that must run type-checks.
+#[test]
+fn ch02_failure_corpus_checker_view() {
+    chapter_checker_view(View {
+        dir: "02-failure",
+        chapter: 2,
+        letter: 'F',
+        resolver_letter: None,
+        count: 36,
+        pending: PENDING_02,
+        coded: CH02_CODED_ELSEWHERE,
+        also: CH02_ALSO_SPEAKS,
+    });
+}
+
+/// ch03 (`03-numerics`, 46 files), checker view: every `check-error` test
+/// reports `D00nn`, and every program that must run type-checks.
+#[test]
+fn ch03_numerics_corpus_checker_view() {
+    chapter_checker_view(View {
+        dir: "03-numerics",
+        chapter: 3,
+        letter: 'D',
+        resolver_letter: None,
+        count: 46,
+        pending: PENDING_03,
+        coded: CH03_CODED_ELSEWHERE,
+        also: CH03_ALSO_SPEAKS,
+    });
+}
+
+/// A `check-error` test of chapter 4 whose code is not `A00` + its cited
+/// rule: `(test, code, why)`.
+const CH04_CODED_ELSEWHERE: &[(&str, &str, &str)] = &[(
+    "main-root-capability-missing-from-needs-rejected",
+    "A0001",
+    "ch04 R8 itself sends this case to R1 — the capability of a `main` parameter's type \
+     \"MUST be declared in the root module's `needs { ... }` (Rule 1)\" — so the resolver \
+     reports it under R1's code: one cause, one code (`fors_resolve::authority::check_main_impl`)",
+)];
+
+/// Diagnostics a ch04 file draws beside its own: `(test, code, count, why)`.
+const CH04_ALSO_SPEAKS: &[(&str, &str, usize, &str)] = &[
+    (
+        "main-generic-rejected",
+        "A0008",
+        1,
+        "ch04 R8 bars a type-parameter-typed `main` parameter too (\"not ... a type parameter\"): \
+         `inout out: W` is the second, independent fault, which the resolver reports beside \
+         `main[W: io.Writer]` being generic",
+    ),
+    (
+        "comptime-declared-file-read-accepted",
+        "A0013",
+        1,
+        "the file declares its read with `@comptime_input(\".config\")`, an attribute no chapter \
+         defines; ch04 R13 and ch10 R42 name the header's `inputs { \".config\" };` clause, which \
+         this file does not write, so the read IS undeclared. The file is `parse-ok`, which says \
+         nothing about the checker; its owner should write the `inputs` clause",
+    ),
+];
+
+/// ch04 (`04-authority`, 34 targets), the build's view: every `check-error`
+/// test reports `A00nn` — from the checker, or for R1/R8 from the
+/// resolver — or the code [`CH04_CODED_ELSEWHERE`] names, and every program
+/// that must run is silent. [`PENDING_04`] holds what needs a manifest, an
+/// evaluator or a corpus fix.
+#[test]
+fn ch04_authority_corpus_checker_view() {
+    chapter_checker_view(View {
+        dir: "04-authority",
+        chapter: 4,
+        letter: 'A',
+        resolver_letter: Some('A'),
+        count: 34,
+        pending: PENDING_04,
+        coded: CH04_CODED_ELSEWHERE,
+        also: CH04_ALSO_SPEAKS,
+    });
+}
+
+#[test]
+fn pending_04_is_shrinking() {
+    pending_is_shrinking("04-authority", PENDING_04, PENDING_04_MAX, "PENDING_04");
+}
+
+fn pending_is_shrinking(dir: &str, pending: &[(&str, &str)], max: usize, table: &str) {
+    assert!(
+        pending.len() <= max,
+        "{table} grew to {} (bound {max}); an increment must lower it, never raise it",
+        pending.len()
+    );
+    let names: Vec<String> = corpus_targets(&repo_root().join("tests/conformance").join(dir))
+        .iter()
+        .map(|t| {
+            parse_directives(&directive_source(t))
+                .name
+                .replace('_', "-")
+        })
+        .collect();
+    for (n, _) in pending {
+        assert!(
+            names.iter().any(|x| x == n),
+            "{table} names a test that is not in the corpus: {n}"
+        );
+    }
+}
+
+#[test]
+fn pending_02_is_shrinking() {
+    pending_is_shrinking("02-failure", PENDING_02, PENDING_02_MAX, "PENDING_02");
+}
+
+#[test]
+fn pending_03_is_shrinking() {
+    pending_is_shrinking("03-numerics", PENDING_03, PENDING_03_MAX, "PENDING_03");
+}
+
+/// D10 for FMIR F3: every `?`, handler and `raise` of the ch02 corpus's
+/// accepted programs is published, with the propagation edge decided.
+#[test]
+fn d10_failure_facts_are_published_for_fmir_f3() {
+    use fors_check::facts::Propagation;
+    let all = |name: &str| {
+        let (checker, _, out) = check_target_full(&target_named("02-failure", name));
+        (checker, out)
+    };
+    // `?` with equal error types: `Propagation::Same`, E and F recorded.
+    let (c, out) = all("postfix-try-propagate");
+    assert!(c.is_empty(), "accepted: {c:?}");
+    let tries: Vec<_> = out
+        .facts
+        .iter()
+        .flat_map(|(_, f)| f.failure.tries.iter().copied())
+        .collect();
+    assert!(!tries.is_empty(), "D10: the `?` is published");
+    assert!(
+        tries
+            .iter()
+            .all(|t| t.edge == Propagation::Same && t.callee_raises == t.target)
+    );
+    // `?` across one `ErrorFrom` hop: the impl and its `from` are named.
+    let (_, out) = all("error-from-single-hop");
+    let hop: Vec<_> = out
+        .facts
+        .iter()
+        .flat_map(|(_, f)| f.failure.tries.iter().copied())
+        .collect();
+    assert!(
+        hop.iter()
+            .any(|t| matches!(t.edge, Propagation::ErrorFrom { .. }) && t.callee_raises != t.target),
+        "D10: the ErrorFrom edge is decided once, here: {hop:?}"
+    );
+    // A handler: its binding is the callee's `raises` type, its block yields
+    // the success type.
+    let (c, out) = all("handler-block-value-accepted");
+    assert!(c.is_empty(), "accepted: {c:?}");
+    let hs: Vec<_> = out
+        .facts
+        .iter()
+        .flat_map(|(_, f)| f.failure.handlers.iter().copied())
+        .collect();
+    assert_eq!(hs.len(), 1, "D10: one handler: {hs:?}");
+    assert!(!hs[0].diverges && hs[0].binding != hs[0].success);
+    // A `raise` of a named unit variant records the variant.
+    let (c, out) = all("raise-in-raises-fn-accepted");
+    assert!(c.is_empty(), "accepted: {c:?}");
+    let rs: Vec<_> = out
+        .facts
+        .iter()
+        .flat_map(|(_, f)| f.failure.raises.iter().copied())
+        .collect();
+    assert!(
+        !rs.is_empty() && rs.iter().all(|r| r.variant.is_some()),
+        "D10: `raise Err.empty;` names its variant: {rs:?}"
+    );
+}
+
+/// D11: ch03 R4/R6's methods resolve to their prelude declarations, typed,
+/// and `reduce` carries its element type.
+#[test]
+fn d11_numeric_facts_are_published() {
+    use fors_check::facts::{ArithOp, NumericMethod};
+    let rows = |name: &str| {
+        let (checker, _, out) = check_target_full(&target_named("03-numerics", name));
+        assert!(checker.is_empty(), "{name} is accepted: {checker:?}");
+        out
+    };
+    let out = rows("sat-add-saturates");
+    let calls: Vec<_> = out
+        .facts
+        .iter()
+        .flat_map(|(_, f)| f.numeric.calls.iter().copied())
+        .collect();
+    assert_eq!(calls.len(), 1, "{calls:?}");
+    assert_eq!(calls[0].kind, NumericMethod::Sat(ArithOp::Add));
+    assert_eq!(
+        calls[0].recv, calls[0].result,
+        "Rule 4 keeps the receiver's type"
+    );
+    let out = rows("wrap-as-truncates");
+    let conv: Vec<_> = out
+        .facts
+        .iter()
+        .flat_map(|(_, f)| f.numeric.calls.iter().copied())
+        .collect();
+    assert_eq!(conv.len(), 1, "{conv:?}");
+    assert_eq!(conv[0].kind, NumericMethod::WrapAs);
+    assert_ne!(conv[0].recv, conv[0].result, "Rule 6 converts to `U`");
+    let out = rows("reduce-empty-with-identity");
+    let red: Vec<_> = out
+        .facts
+        .iter()
+        .flat_map(|(_, f)| f.numeric.reduces.iter().copied())
+        .collect();
+    assert_eq!(red.len(), 1, "{red:?}");
+    assert!(red[0].identity.is_some());
 }
 
 /// A non-ch09 `check-ok` test that ch09 rejects anyway. Each of these is a
@@ -1206,6 +1638,155 @@ fn ch01_merge_liveness_tests() {
         "merge-liveness-resolved-accepted",
     ));
     assert!(got.is_empty(), "both branches consume: got {got:?}");
+}
+
+// ----------------------------------------- increment I10's ch01 half (B)
+
+/// design §13's I10 GATE, ch01 side: "the type-dependent subset of ch01's
+/// [`check-error`] tests ... scoped in this increment from the rule list"
+/// R14-R18 and R21-R21d (brands and `Shared`; R14's `secret` composition
+/// has no `check-error` file). Each row is `(test, code, clause)`: exactly
+/// one checker diagnostic, of that code, whose message cites `ch01` and the
+/// clause the file's own `//! rule:` line names. Same assertion shape as
+/// [`CH01_CODED_09`].
+///
+/// `brand-param-two-arenas-rejected` keeps ch09's T0026: the ch09 corpus
+/// asserts T0026 for exactly this program shape
+/// (`09-types/two-brands-one-param-rejected`, "A is bound to `two` by the
+/// first argument; the second argument's brand `one` disagrees"), so the
+/// one code per fault is ch09's and the message names R15d.
+const I10_CH01_CODED: &[(&str, &str, &str)] = &[
+    ("arena-binding-move-rejected", "O0015", "R15a"),
+    ("arena-no-constructor", "O0015", "R15a"),
+    ("brand-kind-closed", "O0015", "R15d"),
+    ("brand-param-two-arenas-rejected", "T0026", "R15d"),
+    ("arena-brand-mismatch-rejected", "O0016", "R16"),
+    ("with-allocator-brand", "O0018", "R18"),
+    ("atomic-outside-shared-rejected", "O0021", "R21"),
+    (
+        "shared-atomic-field-without-shared-impl-rejected",
+        "O0021",
+        "R21",
+    ),
+    ("shared-fieldwise-check-rejected", "O0021", "R21a"),
+    ("shared-impl-enum-payload-checked", "O0021", "R21a"),
+    ("shared-impl-generic-field-needs-bound", "O0021", "R21a"),
+];
+
+/// The accepted twins of the same rules (`parse-ok` in the corpus, so no
+/// other assertion reaches them): the new checks must stay silent on them.
+const I10_CH01_ACCEPTED: &[&str] = &[
+    "arena-brand-match-accepted",
+    "brand-param-helper-accepted",
+    "brand-field-requires-param-accepted",
+    "with-allocator-brand-match-accepted",
+    "shared-fieldwise-check-accepted",
+    "shared-impl-generic-field-with-bound",
+    "shared-unsafe-impl-form-accepted",
+    "shared-generic-bound-accepted",
+    "secret-iso-composition-accepted",
+];
+
+/// The in-scope (R14-R18, R21-R21d) `check-error` tests this increment does
+/// NOT turn on, each with the phase or fix that decides it. The checker is
+/// silent on every one (asserted below), because the fault is already
+/// reported before it, or the file cannot reach it.
+const I10_CH01_WAITING: &[(&str, &str)] = &[
+    (
+        "arena-brand-nonescape-rejected",
+        "ch01 R15: the brand `x` in `fn leak() -> Ref[Node[x], x]` has no spelling outside its \
+         `with` block, so the resolver reports N0014 at both uses (ch08 R14) — the escape is \
+         impossible to WRITE, which is R15's own non-escape argument (a)",
+    ),
+    (
+        "brand-field-requires-param",
+        "ch01 R15d: `struct Holder { r: Ref[Node[A], A] }` declares no `A`, so `A` is unbound \
+         and the resolver reports N0014 twice; the checker never sees a brand to judge",
+    ),
+    (
+        "shared-blanket-impl-rejected",
+        "ch01 R21a's blanket clause is decided twice already: ch08 R21's orphan rule (N0021, \
+         `Shared` is a prelude trait and `T` no item) and ch09 R18 (T0018); a third code for one \
+         fault would be noise",
+    ),
+    (
+        "shared-impl-outside-defining-module-rejected",
+        "ch01 R21a's defining-module clause IS ch08 R21's orphan rule for a prelude trait; and \
+         the directory test's layout breaks ch08 R24 (`holder.fors` declares `module \
+         lib.counter;`, `main.fors` `module app;`: N0001 twice, N0004, N0014), so the impl's \
+         head never resolves and the definite-only `Shared` pass stays silent",
+    ),
+];
+
+/// The directive's own `rule:` text (`01.R15a`).
+fn directive_rule(src: &str) -> String {
+    src.lines()
+        .find_map(|l| l.strip_prefix("//! rule:"))
+        .map(|r| r.trim().to_string())
+        .unwrap_or_default()
+}
+
+#[test]
+fn i10_ch01_brand_and_shared_tests_assert_their_code_and_clause() {
+    let mut failures = Vec::new();
+    for &(name, code, clause) in I10_CH01_CODED {
+        let target = target_named("01-ownership", name);
+        let src = directive_source(&target);
+        if directive_rule(&src) != format!("01.{clause}") {
+            failures.push(format!(
+                "{name}: the table names {clause}, the file cites {}",
+                directive_rule(&src)
+            ));
+        }
+        let got = check_target_messages(&target);
+        if got.len() != 1 {
+            failures.push(format!(
+                "{name}: expected exactly one diagnostic, got {got:?}"
+            ));
+            continue;
+        }
+        if got[0].0 != code {
+            failures.push(format!("{name}: expected {code}, got {}", got[0].0));
+        }
+        if !got[0].1.contains("ch01 ") || !got[0].1.contains(clause) {
+            failures.push(format!(
+                "{name}: the message must cite ch01 {clause}; got {:?}",
+                got[0].1
+            ));
+        }
+        if let Some(num) = code.strip_prefix('O') {
+            let n: u16 = num.parse().unwrap();
+            if !fors_check::rules::CH01_RULES.iter().any(|e| {
+                e.code == Some(n) && e.status == fors_check::rules::RuleStatus::Implemented
+            }) {
+                failures.push(format!("{name}: {code} has no implemented CH01_RULES row"));
+            }
+        }
+    }
+    for &name in I10_CH01_ACCEPTED {
+        let got = check_target_messages(&target_named("01-ownership", name));
+        if !got.is_empty() {
+            failures.push(format!("{name}: expected silence, got {got:?}"));
+        }
+    }
+    for &(name, _) in I10_CH01_WAITING {
+        let target = target_named("01-ownership", name);
+        assert_eq!(
+            parse_directives(&directive_source(&target)).expect,
+            "check-error",
+            "{name}: I10_CH01_WAITING lists check-error files only"
+        );
+        let got = check_target_messages(&target);
+        if !got.iter().all(|(c, _)| c == "T0018") || got.len() > 1 {
+            failures.push(format!("{name}: waiting, but the checker said {got:?}"));
+        }
+    }
+    assert!(
+        failures.is_empty(),
+        "I10's ch01 brand/Shared tests ({}):\n{}",
+        failures.len(),
+        failures.join("\n")
+    );
 }
 
 // ------------------------------------------------ increment I8b's gate
