@@ -7,7 +7,8 @@ commit history, which predates the Conventional Commits convention.
 
 | Language | Compiler | Meaning |
 |---|---|---|
-| `lang-v0.5.2` | `compiler-v0.5.0` | current |
+| `lang-v0.5.2` | `compiler-v0.6.0` | current |
+| `lang-v0.5.2` | `compiler-v0.5.0` | checker I6, F4/F6 interpreter halves, ch05 corpus |
 | `lang-v0.5.2` | `compiler-v0.4.0` | checker I5 |
 | `lang-v0.5.2` | `compiler-v0.3.0` | FMIR F5 |
 | `lang-v0.5.1` | `compiler-v0.2.0` | checker I3.5–I4b, FMIR F1–F2 |
@@ -84,6 +85,34 @@ measurement, the grammar, names and visibility), with a conformance corpus and
 an independent reference parser.
 
 ## Compiler
+
+### compiler-v0.6.0 — 2026-10-02
+
+Type checker increment **I7**, patterns and exhaustiveness, produced by one
+agent and independently verified by another. Implements `lang-v0.5.2`;
+still no code generator.
+
+- **Patterns (ch09 R50–R52).** Bindings, literals, wildcards, tuples,
+  struct patterns with omitted fields, enum variant payloads, nested
+  patterns, `some`/`none`, typed against the scrutinee with one diagnostic
+  at the position ch03 R25 fixes.
+- **Exhaustiveness (R53–R55).** The standard usefulness algorithm with no
+  early exit; witnesses for missing constructors; unreachable arms; the
+  R55 step budget, whose count an independent reference reproduces exactly
+  on both corpus files. An oracle enumerates every value of 10 000 seeded
+  nested scrutinee types and agrees with the algorithm on exhaustiveness,
+  per-arm reachability and the diagnostic's line.
+- A nested explicit generic argument (`id[Option[i64]](true)`) is now
+  checked; it used to be accepted silently.
+- **Coverage.** 223 of chapter 09's 246 conformance tests on, 23 pending
+  (I8 and I8b); 680 Rust tests.
+- **Verification found and fixed before merge.** A `const` pattern of a
+  `Str` or a negative integer lowered to a wildcard, so `match s { S => 1 }`
+  passed as exhaustive; an unknown, duplicated or private field in a struct
+  pattern was silent; witnesses could name a covered string.
+- **Open for the owner.** R55's prose admits two step counts
+  (`match-budget-within-accepted` says "about 4 000", the no-early-exit
+  reading gives 6150); the count is normative across implementations.
 
 ### compiler-v0.5.0 — 2026-10-02
 
