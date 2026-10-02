@@ -7,7 +7,8 @@ commit history, which predates the Conventional Commits convention.
 
 | Language | Compiler | Meaning |
 |---|---|---|
-| `lang-v0.5.3` | `compiler-v0.19.0` | current |
+| `lang-v0.5.3` | `compiler-v0.20.0` | current |
+| `lang-v0.5.3` | `compiler-v0.19.0` | FMIR F8, the capability host surface and oracle replay |
 | `lang-v0.5.3` | `compiler-v0.18.0` | FMIR F3, failure lowering and the exit sequence |
 | `lang-v0.5.3` | `compiler-v0.17.0` | checker I10c, the prelude names bind to std |
 | `lang-v0.5.3` | `compiler-v0.16.0` | checker I10, the other chapters' obligations |
@@ -106,6 +107,45 @@ measurement, the grammar, names and visibility), with a conformance corpus and
 an independent reference parser.
 
 ## Compiler
+
+### compiler-v0.20.0 — 2026-10-03
+
+FMIR increment **F9**, produced by one agent and independently verified
+by another. Implements `lang-v0.5.3`; still no code generator.
+
+- **Comptime mode.** `comptime { }` blocks evaluate at build time on the
+  interpreter's own loop with a sealed environment: no capabilities, a
+  sealed oracle that can read no clock or entropy (asserted after every
+  evaluation), and an intrinsic table whose comptime column refuses
+  every host door by name (A0012). Declared inputs from the header's
+  `inputs { }` clause are read once and content-hashed; an undeclared
+  read is A0013; `fs.read_to_string` is comptime-only.
+- **Budgets.** One step per instruction, bytes per allocation; 2²⁰
+  steps and 64 MiB per evaluation, 2²⁸ steps across the build, each
+  overrun A0014 with the counts and the declaration. Measured at ~47M
+  steps/s in release.
+- **The memo.** Results are content-addressed by a key over the target
+  (pointer width, endianness, layout version), every reachable
+  function's FMIR hash, each declared input's content hash and the
+  budgets; entries are byte-identical across processes, working
+  directories and environments. Observing an address blocks tier-up.
+- **CLI.** `fors build [--memo-dir] [--counters]` runs the build step;
+  `fors run` refuses a program whose comptime evaluation fails.
+- **Coverage.** The five ch04 comptime gate rows reach their verdicts
+  (two pinned on corpus defects, with twins covering the rule); memo and
+  cross-process tests; 1026 Rust tests (16 held out with a stated
+  reason).
+- **Verification found and fixed before merge** (22 escape programs, 15
+  memo-staleness variants): a value-position `comptime { }` outside
+  `main` built clean while its enclosing body silently failed to lower;
+  a `comptime` block in a `const` initialiser was neither evaluated nor
+  reported. Both are named A0011 errors now.
+- **For the owner.** Declared inputs may name paths outside the package;
+  memo entries carry no integrity hash; `std/env` bodies are stubs; the
+  checker accepts a run-time `fs.read_to_string`; two corpus files
+  (`comptime-clock-read-rejected`, `comptime-file-read-declared-accepted`)
+  need their `use`/`inputs` fixed; `PENDING_04`'s comptime-budget row is
+  now decided by the build step.
 
 ### compiler-v0.19.0 — 2026-10-03
 
