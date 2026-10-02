@@ -4,8 +4,8 @@ GENERATED FILE — do not hand-edit; run `tools/specpack/gen.py --write` to
 regenerate. Source: `docs/spec/*.md` (normative), `tests/conformance/`
 (corpus) and `std/**/*.fors` (standard library).
 
-Language version: 0.5.1 (`docs/spec/VERSION`)
-Inputs SHA-256: f47a2eb103f1704160df7266207f1dc7601972ddcac9ef6c060f7ffa4d7a6d4c
+Language version: 0.5.2 (`docs/spec/VERSION`)
+Inputs SHA-256: f1c5536806e9b8d4495d9409ef81911b7bb5dff7d79920b2524743737c250be4
 
 This pack exists because no model has seen Fors before: guessing from
 Rust/Zig/Swift/C is wrong more often than it is right. Read section 1 first.
