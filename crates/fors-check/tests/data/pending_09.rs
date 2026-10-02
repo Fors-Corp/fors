@@ -214,13 +214,47 @@
 //   by `ty::lin`/`ty::droppable` as of this increment, and the probe
 //   above proves it, but the file's `v.iter().map(..)` needs std's
 //   adaptors to type at all.
-const PENDING_09_MAX: usize = 6;
+//
+// I10c (ch10 R2's prelude names bound to package `std`) gave the harness a
+// std MODE rather than editing the corpus: `ch09_needs_std` checks an
+// `adaptor-*` file, or one that names an R2 prelude name or calls `.iter()`,
+// with every `std/` module in the build (the other files are checked alone,
+// as before). It deleted TWO rows, which now report exactly their own code:
+//
+// - `adaptor-annotated-binding-mismatch-rejected` (T0026): `v.iter().map(
+//   double).take(3)` types against std's `Vec`, `SliceIter`, `Mapped` and
+//   `Taken`, and R38(b)'s receiver binding makes the result `Taken[Mapped[
+//   SliceIter[i32], i32]]`, not the annotated `Taken[SliceIter[i32]]`.
+// - `adaptor-map-closure-returns-linear-rejected` (T0012): `map[U:
+//   Droppable]` with `U := Res`, `impl Linear for Res`.
+//
+// and RETAGGED the other three `I8b` -> `R43-rigid-Iterator`, because with
+// std in the build they are still silent for a reason that is not R2's:
+// each calls an adaptor on a RIGID receiver `I: Iterator` (`it.take(3)`,
+// `h.src.take(2)`, `it.take(2)`). The user's `Iterator` is the
+// LANGUAGE-KNOWN row, whose method table lists `next` only; the provided
+// `take` is declared on `std.mem.seq`'s row of the same trait (ch10 R32:
+// "one trait, not two"). I10c identifies the two rows for BOUND
+// satisfaction (`Wf::holds`) but not for member lookup or projections —
+// offering `seq`'s methods on a rigid `I` would type `Self.Item` as `seq`'s
+// projection, a different neutral type from the user's `I.Item`, and turn
+// `adaptor-chain-rigid-receiver-accepted` into a false T0026. That identity
+// is the owner of `silent.rs`'s `R43_RIGID_ITERATOR` rows ("`Iterator`'s
+// prelude surface"), so the three rows wait for it:
+//
+// - `adaptor-name-clash-two-traits-rejected` needs `take` from BOTH
+//   `Limited` and `Iterator` on `I: Iterator + Limited` (R44's T0044).
+// - `adaptor-on-field-receiver-rejected`,
+//   `adaptor-on-inout-receiver-rejected` need `take`'s `sink self` to reach
+//   the flow pass (ch01 R4a(c)/(d)).
+//
+// `callable-bound-cannot-bind-result-rejected` is unchanged: the owner
+// decision recorded above.
+const PENDING_09_MAX: usize = 4;
 const PENDING_09: &[(&str, &str)] = &[
-    ("adaptor-annotated-binding-mismatch-rejected", "I8b"),
-    ("adaptor-map-closure-returns-linear-rejected", "I8b"),
-    ("adaptor-name-clash-two-traits-rejected", "I8b"),
-    ("adaptor-on-field-receiver-rejected", "I8b"),
-    ("adaptor-on-inout-receiver-rejected", "I8b"),
+    ("adaptor-name-clash-two-traits-rejected", "R43-rigid-Iterator"),
+    ("adaptor-on-field-receiver-rejected", "R43-rigid-Iterator"),
+    ("adaptor-on-inout-receiver-rejected", "R43-rigid-Iterator"),
     ("callable-bound-cannot-bind-result-rejected", "I8b"),
 ];
 

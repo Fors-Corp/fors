@@ -109,6 +109,49 @@ fn check_target(path: &Path) -> (Vec<String>, Vec<String>) {
 /// [`check_target`] plus the whole `CheckOutput`, for the tests that read
 /// the store and the CHECK-position trace rather than the diagnostics.
 fn check_target_full(path: &Path) -> (Vec<String>, Vec<String>, fors_check::CheckOutput) {
+    check_target_in(path, false)
+}
+
+/// Every `std/*.fors` module under the name ch08 R17's synthetic table gives
+/// it (`std.mem`, `std.mem.alloc`, ...) — the same 15 files, in the same
+/// order, as `fors-lower`'s `std_checks_clean` and `silent.rs`'s sweep, so
+/// the build has package `std` in it and ch10 R2's prelude names bind to
+/// std's real declarations (I10c).
+fn std_module_sources() -> Vec<(Vec<&'static str>, Vec<u8>)> {
+    let root = repo_root().join("std");
+    let files: &[(&str, &[&'static str])] = &[
+        ("io.fors", &["std", "io"]),
+        ("mem.fors", &["std", "mem"]),
+        ("mem/alloc.fors", &["std", "mem", "alloc"]),
+        ("mem/vec.fors", &["std", "mem", "vec"]),
+        ("mem/seq.fors", &["std", "mem", "seq"]),
+        ("mem/text.fors", &["std", "mem", "text"]),
+        ("mem/hashmap.fors", &["std", "mem", "hashmap"]),
+        ("fs.fors", &["std", "fs"]),
+        ("net.fors", &["std", "net"]),
+        ("proc.fors", &["std", "proc"]),
+        ("rand.fors", &["std", "rand"]),
+        ("time.fors", &["std", "time"]),
+        ("env.fors", &["std", "env"]),
+        ("ffi.fors", &["std", "ffi"]),
+        ("gpu.fors", &["std", "gpu"]),
+    ];
+    files
+        .iter()
+        .map(|(rel, segs)| {
+            let src = fs::read(root.join(rel)).expect("std module reads");
+            (segs.to_vec(), src)
+        })
+        .collect()
+}
+
+/// [`check_target_full`], optionally with every `std` module in the build
+/// after the target's own files. Only the TARGET's diagnostics are
+/// returned: `std`'s own are `no_new_diagnostics_outside_ch09`'s business.
+fn check_target_in(
+    path: &Path,
+    with_std: bool,
+) -> (Vec<String>, Vec<String>, fors_check::CheckOutput) {
     if std::env::var("FORS_TRACE").is_ok() {
         eprintln!("== {}", path.display());
     }
@@ -170,6 +213,13 @@ fn check_target_full(path: &Path) -> (Vec<String>, Vec<String>, fors_check::Chec
         root = Some(0);
     }
 
+    let own = sources.len();
+    if with_std {
+        for (segs, s) in std_module_sources() {
+            names.push(segs.iter().map(|b| interner.intern(b.as_bytes())).collect());
+            sources.push(s);
+        }
+    }
     let parsed: Vec<_> = sources.iter().map(|s| parse_file(s)).collect();
     let inputs: Vec<FileInput> = parsed
         .iter()
@@ -188,12 +238,48 @@ fn check_target_full(path: &Path) -> (Vec<String>, Vec<String>, fors_check::Chec
     let resolver: Vec<String> = resolved
         .files
         .iter()
+        .take(own)
         .flat_map(|f| f.diagnostics.iter())
         .map(|d| d.code.as_string())
         .collect();
     let out = fors_check::check_build(&inputs, &resolved, &mut interner);
-    let checker: Vec<String> = out.diagnostics.iter().map(|d| d.code.as_string()).collect();
+    let checker: Vec<String> = out
+        .diagnostics
+        .iter()
+        .filter(|d| d.file.index() < own)
+        .map(|d| d.code.as_string())
+        .collect();
     (checker, resolver, out)
+}
+
+/// ch10 R2's eight prelude names.
+const R2_NAMES: [&str; 8] = [
+    "Allocator",
+    "AllocError",
+    "PageAllocator",
+    "Buffer",
+    "Vec",
+    "Map",
+    "String",
+    "Utf8Error",
+];
+
+/// I10c's harness mode: a `09-types` file is checked WITH `std` in the build
+/// exactly when its subject is std's surface — an `adaptor-*` file (the
+/// corpus of `Iterator`'s PROVIDED methods, which only `std/mem/seq.fors`
+/// declares), or a file that names one of ch10 R2's prelude names or calls
+/// `.iter()`. Every other file is checked alone, as before: the corpus is
+/// not edited, and a file that does not need std is not given it.
+fn ch09_needs_std(key: &str, src: &str) -> bool {
+    let is_ident = |c: u8| c.is_ascii_alphanumeric() || c == b'_';
+    let b = src.as_bytes();
+    let word = |w: &str| {
+        src.match_indices(w).any(|(i, _)| {
+            let j = i + w.len();
+            (i == 0 || !is_ident(b[i - 1])) && (j >= b.len() || !is_ident(b[j]))
+        })
+    };
+    key.starts_with("adaptor-") || src.contains(".iter()") || R2_NAMES.iter().any(|w| word(w))
 }
 
 fn corpus_targets(dir: &Path) -> Vec<PathBuf> {
@@ -237,6 +323,7 @@ fn ch09_types_corpus_checker_view() {
     let mut failures = Vec::new();
     let mut on = 0usize;
     let mut pending = 0usize;
+    let mut with_std_count = 0usize;
     for target in &targets {
         let src = directive_source(target);
         let case = parse_directives(&src);
@@ -246,6 +333,10 @@ fn ch09_types_corpus_checker_view() {
             case.name
         );
         let key = case.name.replace('_', "-");
+        let with_std = ch09_needs_std(&key, &src);
+        if with_std {
+            with_std_count += 1;
+        }
         if PENDING_09.iter().any(|&(n, _)| n == key) {
             pending += 1;
             // A pending test must still be SILENT: an increment that has not
@@ -253,7 +344,7 @@ fn ch09_types_corpus_checker_view() {
             // file whose OTHER declarations break a rule the checker has
             // reached, listed with its reason in `PENDING_SPEAKS`; there the
             // obligation is that the test's OWN code is still unreported.
-            let (got, _) = check_target(target);
+            let (got, _, _) = check_target_in(target, with_std);
             let want = expected_code(&case.detail).map(|(c, n)| format!("{c}{n:04}"));
             match PENDING_SPEAKS.iter().find(|&&(n, _)| n == key) {
                 Some(_) => {
@@ -278,7 +369,7 @@ fn ch09_types_corpus_checker_view() {
             continue;
         }
         on += 1;
-        let (got, _) = check_target(target);
+        let (got, _, _) = check_target_in(target, with_std);
         match case.expect.as_str() {
             "check-ok" => {
                 if !got.is_empty() {
@@ -292,7 +383,7 @@ fn ch09_types_corpus_checker_view() {
                 // phase's to report; the checker's obligation is silence.
                 if matches!(expected_code(&case.detail), Some(('N', _)) | Some(('A', _))) {
                     let w = want.unwrap();
-                    let (_, res) = check_target(target);
+                    let (_, res, _) = check_target_in(target, with_std);
                     if !got.is_empty() || res.len() != 1 || res[0] != w {
                         failures.push(format!("{key}: expected the resolver alone to say {w}; resolver {res:?}, checker {got:?}"));
                     }
@@ -320,7 +411,7 @@ fn ch09_types_corpus_checker_view() {
         }
     }
     eprintln!(
-        "ch09 checker view: {on} on, {pending} pending, {} total",
+        "ch09 checker view: {on} on, {pending} pending, {} total, {with_std_count} checked with std",
         targets.len()
     );
     assert!(
@@ -1048,6 +1139,46 @@ fn cross_chapter_conflicts_are_live() {
     }
 }
 
+/// The ch09 rows I10c deleted from `PENDING_09` by checking them with
+/// `std` in the build ([`ch09_needs_std`]).
+const CH09_ON_ONLY_WITH_STD: &[&str] = &[
+    "adaptor-annotated-binding-mismatch-rejected",
+    "adaptor-map-closure-returns-linear-rejected",
+];
+
+/// I10c: the std mode is what turns these on, not a change of judgement on
+/// the file alone. Checked ALONE each is silent — `Iterator`'s provided
+/// `map`/`take` and `Mapped`/`Taken` exist only in `std/mem/seq.fors`, so
+/// nothing in the body types — and checked WITH std each reports exactly
+/// its own code, which is the harness mode the corpus view uses for it.
+#[test]
+fn ch09_std_mode_is_what_turns_them_on() {
+    let dir = repo_root().join("tests/conformance/09-types");
+    let mut failures = Vec::new();
+    for &name in CH09_ON_ONLY_WITH_STD {
+        let target = dir.join(format!("{name}.fors"));
+        let src = directive_source(&target);
+        let case = parse_directives(&src);
+        let want = expected_code(&case.detail).map(|(c, n)| format!("{c}{n:04}"));
+        if !ch09_needs_std(name, &src) {
+            failures.push(format!("{name}: the harness does not check it with std"));
+        }
+        let (alone, _, _) = check_target_in(&target, false);
+        if !alone.is_empty() {
+            failures.push(format!(
+                "{name}: alone the checker already speaks: {alone:?}"
+            ));
+        }
+        let (with, _, _) = check_target_in(&target, true);
+        if want.is_none() || with.len() != 1 || Some(&with[0]) != want.as_ref() {
+            failures.push(format!(
+                "{name}: with std expected exactly {want:?}, got {with:?}"
+            ));
+        }
+    }
+    assert!(failures.is_empty(), "{}", failures.join("\n"));
+}
+
 #[test]
 fn pending_09_is_shrinking() {
     assert!(
@@ -1174,7 +1305,8 @@ fn every_check_error_test_yields_exactly_one_diagnostic() {
         if matches!(expected_code(&case.detail), Some(('N', _)) | Some(('A', _))) {
             continue;
         }
-        let (got, _) = check_target(&target);
+        let with_std = ch09_needs_std(&key, &directive_source(&target));
+        let (got, _, _) = check_target_in(&target, with_std);
         if got.len() != 1 {
             failures.push(format!("{key}: {} diagnostics {got:?}", got.len()));
         }

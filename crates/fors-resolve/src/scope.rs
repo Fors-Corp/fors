@@ -107,7 +107,7 @@ impl<'a> BodyCtx<'a> {
         }
         self.prelude
             .get(module, name)
-            .map(|e| Found::Entity(e, &[]))
+            .map(|e| Found::Entity(e, self.prelude.variants(name)))
     }
 
     /// Ch08 Rule 18: declares `name` (introduced at `node`) in the

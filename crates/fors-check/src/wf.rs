@@ -500,6 +500,41 @@ impl<'a> Wf<'a> {
     /// projection against its declared bounds. Projection subjects (I6) and
     /// anything else are `Unknown` unless decided below.
     pub fn holds(&mut self, subject: TyId, want: TraitRefId) -> Holds {
+        let ans = self.holds_exact(subject, want);
+        if ans == Holds::Yes || want == NO_TRAIT_REF {
+            return ans;
+        }
+        // ch10 R32: "the prelude name `Iterator` and `mem.seq.Iterator`
+        // denote ONE item ... so there is one trait, not two". In a build
+        // that ships `std` a user's `I: Iterator` names the language-known
+        // row while `std`'s own signatures (`zip[J: Iterator]`) name
+        // `std.mem.seq`'s declaration of it, so an `Iterator` BOUND is
+        // satisfied by either row — exactly as R31 already accepts either
+        // ([`Wf::iterator_traits`]). Neither row has parameters of its own.
+        let (want_def, _) = self.fir.tys.trait_ref(want);
+        let iters = self.iterator_traits();
+        if iters.len() < 2 || !iters.contains(&want_def) {
+            return ans;
+        }
+        let mut out = ans;
+        for d in iters {
+            if d == want_def {
+                continue;
+            }
+            let other = self.fir.tys.intern_trait_ref(d, NO_ARGS);
+            match self.holds_exact(subject, other) {
+                Holds::Yes => return Holds::Yes,
+                Holds::Unknown => out = Holds::Unknown,
+                Holds::No => {}
+            }
+        }
+        out
+    }
+
+    /// [`Self::holds`] for exactly the trait row `want` names, with no
+    /// identification of the two `Iterator` rows: what R31's `for` asks,
+    /// because the element type is THAT row's `Item`.
+    pub fn holds_exact(&mut self, subject: TyId, want: TraitRefId) -> Holds {
         self.holds_probes += 1;
         if subject == TY_ERROR || subject == NO_TY || want == NO_TRAIT_REF {
             return Holds::Unknown;
