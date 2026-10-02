@@ -182,5 +182,14 @@ impl Entries {
 // `inputs { ... };` clause (ch04 R13). No capability, and TOTAL — a missing
 // input is a BUILD error, which is why the corpus writes it with no `?`.
 pub fn read_to_string(let path: Str) -> Str {
-    return "";
-} // STUB
+    return input_read(path);
+}
+
+// The comptime door (design §5.8's `@input_read` row, F9). Lowering
+// intercepts a call to this function of THIS module whose body is this
+// self-recursive stand-in and emits the `input_read` intrinsic, which
+// serves the bytes from the build's declared-inputs map and is forbidden
+// at run time — never a descriptor, never the file system.
+fn input_read(let path: Str) -> Str {
+    return input_read(path);
+}

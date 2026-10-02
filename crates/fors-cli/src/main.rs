@@ -17,7 +17,12 @@
 //! `fors run [--oracle-record <file> | --oracle-replay <file>] <file>`
 //! builds one program with `std`, lowers it and runs it under the FMIR
 //! interpreter; see [`run`].
+//!
+//! `fors build [--memo-dir <dir>] [--counters] <file>` is the build step:
+//! check, lower, and evaluate every `comptime` block in comptime mode,
+//! reporting the comptime diagnostics with the checker's; see [`build`].
 
+mod build;
 mod run;
 
 use std::io::Write;
@@ -607,6 +612,7 @@ fn main() -> ExitCode {
         Some("check") => run_check(&args[1..]),
         Some("explain") => run_explain(&args[1..]),
         Some("run") => run::run_run(&args[1..]),
+        Some("build") => build::run_build(&args[1..]),
         // Two streams (CONTRIBUTING.md): the compiler's own version, and the
         // language version it implements.
         Some("--version" | "-V") => {
@@ -624,6 +630,7 @@ fn main() -> ExitCode {
                  \x20      fors explain [--format json|text] <CODE>\n\
                  \x20      fors explain [--format json|text] --list\n\
                  \x20      fors run [--oracle-record <file> | --oracle-replay <file>] <file>\n\
+                 \x20      fors build [--memo-dir <dir>] [--counters] <file>\n\
                  \x20      fors --version"
             );
             ExitCode::from(2)

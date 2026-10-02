@@ -1966,3 +1966,139 @@ fn f3_comptime_int_as_out_of_range_is_a_named_refusal() {
         built.lower_diags
     );
 }
+
+/// F9 (design §6): a statement-form `comptime` block is lowered as its OWN
+/// thunk — a function carrying a freshly minted key, whose body is the
+/// block — and the enclosing run-time body contains nothing of it (it was
+/// evaluated at build time, never deferred to run time).
+#[test]
+fn f9_comptime_block_lowers_as_its_own_thunk() {
+    let mut interner = Interner::new();
+    let src = "fn main(inout out: Out) { comptime { var i: i64 = 0; while i < 3 { i = \
+               i.wrap_add(1); } } out.write_line(\"ok\"); }\n";
+    let source = format!("module m;\nneeds {{ }};\n{OUT_PRELUDE}{src}");
+    let bytes = source.into_bytes();
+    let name: Segments = vec![interner.intern(b"m")];
+    let parsed = parse_file(&bytes);
+    assert!(parsed.diags.is_empty(), "fixture must parse");
+    let inputs = [FileInput {
+        tree: &parsed.tree,
+        tokens: &parsed.tokens,
+        source: &bytes,
+        name,
+    }];
+    let resolved = fors_resolve::resolve_in_package(&mut interner, &inputs, Some(0), Some(b"m"));
+    let out = fors_check::check_build(&inputs, &resolved, &mut interner);
+    assert!(out.diagnostics.is_empty(), "check diags");
+    let lowered = lower_build(&inputs, &out, &mut interner);
+    assert!(lowered.diags.is_empty(), "{:?}", lowered.diags);
+    assert_eq!(lowered.comptime.len(), 1);
+    let t = &lowered.comptime[0];
+    assert_eq!(
+        (t.enclosing.as_str(), t.name.as_str()),
+        ("main", "main#comptime0")
+    );
+    assert!(t.error.is_none() && t.inputs.is_empty());
+    let main = lowered.fns.iter().find(|f| f.name == "main").expect("main");
+    let thunk = lowered
+        .fns
+        .iter()
+        .find(|f| f.name == t.name)
+        .expect("thunk");
+    assert_ne!(main.decl.decl, thunk.decl.decl, "the thunk has its own key");
+    let has_loop_compare = |d: &fors_fmir::decl::DeclFmir| {
+        d.insts
+            .all_rows()
+            .any(|(_, r)| matches!(r.op, fors_fmir::op::Op::Icmp(_)))
+    };
+    assert!(
+        has_loop_compare(&thunk.decl),
+        "the block's loop is in the thunk"
+    );
+    assert!(
+        !has_loop_compare(&main.decl),
+        "and nowhere in the run-time body"
+    );
+    for f in &lowered.fns {
+        assert!(fors_fmir::verify::verify(&f.decl).is_empty(), "{}", f.name);
+    }
+}
+
+/// F9 (verifier): a VALUE-position `comptime` block (`let x = comptime {
+/// ... };`) is a NAMED thunk row, never a clean build. Before this, the
+/// block was evaluated as if it were a statement and the enclosing
+/// function's run-time body silently failed to lower — a `fors build`
+/// with exit 0 and a function with no body.
+#[test]
+fn f9_value_position_comptime_block_is_a_named_thunk_row() {
+    let mut interner = Interner::new();
+    let src = "fn helper() -> i64 { let x: i64 = comptime { 5 }; return x; }\nfn main(inout \
+               out: Out) { out.write_line(\"ok\"); }\n";
+    let source = format!("module m;\nneeds {{ }};\n{OUT_PRELUDE}{src}");
+    let bytes = source.into_bytes();
+    let name: Segments = vec![interner.intern(b"m")];
+    let parsed = parse_file(&bytes);
+    assert!(parsed.diags.is_empty(), "fixture must parse");
+    let inputs = [FileInput {
+        tree: &parsed.tree,
+        tokens: &parsed.tokens,
+        source: &bytes,
+        name,
+    }];
+    let resolved = fors_resolve::resolve_in_package(&mut interner, &inputs, Some(0), Some(b"m"));
+    let out = fors_check::check_build(&inputs, &resolved, &mut interner);
+    let lowered = lower_build(&inputs, &out, &mut interner);
+    assert_eq!(lowered.comptime.len(), 1);
+    let t = &lowered.comptime[0];
+    assert_eq!(t.enclosing, "helper");
+    match &t.error {
+        Some(LowerError::Comptime(w)) => assert!(w.contains("used as a value"), "{w}"),
+        other => panic!("a value-position block must be a named row, got {other:?}"),
+    }
+    assert!(
+        !lowered.fns.iter().any(|f| f.name == t.name),
+        "no thunk is lowered for a block the build cannot splice"
+    );
+    assert!(
+        lowered
+            .diags
+            .iter()
+            .any(|d| d.name == "helper" && matches!(d.error, LowerError::Comptime(_))),
+        "and the run-time body refuses it too: {:?}",
+        lowered.diags
+    );
+}
+
+/// F9 (verifier): a `comptime` block in a `const` initialiser has no body
+/// facts, so the thunk loop never sees it; it is a NAMED row, not a block
+/// that is neither evaluated nor reported.
+#[test]
+fn f9_comptime_block_in_a_const_initialiser_is_a_named_thunk_row() {
+    let mut interner = Interner::new();
+    let src = "const K: i64 = comptime { 5 };\nfn main(inout out: Out) { out.write_line(\"ok\"); \
+               }\n";
+    let source = format!("module m;\nneeds {{ }};\n{OUT_PRELUDE}{src}");
+    let bytes = source.into_bytes();
+    let name: Segments = vec![interner.intern(b"m")];
+    let parsed = parse_file(&bytes);
+    assert!(parsed.diags.is_empty(), "fixture must parse");
+    let inputs = [FileInput {
+        tree: &parsed.tree,
+        tokens: &parsed.tokens,
+        source: &bytes,
+        name,
+    }];
+    let resolved = fors_resolve::resolve_in_package(&mut interner, &inputs, Some(0), Some(b"m"));
+    let out = fors_check::check_build(&inputs, &resolved, &mut interner);
+    let lowered = lower_build(&inputs, &out, &mut interner);
+    let rows: Vec<_> = lowered
+        .comptime
+        .iter()
+        .filter(|t| t.enclosing == "K")
+        .collect();
+    assert_eq!(rows.len(), 1, "{:?}", lowered.comptime);
+    match &rows[0].error {
+        Some(LowerError::Comptime(w)) => assert!(w.contains("`const` initialiser"), "{w}"),
+        other => panic!("a const-initialiser block must be a named row, got {other:?}"),
+    }
+}

@@ -5,7 +5,7 @@ regenerate. Source: `docs/spec/*.md` (normative), `tests/conformance/`
 (corpus) and `std/**/*.fors` (standard library).
 
 Language version: 0.5.3 (`docs/spec/VERSION`)
-Inputs SHA-256: 91e18b5de1db085f0728b93dbecbe760636d3201ef129903e8aaf4d08342f8e8
+Inputs SHA-256: 5e3db1e59660865161f0dfb1e666b31bae1680151306ed4bda4f31159226aa36
 
 This pack exists because no model has seen Fors before: guessing from
 Rust/Zig/Swift/C is wrong more often than it is right. Read section 1 first.
@@ -783,6 +783,7 @@ impl Entries {
     pub fn close(sink self: Self) { ... }
 }
 pub fn read_to_string(let path: Str) -> Str { ... }
+fn input_read(let path: Str) -> Str { ... }
 ```
 
 ### std.gpu  (`std/gpu.fors`)

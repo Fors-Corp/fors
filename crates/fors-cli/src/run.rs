@@ -28,8 +28,6 @@
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
-use fors_index::{Interner, Segments, module::is_legal_segment};
-
 pub const EXIT_USAGE: u8 = 64;
 pub const EXIT_BUILD: u8 = 65;
 pub const EXIT_INTERP: u8 = 69;
@@ -50,7 +48,7 @@ fn usage(msg: &str) -> ExitCode {
 }
 
 /// The `std` source root: `--std`, else `FORS_STD`, else this checkout's.
-fn default_std_dir() -> PathBuf {
+pub(crate) fn default_std_dir() -> PathBuf {
     match std::env::var_os("FORS_STD") {
         Some(d) => PathBuf::from(d),
         None => Path::new(env!("CARGO_MANIFEST_DIR")).join("../../std"),
@@ -59,7 +57,7 @@ fn default_std_dir() -> PathBuf {
 
 /// Every `.fors` file under `dir`, named `std.<path>` (ch08 R17's module
 /// names for `std`), sorted so the build is deterministic.
-fn std_modules(dir: &Path) -> std::io::Result<Vec<(Vec<Vec<u8>>, Vec<u8>)>> {
+pub(crate) fn std_modules(dir: &Path) -> std::io::Result<Vec<(Vec<Vec<u8>>, Vec<u8>)>> {
     let mut paths = Vec::new();
     let mut stack = vec![dir.to_path_buf()];
     while let Some(d) = stack.pop() {
@@ -227,117 +225,39 @@ pub fn run_run(args: &[String]) -> ExitCode {
     }
 }
 
-/// parse -> resolve -> check -> lower, with `std` in the build. `Err` is the
-/// rendered refusal lines (the ROOT file's diagnostics, or why `main` did
-/// not lower). `std`'s own diagnostics are not the program's: the known
-/// owner-decision conflicts stay there, and anything that keeps a `std`
-/// body from lowering surfaces as that callee's named refusal.
+/// parse -> resolve -> check -> lower -> comptime (F9's build step,
+/// [`crate::build::compile`]), with `std` in the build. `Err` is the rendered
+/// refusal lines: the ROOT file's diagnostics and every comptime build
+/// error (a program whose comptime evaluation fails does not run), or why
+/// `main` did not lower. `std`'s own diagnostics are not the program's: the
+/// known owner-decision conflicts stay there, and anything that keeps a
+/// `std` body from lowering surfaces as that callee's named refusal.
 fn build(
     display: &str,
     file: &Path,
     source: &[u8],
     std_srcs: Vec<(Vec<Vec<u8>>, Vec<u8>)>,
 ) -> Result<(fors_interp::Program, fors_fir::ty::TyStore), Vec<String>> {
-    let mut interner = Interner::new();
-    let root_name: Segments = match crate::real_header_segments(source, &mut interner) {
-        Some(s) => s,
-        None => {
-            let stem = file
-                .file_stem()
-                .map(|s| s.to_string_lossy().into_owned())
-                .unwrap_or_default();
-            // The conformance corpus's hyphenated test names are not module
-            // names (tests/conformance/README.md); such a file is `main`.
-            let stem = if is_legal_segment(stem.as_bytes()) {
-                stem
-            } else {
-                "main".to_string()
-            };
-            vec![interner.intern(stem.as_bytes())]
-        }
+    let out = crate::build::compile(
+        display,
+        file,
+        source,
+        std_srcs,
+        &crate::build::Opts::default(),
+    );
+    if !out.errors.is_empty() {
+        return Err(out.errors);
+    }
+    let Some((mut prog, tys)) = out.program else {
+        return Err(vec![format!("{display}: no `main` to run")]);
     };
-    let mut sources: Vec<Vec<u8>> = vec![source.to_vec()];
-    let mut names: Vec<Segments> = vec![root_name];
-    for (segs, src) in std_srcs {
-        names.push(segs.iter().map(|b| interner.intern(b)).collect());
-        sources.push(src);
-    }
-    let parsed: Vec<_> = sources.iter().map(|s| fors_syntax::parse_file(s)).collect();
-    let index = fors_diag::LineIndex::new(source);
-    let at = |start: u32| {
-        let (l, c) = index.line_col(start);
-        format!("{display}:{l}:{c}")
-    };
-    let mut errors: Vec<String> = parsed[0]
-        .diags
-        .iter()
-        .map(|d| format!("{}: error[{}]: {}", at(d.start), d.code.as_str(), d.message))
-        .collect();
-    if !errors.is_empty() {
-        return Err(errors);
-    }
-    let inputs: Vec<fors_resolve::FileInput> = parsed
-        .iter()
-        .zip(sources.iter())
-        .zip(names.iter())
-        .map(|((p, s), n)| fors_resolve::FileInput {
-            tree: &p.tree,
-            tokens: &p.tokens,
-            source: s,
-            name: n.clone(),
-        })
-        .collect();
-    let resolved = fors_resolve::resolve_in_package(&mut interner, &inputs, Some(0), None);
-    if let Some(f) = resolved.files.first() {
-        for d in &f.diagnostics {
-            errors.push(format!(
-                "{}: error[{}]: {}",
-                at(d.start),
-                d.code.as_string(),
-                d.message
-            ));
-        }
-    }
-    if !errors.is_empty() {
-        return Err(errors);
-    }
-    let checked = fors_check::check_build(&inputs, &resolved, &mut interner);
-    for d in checked.diagnostics.iter().filter(|d| d.file.index() == 0) {
-        errors.push(format!(
-            "{}: error[{}]: {}",
-            at(d.start),
-            d.code.as_string(),
-            d.message
-        ));
-    }
-    if !errors.is_empty() {
-        return Err(errors);
-    }
-    let lowered = fors_lower::lower_build(&inputs, &checked, &mut interner);
-    if !lowered.fns.iter().any(|f| f.name == "main") {
-        let mut lines: Vec<String> = lowered
-            .diags
-            .iter()
-            .filter(|d| d.name == "main")
-            .map(|d| format!("{display}: `main` does not lower: {:?}", d.error))
-            .collect();
+    let Some(main) = prog.fns.iter().position(|f| f.name == "main") else {
+        let mut lines = out.main_diags;
         if lines.is_empty() {
             lines.push(format!("{display}: no `main` to run"));
         }
         return Err(lines);
-    }
-    let fns: Vec<fors_interp::ProgFn> = lowered
-        .fns
-        .into_iter()
-        .map(|f| fors_interp::ProgFn {
-            name: f.name,
-            decl: f.decl,
-            strings: f.strings,
-            intrinsics: f.intrinsics,
-        })
-        .collect();
-    let prog = fors_interp::Program::entry_by_name(fns, "main", fors_interp::Config::v0_1())
-        .ok_or_else(|| vec![format!("{display}: no `main` to run")])?
-        .with_names(lowered.names);
-    Ok((prog, lowered.tys))
+    };
+    prog.entry = main;
+    Ok((prog, tys))
 }

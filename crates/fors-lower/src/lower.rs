@@ -139,6 +139,41 @@ pub struct LoweredBuild {
     /// recursively through its components). Keyed by [`LoweredBuild::tys`]'
     /// ids; hand it to the interpreter's `Program::with_names`.
     pub names: fors_fmir::names::TypeNames,
+    /// F9: one row per `comptime { ... }` block in a lowered declaration —
+    /// the THUNK the build step evaluates in comptime mode (design §6). A
+    /// row whose `error` is `None` has its FMIR in [`LoweredBuild::fns`]
+    /// under [`ComptimeThunk::name`]; a row with an error is a NAMED build
+    /// error (a shape the comptime engine cannot be handed), never a block
+    /// silently left unevaluated or deferred to run time.
+    pub comptime: Vec<ComptimeThunk>,
+    /// F9: `(key, name)` of every `extern` declaration, so the comptime
+    /// evaluator can name a call to one as a sealed operation (ch04 R2a,
+    /// R12) rather than an anonymous unknown callee.
+    pub externs: Vec<(fors_fir::DeclKeyId, String)>,
+}
+
+/// F9: one `comptime { ... }` block, lowered as its own zero-capability
+/// THUNK: a function with the enclosing declaration's parameters (the
+/// run-time bindings, which the evaluator passes with NO value) whose body
+/// is the block. The run-time body of the enclosing declaration contains
+/// nothing for a statement-form block: it was evaluated at build time.
+#[derive(Clone, Debug)]
+pub struct ComptimeThunk {
+    /// The enclosing declaration's name (what a comptime error names).
+    pub enclosing: String,
+    pub def: DefId,
+    /// The thunk's own function name in [`LoweredBuild::fns`]:
+    /// `<enclosing>#comptime<i>`.
+    pub name: String,
+    /// The build-input index of the declaring file.
+    pub file: u32,
+    /// Byte offset of the `comptime` keyword in that file.
+    pub offset: u32,
+    /// The module header's `inputs { ... };` paths (ch04 R13), in source
+    /// order — what the build resolves to content hashes before evaluating.
+    pub inputs: Vec<Vec<u8>>,
+    /// Why the thunk could not be lowered, if it could not.
+    pub error: Option<LowerError>,
 }
 
 /// `TyStore` is not `Debug` (it is a dozen parallel columns), and a build's
@@ -202,6 +237,8 @@ pub fn lower_build(
         // frozen and must stay byte-identical, so instantiation interns here.
         tys: out.fir.tys.clone(),
         names: fors_fmir::names::TypeNames::default(),
+        comptime: Vec::new(),
+        externs: Vec::new(),
     };
     let Some(defs) = out.defs.as_ref() else {
         return build;
@@ -220,9 +257,89 @@ pub fn lower_build(
         // every program that declares a generic function carry a diagnostic.
         // The instances come from the worklist below.
         if !generic_owners(&out.fir, defs, *def).is_empty() {
+            // F9: a comptime block inside a generic declaration would be
+            // evaluated once per instantiation; that is not built here, and
+            // skipping it silently would leave the block unevaluated.
+            let name = name_of(*def, interner);
+            for (i, (_, offset, _)) in comptime_blocks(inputs, defs, *def).into_iter().enumerate() {
+                build.comptime.push(ComptimeThunk {
+                    enclosing: name.clone(),
+                    def: *def,
+                    name: format!("{name}#comptime{i}"),
+                    file: defs.get(*def).map(|r| r.file.0).unwrap_or(0),
+                    offset,
+                    inputs: Vec::new(),
+                    error: Some(LowerError::Comptime(
+                        "a comptime block in a generic declaration is evaluated per \
+                         instantiation, which F9 does not build"
+                            .into(),
+                    )),
+                });
+            }
             continue;
         }
         let name = name_of(*def, interner);
+        // F9: every comptime block of this declaration, as its own thunk —
+        // lowered whether or not the run-time body lowers, so a block is
+        // never silently left unevaluated.
+        for (i, (block, offset, statement)) in
+            comptime_blocks(inputs, defs, *def).into_iter().enumerate()
+        {
+            let thunk_name = format!("{name}#comptime{i}");
+            let file_idx = defs.get(*def).map(|r| r.file.0).unwrap_or(0);
+            let declared = inputs
+                .get(file_idx as usize)
+                .map(header_inputs)
+                .unwrap_or_default();
+            if !statement {
+                // A VALUE-position block (`let x = comptime { ... };`): its
+                // result would have to be spliced into the run-time body,
+                // which F9 does not build. The run-time body refuses it too
+                // (`lower_expr`), but that refusal is one of `fors run`'s
+                // `main`-only diagnostics; THIS row is what `fors build`
+                // reports, at the keyword — never a clean build that
+                // evaluated the block as if it were a statement and left
+                // the enclosing function without a body.
+                build.comptime.push(ComptimeThunk {
+                    enclosing: name.clone(),
+                    def: *def,
+                    name: thunk_name,
+                    file: file_idx,
+                    offset,
+                    inputs: declared,
+                    error: Some(LowerError::Comptime(VALUE_BLOCK_UNBUILT.into())),
+                });
+                continue;
+            }
+            let env = Env {
+                inputs,
+                fir: &out.fir,
+                defs,
+                facts_all: &out.facts,
+            };
+            let key = insts.mint_key();
+            let shared = Shared {
+                interner,
+                tys: &mut build.tys,
+                mono: &mut insts,
+            };
+            let error = match lower_thunk(&env, shared, *def, &thunk_name, facts, block, key) {
+                Ok(f) => {
+                    build.fns.push(f);
+                    None
+                }
+                Err(e) => Some(e),
+            };
+            build.comptime.push(ComptimeThunk {
+                enclosing: name.clone(),
+                def: *def,
+                name: thunk_name,
+                file: file_idx,
+                offset,
+                inputs: declared,
+                error,
+            });
+        }
         let env = Env {
             inputs,
             fir: &out.fir,
@@ -298,6 +415,46 @@ pub fn lower_build(
             }),
         }
     }
+    // F9: every `extern` declaration's key and name (ch04 R2a's sealed
+    // operations), for the comptime evaluator.
+    for i in 0..defs.len() {
+        let def = DefId(i as u32);
+        if let Some(row) = defs.get(def)
+            && row.kind == DeclKind::ExternFn
+        {
+            build.externs.push((row.key, name_of(def, interner)));
+        }
+    }
+    // F9: a `comptime` block in a `const` initialiser. The checker gives a
+    // `const` no body facts, so the loop above never sees it; without this
+    // scan the block would be neither evaluated nor reported. A NAMED row
+    // instead (ch04 R11: a shape the engine cannot take is a build error).
+    for i in 0..defs.len() {
+        let def = DefId(i as u32);
+        let Some(row) = defs.get(def) else {
+            continue;
+        };
+        if row.kind != DeclKind::Const || out.facts.iter().any(|(d, _)| *d == def) {
+            continue;
+        }
+        let name = name_of(def, interner);
+        for (i, (_, offset, _)) in comptime_blocks(inputs, defs, def).into_iter().enumerate() {
+            build.comptime.push(ComptimeThunk {
+                enclosing: name.clone(),
+                def,
+                name: format!("{name}#comptime{i}"),
+                file: row.file.0,
+                offset,
+                inputs: Vec::new(),
+                error: Some(LowerError::Comptime(
+                    "a comptime block in a `const` initialiser: evaluating it and splicing \
+                     the result into the item is not built in F9 (only statement-form blocks \
+                     in function bodies are evaluated)"
+                        .into(),
+                )),
+            });
+        }
+    }
     // F3: ch02 R17's names, for the error type of every lowered `main`.
     let env = Env {
         inputs,
@@ -325,7 +482,14 @@ pub fn lower_build(
     // F8: the root-capability identity of every `main` parameter type, for
     // the entry shim (ch04 R8: "the runtime supplies each argument by that
     // nominal type").
-    for f in build.fns.iter().filter(|f| f.name == "main") {
+    // F9: and of every comptime thunk's parameters, which the comptime
+    // evaluator passes as withheld capability values (design §6).
+    let thunk_names: Vec<&str> = build.comptime.iter().map(|t| t.name.as_str()).collect();
+    for f in build
+        .fns
+        .iter()
+        .filter(|f| f.name == "main" || thunk_names.contains(&f.name.as_str()))
+    {
         for (t, cap) in record_main_roots(&env, &build.tys, interner, f) {
             build.names.insert_root(t, cap);
         }
@@ -867,6 +1031,119 @@ fn lower_one(
     Ok(fx.finish(def, name, instance))
 }
 
+/// F9: lowers the comptime block `block` of `def` as a THUNK (see
+/// [`ComptimeThunk`]) carrying the fresh key `key`.
+fn lower_thunk(
+    env: &Env<'_>,
+    shared: Shared<'_>,
+    def: DefId,
+    name: &str,
+    facts: &BodyFacts,
+    block: usize,
+    key: fors_fir::DeclKeyId,
+) -> Result<LoweredFn, LowerError> {
+    let row = env
+        .defs
+        .get(def)
+        .ok_or_else(|| LowerError::Unresolved(format!("def{}", def.0)))?;
+    if row.kind != DeclKind::Fn {
+        return Err(LowerError::Comptime(
+            "a comptime block outside a `fn` body".into(),
+        ));
+    }
+    let file = env
+        .inputs
+        .get(row.file.0 as usize)
+        .ok_or_else(|| LowerError::Unresolved(format!("file{}", row.file.0)))?;
+    let decl_node = row.node as usize;
+    let subst = Binding::new(&[]);
+    let node_ty = substituted_node_tys(env, shared.tys, facts, &subst)?;
+    let block_end = file.tree.subtree_end(block).min(file.tree.len());
+    prescan_within(file, (block, block_end), facts, shared.tys, &node_ty)?;
+    let mut fx = FnLower::new(env, shared, facts, file, def, subst, node_ty)?;
+    fx.thunk_mode = true;
+    fx.lower_thunk(decl_node, block)?;
+    Ok(fx.finish(def, name, Some(key)))
+}
+
+/// F9: why a value-position `comptime` block does not lower (the same text
+/// at the thunk row `lower_build` reports and the run-time body's refusal).
+const VALUE_BLOCK_UNBUILT: &str = "a comptime block used as a value: splicing its evaluated \
+                                   result into the run-time body is not built in F9 \
+                                   (statement-form blocks are evaluated)";
+
+/// F9: the outermost `comptime` blocks of `def`'s body, with the byte offset
+/// of each (nested blocks are part of their outer block's thunk) and whether
+/// the block is in STATEMENT position — a direct child of a `Block`, which
+/// is what `lower_child` evaluates as a thunk; any other parent (`let`, a
+/// call argument, an operand) makes it a VALUE the run-time body would need
+/// spliced in.
+fn comptime_blocks(
+    inputs: &[FileInput<'_>],
+    defs: &DefTable,
+    def: DefId,
+) -> Vec<(usize, u32, bool)> {
+    let Some(row) = defs.get(def) else {
+        return Vec::new();
+    };
+    let Some(file) = inputs.get(row.file.0 as usize) else {
+        return Vec::new();
+    };
+    let decl = row.node as usize;
+    if decl >= file.tree.len() {
+        return Vec::new();
+    }
+    let end = file.tree.subtree_end(decl).min(file.tree.len());
+    let mut out = Vec::new();
+    let mut n = decl;
+    while n < end {
+        if file.tree.kinds[n] == NodeKind::ComptimeBlock {
+            let (a, b) = file.tree.token_range(n);
+            let first = (a..b)
+                .find(|&t| {
+                    file.tokens
+                        .kinds
+                        .get(t as usize)
+                        .is_some_and(|k| !k.is_trivia())
+                })
+                .unwrap_or(a);
+            let offset = file.tokens.starts.get(first as usize).copied().unwrap_or(0);
+            // The parent in a preorder tree: the nearest earlier node whose
+            // subtree still covers `n`.
+            let parent = (decl..n).rev().find(|&p| file.tree.subtree_end(p) > n);
+            let statement = parent.is_some_and(|p| file.tree.kinds[p] == NodeKind::Block);
+            out.push((n, offset, statement));
+            n = file.tree.subtree_end(n);
+            continue;
+        }
+        n += 1;
+    }
+    out
+}
+
+/// F9: the paths the module header's `inputs { ... };` clause lists (ch04
+/// R13), quotes stripped, in source order.
+fn header_inputs(file: &FileInput<'_>) -> Vec<Vec<u8>> {
+    if file.tree.is_empty() {
+        return Vec::new();
+    }
+    let Some(clause) = file
+        .tree
+        .children(0)
+        .find(|&c| file.tree.kinds[c] == NodeKind::InputsClause)
+    else {
+        return Vec::new();
+    };
+    let (a, b) = file.tree.token_range(clause);
+    (a..b)
+        .filter(|&t| file.tokens.kinds.get(t as usize) == Some(&TokenKind::Str))
+        .filter_map(|t| {
+            let text = file.tokens.text(t as usize, file.source);
+            (text.len() >= 2).then(|| text[1..text.len() - 1].to_vec())
+        })
+        .collect()
+}
+
 /// E11 (design §4.2, §11.2): until checker increment I10 lands D10
 /// (`ContractPolicy` per declaration), `fors-lower` reads the module
 /// header's `contracts:` clause itself. The corpus spells the value with a
@@ -912,6 +1189,74 @@ fn prescan(
     node_ty: &[TyId],
     instance: bool,
 ) -> Result<(), LowerError> {
+    let end_sub = if decl_node < file.tree.len() {
+        file.tree.subtree_end(decl_node).min(file.tree.len())
+    } else {
+        decl_node
+    };
+    // F9: a `comptime` block is not part of the run-time body (it is its own
+    // thunk, see `ComptimeThunk`), so its nodes are not scanned here.
+    let skip = comptime_ranges(file, decl_node, end_sub);
+    prescan_scan(
+        file,
+        (decl_node, end_sub.max(facts.range().1 as usize)),
+        &skip,
+        facts,
+        tys,
+        node_ty,
+    )?;
+    // A generic declaration has no FMIR of its own: it lowers once per
+    // instantiation, which is what `instance` says this call is.
+    if !instance && has_generic_params(file, decl_node) {
+        return Err(LowerError::Generic("generic function".into()));
+    }
+    Ok(())
+}
+
+/// F9: [`prescan`] for a comptime thunk: the same rejections, over the
+/// block's own nodes only.
+fn prescan_within(
+    file: &FileInput<'_>,
+    within: (usize, usize),
+    facts: &BodyFacts,
+    tys: &TyStore,
+    node_ty: &[TyId],
+) -> Result<(), LowerError> {
+    prescan_scan(file, within, &[], facts, tys, node_ty)
+}
+
+/// The `[start, end)` CST ranges of the comptime blocks inside `[from, to)`.
+fn comptime_ranges(file: &FileInput<'_>, from: usize, to: usize) -> Vec<(u32, u32)> {
+    let mut out = Vec::new();
+    let mut n = from;
+    while n < to {
+        if file.tree.kinds[n] == NodeKind::ComptimeBlock {
+            let e = file.tree.subtree_end(n);
+            out.push((n as u32, e as u32));
+            n = e;
+            continue;
+        }
+        n += 1;
+    }
+    out
+}
+
+fn prescan_scan(
+    file: &FileInput<'_>,
+    within: (usize, usize),
+    skip: &[(u32, u32)],
+    facts: &BodyFacts,
+    tys: &TyStore,
+    node_ty: &[TyId],
+) -> Result<(), LowerError> {
+    let (from, to) = within;
+    // `skip` (the run-time body's comptime blocks) and `within` (a thunk's
+    // own block) bound every scan below; the run-time body's `within` is the
+    // whole declaration.
+    let in_scope = |n: u32| {
+        (n as usize) >= from && (n as usize) < to && !skip.iter().any(|&(s, e)| n >= s && n < e)
+    };
+    let decl_node = from;
     let (start, end) = facts.range();
     // A poisoned body never lowers: every later read would be garbage —
     // EXCEPT the statement shapes `lower_let`/`lower_assign` special-case
@@ -925,6 +1270,9 @@ fn prescan(
     let mut stub_ranges = buffer_stub_ranges(file, decl_node);
     stub_ranges.extend(with_stub_ranges(file, decl_node));
     'scan: for n in start..end {
+        if !in_scope(n) {
+            continue;
+        }
         for &(s, e) in &stub_ranges {
             if n >= s && n < e {
                 continue 'scan;
@@ -936,8 +1284,11 @@ fn prescan(
     }
     // I5/I6/I7/I8b/I10-owned forms, by CST kind over the declaration.
     if decl_node < file.tree.len() {
-        let end_sub = file.tree.subtree_end(decl_node).min(file.tree.len());
+        let end_sub = to.min(file.tree.len());
         for n in decl_node..end_sub {
+            if !in_scope(n as u32) {
+                continue;
+            }
             match file.tree.kinds[n] {
                 // F4 lowers `defer`/`errdefer` from I8b's D7 facts and F3
                 // lowers `?`/`else |e|`/`raise` from I10's D10; a statement
@@ -951,17 +1302,9 @@ fn prescan(
                 | NodeKind::ParallelStmt
                 | NodeKind::SimdForStmt
                 | NodeKind::SpawnStmt => return Err(LowerError::Loop),
-                NodeKind::ComptimeBlock => {
-                    return Err(LowerError::Comptime("comptime block".into()));
-                }
                 _ => {}
             }
         }
-    }
-    // A generic declaration has no FMIR of its own: it lowers once per
-    // instantiation, which is what `instance` says this call is.
-    if !instance && has_generic_params(file, decl_node) {
-        return Err(LowerError::Generic("generic function".into()));
     }
     // Open types in the SUBSTITUTED facts: rigid/projection/brand/dyn/fn/
     // const. After instantiation a rigid parameter is a concrete type, so
@@ -969,6 +1312,9 @@ fn prescan(
     // declaration the binding does not own, or a projection no normalisation
     // collapsed.
     for n in start..end {
+        if !in_scope(n) {
+            continue;
+        }
         let t = node_ty[(n - start) as usize];
         if t == NO_TY || t == TY_ERROR {
             continue;
@@ -1332,6 +1678,11 @@ struct FnLower<'a> {
     /// (`DischargeRow::exit` -> `ExitEdge::node`) rather than from whichever
     /// exit the checker happened to list first.
     exit_node: Option<u32>,
+    /// F9: is this walk lowering a comptime block's THUNK rather than the
+    /// run-time body? In a thunk a nested `comptime` block runs inline (it
+    /// is comptime already) and a name with no binding is a run-time local
+    /// of the enclosing body — a named comptime refusal (ch04 R12).
+    thunk_mode: bool,
 }
 
 /// F6: one open `with arena` / `with allocator` block (ch01 R15, R18).
@@ -1464,6 +1815,7 @@ impl<'a> FnLower<'a> {
             node_inst: Vec::new(),
             indirect_roots: Vec::new(),
             exit_node: None,
+            thunk_mode: false,
         })
     }
 
@@ -1849,6 +2201,16 @@ impl<'a> FnLower<'a> {
                 )));
             }
         }
+        if self.thunk_mode {
+            // F9: the only bindings in scope in a thunk are the enclosing
+            // function's parameters and the block's own; anything else is a
+            // run-time local of the enclosing body.
+            return Err(LowerError::Comptime(format!(
+                "the comptime block reads `{}`, a run-time local of the enclosing body, which \
+                 has no comptime value (ch04 R12)",
+                display_sym(&*self.interner, sym)
+            )));
+        }
         Err(LowerError::Unresolved(display_sym(&*self.interner, sym)))
     }
 
@@ -1925,7 +2287,39 @@ impl<'a> FnLower<'a> {
 
     // -- function body -------------------------------------------------------
 
+    /// F9: a comptime block as its own function (see
+    /// [`ComptimeThunk`]). The parameters are bound exactly as the
+    /// enclosing function binds them, so a name resolves to the same
+    /// binding the checker resolved; the evaluator passes them with no
+    /// value. No contract clause runs: the block is not a call of the
+    /// enclosing function.
+    fn lower_thunk(&mut self, decl_node: usize, block: usize) -> Result<(), LowerError> {
+        let _contracts = self.bind_params(decl_node)?;
+        let inner = self
+            .kids(block)
+            .into_iter()
+            .find(|&c| self.kind(c) == NodeKind::Block)
+            .ok_or_else(|| LowerError::Unsupported("comptime block without a body".into()))?;
+        self.ensure_open();
+        self.lower_child(inner)?;
+        if self.is_open() {
+            let ret = self.term(Op::Ret, NO_OPERAND, NO_OPERAND, NO_OPERAND);
+            let from = BlockId(self.cur as u32);
+            self.seal(ret);
+            let leaving = self.scopes_left_to(ScopeId::NONE);
+            self.record_exit(from, BlockId::NONE, ExitKind::Normal, &leaving);
+        }
+        Ok(())
+    }
+
     fn lower_fn(&mut self, decl_node: usize) -> Result<(), LowerError> {
+        let contracts = self.bind_params(decl_node)?;
+        self.lower_fn_body(decl_node, contracts)
+    }
+
+    /// Binds the parameters of the `FnDecl` at `decl_node` and returns its
+    /// contract clauses.
+    fn bind_params(&mut self, decl_node: usize) -> Result<Vec<(ContractKind, usize)>, LowerError> {
         // Params: names from the CST in order, types from the signature in
         // order. A mismatch is a diagnostic, never an index panic. Contract
         // clauses (`pre`/`post`/`invariant`) live on the same `FnSig`.
@@ -1992,6 +2386,14 @@ impl<'a> FnLower<'a> {
                 self.indirect_roots.push(root);
             }
         }
+        Ok(contracts)
+    }
+
+    fn lower_fn_body(
+        &mut self,
+        decl_node: usize,
+        contracts: Vec<(ContractKind, usize)>,
+    ) -> Result<(), LowerError> {
         // Entry contracts (§3.6, §5.3): `pre` then an entry-time
         // `invariant`, policy `Runtime` only — `Off` emits nothing at all
         // (not even the condition), matching `contract-off-no-check-run-ok`
@@ -2881,6 +3283,21 @@ impl<'a> FnLower<'a> {
             NodeKind::ContinueStmt => self.lower_continue(node),
             NodeKind::DeferStmt | NodeKind::ErrdeferStmt => self.lower_defer(node),
             NodeKind::WithStmt => self.lower_with(node),
+            // F9 (design §6): a statement-form `comptime` block was lowered
+            // as its own thunk (`lower_build`) and is evaluated by the build
+            // step; the run-time body contains nothing for it. Inside a
+            // thunk a nested block is comptime already and runs inline.
+            NodeKind::ComptimeBlock if self.thunk_mode => {
+                let inner = self
+                    .kids(node)
+                    .into_iter()
+                    .find(|&c| self.kind(c) == NodeKind::Block)
+                    .ok_or_else(|| {
+                        LowerError::Unsupported("comptime block without a body".into())
+                    })?;
+                self.lower_child(inner)
+            }
+            NodeKind::ComptimeBlock => Ok(()),
             NodeKind::Block => {
                 self.scopes.push(HashMap::new());
                 let r = self.lower_block_region(node);
@@ -4272,6 +4689,10 @@ impl<'a> FnLower<'a> {
             NodeKind::ArrayLit => self.lower_array_lit(node, ty),
             NodeKind::Bracket => self.lower_bracket(node, ty),
             NodeKind::RangeExpr => Err(LowerError::Unsupported("range".into())),
+            // F9: a VALUE-position comptime block would need its
+            // content-addressed result spliced into the run-time body as a
+            // constant. Named, and never a silent fallback to run time.
+            NodeKind::ComptimeBlock => Err(LowerError::Comptime(VALUE_BLOCK_UNBUILT.into())),
             _ => Err(LowerError::Unsupported(kind_name(self.kind(node)).into())),
         }
     }
@@ -5609,10 +6030,26 @@ impl<'a> FnLower<'a> {
         }
         match self.facts.callee_of(node as u32) {
             FactCallee::Direct(def) => {
+                // A free function named bare (`f(x)`) or through its module
+                // (`fs.read_to_string(p)`, F9): the checker resolved the
+                // path to `def`, which is all lowering reads.
                 if self.kind(callee_node) != NodeKind::NameExpr
-                    || self.path_segments(callee_node).len() != 1
+                    || self.path_segments(callee_node).is_empty()
                 {
                     return Err(LowerError::Unresolved("call target".into()));
+                }
+                // F9's comptime door (design §5.8's `@input_read` row):
+                // `std.fs`'s private `input_read`, whose body is the
+                // self-recursive stand-in, is the intrinsic — scoped to that
+                // module and that shape, so a user function that merely
+                // shares the spelling keeps its own body.
+                if self.is_std_fs_input_read(def) {
+                    let name = "input_read";
+                    let sym = self.interner.intern(name.as_bytes());
+                    if !self.intrinsics.iter().any(|(id, _)| *id == sym.0) {
+                        self.intrinsics.push((sym.0, name.into()));
+                    }
+                    return Ok(self.emit_call(Callee::Intrinsic(sym), argv, convs, ty));
                 }
                 // F-mono (ch03 R16-R18): a generic callee becomes the key of
                 // its INSTANCE at this site's determined arguments.
@@ -5915,6 +6352,30 @@ impl<'a> FnLower<'a> {
             self.interner,
             DefId(self.tys.a(bare)),
         )
+    }
+
+    /// F9: is `def` `std.fs`'s `input_read` stand-in (a free function of
+    /// the module named exactly `std.fs`, spelled `input_read`, whose body
+    /// is the self-recursive stub)?
+    fn is_std_fs_input_read(&self, def: DefId) -> bool {
+        let Some(row) = self.defs.get(def) else {
+            return false;
+        };
+        if row.kind != DeclKind::Fn || row.parent != fors_fir::NO_DEF {
+            return false;
+        }
+        if row.name.map(|n| self.interner.resolve(n)) != Some(b"input_read".as_slice()) {
+            return false;
+        }
+        let Some(file) = self.inputs.get(row.file.0 as usize) else {
+            return false;
+        };
+        let module: Vec<&[u8]> = file
+            .name
+            .iter()
+            .map(|s| self.interner.resolve(*s))
+            .collect();
+        module == [b"std".as_slice(), b"fs".as_slice()] && self.is_self_recursive_stub(def)
     }
 
     fn is_self_recursive_stub(&self, def: DefId) -> bool {

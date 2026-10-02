@@ -33,6 +33,12 @@
 //! machine-readable record instead of looking like a program trap. Owner
 //! **Q7**'s backtrace switch lives at the one reporting site, [`trap`].
 //!
+//! **F9** (design §6, ch04 R11-R15) adds comptime MODE to the same dispatch
+//! loop: [`comptime`]'s environment (empty capability table, the declared
+//! inputs, the budgets of [`budget`]), the closed [`intrinsic`] table's
+//! `comptime` column consulted before any door opens, synthetic addresses
+//! and the ch04 R15 observation flag, and the content-addressed memo.
+//!
 //! What is explicitly NOT here: the LOWERING halves of F4 and F6. They need
 //! checker increment I8b's `D7`/`D8` side tables, which do not exist yet
 //! ([HOLE-11]), so both halves are built and tested against hand-written
@@ -52,8 +58,11 @@
 //!   exhaustively, so adding an `-O`-shaped field breaks compilation.
 
 pub mod arith;
+pub mod budget;
+pub mod comptime;
 pub mod exec;
 pub mod host;
+pub mod intrinsic;
 pub mod mem;
 pub mod program;
 pub mod reduce;
@@ -64,6 +73,13 @@ pub mod ub;
 pub mod value;
 
 pub use arith::{FloatKind, IntKind};
+pub use budget::{
+    BuildMeter, COMPTIME_ALLOC_BUDGET, COMPTIME_BUILD_STEP_BUDGET, COMPTIME_STEP_BUDGET, Limits,
+};
+pub use comptime::{
+    ComptimeEnv, ComptimeError, DeclaredInputs, Evaluation, Memo, MemoEntry, MemoKey, evaluate,
+    evaluate_memoized, memo_key, target_hash,
+};
 pub use exec::{Env, Exit, InterpError, Outcome, run, run_with_host, run_with_oracle};
 pub use host::{HostCounters, HostEvent, Oracle, OracleError};
 pub use mem::{AllocKind, AllocState, AllocatorId, ArenaId, ArenaVal, RefVal, next_generation};
