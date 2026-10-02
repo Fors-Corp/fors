@@ -78,6 +78,27 @@ pub const PRELUDE_TYPES5: [&[u8]; 8] = [
 /// named `Linear` or `Droppable` is the ordinary N0013 collision.
 pub const PRELUDE_TYPES6: [&[u8]; 2] = [b"Linear", b"Droppable"];
 
+/// I10 (type checker, ch03): the names chapter 3 makes language-known
+/// beyond ch08 Rule 17's list — `comptime_int` and `comptime_float` (ch03
+/// Rule 9's comptime-only types), the reserved `SVec` (ch03 Rule 20, ch09
+/// Rule 5: "stays reserved") and the two 128-bit widths ch03 Rule 1
+/// rejects. They resolve like prelude types so that the CHECKER decides
+/// them under ch03's own codes (`D0009`, `D0020`, `D0001`) instead of the
+/// generic unresolved-name error; a use of `i128` is still rejected, by the
+/// rule that says why.
+///
+/// MARC: ch08 Rule 17 calls its list closed and does not name these five,
+/// while ch03 Rules 1, 9 and 20 (and the ch03 corpus) use them as known
+/// names. The two chapters disagree; this list is the checker's reading of
+/// ch03 and is flagged for the owner, not decided against ch08 silently.
+pub const PRELUDE_TYPES7: [&[u8]; 5] = [
+    b"comptime_int",
+    b"comptime_float",
+    b"SVec",
+    b"i128",
+    b"u128",
+];
+
 pub fn is_prelude_type(name: &[u8]) -> bool {
     PRELUDE_TYPES.contains(&name)
         || PRELUDE_TYPES2.contains(&name)
@@ -85,6 +106,7 @@ pub fn is_prelude_type(name: &[u8]) -> bool {
         || PRELUDE_TYPES4.contains(&name)
         || PRELUDE_TYPES5.contains(&name)
         || PRELUDE_TYPES6.contains(&name)
+        || PRELUDE_TYPES7.contains(&name)
 }
 
 pub fn is_prelude_value(name: &[u8]) -> bool {

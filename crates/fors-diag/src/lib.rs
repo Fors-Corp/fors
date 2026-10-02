@@ -75,6 +75,10 @@ pub enum FixKind {
     FixModuleHeaderPath,
     /// T0042: a method was read as a field; append the call parentheses.
     CallMethod,
+    /// D0005 / D0009 (ch03 Rules 5 and 9): a numeric value of one type where
+    /// another is expected, or a comptime value escaping to runtime; write
+    /// the explicit `as` conversion the rule asks for.
+    ConvertWithAs,
 }
 
 impl FixKind {
@@ -85,16 +89,18 @@ impl FixKind {
             FixKind::ReplaceIdentifier => "replace-identifier",
             FixKind::FixModuleHeaderPath => "fix-module-header-path",
             FixKind::CallMethod => "call-method",
+            FixKind::ConvertWithAs => "convert-with-as",
         }
     }
 
     /// Every kind, for tools (and tests) that want to enumerate the surface.
-    pub const ALL: [FixKind; 5] = [
+    pub const ALL: [FixKind; 6] = [
         FixKind::InsertSemicolon,
         FixKind::InsertStdImport,
         FixKind::ReplaceIdentifier,
         FixKind::FixModuleHeaderPath,
         FixKind::CallMethod,
+        FixKind::ConvertWithAs,
     ];
 }
 

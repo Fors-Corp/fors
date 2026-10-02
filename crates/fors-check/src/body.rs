@@ -375,6 +375,24 @@ pub struct BodyCx<'f, 'a> {
     /// typed is one this increment reads on speculation (R47's bracket,
     /// whose reading I4 decides), and a diagnostic from it would be a guess.
     pub quiet: u32,
+    /// I10 (ch02 R1, R5): the VALUE positions of a `raise` operand or a
+    /// handler block — the operand itself, a block's tail, every arm of an
+    /// `if`/`match` in such a position — each with the chapter code a
+    /// mismatch there is reported under and the clause it cites. Pushed and
+    /// truncated around the one check that owns them
+    /// ([`Wf::push_yield`](crate::failure)); `subsume` reads it.
+    pub yield_codes: Vec<(u32, fors_index::diag::Code, &'static str)>,
+    /// I10 (ch03 R8, R15, R18, R20): the enclosing lexical regions a ch03
+    /// rule keys on, innermost last.
+    pub regions: Vec<(NodeKind, u32)>,
+    /// I10 (ch03 R25): the elements after the first of a SYNTH-mode array
+    /// literal being checked right now, innermost last — a count mismatch
+    /// there is R25's, not R21's.
+    pub synth_elems: Vec<u32>,
+    /// I10 (ch03 R5): the value positions of the annotated `let`/`var`
+    /// initializer being checked, where a numeric-width mismatch is D0005
+    /// (see `Wf::numeric_mismatch`).
+    pub r5_sites: Vec<u32>,
 }
 
 impl<'f, 'a> BodyCx<'f, 'a> {
@@ -411,7 +429,16 @@ impl<'f, 'a> BodyCx<'f, 'a> {
             lcx,
             nodes: 0,
             quiet: 0,
+            yield_codes: Vec::new(),
+            regions: Vec::new(),
+            synth_elems: Vec::new(),
+            r5_sites: Vec::new(),
         }
+    }
+
+    /// The declaration node this body belongs to.
+    pub fn decl_node(&self) -> usize {
+        self.start as usize
     }
 
     fn inside(&self, node: u32) -> bool {
@@ -516,6 +543,27 @@ impl<'f, 'a> BodyCx<'f, 'a> {
         fors_resolve::paths::byte_range(self.f.tree, self.f.tokens, node)
     }
 
+    /// The chapter code a mismatch at `node` is reported under, when `node`
+    /// is a value position some ch02 rule owns (see `yield_codes`).
+    pub fn yield_code(&self, node: usize) -> Option<(fors_index::diag::Code, &'static str)> {
+        self.yield_codes
+            .iter()
+            .rev()
+            .find(|&&(n, ..)| n == node as u32)
+            .map(|&(_, c, why)| (c, why))
+    }
+
+    /// Whether the node being typed is inside a region of kind `k`
+    /// (`simd for`, `parallel for`, ...), counting only regions opened in
+    /// this body.
+    pub fn in_region(&self, k: NodeKind) -> Option<u32> {
+        self.regions
+            .iter()
+            .rev()
+            .find(|&&(rk, _)| rk == k)
+            .map(|&(_, n)| n)
+    }
+
     pub fn kind(&self, node: usize) -> NodeKind {
         self.f.tree.kinds[node]
     }
@@ -592,6 +640,9 @@ impl Wf<'_> {
             self.sink.open();
             self.bodies_checked += 1;
             let mut lcx = lower::Cx::new(f, def);
+            // ch03 R9: a body's own annotations may name a comptime-only type;
+            // whether the binding is a runtime one is `comptime_binding`'s.
+            lcx.comptime_ok = true;
             lcx.home = def;
             self.build_body_scope(&mut lcx, def, low);
             let mut cx = BodyCx::new(f, def, row.file, row.node, lcx);
@@ -723,6 +774,8 @@ impl Wf<'_> {
             }
             if let Some(expr) = cx.f.tree.children(clause).next() {
                 self.check(cx, expr, bool_ty);
+                // ch02 R9 (I10): no `secret` subexpression in a contract.
+                self.contract_secret(cx, expr);
             }
         }
     }
@@ -757,6 +810,16 @@ impl Wf<'_> {
                 } else {
                     let s = self.show(TY_UNIT);
                     let w = self.show(want);
+                    if let Some((code, why)) = cx.yield_code(node) {
+                        self.bemit_code(
+                            cx,
+                            node,
+                            code,
+                            31,
+                            format!("expected `{w}`, found `{s}`: this block has no tail expression; {why}"),
+                        );
+                        return TY_ERROR;
+                    }
                     self.bemit(
                         cx,
                         node,
@@ -816,6 +879,13 @@ impl Wf<'_> {
             NodeKind::ExprStmt => {
                 let e = cx.kids(node);
                 match e.first() {
+                    // I10 (ch04 R27): `asm(...) { ... };` used directly as a
+                    // statement is checked against `()`, not synthesised.
+                    Some(&x) if cx.kind(x) == NodeKind::AsmExpr => {
+                        let t = self.asm_expr(cx, x, Some(TY_UNIT));
+                        cx.facts.record(x as u32, t);
+                        t
+                    }
                     // R31: an expression statement is SYNTHESISED and its
                     // value dropped.
                     Some(&x) => self.synth(cx, x),
@@ -828,8 +898,13 @@ impl Wf<'_> {
                 self.loop_exit(cx, node);
                 TY_NEVER
             }
-            NodeKind::ForStmt | NodeKind::ParallelForStmt | NodeKind::SimdForStmt => {
-                self.for_stmt(cx, node)
+            NodeKind::ForStmt => self.for_stmt(cx, node),
+            // I10 (ch03 R15, R18, R20): the region kinds ch03's rules key on.
+            NodeKind::ParallelForStmt | NodeKind::SimdForStmt => {
+                cx.regions.push((cx.kind(node), node as u32));
+                let t = self.for_stmt(cx, node);
+                cx.regions.pop();
+                t
             }
             NodeKind::WhileStmt => {
                 let kids = cx.kids(node);
@@ -889,6 +964,12 @@ impl Wf<'_> {
             }
             NodeKind::WithStmt => self.with_stmt(cx, node),
             NodeKind::ParallelStmt | NodeKind::AttrBlockStmt => {
+                if cx.kind(node) == NodeKind::AttrBlockStmt {
+                    // I10 (ch03 R8): the closed `@fastmath` flag set.
+                    self.fastmath_flags(cx, node);
+                    // I10 (ch04 R10): `@unsafe` is never a block.
+                    self.unsafe_block_form(cx, node);
+                }
                 for c in cx.kids(node) {
                     if cx.kind(c) == NodeKind::Block {
                         let pk = cx.kind(node);
@@ -925,11 +1006,25 @@ impl Wf<'_> {
             .skip(1)
             .find(|&&c| is_expr_kind(cx.kind(c)))
             .copied();
-        let declared = annot.map(|a| self.lower_annotation(cx, a));
+        // I10 (ch03 R20): inside a `simd` body the top of a local's
+        // annotation is the one place `SVec[T]` is legal.
+        let declared = annot.map(|a| {
+            if cx.in_region(NodeKind::SimdForStmt).is_some() {
+                cx.lcx.svec_local = a as u32;
+            }
+            let t = self.lower_annotation(cx, a);
+            cx.lcx.svec_local = u32::MAX;
+            t
+        });
         let ty = match (declared, init) {
             (Some(d), Some(e)) => {
                 cx.site(NodeKind::LetStmt, Slot::AnnotatedInit);
+                let mark = cx.r5_sites.len();
+                let mut vp = Vec::new();
+                crate::failure::value_positions(cx, e, &mut vp);
+                cx.r5_sites.extend(vp);
                 self.check(cx, e, d);
+                cx.r5_sites.truncate(mark);
                 self.use_value(cx, e, d, Cause::Explicit(node as u32));
                 d
             }
@@ -951,6 +1046,8 @@ impl Wf<'_> {
                 TY_ERROR
             }
         };
+        // I10 (ch03 R9): a comptime-only type never becomes a runtime local.
+        self.comptime_binding(cx, binding, ty);
         self.bind_binding(cx, binding, ty);
         // D5/D6 (I10a): a `let`/`var` destructuring is a one-arm,
         // irrefutable match (R31/R52), and lowering needs its tree for the
@@ -1053,6 +1150,9 @@ impl Wf<'_> {
         // `a op= b` is R29's: the trait of `op` must hold for the place's
         // type and `b` is checked against it.
         let compound = compound_op(cx, place);
+        // I10 (ch03 R15): a scalar accumulator inside a `parallel for`.
+        let rhs: Vec<usize> = kids.iter().skip(1).copied().collect();
+        self.accumulator_in_parallel(cx, node, place, &rhs, compound.is_some());
         if let Some(op) = compound {
             self.require_operator(cx, place, lhs, op, 29);
         }
@@ -1129,12 +1229,12 @@ impl Wf<'_> {
             if cx.closures > 0 && cx.in_synth_closure() {
                 self.bemit(cx, node, 35, 35, "`raise` inside a closure in SYNTH mode: a closure raises only when checked against a `fn ... raises E` type".to_string());
             } else {
-                self.bemit(
+                self.bemit_code(
                     cx,
                     node,
+                    fors_index::diag::Code::F(1),
                     36,
-                    36,
-                    "`raise` in a function that does not declare `raises`".to_string(),
+                    "`raise` in a function that does not declare `raises`; an error originates only in a `raises E` function (ch02 R1)".to_string(),
                 );
             }
         }
@@ -1143,7 +1243,17 @@ impl Wf<'_> {
                 self.synth(cx, e);
             } else {
                 cx.site(NodeKind::RaiseStmt, Slot::RaiseValue);
-                self.check(cx, e, want);
+                let mark = self.push_yield(
+                    cx,
+                    e,
+                    fors_index::diag::Code::F(1),
+                    crate::failure::WHY_RAISE,
+                );
+                let got = self.check(cx, e, want);
+                self.pop_yield(cx, mark);
+                if got != TY_ERROR {
+                    self.record_raise(cx, node, e, want);
+                }
             }
         }
         TY_NEVER
@@ -1331,7 +1441,7 @@ impl Wf<'_> {
 // ------------------------------------------------------------- helpers
 
 /// Splits a block's children into statements and an optional tail value.
-fn split_tail<'k>(cx: &BodyCx, kids: &'k [usize]) -> (&'k [usize], Option<usize>) {
+pub(crate) fn split_tail<'k>(cx: &BodyCx, kids: &'k [usize]) -> (&'k [usize], Option<usize>) {
     match kids.last() {
         Some(&last) if is_expr_kind(cx.kind(last)) => (&kids[..kids.len() - 1], Some(last)),
         _ => (kids, None),
