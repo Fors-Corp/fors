@@ -1,0 +1,11 @@
+//! name: dwarf_companion_unsigned
+//! rule: 05.R18
+//! expect: parse-ok
+//! detail: IR-ONLY -- the DWARF companion artifact and the signed image's CodeDirectory hash are backend/linker-level outputs with no Fors-source observable at all (no debug-info surface syntax exists); unimplemented, no F0 fixture or gate names it yet. This is a plain program standing in for "a program that gets compiled," the only thing meaningfully Fors-source-shaped about this rule.
+
+module dwarf_companion_unsigned;
+needs { };
+
+fn identity(let n: i64) -> i64 {
+    return n;
+}

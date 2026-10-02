@@ -1,0 +1,11 @@
+//! name: ct_denylist_rejected
+//! rule: 05.R15
+//! expect: parse-ok
+//! detail: IR-ONLY -- the post-regalloc CT verifier (denylisted instructions, a synthesized `@ct_select` branch, an unzeroized secret spill) is unbuilt (design doc section 8.1's GAP, milestone M2); no surface syntax exposes `ct_select` or a denylist-triggering form yet, and secret_trapping_op_rejected already covers this rule's FMIR-level subset. No F0 fixture or gate test names this one; flagged honestly as unimplemented, not pinned.
+
+module ct_denylist_rejected;
+needs { };
+
+fn identity(let s: secret u64) -> secret u64 {
+    return s;
+}

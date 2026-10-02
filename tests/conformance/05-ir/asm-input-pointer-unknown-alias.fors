@@ -1,0 +1,17 @@
+//! name: asm_input_pointer_unknown_alias
+//! rule: 05.R19
+//! expect: parse-ok
+//! detail: IR-ONLY -- a pointer passed as an asm `in` operand gets alias class `unknown` (distinct from Rule 5's five sources) as IR metadata; the surface grammar has no dedicated pointer-typed asm operand, and no F0 fixture or gate test names this specific alias-class assignment yet (GAP). This file passes an ordinary value through an `in` operand, the nearest source-level shape available; how a pointer reaches an asm operand from source is still unsettled.
+
+module app;
+needs { asm };
+
+@unsafe(invariant: "x1 receives the address-like value in x0 verbatim")
+fn pointerish(let addr: i64) -> i64 {
+    let r: i64 = asm(aarch64) {
+        in(x0) = addr,
+        out(x1),
+        "mov x1, x0",
+    };
+    return r;
+}

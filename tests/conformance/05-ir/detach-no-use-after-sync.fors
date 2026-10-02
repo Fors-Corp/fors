@@ -1,0 +1,19 @@
+//! name: detach_no_use_after_sync
+//! rule: 05.R11
+//! expect: parse-ok
+//! detail: IR-ONLY -- dominance checking for a value defined inside a detached region is unbuilt (design doc section 8.1 lists ch05 R9-R11 as GAP, milestone M3); no F0 fixture or gate test enforces it yet. This is the smallest source program whose lowering reaches a spawn/sync region, the construct the rule will eventually police; every value used outside the region here is defined before entering it, so there is nothing for the (unbuilt) dominance check to reject.
+
+module detach_no_use_after_sync;
+needs { };
+
+fn scale(inout buf: Slice[f64], let k: f64) {
+    discard buf;
+    discard k;
+}
+
+fn halves(inout lo: Slice[f64], inout hi: Slice[f64], let k: f64) {
+    parallel {
+        spawn scale(&lo, k);
+        scale(&hi, k);
+    }
+}

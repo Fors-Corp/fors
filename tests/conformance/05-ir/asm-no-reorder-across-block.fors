@@ -1,0 +1,18 @@
+//! name: asm_no_reorder_across_block
+//! rule: 05.R19
+//! expect: parse-ok
+//! detail: IR-ONLY -- "no pass reorders, or constant-folds through, a memory op across an asm block" is an optimizer invariant; no optimizer exists yet to honor or violate it (unbuilt, no F0 fixture). This file places an ordinary call immediately before an asm block, the shape the rule will eventually police.
+
+module app;
+needs { asm };
+
+fn touch(let n: i64) -> i64 {
+    return n;
+}
+
+@unsafe(invariant: "single nop, no side effects")
+fn around_block(let n: i64) -> i64 {
+    let m: i64 = touch(n);
+    asm(aarch64) { "nop" };
+    return m;
+}

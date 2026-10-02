@@ -1,0 +1,11 @@
+//! name: tile_ops_fmir_only
+//! rule: 05.R12
+//! expect: parse-ok
+//! detail: IR-ONLY -- `tile.*` has no surface syntax yet (ch05's own scope note: "the @device surface belongs to a future chapter"), so no Fors program can write a tile op at all -- pinned by crates/fors-fmir/tests/negative_corpus/04-tile-op.fmir (DiagCode::TileOpPresent), run by verify.rs's tile_op_is_rejected.
+
+module tile_ops_fmir_only;
+needs { };
+
+fn identity(let n: i64) -> i64 {
+    return n;
+}
