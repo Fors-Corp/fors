@@ -76,10 +76,26 @@ impl[T, A: brand] Vec[T, A] {
     }
 
     // The release for a LINEAR element type (R11c(iii)): the caller has
-    // popped and consumed every element, so nothing is dropped here.
+    // popped and consumed every element, so nothing OF T is dropped here
+    // — only the linear `store` block itself must be retired. Destructure
+    // `self` to reach it (ch01 R22d(ii): `n`/`capacity` are non-linear and
+    // may be omitted; `store` is linear and must be bound), then hand any
+    // allocated block back to the allocator; an empty Vec may still hold
+    // a zero-length allocation.
     pub fn deinit_empty[L: alloc.Allocator[A]](sink self: Self, inout a: L)
         pre self.len() == 0
-    {} // STUB
+    {
+        match self {
+            Vec { store: let store } => {
+                match store {
+                    some(let b) => {
+                        a.free(move b);
+                    }
+                    none => {}
+                }
+            }
+        }
+    }
 }
 
 // Round 6 (R11c(ii)): these DROP elements, so they need `T: Droppable` and
@@ -91,8 +107,21 @@ impl[T: Droppable, A: brand] Vec[T, A] {
 
     // The ordinary release (R11): `sink self`, so the call `v.deinit(&a)`
     // moves `v` implicitly (ch01 R4, ch09 R46) and discharges its cleanup
-    // obligation (ch01 R22d). Written once with `defer`/`errdefer`.
-    pub fn deinit[L: alloc.Allocator[A]](sink self: Self, inout a: L) {} // STUB
+    // obligation (ch01 R22d). Written once with `defer`/`errdefer`. Same
+    // destructure-and-retire shape as `deinit_empty` above: the linear
+    // `store` field is what must be consumed (ch01 R22d(ii)).
+    pub fn deinit[L: alloc.Allocator[A]](sink self: Self, inout a: L) {
+        match self {
+            Vec { store: let store } => {
+                match store {
+                    some(let b) => {
+                        a.free(move b);
+                    }
+                    none => {}
+                }
+            }
+        }
+    }
 }
 
 impl[T: Copyable, A: brand] Vec[T, A] {

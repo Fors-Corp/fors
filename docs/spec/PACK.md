@@ -5,7 +5,7 @@ regenerate. Source: `docs/spec/*.md` (normative), `tests/conformance/`
 (corpus) and `std/**/*.fors` (standard library).
 
 Language version: 0.5.2 (`docs/spec/VERSION`)
-Inputs SHA-256: 23423557063799408700359b6370f92b39aae6a32dee5ecfb9b9b60f3ace4a24
+Inputs SHA-256: 1975b350c4ec0d93dab14accc920aa8f2087462c6a5a4c202240b4494bd6df39
 
 This pack exists because no model has seen Fors before: guessing from
 Rust/Zig/Swift/C is wrong more often than it is right. Read section 1 first.
@@ -677,7 +677,7 @@ S0023  `Buffer[T, N: usize]`, the inline fixed-capacity buffer:
 S0024  `Vec[T, A: brand]`, the growable array:
 S0025  `Map[K, V, A: brand]`, the hash map:
 S0026  `String[A: brand]` and `Str`.
-S0027  `Option[T]` is ch09 Rule 5's built-in enum with `some(T)` and `none`, whose constructors the prelude binds as values (ch08 Rule 17); this chapter adds only `fn unwrap_or(sink self: Option[T], sink fallback: T) -> T` a...
+S0027  `Option[T]` is ch09 Rule 5's built-in enum with `some(T)` and `none`, whose constructors the prelude binds as values (ch08 Rule 17); this chapter adds only `fn unwrap_or(sink self: Option[T], sink fallback: T) -> T` —...
 S0028  `Slice[T]` and std's slice primitives.
 S0029  `mem.Hash` is implemented by std for `Str`, every integer type, `bool` and `Slice[T]` where `T: Hash`; the hash function is fixed, documented as non-cryptographic, and MUST NOT depend on the target, the build or any a...
 S0030  `Copyable` and `Shared` for std types.
@@ -1159,8 +1159,10 @@ impl[T, A: brand] Own[T, A] {
     pub fn replace(inout self: Self, sink v: T) -> T { ... }
 }
 impl[T] Option[T] {
-    pub fn unwrap_or(sink self: Self, sink fallback: T) -> T { ... }
     pub fn is_some(let self: Self) -> bool { ... }
+}
+impl[T: Droppable] Option[T] {
+    pub fn unwrap_or(sink self: Self, sink fallback: T) -> T { ... }
 }
 pub struct Buffer[T, N: usize] { ... }
 impl[T, N: usize] Buffer[T, N] {

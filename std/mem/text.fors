@@ -72,7 +72,23 @@ impl[A: brand] String[A] {
         self.n = 0;
     }
 
-    pub fn deinit[L: alloc.Allocator[A]](sink self: Self, inout a: L) {} // STUB
+    // Destructure `self` to reach the linear `store` field (ch01
+    // R22d(ii): `n`/`capacity` are non-linear and may be omitted; `store`
+    // is linear and must be bound) and hand any allocated block back to
+    // the allocator; an empty String may still hold a zero-length
+    // allocation.
+    pub fn deinit[L: alloc.Allocator[A]](sink self: Self, inout a: L) {
+        match self {
+            String { store: let store } => {
+                match store {
+                    some(let b) => {
+                        a.free(move b);
+                    }
+                    none => {}
+                }
+            }
+        }
+    }
 }
 
 // Str is a prelude type (ch08 R17); this is its inherent surface.

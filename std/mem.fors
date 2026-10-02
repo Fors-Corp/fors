@@ -66,7 +66,15 @@ impl[A: brand] alloc.Allocator[A] for Heap[A] {
         raise alloc.AllocError.out_of_memory; // STUB: b unchanged on failure (R14)
     }
     fn shrink(inout self: Self, inout b: alloc.Block[A], let layout: alloc.Layout) {} // STUB
-    fn free(inout self: Self, sink b: alloc.Block[A]) {} // STUB
+    // Retires `b` via the syscall unmap/free that backs this heap.
+    // std.mem.alloc has no primitive that consumes a Block (only
+    // own_raw/disown_raw, which hand it on), so until F6's lowering half
+    // gives this allocator its deallocation primitive, the body stays a
+    // self-referencing stand-in, like `SliceIter.load`/`Scalars.decode`/
+    // `BufferIter.take_at` above.
+    fn free(inout self: Self, sink b: alloc.Block[A]) {
+        self.free(move b); // STUB
+    }
     fn owns(let self: Self, let b: alloc.Block[A]) -> bool {
         return false;
     } // STUB
@@ -93,7 +101,14 @@ impl[A: brand] alloc.Allocator[A] for PageAllocator[A] {
         raise alloc.AllocError.out_of_memory; // STUB
     }
     fn shrink(inout self: Self, inout b: alloc.Block[A], let layout: alloc.Layout) {} // STUB
-    fn free(inout self: Self, sink b: alloc.Block[A]) {} // STUB
+    // Retires `b` via the OS page unmap. std.mem.alloc has no primitive
+    // that consumes a Block (only own_raw/disown_raw, which hand it on),
+    // so until F6's lowering half gives this allocator its deallocation
+    // primitive, the body stays a self-referencing stand-in, like
+    // `SliceIter.load`/`Scalars.decode`/`BufferIter.take_at` above.
+    fn free(inout self: Self, sink b: alloc.Block[A]) {
+        self.free(move b); // STUB
+    }
     fn owns(let self: Self, let b: alloc.Block[A]) -> bool {
         return false;
     } // STUB
@@ -125,7 +140,18 @@ impl[A: brand] alloc.Allocator[A] for Bump[A] {
         raise alloc.AllocError.out_of_memory; // STUB
     }
     fn shrink(inout self: Self, inout b: alloc.Block[A], let layout: alloc.Layout) {} // no-op
-    fn free(inout self: Self, sink b: alloc.Block[A]) {} // no-op, keeps linearity honest
+    // A bump allocator's free is semantically a no-op (R19: everything is
+    // released at the block's close or at `reset`), but `b` is still a
+    // linear value that must be consumed, and std.mem.alloc declares no
+    // primitive that retires a Block without actually deallocating it —
+    // only own_raw/disown_raw, which hand it on. That Block-retiring,
+    // no-op primitive is not in the spec (an owner item: alloc needs a
+    // "just drop this Block" operation distinct from `free`). Until then
+    // the body stays a self-referencing stand-in, like
+    // `SliceIter.load`/`Scalars.decode`/`BufferIter.take_at` above.
+    fn free(inout self: Self, sink b: alloc.Block[A]) {
+        self.free(move b); // STUB, no-op, keeps linearity honest
+    }
     fn owns(let self: Self, let b: alloc.Block[A]) -> bool {
         return false;
     } // STUB
@@ -152,7 +178,15 @@ impl[N: usize, A: brand] alloc.Allocator[A] for Fixed[N, A] {
         raise alloc.AllocError.out_of_memory; // STUB
     }
     fn shrink(inout self: Self, inout b: alloc.Block[A], let layout: alloc.Layout) {} // STUB
-    fn free(inout self: Self, sink b: alloc.Block[A]) {} // STUB
+    // Retires `b` back into the inline `store`. std.mem.alloc has no
+    // primitive that consumes a Block (only own_raw/disown_raw, which
+    // hand it on), so until F6's lowering half gives this allocator its
+    // deallocation primitive, the body stays a self-referencing
+    // stand-in, like `SliceIter.load`/`Scalars.decode`/
+    // `BufferIter.take_at` above.
+    fn free(inout self: Self, sink b: alloc.Block[A]) {
+        self.free(move b); // STUB
+    }
     fn owns(let self: Self, let b: alloc.Block[A]) -> bool {
         return false;
     } // STUB
@@ -204,9 +238,16 @@ impl[N: usize, A: brand] alloc.Allocator[A] for Counting[N, A] {
         raise alloc.AllocError.out_of_memory; // STUB
     }
     fn shrink(inout self: Self, inout b: alloc.Block[A], let layout: alloc.Layout) {} // STUB
+    // Counts the free, then retires `b` back into the inline `store`.
+    // std.mem.alloc has no primitive that consumes a Block (only
+    // own_raw/disown_raw, which hand it on), so until F6's lowering half
+    // gives this allocator its deallocation primitive, the retiring step
+    // stays a self-referencing stand-in, like `SliceIter.load`/
+    // `Scalars.decode`/`BufferIter.take_at` above.
     fn free(inout self: Self, sink b: alloc.Block[A]) {
         self.n_frees = self.n_frees + 1;
-    } // STUB
+        self.free(move b); // STUB
+    }
     fn owns(let self: Self, let b: alloc.Block[A]) -> bool {
         return false;
     } // STUB
@@ -235,6 +276,24 @@ impl[T, A: brand] Own[T, A] {
 // --------------------------------------------------------------- Option
 
 impl[T] Option[T] {
+    pub fn is_some(let self: Self) -> bool {
+        match self {
+            some(let v) => {
+                return true;
+            }
+            none => {
+                return false;
+            }
+        }
+    }
+}
+
+// Round 6 (R11c(ii)): the `some` arm below DROPS `fallback`, so it needs
+// `T: Droppable` and is simply unavailable for a linear element type,
+// exactly as round 6 moved `clear`/`deinit` to Droppable blocks (see
+// `Vec[T, A]` and `Map[K, V, A]` above). ch10 S0027's declaration of
+// `unwrap_or` predates that move; this bound amends it.
+impl[T: Droppable] Option[T] {
     pub fn unwrap_or(sink self: Self, sink fallback: T) -> T {
         match self {
             some(let v) => {
@@ -243,16 +302,6 @@ impl[T] Option[T] {
             }
             none => {
                 return fallback;
-            }
-        }
-    }
-    pub fn is_some(let self: Self) -> bool {
-        match self {
-            some(let v) => {
-                return true;
-            }
-            none => {
-                return false;
             }
         }
     }

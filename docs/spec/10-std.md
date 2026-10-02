@@ -697,7 +697,9 @@ parsed one, and `std/` holds the same signatures with placeholder bodies.
 27. **S0027** — `Option[T]` is ch09 Rule 5's built-in enum with `some(T)`
     and `none`, whose constructors the prelude binds as values (ch08 Rule
     17); this chapter adds only
-    `fn unwrap_or(sink self: Option[T], sink fallback: T) -> T` and
+    `fn unwrap_or(sink self: Option[T], sink fallback: T) -> T` — in a
+    `T: Droppable` block, since its `some` arm drops `fallback` (ch01 Rule
+    22c), the same round-6 move as `clear` and `deinit` — and
     `fn is_some(let self: Option[T]) -> bool`, and no `unwrap` that traps.
     There is NO `Result`-shaped type in v0.1 (Rule 10(b)): a std operation
     that can fail says `raises` (Rule 6b), and a std operation whose answer
