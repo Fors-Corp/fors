@@ -7,10 +7,20 @@ commit history, which predates the Conventional Commits convention.
 
 | Language | Compiler | Meaning |
 |---|---|---|
-| `lang-v0.5.0` | `compiler-v0.1.1` | current |
+| `lang-v0.5.1` | `compiler-v0.2.0` | current |
+| `lang-v0.5.0` | `compiler-v0.1.1` | type checker I2–I3 |
 | `lang-v0.5.0` | `compiler-v0.1.0` | first tagged front end |
 
 ## Language
+
+### lang-v0.5.1 — 2026-10-02
+
+Clarification only; no program changes meaning.
+
+- ch10's conformance index names `sigpipe-ignored-write-latches-run-error`:
+  a write to a closed pipe latches `io.Error.closed` (SIGPIPE is ignored)
+  and `main` exits with status 2 per R40(d) — the test had asked for 0 and
+  applied `else` to a total function (FMIR owner decision Q8).
 
 ### lang-v0.5.0 — 2026-09-20 (round 6)
 
@@ -61,6 +71,45 @@ measurement, the grammar, names and visibility), with a conformance corpus and
 an independent reference parser.
 
 ## Compiler
+
+### compiler-v0.2.0 — 2026-10-02
+
+Type checker increments **I3.5, I4a, I4b** and FMIR increments **F1, F2** of
+the two design contracts, each produced by one agent and independently
+verified by another; the first increments that *run* a Fors program.
+Implements `lang-v0.5.1`; still no code generator.
+
+- **I3.5 — `BodyFacts`.** The checker's side table for lowering: per-body
+  expression types, callees, receiver and argument conventions, member
+  indices (D1–D4). `fors-lower` reads nothing else.
+- **I4a/I4b — traits, impls, member lookup.** Method resolution on nominal
+  and primitive heads (ch09 R43–R46), bound satisfaction at calls (R12),
+  R29's several-`Index` rule, a trait's methods exactly as visible as the
+  trait (ch08 R11 — a false N0011 on every cross-module trait-method call is
+  gone). Chapter 08's pending set is empty.
+- **F1 — lowering and the interpreter core.** `fors-lower` walks checked
+  bodies into FMIR; `fors-interp` executes it with exact integer semantics
+  (`MIN / -1` traps `overflow`; a shift traps at `count >= width` — FMIR
+  owner decision Q4), a bit-exact `frem`, and an in-memory `Stdout`.
+- **F2 — contracts, the entry shim, exit statuses.** `pre`/`post`/
+  `invariant` under the module `contracts:` policy (`.off` emits no check
+  instruction); the ch02 R17 / ch10 R40(d) exit table; `SIGPIPE → SIG_IGN`
+  through a real pipe in the conformance runner. Owner decision Q8: a write
+  to a closed pipe latches and `main` exits 2.
+- **`fors-layout`.** Type layout per FMIR owner decision Q1: declaration
+  order, natural alignment, `align ≤ 16`, smallest fitting discriminant.
+- **Coverage.** 195 of chapter 09's 246 conformance tests on, 51 pending
+  later increments; 16 runtime conformance tests run end to end; 492 Rust
+  tests; 1011 corpus files.
+- **Harness.** `matmul-blocked` (cache-blocked companion to `matmul`, nine
+  languages) and a `java-stream` column — sources only, no results file:
+  a tuned-vs-naive claim waits for a calibrated run on a quiet machine.
+- **Verification found and fixed before merge:** a method-lookup carve-out
+  that stayed silent even when the impl table was complete (over-acceptance,
+  I4b); a closed-pipe test that never closed a pipe (F2).
+- **Process.** The repository is public. Each feature increment is followed
+  by a release and a `compiler-vX.Y.Z` tag. CodeQL no longer uploads its
+  database (the scheduled run failed on that upload, not on analysis).
 
 ### compiler-v0.1.1 — 2026-09-20
 
