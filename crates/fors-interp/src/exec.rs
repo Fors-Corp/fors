@@ -41,11 +41,19 @@ pub enum Exit {
 }
 
 /// One run's observable behaviour (design §7.1's `OracleRecord` restricted
-/// to F1: exit plus exact stdout bytes).
+/// to F1+F2: exit, exact stdout bytes, and whether `Stdout` ended the run
+/// latched (ch10 R39/R40) — the exit-status table's F2 input (§5.3, §5.4,
+/// ch10 R40(d)), computed over this by [`crate::shim::entry_exit`].
 #[derive(Clone, PartialEq, Eq, Debug)]
 pub struct Outcome {
     pub exit: Exit,
     pub stdout: Vec<u8>,
+    /// Whether `Stdout` carried a latched error at the point `main`
+    /// returned (ch10 R39): set when a `write_line` through
+    /// [`crate::shim::HostEnv::stdout_fd`] failed (a closed pipe) instead
+    /// of appending bytes. Meaningless when `exit` is a trap (§5.3: the
+    /// trap path never reaches the entry shim's flush at all).
+    pub stdout_latched: bool,
 }
 
 /// A clean interpreter diagnostic: a malformed program, an unimplemented
@@ -146,6 +154,8 @@ struct Machine<'a> {
     cells: Vec<Cells>,
     strs: Vec<Vec<u8>>,
     stdout: Vec<u8>,
+    stdout_latched: bool,
+    host: crate::shim::HostEnv,
     steps: u64,
 }
 
@@ -236,9 +246,23 @@ pub struct Env<'a> {
     pub tys: &'a TyStore,
 }
 
-/// Runs `prog.entry` to completion: `Ok(Outcome)` for a returned or trapped
-/// run, `Err(InterpError)` for a malformed program.
+/// Runs `prog.entry` to completion with the default host environment
+/// (`Stdout` open): `Ok(Outcome)` for a returned or trapped run,
+/// `Err(InterpError)` for a malformed program.
 pub fn run(prog: &Program, tys: &TyStore) -> Result<Outcome, InterpError> {
+    run_with_host(prog, tys, &crate::shim::HostEnv::default())
+}
+
+/// As [`run`], with an explicit [`crate::shim::HostEnv`] — the conformance
+/// runner's hook for §7.2a's "stdout descriptor closed before `main`"
+/// (`main-returns-latched-stdout-exit-2`,
+/// `10-std/sigpipe-ignored-write-latches-run-error`): it hands over the
+/// write end of a real pipe whose read end it closed.
+pub fn run_with_host(
+    prog: &Program,
+    tys: &TyStore,
+    host: &crate::shim::HostEnv,
+) -> Result<Outcome, InterpError> {
     if prog.entry >= prog.fns.len() {
         return Err(InterpError::NoEntry(format!("entry {}", prog.entry)));
     }
@@ -250,6 +274,8 @@ pub fn run(prog: &Program, tys: &TyStore) -> Result<Outcome, InterpError> {
         cells: Vec::new(),
         strs: Vec::new(),
         stdout: Vec::new(),
+        stdout_latched: false,
+        host: *host,
         steps: 0,
     };
     call(prog.entry, None, Vec::new(), &mut m)?;
@@ -266,6 +292,7 @@ pub fn run(prog: &Program, tys: &TyStore) -> Result<Outcome, InterpError> {
                         return Ok(Outcome {
                             exit: Exit::Return,
                             stdout: std::mem::take(&mut m.stdout),
+                            stdout_latched: m.stdout_latched,
                         });
                     }
                     Some(_) => {
@@ -280,6 +307,7 @@ pub fn run(prog: &Program, tys: &TyStore) -> Result<Outcome, InterpError> {
                 return Ok(Outcome {
                     exit: Exit::Trap(kind),
                     stdout: std::mem::take(&mut m.stdout),
+                    stdout_latched: m.stdout_latched,
                 });
             }
         }
@@ -730,9 +758,28 @@ fn root_slot(m: &Machine<'_>, fr: usize, _inst: u32, root: u32) -> Result<Slot, 
         .ok_or(InterpError::UninitRead(root))
 }
 
+/// Resolves a `Seg::Index` segment's runtime index, bounds-checked against
+/// `len` (ch02 R15's `bounds` trap — F2's `trap-bounds` gate, §5.8's
+/// "minimal intrinsic-backed stub" for `Buffer`/`Slice`, real bodies F7's).
+fn index_in_bounds(
+    m: &Machine<'_>,
+    fr: usize,
+    inst: u32,
+    idx: ValId,
+    len: usize,
+) -> Result<usize, Fault> {
+    let idx_slot = val_operand(m, fr, inst, idx.0)?;
+    let i = idx_slot.bits as usize;
+    if i >= len {
+        return Err(Fault::Trap(TrapKind::Bounds));
+    }
+    Ok(i)
+}
+
 /// Reads a place: `[]` is the local slot itself, `[Field(i)]` is one cell
-/// of the aggregate the slot names. Deeper paths are a lowering bug in F1
-/// (lowering only ever emits these two shapes).
+/// of the aggregate the slot names, `[Index(v)]` is the same cell array
+/// read at a RUNTIME index (bounds-checked). Deeper paths are a lowering
+/// bug (lowering only ever emits these shapes through F2).
 fn read_place(m: &mut Machine<'_>, fr: usize, inst: u32, raw: u32) -> Result<Slot, Fault> {
     let (root, segs) = place_shape(m, fr, raw)?;
     let base = root_slot(m, fr, inst, root)?;
@@ -750,7 +797,16 @@ fn read_place(m: &mut Machine<'_>, fr: usize, inst: u32, raw: u32) -> Result<Slo
                 .copied()
                 .ok_or_else(|| InterpError::TypeMismatch("place field out of range".into()).into())
         }
-        _ => Err(InterpError::TypeMismatch("place path outside the F1 shapes".into()).into()),
+        [fors_fmir::place::Seg::Index(idx)] => {
+            let idx = *idx;
+            let cell = m.cells.get(base.bits as usize).ok_or_else(|| {
+                InterpError::TypeMismatch("place base is not an aggregate".into())
+            })?;
+            let len = cell.slots.len();
+            let i = index_in_bounds(m, fr, inst, idx, len)?;
+            Ok(m.cells[base.bits as usize].slots[i])
+        }
+        _ => Err(InterpError::TypeMismatch("place path outside the F1/F2 shapes".into()).into()),
     }
 }
 
@@ -782,7 +838,23 @@ fn write_place(m: &mut Machine<'_>, fr: usize, inst: u32, raw: u32, v: Slot) -> 
             *slot = v;
             Ok(())
         }
-        _ => Err(InterpError::TypeMismatch("place path outside the F1 shapes".into()).into()),
+        [fors_fmir::place::Seg::Index(idx)] => {
+            let idx = *idx;
+            let base = root_slot(m, fr, inst, root)?;
+            if !base.init {
+                return Err(InterpError::UninitRead(root).into());
+            }
+            let len = m
+                .cells
+                .get(base.bits as usize)
+                .ok_or_else(|| InterpError::TypeMismatch("place base is not an aggregate".into()))?
+                .slots
+                .len();
+            let i = index_in_bounds(m, fr, inst, idx, len)?;
+            m.cells[base.bits as usize].slots[i] = v;
+            Ok(())
+        }
+        _ => Err(InterpError::TypeMismatch("place path outside the F1/F2 shapes".into()).into()),
     }
 }
 
@@ -797,11 +869,24 @@ fn exec_intrinsic(
         INTRINSIC_STDOUT_WRITE_LINE => {
             // `stdout_write_line(receiver, text)`: the receiver is ignored
             // (the entry shim fabricates it); the text operand is a `Str`
-            // handle into the machine's byte table.
+            // handle into the machine's byte table. ch10 R39: TOTAL and
+            // LATCHING — when the host gave `Stdout` a real descriptor
+            // (`HostEnv::stdout_fd`, §7.2a's closed-pipe tests) the bytes
+            // go through it first, and a failed write never traps and
+            // never reaches the captured image: it sets the sticky flag
+            // `entry_exit` reads (R40(d): status 2 on return).
             let text = args.get(1).copied().unwrap_or_else(Slot::unit);
-            let bytes = m.strs.get(text.bits as usize).cloned().unwrap_or_default();
-            m.stdout.extend_from_slice(&bytes);
-            m.stdout.push(b'\n');
+            let mut bytes = m.strs.get(text.bits as usize).cloned().unwrap_or_default();
+            bytes.push(b'\n');
+            let arrived = match m.host.stdout_fd {
+                Some(fd) => crate::shim::host_write(fd, &bytes).is_ok(),
+                None => true,
+            };
+            if arrived {
+                m.stdout.extend_from_slice(&bytes);
+            } else {
+                m.stdout_latched = true;
+            }
             define(dest, m, fr, Slot::unit());
             Ok(())
         }

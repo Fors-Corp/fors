@@ -497,7 +497,15 @@ impl<'a> BodyCtx<'a> {
                     self.walk(c);
                 }
             }
-            Contract => {}  // ch02's (Rule 26)
+            // ch02 Rule 26: a `pre`/`post`/`invariant` clause's condition
+            // resolves names exactly like any other expression (F2, design
+            // §3.6) — its own keyword token (`pre`/`post`/`invariant`)
+            // carries no name of its own, so only the children need it.
+            Contract => {
+                for c in self.tree.children(node) {
+                    self.walk(c);
+                }
+            }
             Attribute => {} // not names (Rule 23)
             Block => {
                 self.push_frame();

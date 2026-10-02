@@ -74,7 +74,7 @@ operations moved to `T: Droppable` impl blocks (Rule 11c), leaving
 - `rand-rng-needs-capability-rejected`
 - `result-type-absent-rejected`
 - `scoped-iter-chain-keeps-borrow-rejected`
-- `sigpipe-ignored-write-latches-run-ok`
+- `sigpipe-ignored-write-latches-run-error`
 - `std-fn-without-capability-value-rejected`
 - `std-iterator-inherent-name-clash-rejected`
 - `stdout-check-surfaces-error-accepted`
