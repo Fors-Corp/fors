@@ -20,7 +20,7 @@ use fors_fir::defpath::{HeadKey, NO_DEF};
 use fors_fir::impls::{self, ImplRow};
 use fors_fir::prelude::{PreludeDefs, gty, tr};
 use fors_fir::sig::{Conv, GParamKind, MemberKind, NO_TRAIT_REF, PayloadKind, SigKind};
-use fors_fir::subst::{Binding, one_way_match, subst_norm};
+use fors_fir::subst::{Binding, one_way_match};
 use fors_fir::ty::{ArgsId, FnTyId, NO_ARGS, NO_TY, TY_ERROR, TraitRefId, TyId, TyTag};
 use fors_index::decl::DeclKind;
 use fors_index::ids::{DefId, FileId, ModuleId};
@@ -104,7 +104,7 @@ pub struct Wf<'a> {
     /// method name, method-position) (design §3 fork 8, §7.7). The module matters: the same
     /// `(TyId, Symbol)` resolves differently in modules with different
     /// direct edges (ch08 R7), so a global key would re-route calls.
-    pub method_memo: HashMap<(u32, TyId, Symbol, bool), Result<MethodHit, LookupError>>,
+    pub method_memo: HashMap<(u32, TyId, Symbol, bool, u32), Result<MethodHit, LookupError>>,
     /// The declaration whose body is being typed (for R62's "constraint
     /// entries in scope" on neutral projections). `NO_DEF` outside bodies.
     /// A method constraining its impl's parameter (`impl[I: Iterator]
@@ -112,6 +112,10 @@ pub struct Wf<'a> {
     /// own generics, not on the head's, so `declared_bounds` must read the
     /// current scope as well as the head's owner.
     pub cur_scope: DefId,
+    /// R20's normalisation memo, counters and per-query budget (I6,
+    /// `normalise.rs`). One per build; cleared wholesale on a
+    /// `TraitWorldRevision` bump.
+    pub norm: crate::normalise::NormState,
 }
 
 impl<'a> Wf<'a> {
@@ -155,8 +159,22 @@ impl<'a> Wf<'a> {
             holds_depth: 0,
             method_memo: HashMap::new(),
             cur_scope: fors_fir::NO_DEF,
+            norm: crate::normalise::NormState::new(),
         }
     }
+    /// Design §9.1's `TraitWorldRevision` bump: an impl edit invalidates
+    /// every answer that read the trait world, and both caches that hold
+    /// such answers are dropped wholesale — `methods.rs`'s member-lookup
+    /// memo and `normalise.rs`'s projection memo. What that costs on a cold
+    /// 100k check is §16 point 3's open question and I6's second
+    /// MEASUREMENT (`scale.rs`).
+    pub fn clear_trait_world_caches(&mut self) -> (usize, usize) {
+        let rows = (self.method_memo.len(), self.norm.len());
+        self.method_memo.clear();
+        self.norm.clear();
+        rows
+    }
+
     /// Records that the body being typed read `def`'s signature (ch09 R2).
     pub fn dep(&mut self, def: DefId) {
         self.cur_deps.record(def);
@@ -667,7 +685,7 @@ impl<'a> Wf<'a> {
         let xs = self.fir.tys.args_vec(args);
         let mut out = Vec::with_capacity(xs.len());
         for x in xs {
-            let y = subst_norm(&mut self.fir.tys, x, b)?;
+            let y = self.subst_norm_n(x, b)?;
             out.push(y);
         }
         self.subst_calls += 1;
@@ -1579,7 +1597,7 @@ impl Wf<'_> {
                             b.bind(def, i as u16, *a);
                         }
                         for f in &mut fields {
-                            if let Some(s) = subst_norm(&mut self.fir.tys, *f, &b) {
+                            if let Some(s) = self.subst_norm_n(*f, &b) {
                                 *f = s;
                             }
                         }

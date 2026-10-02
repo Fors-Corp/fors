@@ -6,7 +6,7 @@
 //! silent and absorbing, never a guess.
 
 use fors_fir::sig::{MemberKind, SigKind, VIS_PRIVATE};
-use fors_fir::subst::{Binding, subst_norm};
+use fors_fir::subst::Binding;
 use fors_fir::ty::{ArgsId, FnTyId, NO_ARGS, NO_TY, PrimKind, TY_ERROR, TyId, TyTag};
 use fors_index::Symbol;
 use fors_index::diag::Code;
@@ -417,7 +417,7 @@ impl Wf<'_> {
             b.bind(head, i as u16, x);
         }
         self.subst_calls += 1;
-        subst_norm(&mut self.fir.tys, ty, &b).unwrap_or(TY_ERROR)
+        self.subst_norm_n(ty, &b).unwrap_or(TY_ERROR)
     }
 
     /// The identifier a `FieldExpr` carries. The operand is the node's
@@ -589,7 +589,7 @@ impl Wf<'_> {
             return ty;
         }
         self.subst_calls += 1;
-        subst_norm(&mut self.fir.tys, ty, b).unwrap_or(TY_ERROR)
+        self.subst_norm_n(ty, b).unwrap_or(TY_ERROR)
     }
 
     /// R29's "Several" clause (increment I4). With more than one `Index`

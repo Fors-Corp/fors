@@ -76,9 +76,48 @@
 //   bound", which §8's ch01 R22c row assigns to I8b's `ty::droppable` /
 //   `flow::drop_rigid`; I6 contributes only the `holds` Proj arm that
 //   supplies the bound set, so the later of the two increments owns it.
-const PENDING_09_MAX: usize = 38;
+// I6 (associated types, projections, normalisation, constraint entries)
+// deleted FOUR rows and retagged none. Two were already tagged I6
+// (`constraint-entry-unsatisfied-at-call-rejected`,
+// `neutral-projection-does-not-match-concrete-impl-rejected`); the other
+// two carried a stale I3 tag that design §13's I6 GATE overrides, and the
+// reasons, once, here:
+//
+// - `projection-arg-before-head-final-check-rejected` I3 -> I6, deleted.
+//   §13's I6 GATE names it verbatim in its R38 group ("R38 (`map-sum-
+//   closure-checked-accepted`, `projection-arg-before-head-accepted`,
+//   `-final-check-rejected`, `projection-result-against-expected-
+//   accepted`)"). It needs R20: the literal is synthesised as `i32`
+//   before `I` is bound, and only `subst_norm` with a real projection
+//   solver turns `I.Item` into the `i64` the final check compares it
+//   against.
+// - `neutral-projection-to-dyn-rejected` I3 -> I6, deleted. No §13 GATE
+//   names it (its rule is R10), but it is I6's by machinery and not by
+//   tag: `h.get()` on a rigid `H: Has` is a GENERIC TRAIT METHOD, which
+//   §7.4's container slots (I6) are what make typable at all — before
+//   this increment `methods.rs` answered `Candidate::Generic` and the
+//   whole call was untyped, so the `as dyn Tr` had nothing to reject. The
+//   row is deleted rather than retagged because it now passes.
+//
+// Nothing in I6 moved a row the other way: the 34 rows below were each
+// re-tested with the list emptied and every one of them still fails for
+// its own increment's reason.
+//
+// The I6 verifier retagged ONE row, for the reason I4b gave its sibling:
+//
+// - `adaptor-annotated-binding-mismatch-rejected` I3 -> I8b. R38(b)'s
+//   receiver binding is on since I5, and its `Self := Mapped[SliceIter[i32],
+//   i32]` needs `Iterator`'s PROVIDED `map`/`take` and the `Mapped`/`Taken`
+//   adaptors, which exist only in `std/mem/seq.fors`. The ch09 harness
+//   checks each file alone, where `Iterator` is the prelude row declaring
+//   `next` and nothing else, so no call in the body types and nothing can
+//   be compared. No §13 GATE names it (I6's R38 group lists four files and
+//   this is not one); the only §13 sentence that assigns a round-6
+//   `09-types` file is I8b's. The I3 tag was stale by the same argument
+//   that moved `adaptor-name-clash-two-traits-rejected` to I8b.
+const PENDING_09_MAX: usize = 34;
 const PENDING_09: &[(&str, &str)] = &[
-    ("adaptor-annotated-binding-mismatch-rejected", "I3"),
+    ("adaptor-annotated-binding-mismatch-rejected", "I8b"),
     ("adaptor-map-closure-returns-linear-rejected", "I8b"),
     ("adaptor-name-clash-two-traits-rejected", "I8b"),
     ("adaptor-on-field-receiver-rejected", "I8"),
@@ -87,7 +126,6 @@ const PENDING_09: &[(&str, &str)] = &[
     ("brand-param-as-value-type-rejected", "I8"),
     ("callable-bound-cannot-bind-result-rejected", "I8b"),
     ("const-pattern-equal-to-literal-unreachable-rejected", "I7"),
-    ("constraint-entry-unsatisfied-at-call-rejected", "I6"),
     ("copy-without-copyable-rejected", "I8"),
     ("implicit-receiver-move-in-closure-rejected", "I8"),
     ("implicit-receiver-move-in-loop-rejected", "I8"),
@@ -103,14 +141,11 @@ const PENDING_09: &[(&str, &str)] = &[
     ("match-const-pattern-needs-wildcard-rejected", "I7"),
     ("match-int-needs-wildcard-rejected", "I7"),
     ("match-non-exhaustive-enum-rejected", "I7"),
-    ("neutral-projection-does-not-match-concrete-impl-rejected", "I6"),
     ("neutral-projection-drop-without-bound-rejected", "I8b"),
-    ("neutral-projection-to-dyn-rejected", "I3"),
     ("pattern-bare-fn-name-rejected", "I7"),
     ("pattern-bare-prelude-type-rejected", "I7"),
     ("pattern-bare-struct-name-rejected", "I7"),
     ("pattern-float-literal-rejected", "I7"),
-    ("projection-arg-before-head-final-check-rejected", "I3"),
     ("qualified-call-sink-receiver-needs-move-rejected", "I8"),
     ("rigid-discard-without-droppable-rejected", "I8b"),
     ("rigid-drop-without-droppable-rejected", "I8b"),
