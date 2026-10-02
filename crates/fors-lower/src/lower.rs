@@ -85,6 +85,7 @@ use fors_syntax::{NodeKind, Tree};
 use fors_fmir::alias::AliasSeed;
 use fors_fmir::block::BlockRow;
 use fors_fmir::decl::DeclFmir;
+use fors_fmir::exit::ExitKind;
 use fors_fmir::ids::{ABSENT, BlockId, PlaceId, ScopeId, SiteId, ValId};
 use fors_fmir::inst::{CallRow, Callee, InstRow, ReduceRow};
 use fors_fmir::op::{ArithMode, CmpPred, NO_OPERAND, Op, Policy};
@@ -596,6 +597,7 @@ fn prescan(
     let mut stub_ranges = buffer_stub_ranges(file, decl_node);
     stub_ranges.extend(reduce_stub_ranges(file, decl_node));
     stub_ranges.extend(ch03_prim_stub_ranges(file, facts, decl_node));
+    stub_ranges.extend(with_stub_ranges(file, decl_node));
     'scan: for n in start..end {
         for &(s, e) in &stub_ranges {
             if n >= s && n < e {
@@ -611,7 +613,10 @@ fn prescan(
         let end_sub = file.tree.subtree_end(decl_node).min(file.tree.len());
         for n in decl_node..end_sub {
             match file.tree.kinds[n] {
-                NodeKind::DeferStmt | NodeKind::ErrdeferStmt => return Err(LowerError::Defer),
+                // F4 lowers `defer`/`errdefer` from I8b's D7 facts; a
+                // statement the checker published no row for is still a
+                // named diagnostic, raised at the statement in
+                // `lower_defer` rather than here.
                 NodeKind::TryExpr | NodeKind::Handler | NodeKind::RaiseStmt => {
                     return Err(LowerError::Failure);
                 }
@@ -683,6 +688,78 @@ fn buffer_stub_ranges(file: &FileInput<'_>, decl_node: usize) -> Vec<(u32, u32)>
         }
     }
     out
+}
+
+/// F6: inside each `with arena`/`with allocator` block, the node ranges of
+/// the three shapes `try_lower_arena` lowers — `a.alloc(..)`, `a.reset()`
+/// and `a[r]`, i.e. every call or index whose receiver is the region's own
+/// name. The checker leaves exactly those nodes `TY_ERROR` (ch10 R2:
+/// `Arena`'s method surface is package `std`'s, and reaching it needs I4's
+/// `Index` impl on a bound plus I5's brands), so `prescan` must hold them
+/// out — the same carve-out `buffer_stub_ranges` makes, and by the same
+/// rule: detected structurally off the CST, never by reading `facts`.
+///
+/// Deliberately NOT the whole `with` block: ordinary typed code inside one
+/// still goes through the `TY_ERROR` gate.
+fn with_stub_ranges(file: &FileInput<'_>, decl_node: usize) -> Vec<(u32, u32)> {
+    let mut out = Vec::new();
+    if decl_node >= file.tree.len() {
+        return out;
+    }
+    let end = file.tree.subtree_end(decl_node).min(file.tree.len());
+    for n in decl_node..end {
+        if file.tree.kinds[n] != NodeKind::WithStmt {
+            continue;
+        }
+        let Some(name) = with_region_name(file, n) else {
+            continue;
+        };
+        let stop = file.tree.subtree_end(n).min(file.tree.len());
+        for m in n..stop {
+            if !matches!(
+                file.tree.kinds[m],
+                NodeKind::CallExpr | NodeKind::Bracket | NodeKind::FieldExpr
+            ) {
+                continue;
+            }
+            let Some(mut base) = file.tree.children(m).next() else {
+                continue;
+            };
+            // `a[r].f` is one shape, not two: the `FieldExpr` is what
+            // `try_lower_arena` lowers (FMIR reaches a pointee's field
+            // through one `Deref` place), so the walk steps through the
+            // bracket to find the region name.
+            if file.tree.kinds[m] == NodeKind::FieldExpr
+                && file.tree.kinds[base] == NodeKind::Bracket
+            {
+                let Some(inner) = file.tree.children(base).next() else {
+                    continue;
+                };
+                base = inner;
+            }
+            if file.tree.kinds[base] != NodeKind::NameExpr {
+                continue;
+            }
+            let (a, b) = file.tree.token_range(base);
+            let first = (a as usize..b as usize)
+                .find(|&t| file.tokens.kinds[t] == TokenKind::Ident)
+                .map(|t| file.tokens.text(t, file.source));
+            if first == Some(name) {
+                out.push((m as u32, file.tree.subtree_end(m) as u32));
+            }
+        }
+    }
+    out
+}
+
+/// The name a `with arena`/`with allocator` statement binds: its SECOND own
+/// `Ident` token (`with` is a keyword, then the region word, then the name).
+fn with_region_name<'t>(file: &FileInput<'t>, with_stmt: usize) -> Option<&'t [u8]> {
+    let idents = node_own_idents(file, with_stmt);
+    match idents.as_slice() {
+        [_word, name, ..] => Some(name),
+        _ => None,
+    }
 }
 
 /// Every `reduce(...)` call in the declaration, as `(start, end)` node
@@ -1059,6 +1136,65 @@ struct FnLower<'a> {
     /// Read off the `FnDecl`'s own leading `Attribute` by `lower_fn`; the
     /// only thing that consults it is ch03 Rule 4's `unchecked_<op>` gate.
     unsafe_decl: bool,
+    /// F4: the FMIR scope ([`DeclFmir::scopes`]) each block draft belongs
+    /// to, parallel to `blocks`. A block's scope is the one `verify()`
+    /// reads as an exit edge's innermost scope
+    /// ([`fors_fmir::diag::DiagCode::ExitEdgeScopesNotAChain`]), so it is
+    /// recorded per block at creation and corrected when a `defer` opens a
+    /// new scope mid-block.
+    block_scope: Vec<ScopeId>,
+    /// F4: the scope being emitted into. ONE FMIR scope per `defer`
+    /// statement, chained under the enclosing one — see
+    /// [`FnLower::lower_defer`] for why that is ch01 R23a's textual cut
+    /// made structural.
+    scope_cur: ScopeId,
+    /// F6: the region of the innermost enclosing `with arena`/`with
+    /// allocator` block, and the local slot its handle lives in. Empty
+    /// outside one.
+    with_regions: Vec<WithRegion>,
+    /// F6 (D8): `(interned place, the obligation's introducing CST node)`
+    /// for every linear obligation this body recorded, so a discharge row
+    /// can be matched back to the checker's `root`.
+    oblig_roots: Vec<(PlaceId, u32)>,
+    /// F6 (D8): the LAST instruction lowering emitted while lowering each
+    /// expression node — which, because the walk is post-order, is that
+    /// node's own top-level instruction. It is what turns D8's
+    /// `Discharge::MovedAt(node)` into design §3.5's
+    /// `Discharge::MovedTo(InstId)` without lowering deciding anything:
+    /// the checker said WHICH node consumed the obligation, and this says
+    /// where that node's code landed.
+    node_inst: Vec<(u32, fors_fmir::ids::InstId)>,
+    /// F6: the local roots that hold a POINTER to the caller's place rather
+    /// than a value — every `inout`/`set` parameter of a scalar type. The
+    /// caller passed `borrow_mut`/`borrow_out`'s result (design §3.3), so
+    /// every place rooted here goes through one `Seg::Deref`: a read is the
+    /// interpreter's `read_through` and a write its `write_through`, which
+    /// is what makes the callee's assignment land in the CALLER's slot.
+    /// An aggregate parameter is not here: FMIR's value model shares an
+    /// aggregate's cell by handle, so it is passed by value under the
+    /// `Inout` convention exactly as a method receiver is.
+    indirect_roots: Vec<u32>,
+}
+
+/// F6: one open `with arena` / `with allocator` block (ch01 R15, R18).
+#[derive(Clone, Copy)]
+struct WithRegion {
+    /// The name the block bound, so `a.alloc(..)`/`a.reset()`/`a[r]` are
+    /// recognised as THIS region's surface and not some user method that
+    /// happens to share a spelling.
+    name: Symbol,
+    /// The handle's local slot (`region_enter`'s result lives there).
+    root: u32,
+    /// The scope's brand: `AliasSeed::Arena`'s operand, and the allocator
+    /// identity `@alloc`/`@free` compare (design §3.4a, ch01 R18).
+    brand: fors_fmir::ids::BrandId,
+    kind: WithKind,
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum WithKind {
+    Arena,
+    Allocator,
 }
 
 /// One binding a pattern decided (D5): the local to introduce, the component
@@ -1082,6 +1218,10 @@ enum Projection {
 /// is what advances a `for`'s induction variable) and where `break` goes.
 #[derive(Clone, Copy)]
 struct LoopTargets {
+    /// F4: the FMIR scope the loop STATEMENT sits in. A `break` or
+    /// `continue` leaves every scope opened inside the body, which is the
+    /// chain from the current scope out to this one (ch01 R23e).
+    mark: ScopeId,
     latch: BlockId,
     exit: BlockId,
 }
@@ -1175,6 +1315,12 @@ impl<'a> FnLower<'a> {
             relax: fors_fmir::op::Relax::NONE,
             loops: Vec::new(),
             unsafe_decl: false,
+            block_scope: vec![ROOT_SCOPE],
+            scope_cur: ROOT_SCOPE,
+            with_regions: Vec::new(),
+            oblig_roots: Vec::new(),
+            node_inst: Vec::new(),
+            indirect_roots: Vec::new(),
         })
     }
 
@@ -1204,7 +1350,8 @@ impl<'a> FnLower<'a> {
         // seal order, not id order (see `BlockDraft`).
         let mut blocks = fors_fmir::block::BlockPool::new();
         let mut covered = 0usize;
-        for draft in std::mem::take(&mut self.blocks) {
+        let block_scope = std::mem::take(&mut self.block_scope);
+        for (i, draft) in std::mem::take(&mut self.blocks).into_iter().enumerate() {
             let term = draft.term.unwrap_or(InstRow {
                 op: Op::Unreachable,
                 a: NO_OPERAND,
@@ -1217,7 +1364,10 @@ impl<'a> FnLower<'a> {
                 first_inst: draft.first as u32,
                 inst_len: draft.len as u32,
                 term,
-                scope: ROOT_SCOPE,
+                // F4: the scope this block was emitted into (`ROOT_SCOPE`
+                // for every block of a body with no `defer`, which is what
+                // every pre-F4 declaration still looks like).
+                scope: block_scope.get(i).copied().unwrap_or(ROOT_SCOPE),
             });
             covered += draft.len;
         }
@@ -1459,17 +1609,49 @@ impl<'a> FnLower<'a> {
     }
 
     fn fresh(&mut self, ty: TyId, inst: u32) -> ValId {
-        self.decl.push_val(ValRow::new(
-            ty,
-            false,
-            0,
-            ValDef::Inst(fors_fmir::ids::InstId(inst)),
-        ))
+        let row = ValRow::new(ty, false, 0, ValDef::Inst(fors_fmir::ids::InstId(inst)));
+        let row = self.with_linear(ty, row);
+        self.decl.push_val(row)
     }
 
     fn fresh_param(&mut self, ty: TyId, ordinal: u16) -> ValId {
-        self.decl
-            .push_val(ValRow::new(ty, false, 0, ValDef::Param(ordinal)))
+        let row = ValRow::new(ty, false, 0, ValDef::Param(ordinal));
+        let row = self.with_linear(ty, row);
+        self.decl.push_val(row)
+    }
+
+    /// F6: `flags.LINEAR` from the CHECKER's `lin(T)` answer (ch01 R22a,
+    /// design §3.5: "set by `fors-lower` from `lin(T)` ... which `fors-fir`
+    /// computes"), published per `TyId` in D8's `lin` column. A type the
+    /// body never asked about is absent from the column and the flag stays
+    /// clear — lowering never recomputes `lin`.
+    fn with_linear(&self, ty: TyId, row: ValRow) -> ValRow {
+        let lin = self
+            .facts
+            .linear_obligations
+            .lin
+            .iter()
+            .any(|&(t, yes)| yes && (t == ty || self.subst_matches(t, ty)));
+        if lin {
+            row.with_flags(fors_fmir::flags::LINEAR)
+        } else {
+            row
+        }
+    }
+
+    /// Is `published` (a `TyId` in the CHECKER's frozen store) the same type
+    /// as `here` (one in the lowering-owned clone)? An uninstantiated body
+    /// shares the ids, so the cheap equality above answers almost always;
+    /// after monomorphisation the instance's types were interned later in
+    /// the clone, so the ids differ and the comparison is by the row's own
+    /// shape. [decision: compare `(tag, a, b)` rather than deep-equate —
+    /// `lin(T)` is a per-head answer (ch01 R22a) and the head is `a`.]
+    fn subst_matches(&self, published: TyId, here: TyId) -> bool {
+        if published.0 as usize >= self.tys.len() || here.0 as usize >= self.tys.len() {
+            return false;
+        }
+        let (pb, hb) = (self.tys.unqual(published), self.tys.unqual(here));
+        self.tys.tag(pb) == self.tys.tag(hb) && self.tys.a(pb) == self.tys.a(hb)
     }
 
     fn seal(&mut self, term: InstRow) {
@@ -1495,6 +1677,11 @@ impl<'a> FnLower<'a> {
             len: 0,
             term: None,
         });
+        // F4: a block belongs to the scope that was current when it was
+        // created. The two cases where that is not the scope it is
+        // EMITTED into (a `defer`'s continuation, and a region's join
+        // block) fix it up explicitly.
+        self.block_scope.push(self.scope_cur);
         self.cur = id as usize;
         BlockId(id)
     }
@@ -1562,8 +1749,42 @@ impl<'a> FnLower<'a> {
         None
     }
 
+    /// Interns a place, reaching THROUGH a by-reference parameter's pointer
+    /// (see [`FnLower::indirect_roots`]) when `root` is one.
     fn intern_place(&mut self, root: u32, segs: &[Seg], ty: TyId) -> PlaceId {
+        if self.indirect_roots.contains(&root) {
+            let mut through = Vec::with_capacity(segs.len() + 1);
+            through.push(Seg::Deref);
+            through.extend_from_slice(segs);
+            return self.decl.places.intern(root, &through, ty);
+        }
         self.decl.places.intern(root, segs, ty)
+    }
+
+    /// The root slot itself, never through a pointer — what forwarding a
+    /// by-reference parameter to another by-reference argument reads.
+    fn intern_place_raw(&mut self, root: u32, ty: TyId) -> PlaceId {
+        self.decl.places.intern(root, &[], ty)
+    }
+
+    /// Is a value of `ty` passed by POINTER under `inout`/`set`? Scalars
+    /// are (`borrow_mut`/`borrow_out` on the caller's slot, `Seg::Deref` in
+    /// the callee); aggregates are cells shared by handle and travel by
+    /// value under the convention. Caller and callee decide with this one
+    /// predicate, on the instantiated type, so they cannot disagree.
+    fn by_pointer(&mut self, ty: TyId) -> Result<bool, LowerError> {
+        // `TY_UNIT` is what F2's `lower_let` binds an initialiser-less `var`
+        // to (and what its stand-ins bind), so it is "not yet typed here",
+        // never a real `()` by reference.
+        if ty == NO_TY || ty == TY_ERROR || ty == TY_UNIT {
+            return Err(LowerError::Unresolved(
+                "the type of a by-reference parameter or argument (an uninitialised \
+                 `var` is bound untyped by F2's `lower_let`)"
+                    .into(),
+            ));
+        }
+        let t = self.subst_ty(ty, "a by-reference parameter's type")?;
+        Ok(self.prim_of(t).is_some())
     }
 
     /// `copy_from` a whole local slot.
@@ -1603,14 +1824,23 @@ impl<'a> FnLower<'a> {
                 match self.kind(s) {
                     NodeKind::Params => {
                         for p in self.kids(s) {
-                            let name = self
-                                .own_tokens(p)
-                                .into_iter()
-                                .find(|&(_, k)| k == TokenKind::Ident)
-                                .map(|(t, _)| {
+                            // The name is the Ident just before the `:`.
+                            // `set` is a CONTEXTUAL word (ch07 Rule 4) that
+                            // the lexer gives `Ident`, unlike `let`/`inout`/
+                            // `sink`, so "the first Ident" would bind the
+                            // parameter under the name `set` and leave `n`
+                            // unresolvable in the body.
+                            let own = self.own_tokens(p);
+                            let before_colon = own
+                                .iter()
+                                .take_while(|&&(_, k)| k != TokenKind::Colon)
+                                .filter(|&&(_, k)| k == TokenKind::Ident)
+                                .last()
+                                .or_else(|| own.iter().find(|&&(_, k)| k == TokenKind::Ident))
+                                .map(|&(t, _)| {
                                     self.interner.intern(self.tokens.text(t, self.source))
                                 });
-                            params.push((name.unwrap_or(Symbol(0)), p));
+                            params.push((before_colon.unwrap_or(Symbol(0)), p));
                         }
                     }
                     NodeKind::Contract => {
@@ -1629,9 +1859,15 @@ impl<'a> FnLower<'a> {
             )));
         }
         for (i, (sym, _)) in params.iter().enumerate() {
-            let ty = self.fir.sigs.fn_sigs.param(sig, i).ty;
+            let param = self.fir.sigs.fn_sigs.param(sig, i);
+            let ty = param.ty;
             self.fresh_param(ty, i as u16);
-            self.bind(*sym, ty);
+            let root = self.bind(*sym, ty);
+            // F6: a scalar `inout`/`set` parameter arrives as the caller's
+            // `borrow_mut`/`borrow_out` pointer; see `indirect_roots`.
+            if matches!(param.conv, Conv::Inout | Conv::Set) && self.by_pointer(ty)? {
+                self.indirect_roots.push(root);
+            }
         }
         // Entry contracts (§3.6, §5.3): `pre` then an entry-time
         // `invariant`, policy `Runtime` only — `Off` emits nothing at all
@@ -1683,7 +1919,13 @@ impl<'a> FnLower<'a> {
         if self.is_open() {
             self.emit_exit_contracts()?;
             let ret = self.term(Op::Ret, NO_OPERAND, NO_OPERAND, NO_OPERAND);
+            let from = BlockId(self.cur as u32);
             self.seal(ret);
+            // The function body's own `}` IS the function exit, so the
+            // fall-through `ret` carries the body's scopes rather than a
+            // separate block-end edge before it.
+            let leaving = self.scopes_left_to(ScopeId::NONE);
+            self.record_exit(from, BlockId::NONE, ExitKind::Normal, &leaving);
         }
         Ok(())
     }
@@ -1744,6 +1986,740 @@ impl<'a> FnLower<'a> {
         Ok(())
     }
 
+    // -- F4: `defer`/`errdefer`, scopes and exit edges ------------------------
+
+    /// One block's statements as ONE `defer` region (ch01 R23: `defer` is
+    /// BLOCK-scoped). The bodies declared inside run at the block's `}`,
+    /// which is the exit edge [`FnLower::close_scope_region`] records.
+    ///
+    /// The function BODY's own block does not go through here: its `}` is
+    /// the function exit, and `lower_fn`'s `ret` carries those scopes
+    /// (design §3.8: a `ret` "is still an exit of every scope up to the
+    /// body's own").
+    fn lower_block_region(&mut self, block: usize) -> Result<(), LowerError> {
+        let mark = self.scope_cur;
+        let r = self.lower_block_children(block);
+        // Closed even on the error path: a half-open scope would make
+        // every later edge's chain wrong, and a diagnostic must not also
+        // corrupt the FMIR it is reported alongside.
+        self.close_scope_region(mark);
+        r
+    }
+
+    /// The parent chain from the current scope out to — but NOT including
+    /// — `outer`, innermost first. [`ScopeId::NONE`] as `outer` gives the
+    /// whole chain including the body's root scope, which is what a
+    /// function exit leaves.
+    fn scopes_left_to(&self, outer: ScopeId) -> Vec<ScopeId> {
+        let mut out = Vec::new();
+        let mut s = self.scope_cur;
+        for _ in 0..=self.decl.scopes.len() {
+            if s == outer || s == ScopeId::NONE || s.index() >= self.decl.scopes.len() {
+                break;
+            }
+            out.push(s);
+            s = self.decl.scopes.row(s).parent;
+        }
+        out
+    }
+
+    /// Ends the lexical region whose entry scope was `mark`. When `defer`s
+    /// were declared inside it and control still falls out of it, the
+    /// current block is split: the `br` to the continuation IS the block's
+    /// `}` exit edge, and the continuation is back in `mark`.
+    fn close_scope_region(&mut self, mark: ScopeId) {
+        if self.scope_cur == mark {
+            return;
+        }
+        if self.is_open() {
+            let leaving = self.scopes_left_to(mark);
+            let from = BlockId(self.cur as u32);
+            let save = self.cur;
+            let cont = self.new_block();
+            self.block_scope[cont.index()] = mark;
+            self.cur = save;
+            self.seal(self.term(Op::Br, cont.0, NO_OPERAND, NO_OPERAND));
+            self.record_exit(from, cont, ExitKind::Normal, &leaving);
+            self.cur = cont.index();
+        }
+        self.scope_cur = mark;
+    }
+
+    /// Records the `(from -> to)` exit edge and everything design §3.8's
+    /// step list says it carries: the pending bodies in ch01 R23a's order
+    /// and R23b's `errdefer` filter, and ch01 R22h's discharge record per
+    /// obligation of the scopes being left.
+    ///
+    /// The pending list is [`fors_fmir::exit::expected_pending`]'s own
+    /// answer over the scopes being left. That is not lowering deferring
+    /// to the verifier: the POOL LAYOUT is what lowering decides (one
+    /// scope per `defer`, so a scope's range at an edge is exactly the
+    /// bodies whose statement precedes it — ch01 R23a's textual cut), and
+    /// `expected_pending` then reads that layout the one way the verifier
+    /// and the interpreter both read it.
+    ///
+    /// An edge that leaves nothing — no pending body and no obligation —
+    /// gets NO row: the interpreter reads a missing row as "this transfer
+    /// runs nothing", which is what every pre-F4 terminator is.
+    fn record_exit(&mut self, from: BlockId, to: BlockId, kind: ExitKind, leaving: &[ScopeId]) {
+        if leaving.is_empty() {
+            return;
+        }
+        let pending =
+            fors_fmir::exit::expected_pending(&self.decl.scopes, &self.decl.defers, leaving, kind);
+        let obligations = self.obligations_of(leaving);
+        if pending.is_empty() && obligations.is_empty() {
+            return;
+        }
+        let discharges = self.discharges_for(&obligations, &pending);
+        let scopes = self.decl.exits.push_scopes(leaving);
+        let pending_range = self.decl.exits.push_pending(&pending);
+        let discharge_range = self.decl.exits.push_discharges(&discharges);
+        let mut row = fors_fmir::exit::ExitEdgeRow::plain(from, to, kind);
+        row.scopes = scopes;
+        row.pending = pending_range;
+        row.discharges = discharge_range;
+        self.decl.exits.push(row);
+    }
+
+    /// The linear obligations ([`DeclFmir::obligations`], F6/D8) of the
+    /// scopes being left, innermost first.
+    fn obligations_of(&self, leaving: &[ScopeId]) -> Vec<PlaceId> {
+        let mut out = Vec::new();
+        for s in leaving {
+            if s.index() >= self.decl.scopes.len() {
+                continue;
+            }
+            let range = self.decl.scopes.row(*s).obligations;
+            out.extend_from_slice(self.decl.obligations.get(range));
+        }
+        out
+    }
+
+    /// F6 (D8, ch01 R22h/R22d): one [`DischargeRow`] per obligation of the
+    /// scopes being left. Lowering never DECIDES a discharge — the checker
+    /// published it; what lowering decides is only its FMIR coordinates
+    /// (design §3.5: `MovedAt`/`Destructured`/`TailValue` need no code at
+    /// all, and a `DeferredBody` discharge IS the inlined body this edge
+    /// already carries).
+    ///
+    /// `debug_assert`: no obligation may be left undischarged on any edge.
+    /// A leak is impossible by construction here — ch01 R22i made the
+    /// checker reject it before lowering ever saw the body — and if one
+    /// ever did reach the interpreter it is `ub: linear-leak`, a compiler
+    /// bug, never a trap (design §3.5, §5.2).
+    fn discharges_for(
+        &self,
+        obligations: &[PlaceId],
+        pending: &[fors_fmir::ids::DeferId],
+    ) -> Vec<fors_fmir::exit::DischargeRow> {
+        let mut out: Vec<fors_fmir::exit::DischargeRow> = Vec::new();
+        for place in obligations {
+            if out.iter().any(|d| d.place == *place) {
+                continue;
+            }
+            let how = self.discharge_of(*place, pending);
+            out.push(fors_fmir::exit::DischargeRow { place: *place, how });
+        }
+        debug_assert!(
+            obligations
+                .iter()
+                .all(|p| out.iter().any(|d| d.place == *p)),
+            "ch01 R22h: every obligation of a scope being left must carry a discharge \
+             record; an undischarged one is `ub: linear-leak`, a compiler bug"
+        );
+        out
+    }
+
+    /// F6 (D8): opens a scope that OWES the obligation the checker
+    /// published for the binding `root_node`, when it published one. One
+    /// scope per obligation, for the same reason F4 uses one per `defer`:
+    /// the obligation is owed from this statement on, and
+    /// `ScopeRow::obligations` is a static range, so "owed from here" has
+    /// to be a scope boundary.
+    ///
+    /// A binding the checker published no row for owes nothing and opens
+    /// nothing — `lin(T)` is the checker's answer (ch01 R22a) and lowering
+    /// never recomputes it.
+    fn open_obligation_scope(&mut self, root_node: usize, root: u32, ty: TyId) {
+        if !self
+            .facts
+            .linear_obligations
+            .obligations
+            .iter()
+            .any(|o| o.root == root_node as u32)
+        {
+            return;
+        }
+        let place = self.intern_place(root, &[], ty);
+        self.oblig_roots.push((place, root_node as u32));
+        let range = self.decl.obligations.push_list(&[place]);
+        let scope = self.decl.scopes.push(fors_fmir::scope::ScopeRow {
+            parent: self.scope_cur,
+            brand: fors_fmir::ids::BrandId::NONE,
+            defers: 0..0,
+            obligations: range,
+            region: fors_fmir::ids::RegionId::NONE,
+        });
+        self.scope_cur = scope;
+        // Every block from here on is in the owing scope; the current one
+        // is split so its own `scope` field stays exact.
+        if self.is_open() {
+            let save = self.cur;
+            let cont = self.new_block();
+            self.block_scope[cont.index()] = scope;
+            self.cur = save;
+            self.seal(self.term(Op::Br, cont.0, NO_OPERAND, NO_OPERAND));
+            self.cur = cont.index();
+        }
+    }
+
+    /// D8's own answer for `place`, in FMIR coordinates. Lowering decides
+    /// nothing here: the checker named the consuming NODE and the kind of
+    /// consumption, and this maps them onto design §3.5's four variants.
+    ///
+    /// [decision: the checker's `DischargeRow` is keyed by `(exit, root)`
+    /// and lowering has no map from an FMIR edge back to a checker exit
+    /// index — that correspondence arrives with F3's error-edge table — so
+    /// when a root's discharges disagree across exits the FIRST is taken.
+    /// Nothing observable depends on the choice: `verify()` and the
+    /// interpreter both check that a discharge EXISTS for each obligation
+    /// and that none is duplicated, and `how` is payload for the reducer
+    /// and the diagnostic.]
+    fn discharge_of(
+        &self,
+        place: PlaceId,
+        pending: &[fors_fmir::ids::DeferId],
+    ) -> fors_fmir::scope::Discharge {
+        use fors_check::facts::Discharge as D8;
+        use fors_fmir::scope::Discharge;
+        let root = self.place_root_node(place);
+        let published = root.and_then(|r| {
+            self.facts
+                .linear_obligations
+                .discharges
+                .iter()
+                .find(|d| d.root == r)
+                .map(|d| d.how)
+        });
+        let inst_of = |node: u32| {
+            self.node_inst
+                .iter()
+                .rev()
+                .find(|(n, _)| *n == node)
+                .map(|(_, i)| *i)
+        };
+        match published {
+            // R22d(iii), R23d(b): the body this edge already carries IS the
+            // discharge, so the row names it.
+            Some(D8::DeferredBody { .. }) => pending
+                .first()
+                .and_then(|id| self.decl.defers.get(id.0..id.0 + 1).first().map(|r| r.body))
+                .map(|body| Discharge::DeferredBody(self.scope_owning(place), body))
+                .unwrap_or(Discharge::Returned),
+            Some(D8::MovedAt(n)) | Some(D8::Destructured(n)) => inst_of(n)
+                .map(Discharge::MovedTo)
+                .unwrap_or(Discharge::Returned),
+            // R22d(i)'s tail value, and the fallback for a root whose
+            // discharge the checker published on an exit F3 owns.
+            Some(D8::TailValue(_)) | None => Discharge::Returned,
+        }
+    }
+
+    /// The scope whose `obligations` range holds `place`.
+    fn scope_owning(&self, place: PlaceId) -> ScopeId {
+        self.decl
+            .scopes
+            .all_rows()
+            .find(|(_, s)| {
+                self.decl
+                    .obligations
+                    .get(s.obligations.clone())
+                    .contains(&place)
+            })
+            .map(|(id, _)| id)
+            .unwrap_or(ROOT_SCOPE)
+    }
+
+    /// The introducing CST node of a place's root local, when lowering
+    /// recorded one (F6/D8's `ObligationRow::root`).
+    fn place_root_node(&self, place: PlaceId) -> Option<u32> {
+        self.oblig_roots
+            .iter()
+            .find(|(p, _)| *p == place)
+            .map(|(_, n)| *n)
+    }
+
+    /// F6: `with arena a: Arena[T] { .. }` / `with allocator a: A { .. }`
+    /// (ch01 R15, R18; design §3.7).
+    ///
+    /// Both forms open a scope with a FRESH brand: that brand is the
+    /// allocator identity `@alloc`/`@free` compare (`AllocKind::Heap`), and
+    /// for an arena it is also the `AliasSeed::Arena` every `arena_alloc`
+    /// result carries (design §3.4a — compile-time IR metadata only, which
+    /// no execution reads). The arena form additionally gets a
+    /// [`fors_fmir::region::RegionKind::WithArena`] region, whose
+    /// `region_enter` mints the one live `ArenaVal` (ch01 R15a) and whose
+    /// `region_exit` retires it, making every `Ref` minted inside stale —
+    /// ch01 R17's `trap arena-generation` on the next dereference.
+    ///
+    /// This is a design §5.8 STAND-IN in one respect only: `Arena`'s method
+    /// surface is package `std`'s (ch10 R2), and a build without it leaves
+    /// `a.alloc(..)`/`a.reset()`/`a[r]` untyped, so those three are matched
+    /// by SHAPE inside a `with arena` block and nowhere else. Everything
+    /// else here — the brand, the region, the scope — is final.
+    fn lower_with(&mut self, node: usize) -> Result<(), LowerError> {
+        self.ensure_open();
+        let words = self.own_ident_texts(node);
+        let (word, name) = match words.as_slice() {
+            [w, n] => (*w, *n),
+            _ => {
+                return Err(LowerError::Unsupported(
+                    "a `with` statement whose region word and name are not both present".into(),
+                ));
+            }
+        };
+        let kind = match word {
+            b"arena" => WithKind::Arena,
+            b"allocator" => WithKind::Allocator,
+            other => {
+                return Err(LowerError::Unsupported(format!(
+                    "`with {}`",
+                    String::from_utf8_lossy(other)
+                )));
+            }
+        };
+        let body = self
+            .kids(node)
+            .into_iter()
+            .find(|&c| self.kind(c) == NodeKind::Block)
+            .ok_or_else(|| LowerError::Unsupported("a `with` statement with no body".into()))?;
+        let sym = self.interner.intern(name);
+        // ch01 R15e: the brand is erased from the TYPE after checking but
+        // not from the IR. One fresh `BrandId` per `with` block, which is
+        // what makes two blocks' allocations distinguishable.
+        let brand = fors_fmir::ids::BrandId(self.decl.scopes.len() as u32);
+        let region = match kind {
+            WithKind::Arena => self.decl.regions.push(fors_fmir::region::RegionRow {
+                kind: fors_fmir::region::RegionKind::WithArena,
+                // Present and empty: a `with arena` captures nothing, and
+                // ch05 R9 requires the list to be EXPLICIT, not non-empty.
+                captures: 0..0,
+                brand,
+            }),
+            WithKind::Allocator => fors_fmir::ids::RegionId::NONE,
+        };
+        let outer = self.scope_cur;
+        let scope = self.decl.scopes.push(fors_fmir::scope::ScopeRow {
+            parent: outer,
+            brand,
+            defers: 0..0,
+            obligations: 0..0,
+            region,
+        });
+        // The handle itself, and the block its body runs in.
+        let from = self.cur;
+        let body_id = self.reserve_block();
+        self.cur = from;
+        self.seal(self.term(Op::Br, body_id.0, NO_OPERAND, NO_OPERAND));
+        self.cur = body_id.index();
+        self.block_scope[body_id.index()] = scope;
+        self.scope_cur = scope;
+        self.scopes.push(HashMap::new());
+        let ptr_ty = self.handle_ty();
+        let root = self.bind(sym, ptr_ty);
+        if kind == WithKind::Arena {
+            let inst = self.emit_seeded(
+                Op::RegionEnter,
+                region.0,
+                NO_OPERAND,
+                NO_OPERAND,
+                ptr_ty,
+                AliasSeed::Arena(brand),
+            );
+            let v = self.fresh(ptr_ty, inst);
+            self.write_place(root, &[], ptr_ty, v);
+        }
+        // `with allocator` needs no runtime value at all: the allocator's
+        // identity IS the scope's brand, which is what `@alloc`/`@free`
+        // read (design §3.7, ch01 R18).
+        self.with_regions.push(WithRegion {
+            name: sym,
+            root,
+            brand,
+            kind,
+        });
+        let r = self.lower_block_region(body);
+        self.scopes.pop();
+        self.with_regions.pop();
+        r?;
+        if self.is_open() && kind == WithKind::Arena {
+            self.emit(Op::RegionExit, region.0, NO_OPERAND, NO_OPERAND, TY_UNIT);
+        }
+        // Back out into the enclosing scope, through a block of its own so
+        // every block's `scope` stays exactly the one it executes in.
+        if self.is_open() {
+            let cont = {
+                let save = self.cur;
+                self.scope_cur = outer;
+                let c = self.new_block();
+                self.cur = save;
+                c
+            };
+            self.seal(self.term(Op::Br, cont.0, NO_OPERAND, NO_OPERAND));
+            self.cur = cont.index();
+        }
+        self.scope_cur = outer;
+        Ok(())
+    }
+
+    /// The TyId an arena/allocator HANDLE and a `Ref` take in FMIR.
+    /// design §3.7 gives `ArenaVal`/`RefVal` no surface type in M1 — they
+    /// are pointer-shaped machine values — so this is `rawptr` when the
+    /// build interned it and `unit` otherwise. Nothing reads it: the
+    /// interpreter resolves a handle through its PROVENANCE, and the only
+    /// type a width is ever taken from is the scalar a `Deref` place names.
+    fn handle_ty(&self) -> TyId {
+        self.prim_ty(PrimKind::RawPtr).unwrap_or(TY_UNIT)
+    }
+
+    /// F6's §5.8 stand-in for `Arena`'s own method surface: `a.alloc(..)` /
+    /// `a.create(..)`, `a.reset()` and `a[r].f` (the `Index` impl on
+    /// `Arena`), recognised by SHAPE inside a `with arena` block and
+    /// nowhere else.
+    ///
+    /// Why a stand-in at all: `Arena`'s methods are package `std`'s (ch10
+    /// R2) and reaching them needs I4's `Index` impl on a bound plus I5's
+    /// brands, so the checker types the three call nodes `TY_ERROR` — the
+    /// same situation `Buffer.fixed` is in (see this module's head
+    /// comment). The brand, the region and the scope around them are NOT
+    /// stand-ins; those are F6's final lowering.
+    ///
+    /// Returns `Ok(None)` when `node` is not one of those three shapes, so
+    /// an ordinary call inside a `with arena` block still lowers from
+    /// facts.
+    fn try_lower_arena(&mut self, node: usize) -> Result<Option<ValId>, LowerError> {
+        if self.with_regions.is_empty() {
+            return Ok(None);
+        }
+        match self.kind(node) {
+            NodeKind::CallExpr => {
+                let kids = self.kids(node);
+                let Some(&callee) = kids.first() else {
+                    return Ok(None);
+                };
+                if self.kind(callee) != NodeKind::NameExpr {
+                    return Ok(None);
+                }
+                let segs = self.path_segments(callee);
+                let [recv, method] = segs.as_slice() else {
+                    return Ok(None);
+                };
+                let Some(w) = self.with_region_named(*recv) else {
+                    return Ok(None);
+                };
+                if w.kind != WithKind::Arena {
+                    return Ok(None);
+                }
+                let name = self.interner.resolve(*method).to_vec();
+                let args: Vec<usize> = kids.into_iter().skip(1).collect();
+                match name.as_slice() {
+                    b"alloc" | b"create" => self.lower_arena_alloc(w, &args).map(Some),
+                    b"reset" => {
+                        if !args.is_empty() {
+                            return Err(LowerError::Unsupported(
+                                "`Arena.reset` takes no arguments".into(),
+                            ));
+                        }
+                        let ptr_ty = self.handle_ty();
+                        let h = self.read_root(w.root, ptr_ty, ptr_ty);
+                        let inst = self.emit(Op::ArenaReset, h.0, NO_OPERAND, NO_OPERAND, TY_UNIT);
+                        Ok(Some(self.fresh(TY_UNIT, inst)))
+                    }
+                    other => Err(LowerError::Unsupported(format!(
+                        "`Arena.{}` — only `alloc`/`create`, `reset` and the `Index` impl \
+                         are F6's stand-in; the rest is std's own body (ch10 R2)",
+                        String::from_utf8_lossy(other)
+                    ))),
+                }
+            }
+            // `a[r].f`: the `Index` impl on `Arena` yields the pointee, and
+            // the field read goes through a `Deref` place. ch01 R17's
+            // generation check IS the `arena_deref`, and it has no
+            // `may_elide` bit (design §3.7).
+            NodeKind::FieldExpr => {
+                let kids = self.kids(node);
+                let Some(&base) = kids.first() else {
+                    return Ok(None);
+                };
+                let Some((w, ref_node)) = self.arena_index(base)? else {
+                    return Ok(None);
+                };
+                let ty = self.ty_of(node);
+                if ty == NO_TY || ty == TY_ERROR {
+                    return Err(LowerError::Unresolved(
+                        "the field type behind `Arena`'s `Index` impl".into(),
+                    ));
+                }
+                let slot = self.arena_deref_slot(w, ref_node)?;
+                let pid = self.intern_place(slot, &[Seg::Deref], ty);
+                let inst = self.emit(Op::CopyFrom, pid.0, NO_OPERAND, NO_OPERAND, ty);
+                Ok(Some(self.fresh(ty, inst)))
+            }
+            NodeKind::Bracket => {
+                if self.arena_index(node)?.is_some() {
+                    return Err(LowerError::Unsupported(
+                        "`a[r]` read as a whole aggregate — FMIR places reach a pointee's \
+                         field through a single `Deref` segment, so the read must name a \
+                         field (D12, [HOLE-6], owns the aggregate layout)"
+                            .into(),
+                    ));
+                }
+                Ok(None)
+            }
+            _ => Ok(None),
+        }
+    }
+
+    /// The open `with` region a name refers to, innermost first.
+    fn with_region_named(&self, sym: Symbol) -> Option<WithRegion> {
+        self.with_regions
+            .iter()
+            .rev()
+            .find(|w| w.name == sym)
+            .copied()
+    }
+
+    /// `a[r]` on an open `with arena` region: the region and the `Ref`
+    /// expression, or `None` when this bracket is an ordinary index.
+    fn arena_index(&mut self, node: usize) -> Result<Option<(WithRegion, usize)>, LowerError> {
+        if self.kind(node) != NodeKind::Bracket {
+            return Ok(None);
+        }
+        let kids = self.kids(node);
+        let [base, idx] = kids.as_slice() else {
+            return Ok(None);
+        };
+        if self.kind(*base) != NodeKind::NameExpr {
+            return Ok(None);
+        }
+        let segs = self.path_segments(*base);
+        let [sym] = segs.as_slice() else {
+            return Ok(None);
+        };
+        let Some(w) = self.with_region_named(*sym) else {
+            return Ok(None);
+        };
+        if w.kind != WithKind::Arena {
+            return Ok(None);
+        }
+        Ok(Some((w, *idx)))
+    }
+
+    /// `arena_deref` of the `Ref` `ref_node` names, parked in a fresh local
+    /// slot so a `Deref` place can reach through it.
+    fn arena_deref_slot(&mut self, w: WithRegion, ref_node: usize) -> Result<u32, LowerError> {
+        let ptr_ty = self.handle_ty();
+        let r = self.lower_expr(ref_node)?;
+        let inst = self.emit_seeded(
+            Op::ArenaDeref,
+            r.0,
+            NO_OPERAND,
+            NO_OPERAND,
+            ptr_ty,
+            AliasSeed::Arena(w.brand),
+        );
+        let p = self.fresh(ptr_ty, inst);
+        let slot = self.fresh_root();
+        self.write_place(slot, &[], ptr_ty, p);
+        Ok(slot)
+    }
+
+    /// `a.alloc(S)` / `a.create(S)`: bump-allocate the pointee and store it.
+    ///
+    /// The stored shape is deliberately narrow and NAMED rather than
+    /// guessed: `S` must be a struct literal with exactly one field whose
+    /// value is a scalar. FMIR reaches a pointee through a SINGLE `Deref`
+    /// segment ([`Seg::Deref`]), so a `[Deref, Field(i)]` place — which is
+    /// what a second field would need — does not exist before F7/M2, and
+    /// the byte offsets it would need are D12's ([HOLE-6]). Anything else
+    /// is a [`LowerError`] naming it, never a silent partial store.
+    fn lower_arena_alloc(&mut self, w: WithRegion, args: &[usize]) -> Result<ValId, LowerError> {
+        let [arg] = args else {
+            return Err(LowerError::Unsupported(
+                "`Arena.alloc` takes exactly one value".into(),
+            ));
+        };
+        if self.kind(*arg) != NodeKind::StructLit {
+            return Err(LowerError::Unsupported(
+                "`Arena.alloc` of something other than a struct literal (its pointee's \
+                 layout is D12's, [HOLE-6])"
+                    .into(),
+            ));
+        }
+        let fields: Vec<usize> = self
+            .kids(*arg)
+            .into_iter()
+            .filter(|&c| self.kind(c) == NodeKind::FInit)
+            .collect();
+        let [field] = fields.as_slice() else {
+            return Err(LowerError::Unsupported(format!(
+                "`Arena.alloc` of an aggregate with {} fields — FMIR reaches a pointee \
+                 through ONE `Deref` segment, so only a single-scalar-field pointee is \
+                 expressible before F7/M2 and D12 ([HOLE-6])",
+                fields.len()
+            )));
+        };
+        let value_node = *self.kids(*field).last().ok_or_else(|| {
+            LowerError::Unsupported("a struct-literal field with no value".into())
+        })?;
+        let field_ty = self.ty_of(value_node);
+        if field_ty == NO_TY || field_ty == TY_ERROR {
+            return Err(LowerError::Unresolved(
+                "the field type of `Arena.alloc`'s pointee".into(),
+            ));
+        }
+        let bytes = self.prim_of(field_ty).and_then(prim_bytes).ok_or_else(|| {
+            LowerError::Unsupported(
+                "`Arena.alloc` of a pointee whose field is not a scalar (its layout is \
+                     D12's, [HOLE-6])"
+                    .into(),
+            )
+        })?;
+        let value = self.lower_expr(value_node)?;
+        let ptr_ty = self.handle_ty();
+        let usize_ty = self.index_ty()?;
+        let size = self.emit(Op::ConstInt, bytes, 0, NO_OPERAND, usize_ty);
+        let size = self.fresh(usize_ty, size);
+        let h = self.read_root(w.root, ptr_ty, ptr_ty);
+        let inst = self.emit_seeded(
+            Op::ArenaAlloc,
+            h.0,
+            size.0,
+            NO_OPERAND,
+            ptr_ty,
+            AliasSeed::Arena(w.brand),
+        );
+        let r = self.fresh(ptr_ty, inst);
+        // Store the pointee through the fresh `Ref` — the `Ref` the caller
+        // keeps is the one minted HERE, at THIS generation, which is what a
+        // later `reset` invalidates (ch01 R17).
+        let slot = {
+            let inst = self.emit_seeded(
+                Op::ArenaDeref,
+                r.0,
+                NO_OPERAND,
+                NO_OPERAND,
+                ptr_ty,
+                AliasSeed::Arena(w.brand),
+            );
+            let p = self.fresh(ptr_ty, inst);
+            let slot = self.fresh_root();
+            self.write_place(slot, &[], ptr_ty, p);
+            slot
+        };
+        let pid = self.intern_place(slot, &[Seg::Deref], field_ty);
+        self.emit(Op::Init, pid.0, value.0, NO_OPERAND, TY_UNIT);
+        Ok(r)
+    }
+
+    /// `defer` / `errdefer` (ch01 R23, design §3.8).
+    ///
+    /// The body becomes its own sub-CFG ending at
+    /// [`fors_fmir::scope::BODY_END`] — ch01 R23a's explicitly licensed
+    /// "emit one copy and jump to it" form — and the statement opens a
+    /// FRESH FMIR scope for everything after it.
+    ///
+    /// One scope per `defer` is what makes ch01 R23a's **textual cut**
+    /// structural rather than a second filter. `fors-check`'s own note on
+    /// `ExitEdge::defers` states the requirement: "`fors_fmir::exit::
+    /// expected_pending` has no such cut — it takes a `ScopeRow`'s whole
+    /// `defers` range — so `fors-lower` must lay the pool out so that a
+    /// scope's range at an edge holds exactly these rows." With one row
+    /// per scope and the scopes chained in declaration order, the scopes
+    /// an exit leaves ARE the bodies whose statement precedes it, and
+    /// innermost-first IS reverse textual order.
+    fn lower_defer(&mut self, node: usize) -> Result<(), LowerError> {
+        self.ensure_open();
+        // D7 (I8b): the kind and the statement order are the CHECKER's
+        // answers, keyed by the statement's own node.
+        let fact = self
+            .facts
+            .defer_regions
+            .rows
+            .iter()
+            .find(|r| r.body as usize == node)
+            .copied()
+            .ok_or_else(|| {
+                LowerError::Unresolved(
+                    "a `defer`/`errdefer` statement with no D7 `defer_regions` row".into(),
+                )
+            })?;
+        let stmt_order = u16::try_from(fact.stmt_order).map_err(|_| {
+            LowerError::Unsupported(
+                "a block with more than 65535 statements before a `defer`".into(),
+            )
+        })?;
+        // ch07 Disambiguation 9: the body is a `block` when the statement
+        // opened with `{`, and otherwise a single expression.
+        let body_node = *self.kids(node).first().ok_or_else(|| {
+            LowerError::Unsupported("a `defer` statement with no body at all".into())
+        })?;
+        let from = self.cur;
+        let body_id = self.reserve_block();
+        let cont_id = self.reserve_block();
+        // Seal `from` FIRST: `seal` assigns instruction spans from one
+        // running cursor, so seal order must stay emission order
+        // (`BlockDraft`'s invariant).
+        self.cur = from;
+        self.seal(self.term(Op::Br, cont_id.0, NO_OPERAND, NO_OPERAND));
+        // The body, in the scope it was WRITTEN in (it is not pending to
+        // itself), ending at `br BODY_END`.
+        self.cur = body_id.index();
+        self.scopes.push(HashMap::new());
+        let mark = self.scope_cur;
+        // ch01 R23c: "Bodies MAY NEST: a `defer` written inside a body is a
+        // statement of that body's block and runs when that block exits" —
+        // so the body is a region of its own, and a nested `defer` (or a
+        // linear `let`) closes with an edge INSIDE the sub-CFG, before the
+        // `br BODY_END`.
+        let r = if self.kind(body_node) == NodeKind::Block {
+            self.lower_block_region(body_node)
+        } else {
+            self.lower_child(body_node)
+        };
+        self.scopes.pop();
+        r?;
+        if self.scope_cur != mark {
+            return Err(LowerError::Unsupported(
+                "a `defer` body whose single-expression form opened a scope".into(),
+            ));
+        }
+        if self.is_open() {
+            self.seal(self.term(Op::Br, fors_fmir::scope::BODY_END.0, NO_OPERAND, NO_OPERAND));
+        }
+        let kind = match fact.kind {
+            fors_check::facts::DeferKind::Defer => fors_fmir::scope::DeferKind::Defer,
+            fors_check::facts::DeferKind::ErrDefer => fors_fmir::scope::DeferKind::ErrDefer,
+        };
+        let defer_id = self.decl.defers.push(fors_fmir::scope::DeferRow {
+            kind,
+            body: body_id,
+            stmt_order,
+        });
+        let scope = self.decl.scopes.push(fors_fmir::scope::ScopeRow {
+            parent: self.scope_cur,
+            brand: fors_fmir::ids::BrandId::NONE,
+            defers: defer_id.0..(defer_id.0 + 1),
+            obligations: 0..0,
+            region: fors_fmir::ids::RegionId::NONE,
+        });
+        self.scope_cur = scope;
+        self.block_scope[cont_id.index()] = scope;
+        self.cur = cont_id.index();
+        Ok(())
+    }
+
     fn lower_child(&mut self, node: usize) -> Result<(), LowerError> {
         match self.kind(node) {
             NodeKind::LetStmt => self.lower_let(node),
@@ -1768,9 +2744,11 @@ impl<'a> FnLower<'a> {
             NodeKind::MatchExpr => self.lower_match_stmt(node),
             NodeKind::BreakStmt => self.lower_break(node),
             NodeKind::ContinueStmt => self.lower_continue(node),
+            NodeKind::DeferStmt | NodeKind::ErrdeferStmt => self.lower_defer(node),
+            NodeKind::WithStmt => self.lower_with(node),
             NodeKind::Block => {
                 self.scopes.push(HashMap::new());
-                let r = self.lower_block_children(node);
+                let r = self.lower_block_region(node);
                 self.scopes.pop();
                 r
             }
@@ -1848,6 +2826,11 @@ impl<'a> FnLower<'a> {
             let v = self.lower_expr(e)?;
             self.write_place(root, &[], bind_ty, v);
         }
+        // F6 (D8): a LINEAR binding owes an obligation from here on. The
+        // `ObligationRow::decl` note is why the scope opens AFTER the
+        // initialiser: "an exit INSIDE this range ... happens before the
+        // binding exists: the obligation is not owed there".
+        self.open_obligation_scope(binding, root, bind_ty);
         Ok(())
     }
 
@@ -2144,7 +3127,14 @@ impl<'a> FnLower<'a> {
             None => self.term(Op::Ret, NO_OPERAND, NO_OPERAND, NO_OPERAND),
             Some(v) => self.term(Op::Ret, v.0, NO_OPERAND, NO_OPERAND),
         };
+        let from = BlockId(self.cur as u32);
         self.seal(ret);
+        // F4: `return` is an exit of EVERY scope up to the body's own
+        // (design §3.8). The operand was read above, before the edge, which
+        // is ch01 R23a's "`e` is evaluated and moved into the result BEFORE
+        // any body runs" — structural, by block order.
+        let leaving = self.scopes_left_to(ScopeId::NONE);
+        self.record_exit(from, BlockId::NONE, ExitKind::Normal, &leaving);
         Ok(())
     }
 
@@ -2168,8 +3158,9 @@ impl<'a> FnLower<'a> {
         // Then branch, in its own scope.
         self.cur = then_id.0 as usize;
         self.scopes.push(HashMap::new());
-        self.lower_block_children(then_b)?;
+        let r = self.lower_block_region(then_b);
         self.scopes.pop();
+        r?;
         let falls_then = self.is_open();
         if falls_then {
             self.seal(self.term(Op::Br, join_id.0, NO_OPERAND, NO_OPERAND));
@@ -2180,8 +3171,9 @@ impl<'a> FnLower<'a> {
             None => true,
             Some(e) => {
                 self.scopes.push(HashMap::new());
-                self.lower_block_children(e)?;
+                let r = self.lower_block_region(e);
                 self.scopes.pop();
+                r?;
                 self.is_open()
             }
         };
@@ -2316,7 +3308,7 @@ impl<'a> FnLower<'a> {
         for (i, &(_, body)) in cases.iter().enumerate() {
             self.cur = blocks[i].0 as usize;
             self.scopes.push(HashMap::new());
-            let r = self.lower_block_children(body);
+            let r = self.lower_block_region(body);
             self.scopes.pop();
             r?;
             if self.is_open() {
@@ -2491,7 +3483,7 @@ impl<'a> FnLower<'a> {
         let mut binds = Vec::new();
         self.lower_pat(root, scrut_val, fail, &mut binds)?;
         self.bind_pattern(&binds, scrut_place);
-        self.lower_block_children(body)
+        self.lower_block_region(body)
     }
 
     /// `(root slot, type)` when the scrutinee expression is a bare local,
@@ -2765,7 +3757,7 @@ impl<'a> FnLower<'a> {
         let saved = self.relax;
         self.relax = fors_fmir::op::Relax(mask);
         self.scopes.push(HashMap::new());
-        let r = self.lower_block_children(block);
+        let r = self.lower_block_region(block);
         self.scopes.pop();
         self.relax = saved;
         r
@@ -2959,9 +3951,13 @@ impl<'a> FnLower<'a> {
         exit: BlockId,
         advance: Option<(u32, TyId, u64)>,
     ) -> Result<(), LowerError> {
-        self.loops.push(LoopTargets { latch, exit });
+        let mark = self.scope_cur;
+        self.loops.push(LoopTargets { latch, exit, mark });
         let r = self.lower_block_children(body_node);
         self.loops.pop();
+        // ch01 R23e: the body's block is exited at the END of every
+        // iteration, so its `defer`s run once per iteration, here.
+        self.close_scope_region(mark);
         r?;
         if self.is_open() {
             self.seal(self.term(Op::Br, latch.0, NO_OPERAND, NO_OPERAND));
@@ -2978,7 +3974,10 @@ impl<'a> FnLower<'a> {
         let Some(t) = self.loops.last().copied() else {
             return Err(LowerError::Unresolved("`break` outside a loop".into()));
         };
+        let from = BlockId(self.cur as u32);
         self.seal(self.term(Op::Br, t.exit.0, NO_OPERAND, NO_OPERAND));
+        let leaving = self.scopes_left_to(t.mark);
+        self.record_exit(from, t.exit, ExitKind::Normal, &leaving);
         Ok(())
     }
 
@@ -2987,7 +3986,10 @@ impl<'a> FnLower<'a> {
         let Some(t) = self.loops.last().copied() else {
             return Err(LowerError::Unresolved("`continue` outside a loop".into()));
         };
+        let from = BlockId(self.cur as u32);
         self.seal(self.term(Op::Br, t.latch.0, NO_OPERAND, NO_OPERAND));
+        let leaving = self.scopes_left_to(t.mark);
+        self.record_exit(from, t.latch, ExitKind::Normal, &leaving);
         Ok(())
     }
 
@@ -3041,6 +4043,20 @@ impl<'a> FnLower<'a> {
     // -- expressions ----------------------------------------------------------
 
     fn lower_expr(&mut self, node: usize) -> Result<ValId, LowerError> {
+        let before = self.insts.len();
+        let v = self.lower_expr_inner(node)?;
+        // F6 (D8): the walk is post-order, so the last instruction emitted
+        // here is `node`'s own. See `FnLower::node_inst`.
+        if self.insts.len() > before {
+            self.node_inst.push((
+                node as u32,
+                fors_fmir::ids::InstId(self.insts.len() as u32 - 1),
+            ));
+        }
+        Ok(v)
+    }
+
+    fn lower_expr_inner(&mut self, node: usize) -> Result<ValId, LowerError> {
         // [HOLE-7]: a `reduce(...)` call is poisoned by the checker, so it
         // is intercepted before the `TY_ERROR` gate (see
         // `reduce_stub_ranges` for the whole hard-coding).
@@ -3052,6 +4068,12 @@ impl<'a> FnLower<'a> {
         // run before the gate below.
         if self.ch03_method_call(node).is_some() {
             return self.lower_ch03_prim_method(node);
+        }
+        // F6's `Arena` surface stand-in, for the same reason: `a.alloc(..)`,
+        // `a.reset()` and `a[r].f` are `TY_ERROR` until I4's `Index` impl on
+        // a bound and I5's brands reach std's own bodies.
+        if let Some(v) = self.try_lower_arena(node)? {
+            return Ok(v);
         }
         let ty = self.ty_of(node);
         if ty == TY_ERROR {
@@ -4042,6 +5064,80 @@ impl<'a> FnLower<'a> {
         }
     }
 
+    /// F6: `f(&x)` / `f(&out x)` — a by-reference argument (ch07 Rule 4's
+    /// `inout`/`set` markers).
+    ///
+    /// These are the two opcodes design §3.3 gives them: `borrow_mut`
+    /// pushes a UNIQUE tag on the place's borrow stack and `borrow_out`
+    /// additionally marks the slot uninitialised, so a read before the
+    /// callee writes it is design §5.2's "uninitialised read (incl. through
+    /// `&out`)". A plain `let` argument is NOT one of these — ch01 R7 is
+    /// explicit that "a `let` parameter is **not** a no-alias fact and MUST
+    /// NOT seed one", which is why two overlapping `let` accesses stay
+    /// legal and only these two forms take a unique tag.
+    ///
+    /// The seed is §3.4a's "parameter convention" row: the convention the
+    /// CHECKER published for this argument, carried, never recomputed.
+    fn lower_by_ref_arg(&mut self, arg: usize) -> Result<ValId, LowerError> {
+        let set = self.kind(arg) == NodeKind::SetArg;
+        let place = *self.kids(arg).first().ok_or_else(|| {
+            LowerError::Unsupported("a by-reference argument with no place".into())
+        })?;
+        if self.kind(place) != NodeKind::NameExpr {
+            return Err(LowerError::Unsupported(
+                "a by-reference argument to a projected place (its borrow stack is sub-range, \
+                 F7/M2)"
+                    .into(),
+            ));
+        }
+        let segs = self.path_segments(place);
+        let [sym] = segs.as_slice() else {
+            return Err(LowerError::Unsupported(
+                "a by-reference argument naming a path rather than a local".into(),
+            ));
+        };
+        let (root, base_ty) = self.resolve_name(*sym)?;
+        if !self.by_pointer(base_ty)? {
+            // An aggregate: FMIR's value model shares its cell by handle, so
+            // the callee's writes through `inout self`-style access land in
+            // this cell; the `Inout` convention on the call row carries the
+            // access, exactly as the method-receiver path passes `c` for
+            // `c.bump()`. `&out` of an aggregate has no cell to share yet.
+            if set {
+                return Err(LowerError::Unsupported(
+                    "`&out` of an aggregate (its cell is created by the callee's write, \
+                     which needs the `[Deref, Field]` place of F7/M2)"
+                        .into(),
+                ));
+            }
+            return Ok(self.read_root(root, base_ty, base_ty));
+        }
+        if self.indirect_roots.contains(&root) {
+            // Forwarding a by-reference parameter: the pointer the caller
+            // gave us IS the argument. A fresh borrow of a `[Deref]` place
+            // would need sub-range borrow stacks (F7/M2), and would be
+            // wrong anyway — the original tag is the access.
+            let pid = self.intern_place_raw(root, base_ty);
+            let inst = self.emit(Op::CopyFrom, pid.0, NO_OPERAND, NO_OPERAND, base_ty);
+            return Ok(self.fresh(base_ty, inst));
+        }
+        let pid = self.intern_place(root, &[], base_ty);
+        let (op, conv) = if set {
+            (Op::BorrowOut, Conv::Set)
+        } else {
+            (Op::BorrowMut, Conv::Inout)
+        };
+        let inst = self.emit_seeded(
+            op,
+            pid.0,
+            NO_OPERAND,
+            NO_OPERAND,
+            base_ty,
+            AliasSeed::Conv(conv),
+        );
+        Ok(self.fresh(base_ty, inst))
+    }
+
     fn lower_call(&mut self, node: usize, ty: TyId) -> Result<ValId, LowerError> {
         let kids = self.kids(node);
         let Some(&callee_node) = kids.first() else {
@@ -4056,7 +5152,7 @@ impl<'a> FnLower<'a> {
             match self.kind(a) {
                 NodeKind::NamedArg => return Err(LowerError::Unsupported("named argument".into())),
                 NodeKind::InoutArg | NodeKind::SetArg => {
-                    return Err(LowerError::Unsupported("by-reference argument".into()));
+                    argv.push(self.lower_by_ref_arg(a)?);
                 }
                 _ => argv.push(self.lower_expr(a)?),
             }
@@ -4779,6 +5875,26 @@ fn num_kind_of(p: Option<PrimKind>) -> Option<NumKind> {
 }
 
 /// Two's-complement narrowing of a literal value to its decided type.
+/// A scalar's width in bytes — what an `arena_alloc` must reserve for a
+/// pointee and what the interpreter's `Deref` write bounds-checks against.
+/// `None` for anything that is not a fixed-width scalar: F6's `Arena`
+/// stand-in refuses those by name rather than guessing a size (the real
+/// layout is D12's, [HOLE-6]).
+fn prim_bytes(k: PrimKind) -> Option<u32> {
+    Some(match k {
+        PrimKind::I8 | PrimKind::U8 | PrimKind::Bool => 1,
+        PrimKind::I16 | PrimKind::U16 => 2,
+        PrimKind::I32 | PrimKind::U32 | PrimKind::F32 => 4,
+        PrimKind::I64
+        | PrimKind::U64
+        | PrimKind::F64
+        | PrimKind::Isize
+        | PrimKind::Usize
+        | PrimKind::RawPtr => 8,
+        _ => return None,
+    })
+}
+
 fn narrow_int(v: i128, prim: Option<PrimKind>) -> u64 {
     let w = match prim {
         Some(PrimKind::I8) | Some(PrimKind::U8) => 8,

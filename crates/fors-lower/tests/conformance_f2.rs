@@ -107,6 +107,31 @@ fn module_name_of(stem: &str, source: &[u8], interner: &mut Interner) -> Segment
     })
 }
 
+/// A directive's `detail`, as BYTES: `\n` in the line is a real newline
+/// (ch01 R23a's defer tests pin several lines in one `detail`, e.g.
+/// `3\n2\n1`). `\\` escapes a literal backslash; nothing else is special.
+fn detail_bytes(detail: &str) -> Vec<u8> {
+    let mut out = Vec::new();
+    let mut it = detail.chars();
+    while let Some(c) = it.next() {
+        if c != '\\' {
+            out.extend_from_slice(c.to_string().as_bytes());
+            continue;
+        }
+        match it.next() {
+            Some('n') => out.push(b'\n'),
+            Some('t') => out.push(b'\t'),
+            Some('\\') => out.push(b'\\'),
+            Some(other) => {
+                out.push(b'\\');
+                out.extend_from_slice(other.to_string().as_bytes());
+            }
+            None => out.push(b'\\'),
+        }
+    }
+    out
+}
+
 /// What a run came to, in the terms this runner compares against a
 /// directive (§7.2a's table, F2's slice of it).
 #[derive(Debug)]
@@ -122,6 +147,14 @@ enum Observed {
 struct Run {
     observed: Observed,
     contract_checks: usize,
+    /// Every byte the program wrote through a `write_*` stand-in, whatever
+    /// the outcome. §7.2a lets a `trap` test assert the content of the
+    /// lines BEFORE the trap line, which is exactly how `trap-runs-no-defer`
+    /// and `10-std/defer-not-run-on-trap` observe that no deferred body
+    /// ran; F1's §5.8 stand-in routes `Stderr.write_line` through the same
+    /// `stdout_write_line` intrinsic, so this image is where those lines
+    /// would appear if a body HAD run.
+    written: Vec<u8>,
 }
 
 /// Builds `src` (plus `std/io.fors` when the source names `use std.io;` —
@@ -206,6 +239,7 @@ fn build_and_run(label: &str, stem: &str, src: &[u8], host: &HostEnv) -> Run {
         .collect();
     let prog = Program::entry_by_name(fns, "main", Config::v0_1()).expect("a main");
     let outcome = run_with_host(&prog, &tys, host).expect("a verified program runs");
+    let written = outcome.stdout.clone();
     let observed = match entry_exit(&outcome) {
         ExitStatus::Trap(k) => Observed::Trap(k),
         ExitStatus::Status(code) => Observed::Status(code, outcome.stdout),
@@ -213,6 +247,7 @@ fn build_and_run(label: &str, stem: &str, src: &[u8], host: &HostEnv) -> Run {
     Run {
         observed,
         contract_checks,
+        written,
     }
 }
 
@@ -236,11 +271,12 @@ fn check_source(label: &str, stem: &str, src: &str, host: &HostEnv) -> Run {
             if d.detail == "(no output)" {
                 assert_eq!(stdout, b"", "{label}: stdout");
             } else {
-                // `detail` names one line's text; stdout is that line plus
-                // `write_line`'s trailing `\n` (§7.2a: `run-ok` compares
-                // bytes equal to `detail`, and every F2 `run-ok` gate test
-                // here is exactly one `write_line`).
-                let mut expected = d.detail.as_bytes().to_vec();
+                // `detail` names the LINES' text; stdout is those lines
+                // each followed by `write_line`'s own `\n` (§7.2a:
+                // `run-ok` compares bytes equal to `detail`). A `detail`
+                // with embedded `\n`s (ch01 R23a's defer order tests) is
+                // several lines, so the separator is a real newline too.
+                let mut expected = detail_bytes(&d.detail);
                 expected.push(b'\n');
                 assert_eq!(*stdout, expected, "{label}: stdout");
             }
@@ -399,6 +435,7 @@ fn build_and_run_with_std(label: &str, stem: &str, src: &[u8], host: &HostEnv) -
         .collect();
     let prog = Program::entry_by_name(fns, "main", Config::v0_1()).expect("a main");
     let outcome = run_with_host(&prog, &tys, host).expect("a verified program runs");
+    let written = outcome.stdout.clone();
     let observed = match entry_exit(&outcome) {
         ExitStatus::Trap(k) => Observed::Trap(k),
         ExitStatus::Status(code) => Observed::Status(code, outcome.stdout),
@@ -406,6 +443,7 @@ fn build_and_run_with_std(label: &str, stem: &str, src: &[u8], host: &HostEnv) -
     Run {
         observed,
         contract_checks,
+        written,
     }
 }
 
@@ -1371,4 +1409,361 @@ fn gate_plain_for_accumulator_accepted_run_ok() {
 #[test]
 fn gate_trap_overflow() {
     gate_test("02-failure/trap-overflow.fors");
+}
+
+// ---------------------------------------------------------------- F4's gate
+//
+// design §9's F4 list, the LOWERING half: `defer`/`errdefer` read from the
+// checker's D7 facts, one FMIR scope per `defer` statement so ch01 R23a's
+// textual cut is structural, and an exit edge on every static exit carrying
+// the pending bodies in R23a's order.
+//
+// Two of the nine are HELD OUT, and for the reason design §9 names: they
+// need F3's failure edges, which wait on I10's ch02 typing.
+// `01-ownership/errdefer-skipped-on-return-run-ok` is written with an `else
+// |e| { }` handler and `02-failure/main-raises-after-defer-run-error` with
+// `raise`; `prescan` still refuses both as `LowerError::Failure`
+// (`gate_f4_held_out_cases_are_named_failure_edges` asserts exactly that, so
+// the hold-out cannot rot into silence).
+
+#[test]
+#[ignore = "HELD OUT on F3. The `errdefer` body itself lowers (R23b filters it \
+            off every normal exit), but the gate row's `main` is \
+            `work(&out) else |e| { return; };` — a Handler, i.e. `?`/`else` \
+            beyond what F2's exit table does, which waits on I10's ch02 \
+            typing. `gate_f4_held_out_cases_are_named_failure_edges` in \
+            `gate.rs` pins that this is the ONLY reason."]
+fn gate_errdefer_skipped_on_return_run_ok() {
+    gate_test("01-ownership/errdefer-skipped-on-return-run-ok.fors");
+}
+
+#[test]
+#[ignore = "HELD OUT on F3. `raise Error.boom;` out of `main` is `raise` \
+            propagation beyond what F2's exit table does (I10's ch02 \
+            typing). The ORDER it pins — the deferred line on `Stderr` \
+            before ch02 R17's `error: ` line — is design §5.4 step 2, and \
+            the pending-body machinery that produces it is in and tested by \
+            the five `run-ok` rows above; only the error EDGE is missing."]
+fn gate_main_raises_after_defer_run_error() {
+    gate_test("02-failure/main-raises-after-defer-run-error.fors");
+}
+
+#[test]
+fn gate_defer_reverse_order_run_ok() {
+    gate_test("01-ownership/defer-reverse-order-run-ok.fors");
+}
+
+#[test]
+fn gate_defer_runs_on_return_run_ok() {
+    gate_test("01-ownership/defer-runs-on-return-run-ok.fors");
+}
+
+#[test]
+fn gate_defer_per_iteration_run_ok() {
+    gate_test("01-ownership/defer-per-iteration-run-ok.fors");
+}
+
+#[test]
+fn gate_defer_nested_scope_order_run_ok() {
+    gate_test("01-ownership/defer-nested-scope-order-run-ok.fors");
+}
+
+#[test]
+fn gate_defer_result_evaluated_first_run_ok() {
+    gate_test("01-ownership/defer-result-evaluated-first-run-ok.fors");
+}
+
+/// ch02 R7 / design §5.3: a `trap` has no successor, so it runs NO deferred
+/// body. §7.2a makes the absence observable — the marker would be among the
+/// lines before the trap line — and that is what this asserts, not merely
+/// the trap kind.
+#[test]
+fn gate_trap_runs_no_defer() {
+    let run = check_corpus_file("02-failure/trap-runs-no-defer.fors", &HostEnv::default());
+    assert!(
+        !String::from_utf8_lossy(&run.written).contains("cleanup"),
+        "a trap runs no deferred body (ch02 R7), so `cleanup` must not have been written: {:?}",
+        String::from_utf8_lossy(&run.written)
+    );
+}
+
+#[test]
+fn gate_defer_not_run_on_trap() {
+    let run = check_corpus_file("10-std/defer-not-run-on-trap.fors", &HostEnv::default());
+    assert!(
+        !String::from_utf8_lossy(&run.written).contains("cleanup"),
+        "ch10 R40(b), ch02 R7: no deferred body runs on the trap path: {:?}",
+        String::from_utf8_lossy(&run.written)
+    );
+}
+
+/// F4's verifier obligation, over the WHOLE corpus: "the verifier check
+/// that every exit edge carries exactly the right multiset" (design §9's
+/// F4). Every `.fors` file under `tests/conformance` that lowers at all is
+/// walked, and for each lowered declaration this asserts, against
+/// `fors_fmir::exit::expected_pending` directly and not only through
+/// `verify()`:
+///
+/// - every exit edge's `pending` IS `expected_pending`'s answer for the
+///   scopes it leaves and its kind (ch01 R23a's reverse textual order, R23b's
+///   `errdefer`-only-on-error filter);
+/// - every `DeferRow` in the pool is reached by at least one edge — a body
+///   the lowering recorded but no exit ever runs would be a silently dropped
+///   `defer`, which `verify()` cannot see;
+/// - a `trap`-terminated block carries NO edge at all (ch01 R23f, ch02 R7:
+///   a trap runs no deferred body);
+/// - one FMIR scope per `DeferRow` beyond the body's root, which is how ch01
+///   R23a's textual cut is made structural rather than filtered.
+///
+/// It also prints F4's COUNTER (design §9, risk R6): what inlining the
+/// bodies at every edge would cost as a ratio of body size. Lowering emits
+/// one copy per body and jumps to it (ch01 R23a's explicitly permitted
+/// form), so the ratio is what the OTHER form would have added.
+#[test]
+fn f4_exit_edges_carry_expected_pending_over_the_corpus() {
+    let root = repo_root().join("tests/conformance");
+    let mut files: Vec<PathBuf> = Vec::new();
+    collect_fors(&root, &mut files);
+    files.sort();
+    assert!(files.len() > 50, "the corpus should be found: {files:?}");
+    let mut with_defers = 0usize;
+    let mut edges_checked = 0usize;
+    let mut body_insts = 0u64;
+    let mut inlined_insts = 0u64;
+    let mut decl_insts = 0u64;
+    for path in &files {
+        let Ok(src) = fs::read(path) else { continue };
+        let stem = path.file_stem().unwrap().to_string_lossy().into_owned();
+        let Some(lowered) = try_lower(&stem, &src) else {
+            continue;
+        };
+        for f in &lowered {
+            let decl = &f.decl;
+            decl_insts += decl.insts.len() as u64;
+            let n_defers = decl.defers.len() as u32;
+            if n_defers > 0 {
+                with_defers += 1;
+            }
+            // ch01 R23a's textual cut, made structural: NO scope holds two
+            // `defer` rows, so the scopes an exit leaves ARE the bodies
+            // whose statement precedes it and innermost-first IS reverse
+            // textual order. (A `with arena`/`with allocator` block adds a
+            // scope of its own, so the count is a bound, not an equality.)
+            assert!(
+                decl.scopes.len() as u32 > n_defers,
+                "{}: {n_defers} `defer` rows need at least that many scopes plus the \
+                 body's root",
+                f.name
+            );
+            for (id, scope) in decl.scopes.all_rows() {
+                assert!(
+                    scope.defers.end.saturating_sub(scope.defers.start) <= 1,
+                    "{}: scope {} holds more than one `defer` row, which would need \
+                     ch01 R23a's textual cut as a second filter",
+                    f.name,
+                    id.0
+                );
+            }
+            let mut seen = vec![false; n_defers as usize];
+            for (id, row) in decl.exits.all_rows() {
+                edges_checked += 1;
+                let leaving = decl.exits.scopes(row.scopes.clone());
+                let want = fors_fmir::exit::expected_pending(
+                    &decl.scopes,
+                    &decl.defers,
+                    leaving,
+                    row.kind,
+                );
+                let got = decl.exits.pending(row.pending.clone()).to_vec();
+                assert_eq!(
+                    got, want,
+                    "{}: exit edge {} carries the wrong pending multiset",
+                    f.name, id.0
+                );
+                let term = decl.blocks.row(row.from).term.op;
+                assert_ne!(
+                    term,
+                    fors_fmir::op::Op::Trap,
+                    "{}: a `trap` is not an exit (ch01 R23f, ch02 R7)",
+                    f.name
+                );
+                for d in &got {
+                    if (d.0 as usize) < seen.len() {
+                        seen[d.0 as usize] = true;
+                    }
+                    let body = decl.defers.get(d.0..d.0 + 1)[0].body;
+                    inlined_insts += u64::from(decl.blocks.row(body).inst_len);
+                }
+            }
+            for (i, hit) in seen.iter().enumerate() {
+                let row = decl.defers.get(i as u32..i as u32 + 1)[0];
+                // An `ErrDefer` body on no edge is CORRECT while F3's error
+                // edges do not exist yet (ch01 R23b: it runs on error exits
+                // only, and a body whose only exits are normal has none).
+                // A plain `defer` on no edge would be a dropped body.
+                assert!(
+                    *hit || row.kind == fors_fmir::scope::DeferKind::ErrDefer,
+                    "{}: defer row {i} is on no exit edge, so its body would never run",
+                    f.name
+                );
+                body_insts += u64::from(decl.blocks.row(row.body).inst_len);
+            }
+        }
+    }
+    assert!(
+        with_defers >= 6,
+        "the corpus's `defer` files should lower: only {with_defers} bodies carried a \
+         `DeferRow`"
+    );
+    assert!(edges_checked >= with_defers, "every edge is checked");
+    let ratio = if decl_insts == 0 {
+        0.0
+    } else {
+        inlined_insts as f64 / decl_insts as f64
+    };
+    println!(
+        "F4 COUNTER (design §9, risk R6): inlined-body growth = {inlined_insts} instructions \
+         across {edges_checked} exit edges against {decl_insts} lowered instructions = \
+         {ratio:.4}x of body size. Emitted instead as {body_insts} instructions of \
+         one-copy-per-body (ch01 R23a's \"emit one copy and jump to it\"), i.e. \
+         {:.4}x.",
+        if decl_insts == 0 {
+            0.0
+        } else {
+            body_insts as f64 / decl_insts as f64
+        }
+    );
+    assert!(
+        ratio < 1.0,
+        "F4's R6 risk: inlining every pending body would more than double the corpus's \
+         lowered size ({ratio:.4}x)"
+    );
+}
+
+/// Every `.fors` file under `dir`, recursively.
+fn collect_fors(dir: &Path, out: &mut Vec<PathBuf>) {
+    let Ok(entries) = fs::read_dir(dir) else {
+        return;
+    };
+    for e in entries.flatten() {
+        let p = e.path();
+        if p.is_dir() {
+            collect_fors(&p, out);
+        } else if p.extension().map(|x| x == "fors").unwrap_or(false) {
+            out.push(p);
+        }
+    }
+}
+
+/// Parse + resolve + check + lower, returning the lowered functions when
+/// the pipeline got that far and `None` when it did not. Unlike
+/// [`build_and_run`] this asserts nothing: the corpus holds deliberate
+/// parse-error and check-error files, and an F4 property is about the
+/// bodies that DO lower.
+fn try_lower(stem: &str, src: &[u8]) -> Option<Vec<fors_lower::LoweredFn>> {
+    let mut interner = Interner::new();
+    let mut sources: Vec<Vec<u8>> = vec![src.to_vec()];
+    let mut names: Vec<Segments> = vec![module_name_of(stem, src, &mut interner)];
+    if String::from_utf8_lossy(src).contains("use std.io;") {
+        let io_path = repo_root().join("std/io.fors");
+        let io_src = fs::read(&io_path).ok()?;
+        let name: Segments = vec![interner.intern(b"std"), interner.intern(b"io")];
+        sources.push(io_src);
+        names.push(name);
+    }
+    let parsed: Vec<_> = sources.iter().map(|s| parse_file(s)).collect();
+    if parsed.iter().any(|p| !p.diags.is_empty()) {
+        return None;
+    }
+    let inputs: Vec<FileInput> = parsed
+        .iter()
+        .zip(sources.iter())
+        .zip(names.iter())
+        .map(|((p, s), n)| FileInput {
+            tree: &p.tree,
+            tokens: &p.tokens,
+            source: s,
+            name: n.clone(),
+        })
+        .collect();
+    let resolved = fors_resolve::resolve_in_package(&mut interner, &inputs, Some(0), None);
+    let out = fors_check::check_build(&inputs, &resolved, &mut interner);
+    let lowered = fors_lower::lower_build(&inputs, &out, &mut interner);
+    for f in &lowered.fns {
+        let diags = fors_fmir::verify::verify(&f.decl);
+        assert!(
+            diags.is_empty(),
+            "{stem}: lowered {} must verify clean: {diags:?}",
+            f.name
+        );
+    }
+    Some(lowered.fns)
+}
+
+// ---------------------------------------------------------------- F6's gate
+//
+// design §9's F6 list, the LOWERING half: `with arena`/`with allocator` and
+// their fresh brands, `arena_alloc`/`arena_deref`/`arena_reset`, `@alloc`/
+// `@free` through the allocator intrinsics, and the obligation/discharge
+// machinery of D8. The interpreter half (`ArenaVal`/`RefVal`, generation
+// checks, the `ub:` reports, the borrow stack's SharedRO groups) landed
+// earlier on hand-written FMIR fixtures; these are the SOURCE-level twins.
+
+#[test]
+fn gate_arena_generation_trap() {
+    gate_test("01-ownership/arena-generation-trap.fors");
+}
+
+/// F6's D8 obligation machinery, over the whole corpus: **no obligation is
+/// left undischarged on any exit edge**, which is the lowering-side half of
+/// "a leak is impossible by construction (the checker rejected it)". ch01
+/// R22i rejects a leak before lowering sees the body, so an edge missing a
+/// discharge would be a compiler bug — and design §3.5/§5.2 are explicit
+/// that such a bug is `ub: linear-leak`, status 70, and **never a trap**:
+/// ch02 R15's kind list is closed at eight. That last clause is
+/// `ub_linear_leak_is_not_a_trap` re-asserted at the lowering boundary.
+#[test]
+fn f6_no_obligation_is_undischarged_and_a_leak_is_not_a_trap() {
+    let root = repo_root().join("tests/conformance");
+    let mut files: Vec<PathBuf> = Vec::new();
+    collect_fors(&root, &mut files);
+    files.sort();
+    let mut obligations_seen = 0usize;
+    for path in &files {
+        let Ok(src) = fs::read(path) else { continue };
+        let stem = path.file_stem().unwrap().to_string_lossy().into_owned();
+        let Some(lowered) = try_lower(&stem, &src) else {
+            continue;
+        };
+        for f in &lowered {
+            let decl = &f.decl;
+            for (id, row) in decl.exits.all_rows() {
+                let leaving = decl.exits.scopes(row.scopes.clone());
+                let mut owed: Vec<fors_fmir::ids::PlaceId> = Vec::new();
+                for s in leaving {
+                    owed.extend_from_slice(decl.obligations.get(decl.scopes.row(*s).obligations));
+                }
+                let got = decl.exits.discharges(row.discharges.clone());
+                obligations_seen += owed.len();
+                for p in &owed {
+                    assert!(
+                        got.iter().any(|d| d.place == *p),
+                        "{}: exit edge {} leaves place {} with an undischarged linear \
+                         obligation (ch01 R22h); the checker rejected every leak, so this \
+                         would be a compiler bug",
+                        f.name,
+                        id.0,
+                        p.0
+                    );
+                }
+            }
+        }
+    }
+    // `ub_linear_leak_is_not_a_trap`, at this boundary: the class the
+    // interpreter would report is not one of ch02 R15's eight trap kinds.
+    assert!(
+        !fors_fmir::op::TrapKind::KINDS.contains(&fors_interp::UbClass::LinearLeak.as_str()),
+        "a linear leak is a `ub:` report, never a trap (ch02 R15's list is closed at eight)"
+    );
+    println!("F6: {obligations_seen} obligation-edge pairs checked over the corpus");
 }
