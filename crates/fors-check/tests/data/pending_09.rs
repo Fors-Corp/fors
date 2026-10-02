@@ -166,7 +166,55 @@
 //   than §8's row.
 //
 // After I8 every remaining row is tagged `I8b`.
-const PENDING_09_MAX: usize = 14;
+//
+// I8b (round-6 flow) deleted SEVEN rows — `linear-bound-adds-no-operation-
+// rejected`, `linear-match-{literal-component,omitted-field,underscore}-
+// rejected`, `neutral-projection-drop-without-bound-rejected`,
+// `rigid-{discard,drop}-without-droppable-rejected` — and
+// `rigid-expression-statement-without-droppable-rejected` with a one-token
+// repair to the corpus file, recorded here because it is a change to the
+// corpus and not to the checker:
+//
+// - `rigid-expression-statement-without-droppable-rejected`. The file's
+//   helper was `fn make[T](let t: T) -> T { return t; }`, which is itself
+//   ill-formed: `return t` moves out of a `let` parameter, ch01 R3, the
+//   very violation `copy-without-copyable-rejected` asserts — which is
+//   what `PENDING_SPEAKS` recorded while the row was pending. A file
+//   cannot yield "exactly one diagnostic" with a second, unrelated
+//   violation in another declaration, so the helper now reads
+//   `fn make[T](sink t: T) -> T { return move t; }` and the call
+//   `make(move x)` (ch01 R2's marker). The test's own subject — an
+//   expression statement dropping a value of rigid type, T0057 — is
+//   unchanged, and it is now the file's single diagnostic.
+//
+// THREE rows stay, each blocked on something that is not this increment's
+// to decide:
+//
+// - `callable-bound-cannot-bind-result-rejected` needs an OWNER decision.
+//   R38 as design §7.4 writes it ACCEPTS this program (the I5 verifier's
+//   note above): `return apply(2, double)` is a CHECK position, so step
+//   (c) matches the declared result `U` against the expected `i32` and
+//   binds it. The file's premise ("`F: fn (...) -> U` leaves `U`
+//   uninferable") holds only in SYNTH position. Either the corpus file
+//   moves the call into a `let` (SYNTH) or §7.4 gains a clause; I8b
+//   implements neither, because both are the owner's call.
+// - `adaptor-name-clash-two-traits-rejected` and
+//   `adaptor-on-{field,inout}-receiver-rejected`,
+//   `adaptor-annotated-binding-mismatch-rejected` need `Iterator`'s
+//   PROVIDED adaptors (`map`, `take`, `Mapped`, `Taken`), which exist only
+//   in `std/mem/seq.fors`; the ch09 harness checks each file alone, where
+//   `Iterator` is the prelude row declaring `next` and nothing else. The
+//   MECHANISMS they test are implemented and are proved by probes that
+//   supply the adaptor trait locally (`probes.rs`:
+//   `linear_closure_result_fails_its_droppable_bound`,
+//   `adaptor_receiver_conventions_are_decided_with_a_local_trait`). The
+//   rows stay until the harness can build a file against `std`.
+// - `adaptor-map-closure-returns-linear-rejected` is the same: its `U:
+//   Droppable` bound with `U := Res` and `impl Linear for Res` is decided
+//   by `ty::lin`/`ty::droppable` as of this increment, and the probe
+//   above proves it, but the file's `v.iter().map(..)` needs std's
+//   adaptors to type at all.
+const PENDING_09_MAX: usize = 6;
 const PENDING_09: &[(&str, &str)] = &[
     ("adaptor-annotated-binding-mismatch-rejected", "I8b"),
     ("adaptor-map-closure-returns-linear-rejected", "I8b"),
@@ -174,14 +222,6 @@ const PENDING_09: &[(&str, &str)] = &[
     ("adaptor-on-field-receiver-rejected", "I8b"),
     ("adaptor-on-inout-receiver-rejected", "I8b"),
     ("callable-bound-cannot-bind-result-rejected", "I8b"),
-    ("linear-bound-adds-no-operation-rejected", "I8b"),
-    ("linear-match-literal-component-rejected", "I8b"),
-    ("linear-match-omitted-field-rejected", "I8b"),
-    ("linear-match-underscore-rejected", "I8b"),
-    ("neutral-projection-drop-without-bound-rejected", "I8b"),
-    ("rigid-discard-without-droppable-rejected", "I8b"),
-    ("rigid-drop-without-droppable-rejected", "I8b"),
-    ("rigid-expression-statement-without-droppable-rejected", "I8b"),
 ];
 
 /// A pending test on which the checker nonetheless SPEAKS, because a
@@ -191,11 +231,4 @@ const PENDING_09: &[(&str, &str)] = &[
 /// list is the explicit, asserted-live exception: the diagnostic must be
 /// real and must NOT be the code the test expects, so a row cannot be
 /// parked here to hide a wrong answer about its own rule.
-const PENDING_SPEAKS: &[(&str, &str)] = &[(
-    "rigid-expression-statement-without-droppable-rejected",
-    "its helper `fn make[T](let t: T) -> T { return t; }` moves a non-`Copyable` rigid value out of a \
-     `let` parameter, which is ch01 R3 — the very violation the sibling test \
-     `copy-without-copyable-rejected` asserts, in a file whose own subject (an expression statement \
-     dropping a rigid value, T0057) is I8b's. The O0003 is correct and is charged to `make`, not to \
-     `f`; the file's own T0057 is still unreported, which is what this list asserts.",
-)];
+const PENDING_SPEAKS: &[(&str, &str)] = &[];

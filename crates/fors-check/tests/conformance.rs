@@ -454,6 +454,14 @@ const CROSS_CHAPTER: &[(&str, &str)] = &[
         "the test's whole point is that ch08 leaves these to the checker; `-> K` names a `const` in type position,          which ch09 R11 rejects (`local-shadowing-prelude-type-as-type-head-rejected` is the same clause)",
     ),
     (
+        "with_arena_brand_type_accepted",
+        "ch08 R19 asserts only that the `with arena` binding `a` is one binding, usable as a value and in type          position; the body then writes `discard v;` on a `v: Own[i32, a]`, and `Own` is linear by language rule, so          ch01 R22d rejects the `discard` (`linear-discard-rejected` asserts exactly this clause)",
+    ),
+    (
+        "with_brand_in_closure_type_accepted",
+        "same clause as the row above: ch08 asserts the brand's visibility in a nested block, a closure and a          sibling `with`, and all three bodies `discard` an `Own`, which ch01 R22d rejects",
+    ),
+    (
         "pattern_variant_through_alias_accepted",
         "ch08 R25 asserts only that the two-segment path through the alias reaches the variant as a reference; its          `Color` has exactly two variants (`Red`, `Rgb`), both matched, so ch09 R53/R54 (I7) find the trailing          `let other` arm unreachable — the SAME clause `unreachable-arm-rejected` asserts for a non-aliased enum",
     ),
@@ -478,7 +486,20 @@ const CROSS_CHAPTER: &[(&str, &str)] = &[
 /// `std` now writes the destructuring form R22d(ii) prescribes. The list
 /// is empty, not deleted, so a regression is caught by the count assertion
 /// rather than by this comment going stale.
-const STD_CONFLICTS: &[(&str, &str)] = &[];
+const STD_CONFLICTS: &[(&str, &str)] = &[
+    (
+        "Option::unwrap_or",
+        "std/mem.fors: `pub fn unwrap_or(sink self, sink fallback: T) -> T` writes `discard fallback;` on the `some` arm, which ch01 R22c forbids for a rigid `T` with no `Droppable` bound (I8b's T0057). This is a SIGNATURE question for the owner, not a STUB: either `unwrap_or` declares `T: Droppable`, or it returns `fallback` unconsumed is impossible and the method does not exist for a linear `T`",
+    ),
+    (
+        "Map::insert",
+        "std/mem/hashmap.fors: the body is `raise alloc.AllocError.out_of_memory; // STUB`, which drops the `sink k: K` and `sink v: V` parameters on the error exit; ch01 R22c reports T0057 on the first until the real body stores them",
+    ),
+    (
+        "Vec::push",
+        "std/mem/vec.fors: the body is `raise alloc.AllocError.out_of_memory; // STUB`, which drops the `sink v: T` parameter on the error exit; ch01 R22c reports T0057 until the real body stores it",
+    ),
+];
 
 /// The no-regression assertion the I2 gate names: outside the tests this
 /// increment turned on, the checker stays silent on every program another
@@ -1174,4 +1195,485 @@ fn ch01_merge_liveness_tests() {
         "merge-liveness-resolved-accepted",
     ));
     assert!(got.is_empty(), "both branches consume: got {got:?}");
+}
+
+// ------------------------------------------------ increment I8b's gate
+
+/// design §13's I8b GATE, by rule group. Round 6 (ch01 O1-O3) added these
+/// `check-error` files to `01-ownership`; before this increment the
+/// checker was required to stay SILENT on every one of them (nothing
+/// asserted them, and `no_new_diagnostics_outside_ch09` covers only
+/// `check-ok`/`run-ok`). **The harness expectation flips here and nowhere
+/// else**: each of them must now yield EXACTLY ONE diagnostic. The code is
+/// not pinned per row because most of these files' `detail` lines cite a
+/// ch01 clause rather than a code, and several cite two (a `?` that leaks
+/// AND an `errdefer` that can never run); what the design fixes is that
+/// there is one root cause and the checker finds it.
+const I8B_CH01_REJECTED: &[(&str, &str)] = &[
+    // R22h/R22i (9)
+    ("linear-local-dropped-at-block-end-rejected", "R22h"),
+    ("linear-local-dropped-at-return-rejected", "R22h"),
+    ("linear-local-dropped-at-question-rejected", "R22h"),
+    ("linear-local-dropped-at-break-rejected", "R22h"),
+    ("linear-temporary-expression-statement-rejected", "R22h"),
+    ("linear-let-underscore-rejected", "R22h"),
+    ("linear-var-overwritten-rejected", "R22h"),
+    ("linear-sink-parameter-unconsumed-rejected", "R22h"),
+    (
+        "user-linear-type-diagnostic-names-consumer-rejected",
+        "R22i",
+    ),
+    // R22d-R22g (the `-rejected` half of the group's 18)
+    (
+        "linear-consumed-by-struct-literal-then-aggregate-rejected",
+        "R22a(b)",
+    ),
+    ("linear-match-underscore-rejected", "R22d(ii)"),
+    ("linear-match-omitted-field-rejected", "R22d(ii)"),
+    ("linear-consume-rejected", "R22d"),
+    ("linear-discard-rejected", "R22d"),
+    ("linear-in-loop-consumed-once-rejected", "R4a(b)"),
+    ("linear-field-partial-move-rejected", "R4a(c)"),
+    ("linear-captured-by-closure-still-owed-rejected", "R22g"),
+    ("linear-with-block-exit-rejected", "R22g"),
+    ("linear-trap-does-not-consume-rejected", "R22d"),
+    ("linear-impl-with-bound-rejected", "R22"),
+    // R23-R23f, check side (the `-rejected` half of the group's 20)
+    ("errdefer-normal-exit-unconsumed-rejected", "R22h"),
+    ("defer-place-moved-before-exit-rejected", "R23d(a)"),
+    ("defer-in-loop-moves-outer-rejected", "R23d(d)"),
+    ("defer-return-inside-rejected", "R23c"),
+    ("defer-raise-inside-rejected", "R23c"),
+    ("defer-question-inside-rejected", "R23c"),
+    ("defer-break-outer-loop-rejected", "R23c"),
+    ("errdefer-without-error-exit-rejected", "R23b"),
+    ("errdefer-after-fallible-call-rejected", "R23b"),
+    (
+        "linear-enum-payload-one-arm-unconsumed-rejected",
+        "R22d(ii)",
+    ),
+    // R19c/R19d, the clause decidable without `std`
+    ("closure-returned-with-local-capture-rejected", "R19d"),
+];
+
+/// The `check-ok` halves of the same groups: the programs round 6 calls
+/// well-formed, which the new machinery must not reject. Together with the
+/// list above these are design §13's I8b GATE minus the files whose rules
+/// need `std` in the harness (listed in `I8B_NEEDS_STD`).
+const I8B_CH01_ACCEPTED: &[&str] = &[
+    "linear-consumed-by-sink-call-accepted",
+    "linear-consumed-by-return-accepted",
+    "linear-consumed-by-implicit-receiver-move-accepted",
+    "linear-aggregate-destructured-accepted",
+    "linear-option-matched-accepted",
+    "linear-in-loop-reinit-accepted",
+    "linear-spawn-move-accepted",
+    "linear-with-block-defer-accepted",
+    "defer-consumes-linear-on-all-exits-accepted",
+    "errdefer-consumes-on-error-exit-accepted",
+    "defer-inout-use-after-defer-accepted",
+    "defer-in-loop-per-iteration-accepted",
+    "defer-inner-loop-break-accepted",
+    "defer-handler-inside-accepted",
+    "defer-with-block-allocator-live-accepted",
+    "defer-in-closure-body-accepted",
+    "defer-nested-body-accepted",
+    "errdefer-and-defer-interleaved-reverse-order-accepted",
+];
+
+/// design §13's I8b GATE, R19c/R19d group: the files whose subject needs
+/// `Vec`, `String` or `std.mem`'s adaptors. The ch01 harness builds one
+/// file at a time, where those are prelude OPAQUE rows (`Vec` and
+/// `String` are declared in package `std`, ch10 R2), so `v.iter()`,
+/// `.map`, `.zip`, `.take`, `.count` and `as_str` resolve to nothing and
+/// there is no call for R19c to judge. The mechanism is implemented and
+/// proved by probes (`probes.rs`'s I8b block); these rows are listed, with
+/// the reason, rather than silently skipped, and the assertion below is
+/// the honest one: the checker must not GUESS on them.
+const I8B_NEEDS_STD: &[&str] = &[
+    "scoped-through-generic-sink-result-scoped-rejected",
+    "scoped-through-generic-sink-consumed-accepted",
+    "scoped-through-generic-inout-param-rejected",
+    "scoped-through-generic-raises-rejected",
+    "scoped-through-generic-sink-returned-under-scoped-accepted",
+    "scoped-into-concrete-sink-rejected",
+    "scoped-copy-into-field-via-let-param-rejected",
+    "scoped-rvalue-extent-is-the-statement-accepted",
+    "scoped-rvalue-extent-is-the-for-accepted",
+    "zip-two-scoped-sources-rejected",
+    "zip-two-scoped-sources-local-accepted",
+    "zip-scoped-and-owned-accepted",
+    "adaptor-chain-for-mutates-source-rejected",
+    "closure-capture-keeps-local-in-chain-accepted",
+    "closure-capture-in-chain-returned-rejected",
+];
+
+#[test]
+fn i8b_round6_ch01_rejected_files_yield_exactly_one_diagnostic() {
+    let mut failures = Vec::new();
+    for &(name, clause) in I8B_CH01_REJECTED {
+        let target = target_named("01-ownership", name);
+        let case = parse_directives(&directive_source(&target));
+        if case.expect != "check-error" {
+            failures.push(format!(
+                "{name}: expected a check-error file, found {:?}",
+                case.expect
+            ));
+            continue;
+        }
+        let got = check_target_messages(&target);
+        if got.len() != 1 {
+            failures.push(format!(
+                "{name} (ch01 {clause}): expected exactly one diagnostic, got {got:?}"
+            ));
+        }
+    }
+    assert!(
+        failures.is_empty(),
+        "I8b's round-6 ch01 rejections ({}):\n{}",
+        failures.len(),
+        failures.join("\n")
+    );
+}
+
+#[test]
+fn i8b_round6_ch01_accepted_files_are_silent() {
+    let mut failures = Vec::new();
+    for &name in I8B_CH01_ACCEPTED {
+        let target = target_named("01-ownership", name);
+        let case = parse_directives(&directive_source(&target));
+        assert_eq!(
+            case.expect, "check-ok",
+            "{name}: this list is the check-ok half"
+        );
+        let got = check_target_messages(&target);
+        if !got.is_empty() {
+            failures.push(format!("{name}: expected silence, got {got:?}"));
+        }
+    }
+    // The seven behaviour tests design §13 assigns to FMIR F4 are NOT in
+    // this gate; I8b's obligation on them is only that it emits nothing.
+    for name in [
+        "defer-reverse-order-run-ok",
+        "defer-runs-on-return-run-ok",
+        "defer-per-iteration-run-ok",
+        "defer-nested-scope-order-run-ok",
+        "defer-result-evaluated-first-run-ok",
+        "errdefer-skipped-on-return-run-ok",
+    ] {
+        let got = check_target_messages(&target_named("01-ownership", name));
+        if !got.is_empty() {
+            failures.push(format!("{name}: F4's behaviour test, got {got:?}"));
+        }
+    }
+    assert!(
+        failures.is_empty(),
+        "I8b's round-6 ch01 acceptances ({}):\n{}",
+        failures.len(),
+        failures.join("\n")
+    );
+}
+
+/// The R19c/R19d files the single-file harness cannot build: the checker
+/// must be SILENT on them, because an increment that cannot see the call
+/// must not guess at it (design §7.10). This is the assertion that keeps
+/// `I8B_NEEDS_STD` honest — a row whose file starts producing a
+/// diagnostic has either been fixed or broken, and either way must leave
+/// the list.
+#[test]
+fn i8b_r19c_files_that_need_std_are_not_guessed_at() {
+    let mut failures = Vec::new();
+    for &name in I8B_NEEDS_STD {
+        let got = check_target_messages(&target_named("01-ownership", name));
+        if !got.is_empty() {
+            failures.push(format!("{name}: expected silence, got {got:?}"));
+        }
+    }
+    assert!(
+        failures.is_empty(),
+        "I8b's std-blocked R19c rows ({}):\n{}",
+        failures.len(),
+        failures.join("\n")
+    );
+}
+
+/// ch01 Rule 22i's NORMATIVE CONTENT (not wording), asserted as the
+/// rendered string on the corpus file whose `detail` enumerates it: "the
+/// diagnostic carries the value `r`, its type `Res`, the exit (the `}` of
+/// the body) and the consumer `Res.close`".
+#[test]
+fn r22i_diagnostic_carries_the_value_type_exit_and_consumer() {
+    let target = target_named(
+        "01-ownership",
+        "user-linear-type-diagnostic-names-consumer-rejected",
+    );
+    let got = check_target_messages(&target);
+    assert_eq!(got.len(), 1, "one diagnostic, got {got:?}");
+    assert_eq!(got[0].0, "O0022", "ch01 R22's own code");
+    let m = &got[0].1;
+    for want in [
+        "`r`",                    // the value's name
+        "`Res`",                  // its type as ch09 R20 displays it
+        "of the block opened at", // the exit's kind
+        "`Res.close`",            // the consumer, from the head's defining module
+        "ch01 R22h",              // the clause
+    ] {
+        assert!(
+            m.contains(want),
+            "R22i requires {want:?} in the diagnostic; got {m:?}"
+        );
+    }
+    // The exit's LOCATION, read out of the corpus file rather than pinned.
+    let src = fs::read_to_string(&target).unwrap();
+    let code = src.find("fn f()").expect("the corpus file still has `f`");
+    let brace = code + src[code..].find('{').expect("`f` has a body");
+    let (l, c) = fors_diag::line_col(src.as_bytes(), brace as u32);
+    assert!(
+        m.contains(&format!("{l}:{c}")),
+        "R22i requires the exit's location {l}:{c}; got {m:?}"
+    );
+}
+
+/// design §13's "Interface to FMIR lowering": D7, D8 and D9 exist under
+/// exactly those names, and carry the shapes `fmir-interpreter.md` §3.5
+/// and §3.8 describe. F4's and F6's lowering halves read these, so the
+/// assertion is on the DATA, not on a diagnostic.
+#[test]
+fn d7_d8_d9_are_published_for_fmir_lowering() {
+    use fors_check::facts::{Access, DeferKind, Discharge, ExitEdgeKind};
+    let target = target_named(
+        "01-ownership",
+        "defer-consumes-linear-on-all-exits-accepted",
+    );
+    let (checker, _, out) = check_target_full(&target);
+    assert!(checker.is_empty(), "the file is accepted: {checker:?}");
+    let body = out
+        .facts
+        .iter()
+        .find(|(_, f)| !f.defer_regions.rows.is_empty())
+        .map(|(_, f)| f)
+        .expect("D7: some body has a defer region");
+    // D7: one `defer` row, with its scope, kind, body and stmt_order.
+    assert_eq!(body.defer_regions.rows.len(), 1);
+    assert_eq!(body.defer_regions.rows[0].kind, DeferKind::Defer);
+    assert!(body.defer_regions.rows[0].scope > 0);
+    // D7: the place -> strongest-access summary (R23d), and `r.close()`
+    // is a MOVE.
+    assert!(
+        body.defer_regions
+            .accesses
+            .iter()
+            .any(|a| a.access == Access::Move),
+        "D7: R23d's summary must record the deferred move"
+    );
+    // D7: every exit edge, with the bodies that run on it in order.
+    assert!(
+        body.defer_regions
+            .exits
+            .iter()
+            .any(|e| e.kind == ExitEdgeKind::Question && !e.defers.is_empty()),
+        "D7: the `?`'s error edge runs the pending `defer`"
+    );
+    assert!(
+        body.defer_regions
+            .exits
+            .iter()
+            .any(|e| e.kind == ExitEdgeKind::BlockEnd && !e.scopes.is_empty()),
+        "D7: a block-end edge names the scopes it leaves"
+    );
+    // D8: the obligation, `lin(T)` per `TyId`, and one `Discharge` per
+    // obligation per exit edge.
+    assert_eq!(
+        body.linear_obligations.obligations.len(),
+        1,
+        "D8: `r` is the one obligation"
+    );
+    assert!(
+        body.linear_obligations.lin.iter().all(|&(_, v)| v),
+        "D8: `lin(T)` per TyId"
+    );
+    assert!(
+        body.linear_obligations
+            .discharges
+            .iter()
+            .any(|d| matches!(d.how, Discharge::DeferredBody { .. })),
+        "D8: the deferred body is what consumed it (R22d(iii))"
+    );
+    // D9: a capturing closure's sources (R19d).
+    let (_, _, out) = check_target_full(&target_named(
+        "01-ownership",
+        "closure-returned-with-local-capture-rejected",
+    ));
+    assert!(
+        out.facts
+            .iter()
+            .any(|(_, f)| !f.scoped_sources.rows.is_empty()),
+        "D9: the capturing closure's source set is published"
+    );
+}
+
+/// D7 against FMIR F4's own oracle. For every exit edge of every body of
+/// the `defer`/`errdefer` corpus files, the multiset D7 publishes — in
+/// run order — equals what `fors_fmir::exit::expected_pending` computes
+/// from the same rows once they are laid out as F4's `ScopePool` /
+/// `DeferPool`. This is the assertion design §13 names ("F4's verifier
+/// check is an assertion against D7, not a re-derivation"), run here so
+/// the two sides cannot drift.
+#[test]
+fn d7_exit_multisets_match_fmir_expected_pending() {
+    use fors_check::facts::{DeferKind, ExitEdgeKind};
+    use fors_fmir::exit::{ExitKind, expected_pending};
+    use fors_fmir::ids::{BlockId, BrandId, DeferId, RegionId, ScopeId};
+    use fors_fmir::scope::{DeferKind as FKind, DeferPool, DeferRow, ScopePool, ScopeRow};
+    let mut edges = 0usize;
+    let mut with_bodies = 0usize;
+    for name in [
+        "errdefer-and-defer-interleaved-reverse-order-accepted",
+        "defer-nested-body-accepted",
+        "defer-inner-loop-break-accepted",
+        "defer-in-loop-per-iteration-accepted",
+        "defer-consumes-linear-on-all-exits-accepted",
+        "errdefer-consumes-on-error-exit-accepted",
+        "defer-with-block-allocator-live-accepted",
+        "defer-in-closure-body-accepted",
+    ] {
+        let (checker, _, out) = check_target_full(&target_named("01-ownership", name));
+        assert!(checker.is_empty(), "{name}: {checker:?}");
+        for (_, f) in &out.facts {
+            let d7 = &f.defer_regions;
+            if d7.rows.is_empty() {
+                continue;
+            }
+            // Every scope D7 mentions, each one's rows laid out contiguously.
+            let mut scopes: Vec<u32> = Vec::new();
+            for r in &d7.rows {
+                if !scopes.contains(&r.scope) {
+                    scopes.push(r.scope);
+                }
+            }
+            for e in &d7.exits {
+                for &s in &e.scopes {
+                    if !scopes.contains(&s) {
+                        scopes.push(s);
+                    }
+                }
+            }
+            for e in &d7.exits {
+                // ch01 R23a: a body is pending on an exit only when its
+                // statement was executed on that path, i.e. textually
+                // precedes the exit (a `}` is after everything). FMIR's
+                // `ScopeRow.defers` is one range per scope, so the oracle
+                // is fed the rows pending AT THIS EDGE: that cut is what
+                // `fors-lower` must reproduce when it lays the pool out.
+                let pending_here = |r: &fors_check::facts::DeferRegionRow| {
+                    e.kind == ExitEdgeKind::BlockEnd || r.body < e.node
+                };
+                let mut defers = DeferPool::new();
+                let mut pool = ScopePool::new();
+                let mut row_id: Vec<Option<DeferId>> = vec![None; d7.rows.len()];
+                let mut scope_id: Vec<(u32, ScopeId)> = Vec::new();
+                for &s in &scopes {
+                    let start = defers.len() as u32;
+                    for (i, r) in d7.rows.iter().enumerate() {
+                        if r.scope != s || !pending_here(r) {
+                            continue;
+                        }
+                        row_id[i] = Some(defers.push(DeferRow {
+                            kind: match r.kind {
+                                DeferKind::Defer => FKind::Defer,
+                                DeferKind::ErrDefer => FKind::ErrDefer,
+                            },
+                            body: BlockId(r.body),
+                            stmt_order: u16::try_from(r.stmt_order).expect("a u16 statement order"),
+                        }));
+                    }
+                    let end = defers.len() as u32;
+                    let id = pool.push(ScopeRow {
+                        parent: ScopeId::NONE,
+                        brand: BrandId::NONE,
+                        defers: start..end,
+                        obligations: 0..0,
+                        region: RegionId::NONE,
+                    });
+                    scope_id.push((s, id));
+                }
+                let sid = |s: u32| {
+                    scope_id
+                        .iter()
+                        .find(|&&(n, _)| n == s)
+                        .map(|&(_, i)| i)
+                        .unwrap()
+                };
+                let leaving: Vec<ScopeId> = e.scopes.iter().map(|&s| sid(s)).collect();
+                let kind = match e.kind {
+                    ExitEdgeKind::Raise | ExitEdgeKind::Question => ExitKind::Error,
+                    _ => ExitKind::Normal,
+                };
+                let want = expected_pending(&pool, &defers, &leaving, kind);
+                let got: Vec<DeferId> = e
+                    .defers
+                    .iter()
+                    .map(|&i| row_id[i as usize].expect("a body D7 says runs here is pending here"))
+                    .collect();
+                assert_eq!(
+                    got, want,
+                    "{name}: D7's {:?} edge at node {}",
+                    e.kind, e.node
+                );
+                edges += 1;
+                if !got.is_empty() {
+                    with_bodies += 1;
+                }
+            }
+        }
+    }
+    assert!(
+        edges >= 16 && with_bodies >= 8,
+        "the oracle saw {edges} edges, {with_bodies} with bodies"
+    );
+}
+
+/// D8's contract for F6: on every exit edge, every obligation that is OWED
+/// there — its scope is among the scopes the edge leaves, its binding is
+/// written before the exit and the exit is not inside its own declaring
+/// statement — carries exactly ONE `Discharge`. Over every accepted
+/// round-6 file, so a path-insensitive discharge (credited from another
+/// branch) or a missing one cannot hide behind a silent checker.
+#[test]
+fn d8_carries_one_discharge_per_owed_obligation_per_exit_edge() {
+    use fors_check::facts::ExitEdgeKind;
+    let mut owed = 0usize;
+    for &name in I8B_CH01_ACCEPTED {
+        let (checker, _, out) = check_target_full(&target_named("01-ownership", name));
+        assert!(checker.is_empty(), "{name}: {checker:?}");
+        for (_, f) in &out.facts {
+            let d7 = &f.defer_regions;
+            let d8 = &f.linear_obligations;
+            for (i, e) in d7.exits.iter().enumerate() {
+                for o in &d8.obligations {
+                    if !e.scopes.contains(&o.scope)
+                        || (e.node >= o.decl.0 && e.node < o.decl.1)
+                        || (e.kind != ExitEdgeKind::BlockEnd && o.root > e.node)
+                    {
+                        continue;
+                    }
+                    let n = d8
+                        .discharges
+                        .iter()
+                        .filter(|d| d.exit == i as u32 && d.root == o.root)
+                        .count();
+                    assert_eq!(
+                        n, 1,
+                        "{name}: the obligation at node {} on the {:?} edge at node {} has {n} discharges",
+                        o.root, e.kind, e.node
+                    );
+                    owed += 1;
+                }
+            }
+        }
+    }
+    assert!(
+        owed >= 20,
+        "D8 covered {owed} owed (obligation, edge) pairs"
+    );
 }

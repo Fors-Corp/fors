@@ -3009,3 +3009,513 @@ fn write_it(inout b: Box) { b[0] = 2; }
          records the same fact"
     );
 }
+
+// ------------------------------------------------- increment I8b probes
+//
+// Round-6 flow: ch01 R19c/R19d, R22-R22i, R23-R23f and the ch09 rows they
+// amend (R10(c), R11, R23, R24, R50, R57). One MUTATION probe per
+// mechanism — a program that differs from an accepted one by exactly the
+// token the rule turns on — plus the three metamorphic tests design §13's
+// I8b GATE names.
+
+/// The prelude every linear probe shares: a declared-linear `Res` with a
+/// `sink self` consumer, written once.
+const RES: &str = "struct Res { fd: i32 }\n\
+                   impl Linear for Res { }\n\
+                   impl Res {\n\
+                   fn open(let n: i32) -> Res { return Res { fd: n }; }\n\
+                   fn close(sink self) { }\n\
+                   fn poke(inout self) { }\n\
+                   }\n";
+
+/// ch01 R22a/R22d: the mutation is the `impl Linear` line itself. The same
+/// body is silent without it and leaks with it, so the obligation comes
+/// from the DECLARATION and from nothing else (R22: "whether a constructor
+/// is linear is a fact of the constructor").
+#[test]
+fn the_impl_linear_line_is_what_creates_the_obligation() {
+    const BODY: &str = "fn f() { var r: Res = Res.open(1); r.poke(); }\n";
+    let without = check_source(&format!(
+        "struct Res {{ fd: i32 }}\n\
+         impl Res {{\n\
+         fn open(let n: i32) -> Res {{ return Res {{ fd: n }}; }}\n\
+         fn close(sink self) {{ }}\n\
+         fn poke(inout self) {{ }}\n\
+         }}\n{BODY}"
+    ));
+    assert!(
+        without.is_empty(),
+        "no `impl Linear`, no obligation: {without:?}"
+    );
+    let with = check_source(&format!("{RES}{BODY}"));
+    assert_eq!(with, vec!["O0022"], "the `impl Linear` line turns it on");
+}
+
+/// ch01 R22a(b): linearity propagates into an aggregate, and the
+/// aggregate's own consumption discharges the whole. The mutation is one
+/// field type.
+#[test]
+fn linearity_propagates_into_an_aggregate_and_only_through_a_value_field() {
+    let leaks = check_source(&format!(
+        "{RES}struct Box {{ r: Res }}\n\
+         fn f() {{ var b: Box = Box {{ r: Res.open(1) }}; }}\n"
+    ));
+    assert_eq!(leaks, vec!["O0022"], "`Box` is linear by inference");
+    let behind_ref = check_source(&format!(
+        "{RES}struct Keep {{ n: i32 }}\n\
+         fn f() {{ var b: Keep = Keep {{ n: 1 }}; }}\n"
+    ));
+    assert!(
+        behind_ref.is_empty(),
+        "no linear field, no obligation: {behind_ref:?}"
+    );
+}
+
+/// ch01 R22d: the discharge set is exactly (i)/(ii)/(iii). The mutation is
+/// the verb: `r.close()` discharges, `discard r` and `consume r` do not.
+#[test]
+fn only_a_whole_place_move_discharges_an_obligation() {
+    let moved = check_source(&format!(
+        "{RES}fn f() {{ var r: Res = Res.open(1); r.close(); }}\n"
+    ));
+    assert!(
+        moved.is_empty(),
+        "an implicit receiver move discharges: {moved:?}"
+    );
+    for verb in ["discard r;", "consume r;"] {
+        let got = check_source(&format!(
+            "{RES}fn f() {{ var r: Res = Res.open(1); {verb} }}\n"
+        ));
+        assert_eq!(got, vec!["O0022"], "`{verb}` must not discharge");
+    }
+}
+
+/// ch01 R22f / ch09 R10(c): the mutation is the `as dyn Tr`.
+#[test]
+fn a_linear_value_does_not_coerce_to_dyn() {
+    const TR: &str = "trait Tr { fn go(let self); }\nimpl Tr for Res { fn go(let self) { } }\n";
+    let erased = check_source(&format!(
+        "{RES}{TR}fn f(sink r: Res) -> dyn Tr {{ return r as dyn Tr; }}\n"
+    ));
+    assert_eq!(erased, vec!["T0010"], "R22f: the obligation would vanish");
+    let kept = check_source(&format!("{RES}{TR}fn f(sink r: Res) {{ r.close(); }}\n"));
+    assert!(kept.is_empty(), "the same value consumed instead: {kept:?}");
+}
+
+/// ch01 R22g: a closure captures by ACCESS and never moves, so the
+/// enclosing scope still owes the place. The mutation is whether the
+/// closure's body touches `r` at all.
+#[test]
+fn a_closure_capture_leaves_the_obligation_with_the_enclosing_scope() {
+    let owed = check_source(&format!(
+        "{RES}fn f() {{ var r: Res = Res.open(1); let c: fn () = || {{ r.poke(); }}; c(); }}\n"
+    ));
+    assert_eq!(
+        owed,
+        vec!["O0022"],
+        "still owed after the closure's last use"
+    );
+    let consumed = check_source(&format!(
+        "{RES}fn f() {{ var r: Res = Res.open(1); let c: fn () = || {{ }}; c(); r.close(); }}\n"
+    ));
+    assert!(consumed.is_empty(), "{consumed:?}");
+}
+
+/// ch01 R23d(b)/R23b: `defer` consumes on every exit, `errdefer` on the
+/// error exits only. The mutation is the one keyword.
+#[test]
+fn defer_consumes_on_every_exit_and_errdefer_only_on_error_exits() {
+    const BODY: &str = "fn f() raises Err {\n\
+                        var r: Res = Res.open(1);\n\
+                        KW r.close();\n\
+                        step()?;\n\
+                        }\n";
+    let prelude = format!("{RES}enum Err {{ boom }}\nfn step() raises Err {{ }}\n");
+    let with_defer = check_source(&format!("{prelude}{}", BODY.replace("KW", "defer")));
+    assert!(
+        with_defer.is_empty(),
+        "`defer` runs on both exits: {with_defer:?}"
+    );
+    let with_errdefer = check_source(&format!("{prelude}{}", BODY.replace("KW", "errdefer")));
+    assert_eq!(
+        with_errdefer,
+        vec!["O0022"],
+        "`errdefer` does not run on the normal exit"
+    );
+}
+
+/// ch01 R23d(a): every place a deferred body mentions must be live at every
+/// exit at which that body runs. The mutation is the extra `r.close();`.
+#[test]
+fn a_deferred_body_still_needs_the_place_it_mentions() {
+    let ok = check_source(&format!(
+        "{RES}fn f() {{ var r: Res = Res.open(1); defer r.close(); r.poke(); }}\n"
+    ));
+    assert!(ok.is_empty(), "{ok:?}");
+    let moved = check_source(&format!(
+        "{RES}fn f() {{ var r: Res = Res.open(1); defer r.close(); r.close(); }}\n"
+    ));
+    assert_eq!(moved, vec!["O0023"], "R23d(a)");
+}
+
+/// ch01 R23f / ch02 R7: a trap is not an exit and discharges nothing. The
+/// mutation is which statement ends the body.
+#[test]
+fn a_trap_discharges_nothing() {
+    let trapping = check_source(&format!(
+        "{RES}fn f(let xs: Slice[i32], let i: usize) -> i32 {{\n\
+         var r: Res = Res.open(1);\n\
+         return xs[i];\n\
+         }}\n"
+    ));
+    assert_eq!(
+        trapping,
+        vec!["O0022"],
+        "the non-trapping path still owes `r`"
+    );
+    let consumed = check_source(&format!(
+        "{RES}fn f(let xs: Slice[i32], let i: usize) -> i32 {{\n\
+         var r: Res = Res.open(1);\n\
+         r.close();\n\
+         return xs[i];\n\
+         }}\n"
+    ));
+    assert!(consumed.is_empty(), "{consumed:?}");
+}
+
+/// ch01 R22c / ch09 R57: the mutation is the bound. `Droppable`,
+/// `Copyable` and `Iterator` each license the drop; `Linear` does not
+/// ("`Linear` MAY be used as a bound, where it restricts instantiation and
+/// adds NO operation").
+#[test]
+fn a_rigid_drop_needs_a_droppable_copyable_or_iterator_bound() {
+    assert_eq!(check_source("fn f[T](sink x: T) { }\n"), vec!["T0057"]);
+    assert_eq!(
+        check_source("fn f[T: Linear](sink x: T) { }\n"),
+        vec!["T0057"]
+    );
+    for bound in ["Droppable", "Copyable", "Iterator"] {
+        let got = check_source(&format!("fn f[T: {bound}](sink x: T) {{ }}\n"));
+        assert!(
+            got.is_empty(),
+            "`T: {bound}` licenses the drop, got {got:?}"
+        );
+    }
+}
+
+/// ch01 R22d(ii) / ch09 R50: the mutation is the sub-pattern. `let n`
+/// binds the linear component, `_` and an omitted field drop it.
+#[test]
+fn a_pattern_must_bind_every_linear_component() {
+    let bound = check_source(&format!(
+        "{RES}struct Box {{ r: Res, n: i32 }}\n\
+         fn f(sink b: Box) {{ match b {{ Box {{ r: let i, n: let k }} => {{ i.close(); }} }} }}\n"
+    ));
+    assert!(bound.is_empty(), "{bound:?}");
+    let wild = check_source(&format!(
+        "{RES}struct Box {{ r: Res, n: i32 }}\n\
+         fn f(sink b: Box) {{ match b {{ Box {{ r: _, n: let k }} => {{ }} }} }}\n"
+    ));
+    assert_eq!(wild, vec!["O0022"], "`_` facing a linear component");
+    let omitted = check_source(&format!(
+        "{RES}struct Box {{ r: Res, n: i32 }}\n\
+         fn f(sink b: Box) {{ match b {{ Box {{ n: let k }} => {{ }} }} }}\n"
+    ));
+    assert_eq!(omitted, vec!["O0022"], "an omitted linear field");
+}
+
+/// ch01 R19d: a closure over a LOCAL is a scoped value no function may
+/// return. The mutation is whether the captured place is a local or a
+/// parameter the result is `scoped(..)` to — here, nothing captured at all.
+#[test]
+fn a_closure_over_a_local_cannot_be_returned() {
+    let captured = check_source(
+        "fn f() -> fn (let i32) -> i32 {\n\
+         let k: i32 = 3;\n\
+         return |let x| x + k;\n\
+         }\n",
+    );
+    assert_eq!(captured, vec!["O0019"], "R19/R19d");
+    let closed = check_source(
+        "fn f() -> fn (let i32) -> i32 {\n\
+         return |let x| x + 3;\n\
+         }\n",
+    );
+    assert!(
+        closed.is_empty(),
+        "a closure that captures nothing: {closed:?}"
+    );
+}
+
+/// ch09 R12 with `U: Droppable` and `U := Res`, the mechanism
+/// `adaptor-map-closure-returns-linear-rejected` tests — proved with the
+/// adaptor trait supplied LOCALLY, because the ch09 harness checks each
+/// file alone and `Iterator`'s provided `map` lives only in
+/// `std/mem/seq.fors` (see `tests/data/pending_09.rs`).
+#[test]
+fn linear_closure_result_fails_its_droppable_bound() {
+    let bad = check_source(&format!(
+        "{RES}fn mapper[U: Droppable](let f: fn (sink i32) -> U) {{ }}\n\
+         fn make(sink n: i32) -> Res {{ return Res.open(n); }}\n\
+         fn g() {{ mapper(make); }}\n"
+    ));
+    assert_eq!(bad, vec!["T0012"], "`Res` is linear, so not `Droppable`");
+    let good = check_source(&format!(
+        "{RES}fn mapper[U: Droppable](let f: fn (sink i32) -> U) {{ }}\n\
+         fn make(sink n: i32) -> i32 {{ return n; }}\n\
+         fn g() {{ mapper(make); }}\n"
+    ));
+    assert!(good.is_empty(), "a droppable result: {good:?}");
+}
+
+/// The receiver-convention half of `adaptor-on-{field,inout}-receiver-
+/// rejected`, with the adaptor trait supplied locally for the same reason.
+#[test]
+fn adaptor_receiver_conventions_are_decided_with_a_local_trait() {
+    const TRAIT: &str = "trait Taker { fn take(sink self, let n: usize) -> Self; }\n\
+                         struct It { n: usize }\n\
+                         impl Taker for It { fn take(sink self, let n: usize) -> It { return self; } }\n\
+                         struct Holder { it: It }\n";
+    // A `sink self` method called on a FIELD place is R4a(c)'s partial
+    // move, which is what the corpus file asserts.
+    let field = check_source(&format!(
+        "{TRAIT}fn f(sink h: Holder) -> It {{ return h.it.take(2); }}\n"
+    ));
+    assert_eq!(field, vec!["O0004"], "a `sink self` move out of a field");
+    // The same call on an `inout` parameter is R4a(d).
+    let inout = check_source(&format!(
+        "{TRAIT}fn f(inout it: It) -> It {{ return it.take(2); }}\n"
+    ));
+    assert_eq!(inout, vec!["O0004"], "a `sink self` move out of an `inout`");
+    let owned = check_source(&format!(
+        "{TRAIT}fn f(sink it: It) -> It {{ return it.take(2); }}\n"
+    ));
+    assert!(owned.is_empty(), "the owning form is legal: {owned:?}");
+}
+
+/// design §13's I8b GATE: `lin_is_memoised_and_terminates` over ch09 R14's
+/// recursive shapes. `lin` descends into fields and payloads but never into
+/// `Own`, `Ref`, `Arena`, `Slice`, `rawptr`, `fn` or `dyn`, which is the
+/// whole of R22a's finiteness argument — so a type that is recursive
+/// THROUGH one of those answers, and answers once.
+#[test]
+fn lin_is_memoised_and_terminates() {
+    // A list recursive through `Own`: `lin` stops at `Own`, which is
+    // linear by language rule, so the answer is immediate.
+    let list = check_source(
+        "struct Node[A: brand] { next: Option[Own[Node[A], A]], n: i32 }\n\
+         fn f[A: brand](sink x: Node[A]) { }\n",
+    );
+    assert_eq!(list, vec!["O0022"], "linear through `Own`, decided once");
+    // Mutual recursion through `Ref`, which `lin` never enters.
+    let pair = check_source(
+        "struct Ay[B: brand] { b: Option[Ref[Bee[B], B]], n: i32 }\n\
+         struct Bee[B: brand] { a: Option[Ref[Ay[B], B]], n: i32 }\n\
+         fn f[B: brand](sink x: Ay[B]) { }\n",
+    );
+    assert!(pair.is_empty(), "`Ref` is never linear: {pair:?}");
+    // The same question asked many times in one build gives one answer
+    // and no blow-up: twelve bodies, twelve identical decisions.
+    let mut many = String::from(RES);
+    for i in 0..12 {
+        many.push_str(&format!(
+            "fn f{i}() {{ var r: Res = Res.open({i}); r.close(); }}\n"
+        ));
+    }
+    assert!(check_source(&many).is_empty(), "memoised across bodies");
+}
+
+/// design §13's I8b GATE: the merge lattice is still TWO-VALUED (ch01 R8's
+/// round-6 note forbids a third state, a "maybe live" and a drop flag).
+/// The statement from the outside: a place consumed on one path and not the
+/// other is the disagreement, reported ONCE; consuming on both paths
+/// resolves it; and adding the linear obligation does not introduce a
+/// third answer — the same program with a NON-linear type is accepted or
+/// rejected by exactly the same clause.
+#[test]
+fn linear_merge_has_no_third_state() {
+    let disagree = check_source(&format!(
+        "{RES}fn f(let n: i32) {{\n\
+         var r: Res = Res.open(1);\n\
+         if n == 0 {{ r.close(); }}\n\
+         }}\n"
+    ));
+    assert_eq!(
+        disagree.len(),
+        1,
+        "one disagreement, one diagnostic: {disagree:?}"
+    );
+    let both = check_source(&format!(
+        "{RES}fn f(let n: i32) {{\n\
+         var r: Res = Res.open(1);\n\
+         if n == 0 {{ r.close(); }} else {{ r.close(); }}\n\
+         }}\n"
+    ));
+    assert!(both.is_empty(), "agreement on both paths: {both:?}");
+    // The same shape on a NON-linear, non-`Copyable` type: R8's own
+    // disagreement, the same single diagnostic, no extra state.
+    let plain = check_source(
+        "struct S { n: i32 }\n\
+         fn sink_it(sink s: S) { }\n\
+         fn f(let n: i32) {\n\
+         var s: S = S { n: 1 };\n\
+         if n == 0 { sink_it(move s); }\n\
+         sink_it(move s);\n\
+         }\n",
+    );
+    assert_eq!(plain.len(), 1, "R8's own disagreement: {plain:?}");
+}
+
+/// design §13's I8b GATE, ch09 R59: no linear error depends on an
+/// instantiation. `lin` is decided from the DECLARATION, so a body's
+/// linear diagnostics are identical however many ways its generic callees
+/// are instantiated, and a generic body's own rigid-drop answer never
+/// changes when a linear argument is supplied at a call.
+#[test]
+fn no_linear_error_depends_on_instantiation() {
+    const BAD: &str = "fn drop_it[T](sink x: T) { }\n";
+    let alone = check_source(BAD);
+    assert_eq!(alone, vec!["T0057"], "R22c at the definition");
+    let linear = format!("{RES}{BAD}");
+    let once = check_source(&format!("{linear}fn u1() {{ drop_it(move Res.open(1)); }}"));
+    let twice = check_source(&format!(
+        "{linear}fn u1() {{ drop_it(move Res.open(1)); }}\n\
+         fn u2() {{ drop_it(move 1); }}"
+    ));
+    let three = check_source(&format!(
+        "{linear}fn u1() {{ drop_it(move Res.open(1)); }}\n\
+         fn u2() {{ drop_it(move 1); }}\n\
+         fn u3() {{ drop_it(move \"x\"); }}"
+    ));
+    assert_eq!(once, twice, "an instantiation changed the diagnostics");
+    assert_eq!(twice, three, "an instantiation changed the diagnostics");
+    assert_eq!(
+        once,
+        vec!["T0057".to_string()],
+        "exactly the definition's own diagnostic, whatever the callers"
+    );
+    // The mirror: a body that is well-typed at its definition stays
+    // silent however linear its instantiations are.
+    const GOOD: &str = "fn pass[T](sink x: T) -> T { return move x; }\n";
+    let g = format!("{RES}{GOOD}");
+    assert!(
+        check_source(&format!(
+            "{g}fn u1() {{ var r: Res = pass(move Res.open(1)); r.close(); }}"
+        ))
+        .is_empty(),
+        "a linear instantiation of a clean generic body"
+    );
+}
+
+// ------------------------------------- I8b verifier's repairs, pinned
+
+/// ch01 R22h at the `}` of a scope that sits INSIDE an outer `let`'s
+/// initialiser: an arm's pattern binding, or a local of a closure body,
+/// is owed at its own scope's exits, not deferred to the enclosing
+/// statement. The mutation is the `r.close()` inside that inner scope.
+#[test]
+fn a_binding_inside_an_outer_let_initialiser_is_owed_at_its_own_scope() {
+    let arm = check_source(&format!(
+        "{RES}fn f(sink o: Option[Res]) -> i32 {{\n\
+         let v: i32 = match o {{ some(let r) => 1, none => 2 }};\n\
+         return v;\n}}\n"
+    ));
+    assert_eq!(arm, vec!["O0022"], "an arm expression's binding leaks");
+    let arm_block = check_source(&format!(
+        "{RES}fn f(sink o: Option[Res]) -> i32 {{\n\
+         let v: i32 = match o {{ some(let r) => {{ 1 }} none => {{ 2 }} }};\n\
+         return v;\n}}\n"
+    ));
+    assert_eq!(arm_block, vec!["O0022"], "an arm block's binding leaks");
+    let arm_ok = check_source(&format!(
+        "{RES}fn f(sink o: Option[Res]) -> i32 {{\n\
+         let v: i32 = match o {{ some(let r) => {{ r.close(); 1 }} none => {{ 2 }} }};\n\
+         return v;\n}}\n"
+    ));
+    assert!(arm_ok.is_empty(), "consumed in the arm: {arm_ok:?}");
+    let closure = check_source(&format!(
+        "{RES}fn f() {{ let c: fn () = || {{ var r: Res = Res.open(1); r.poke(); }}; c(); }}\n"
+    ));
+    assert_eq!(closure, vec!["O0022"], "a closure body's local leaks");
+    let closure_ok = check_source(&format!(
+        "{RES}fn f() {{ let c: fn () = || {{ var r: Res = Res.open(1); r.close(); }}; c(); }}\n"
+    ));
+    assert!(
+        closure_ok.is_empty(),
+        "consumed in the closure: {closure_ok:?}"
+    );
+    // The `let`'s own `?` still owes nothing for the binding it introduces.
+    let own = check_source(&format!(
+        "{RES}enum Err {{ boom }}\n\
+         fn mk() -> Res raises Err {{ return Res.open(3); }}\n\
+         fn f() raises Err {{ let s: Res = mk()?; s.close(); }}\n"
+    ));
+    assert!(own.is_empty(), "not yet bound at its own `?`: {own:?}");
+}
+
+/// ch01 R22h's "a call result that is not bound": a linear temporary in a
+/// call position that does not consume it — the receiver of a `let self`
+/// method, an argument to a `let` parameter — dies at the call. The
+/// mutation is the convention of the position: `sink` consumes.
+#[test]
+fn a_linear_temporary_in_a_non_consuming_call_position_is_a_leak() {
+    const PEEK: &str = "impl Res { fn peek(let self) -> i32 { return 0; } }\n";
+    let recv = check_source(&format!(
+        "{RES}{PEEK}fn f() -> i32 {{ return Res.open(1).peek(); }}\n"
+    ));
+    assert_eq!(recv, vec!["O0022"], "a `let self` receiver temporary");
+    let recv_sink = check_source(&format!("{RES}fn f() {{ Res.open(1).close(); }}\n"));
+    assert!(
+        recv_sink.is_empty(),
+        "a `sink self` receiver consumes: {recv_sink:?}"
+    );
+    let arg = check_source(&format!(
+        "{RES}fn use_it(let r: Res) {{ }}\nfn f() {{ use_it(Res.open(1)); }}\n"
+    ));
+    assert_eq!(arg, vec!["O0022"], "a `let` argument temporary");
+    let arg_sink = check_source(&format!(
+        "{RES}fn h(sink r: Res) {{ r.close(); }}\nfn f() {{ h(Res.open(1)); }}\n"
+    ));
+    assert!(
+        arg_sink.is_empty(),
+        "a `sink` argument consumes: {arg_sink:?}"
+    );
+    // A PLACE in the same position is not a temporary: it stays owed by
+    // its binding, which consumes it afterwards.
+    let place = check_source(&format!(
+        "{RES}{PEEK}fn f() {{ var r: Res = Res.open(1); let k: i32 = r.peek(); r.close(); }}\n"
+    ));
+    assert!(place.is_empty(), "a place receiver: {place:?}");
+}
+
+/// ch01 R22d: a `sink self` receiver is R22i's consumer of its own HEAD
+/// and does not owe that, but a linear COMPONENT of `self` (R22a(b)) is
+/// consumed only by a move or by a destructuring that binds it. The
+/// mutation is the field's type.
+#[test]
+fn a_sink_self_receiver_owes_its_linear_components() {
+    let plain = check_source(&format!(
+        "{RES}struct P {{ n: i32 }} impl Linear for P {{ }} impl P {{ fn close(sink self) {{ }} }}\n"
+    ));
+    assert!(plain.is_empty(), "no linear component: {plain:?}");
+    let inferred = check_source(&format!(
+        "{RES}struct W {{ r: Res }} impl W {{ fn close(sink self) {{ }} }}\n"
+    ));
+    assert_eq!(inferred, vec!["O0022"], "an inferred-linear `W` drops `r`");
+    let declared = check_source(&format!(
+        "{RES}struct C {{ r: Res, n: i32 }} impl Linear for C {{ }} impl C {{ fn close(sink self) {{ }} }}\n"
+    ));
+    assert_eq!(declared, vec!["O0022"], "a declared-linear `C` drops `r`");
+    let payload = check_source(&format!(
+        "{RES}enum E {{ a(Res), b }} impl Linear for E {{ }} impl E {{ fn close(sink self) {{ }} }}\n"
+    ));
+    assert_eq!(payload, vec!["O0022"], "a payload is a component too");
+    let destructured = check_source(&format!(
+        "{RES}struct C {{ r: Res, n: i32 }} impl Linear for C {{ }} impl C {{\n\
+         fn close(sink self) {{ match self {{ C {{ r: let x, n: let k }} => {{ x.close(); }} }} }} }}\n"
+    ));
+    assert!(
+        destructured.is_empty(),
+        "destructuring consumes: {destructured:?}"
+    );
+}

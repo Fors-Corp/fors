@@ -19,7 +19,7 @@ use fors_fir::sig::Conv;
 use fors_fir::ty::{NO_TY, TyId};
 use fors_index::ids::DefId;
 
-use crate::tape::UseTape;
+use crate::tape::{PlaceId, UseTape};
 
 /// What a call's callee turned out to be (FMIR datum D2, §4.1).
 ///
@@ -75,6 +75,169 @@ pub enum MemberTarget {
     IndexImpl { at: DefId, at_mut: Option<DefId> },
 }
 
+// ----------------------------------------------- I8b: D7, D8, D9 (§4.1)
+
+/// D7: which of the two statements a deferred body came from.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum DeferKind {
+    Defer,
+    ErrDefer,
+}
+
+/// D7: the strongest access a deferred body makes to one place (ch01
+/// R23d's `let` < `inout` < move summary).
+#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Debug)]
+pub enum Access {
+    Let,
+    Inout,
+    Move,
+}
+
+/// D7: one `defer`/`errdefer` statement, in the shape
+/// `fmir-interpreter.md` §3.8 gives `DeferRow` — `fors-lower` turns
+/// `body` into a `BlockId` and `stmt_order` into its `u16` by
+/// construction, and the verifier asserts against this, never re-derives
+/// it.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub struct DeferRegionRow {
+    /// The `block` (or arm) that directly contains the statement.
+    pub scope: u32,
+    pub kind: DeferKind,
+    /// The statement's own CST node; its body is its `block` child.
+    pub body: u32,
+    /// Position among the statements of `scope`. Bodies run in ONE
+    /// reverse `stmt_order` sequence interleaving both kinds (R23a, R23b).
+    pub stmt_order: u32,
+}
+
+/// D7: `(body, place root, strongest access)` — R23d's summary, computed
+/// once and applied at every exit where the body runs.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub struct DeferAccessRow {
+    pub body: u32,
+    pub root: u32,
+    pub access: Access,
+}
+
+/// D7/D8: the kind of one exit edge (ch01 R22h, ch02 R16).
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum ExitEdgeKind {
+    BlockEnd,
+    Return,
+    Raise,
+    Question,
+    Break,
+    Continue,
+}
+
+/// D7: one exit edge, with the scopes it leaves (innermost first) and the
+/// multiset of deferred bodies that run on it, already in the order
+/// R23a(2) fixes. `fors-lower` inlines them in exactly this order.
+#[derive(Clone, Debug)]
+pub struct ExitEdge {
+    pub kind: ExitEdgeKind,
+    /// The `return`/`raise`/`?`/`break`/`continue` node, or the block
+    /// whose `}` this is.
+    pub node: u32,
+    pub scopes: Vec<u32>,
+    /// Indices into [`DeferRegions::rows`], in run order. Only the bodies
+    /// whose statement was EXECUTED on the path to this exit are here
+    /// (ch01 R23a: it textually precedes the exit; a `}` is after every
+    /// statement of its block). `fors_fmir::exit::expected_pending` has no
+    /// such cut — it takes a `ScopeRow`'s whole `defers` range — so
+    /// `fors-lower` must lay the pool out so that a scope's range at an
+    /// edge holds exactly these rows.
+    pub defers: Vec<u32>,
+}
+
+/// D7 — defer/errdefer decisions (design §13's "Interface to FMIR
+/// lowering").
+#[derive(Default, Debug)]
+pub struct DeferRegions {
+    pub rows: Vec<DeferRegionRow>,
+    pub accesses: Vec<DeferAccessRow>,
+    pub exits: Vec<ExitEdge>,
+}
+
+/// D8: what consumed an obligation on one exit edge. The names are
+/// `fmir-interpreter.md` §3.5's `Discharge`, in checker coordinates:
+/// `fors-lower` turns a node into an `InstId`/`BlockId`.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum Discharge {
+    /// A whole-place move (R22d(i)): the node that moved it.
+    MovedAt(u32),
+    /// A `defer`/`errdefer` body (R22d(iii), R23d(b)).
+    DeferredBody { scope: u32, body: u32 },
+    /// A `match` that bound every linear component (R22d(ii)).
+    Destructured(u32),
+    /// The scope's tail value (R22d(i)'s "the function body's tail
+    /// value", generalised to every scope).
+    TailValue(u32),
+}
+
+/// D8: one obligation, as ch01 R22d states it.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub struct ObligationRow {
+    /// The scope that owes it.
+    pub scope: u32,
+    /// The introducing node (`Binding`, `PatLet`, `FPat`, `Param`).
+    pub root: u32,
+    /// Its interned place, when the body ever used it.
+    pub place: Option<PlaceId>,
+    pub ty: TyId,
+    /// The `let`/`var` statement that introduces the binding, as `(start,
+    /// end)` nodes; `(root, root)` for a pattern binding or a parameter. An
+    /// exit INSIDE this range — `var b: Own[..] = a.create(1)?;` — happens
+    /// before the binding exists: the obligation is not owed there and
+    /// carries no [`DischargeRow`] on that edge. Likewise a non-`}` exit
+    /// that textually precedes `root` (a `break` written before the
+    /// binding in the same loop body): owed means "the binding was
+    /// initialised on the path to the edge", which in a structured body is
+    /// exactly "declared before it, and not inside its own statement".
+    pub decl: (u32, u32),
+}
+
+/// D8: one `(exit edge, obligation, discharge)` row. An obligation of a
+/// scope being left with NO row on that edge is `fmir-interpreter.md`
+/// §3.5's `linear-leak` — a compiler bug, never a trap — which is why the
+/// checker reports it as ch01 R22i instead of letting it get here.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub struct DischargeRow {
+    /// Index into [`DeferRegions::exits`].
+    pub exit: u32,
+    pub root: u32,
+    pub how: Discharge,
+}
+
+/// D8 — linear obligations and discharges.
+#[derive(Default, Debug)]
+pub struct LinearObligations {
+    pub obligations: Vec<ObligationRow>,
+    pub discharges: Vec<DischargeRow>,
+    /// `lin(T)` per `TyId` this body asked about (ch01 R22a), so lowering
+    /// sets `flags.LINEAR` from the checker's answer and never recomputes
+    /// it.
+    pub lin: Vec<(TyId, bool)>,
+}
+
+/// D9 — scoped sources (ch01 R19c(d), R19d): per value, the source place
+/// ROOTS its accesses extend. R19a's extents stay M3; this is the source
+/// SETS only, which is what R19c and R19d decide.
+#[derive(Default, Debug)]
+pub struct ScopedSources {
+    pub rows: Vec<(u32, Vec<u32>)>,
+}
+
+impl ScopedSources {
+    pub fn sources_of(&self, node: u32) -> &[u32] {
+        self.rows
+            .iter()
+            .find(|(n, _)| *n == node)
+            .map(|(_, v)| &v[..])
+            .unwrap_or(&[])
+    }
+}
+
 /// One body's typed side table, indexed by `node - start` exactly like
 /// [`BodyCx`](crate::body::BodyCx)'s other per-node vectors: one bounds
 /// check, no hashing. Sized once from the declaration's subtree; nodes
@@ -108,6 +271,13 @@ pub struct BodyFacts {
     /// once lowering owns the pipeline; until then it is the same tape the
     /// checker always emitted).
     pub tape: UseTape,
+    /// D7 (I8b): the `defer`/`errdefer` regions and their exit edges.
+    pub defer_regions: DeferRegions,
+    /// D8 (I8b): the linear obligations, their discharges per exit edge,
+    /// and `lin(T)` per `TyId`.
+    pub linear_obligations: LinearObligations,
+    /// D9 (I8b): the scoped source sets of ch01 R19c(d) and R19d.
+    pub scoped_sources: ScopedSources,
 }
 
 impl BodyFacts {
@@ -123,6 +293,9 @@ impl BodyFacts {
             member: vec![MemberTarget::None; n],
             arg_convs: Vec::new(),
             tape: UseTape::new(),
+            defer_regions: DeferRegions::default(),
+            linear_obligations: LinearObligations::default(),
+            scoped_sources: ScopedSources::default(),
         }
     }
 

@@ -420,7 +420,7 @@ pub const CH09_RULES: [RuleEntry; 62] = [
         &["exhaust::step_budget"],
     ),
     r(56, None, "absent-syntax-no-diagnostic", &[]),
-    r(
+    imp(
         57,
         Some(57),
         "rigid-type-operations-without-a-bound",
@@ -432,6 +432,7 @@ pub const CH09_RULES: [RuleEntry; 62] = [
             "expr::cast",
             "pat::check_pat",
             "tape",
+            "flow::drop_rigid",
         ],
     ),
     r(
@@ -705,15 +706,29 @@ mod tests {
         // (`flow::merge`, `flow::loop_head`, O0008 — the corpus's
         // `merge-liveness-disagreement-rejected` is 01.R8's own test).
         //
-        // R57 and R58 stay unimplemented, each for one site:
-        //  - R57's `tape` site is in (a value use of a non-`Copyable`
-        //    rigid place is a Move, which `flow.rs` now judges —
-        //    `copy-without-copyable-rejected` is on), but
-        //    `pat::check_pat` is not. §8's ch01 R22c row assigns what
-        //    remains of it — "dropping a rigid value needs a bound",
-        //    which is R57's round-6 drop clause and covers `_` facing a
-        //    rigid type — to `flow::drop_rigid` at I8b, and §16
-        //    amendment 10 fixes I8's scope at "R3/R4a/R8/R46 only".
+        // I8b (round-6 flow, 2026-10-02) flips R57, the ONE row it flips.
+        // Its last two sites are now in: `pat::check_pat` rejects a `_`
+        // or a literal pattern facing a linear component (ch01 R22d(ii)),
+        // and the new `flow::drop_rigid` site — `flow::render_linear_leak`
+        // and the scope-exit check behind it — is R57's round-6 drop
+        // clause, "letting a value of rigid type go out of scope,
+        // `discard`ing it, matching it with `_`, or evaluating it as an
+        // expression statement MUST be rejected unless the type is
+        // `Droppable`" (ch01 R22c). `rigid-{drop,discard,expression-
+        // statement}-without-droppable-rejected`,
+        // `neutral-projection-drop-without-bound-rejected` and
+        // `linear-bound-adds-no-operation-rejected` came off `PENDING_09`
+        // with it. The rest of I8b's GATE is ch01's and has no row here:
+        // R22-R22i (O0022, `flow::scope_exit` / `flow::render_linear_leak`
+        // / `wf::is_linear` over `fors_fir::ty::lin`), R23-R23f (O0023,
+        // `flow::static_linear_checks` and `flow::scope_exit`) and
+        // R19c/R19d (O0019, `flow::closure_sources`). The ch09 rows those
+        // clauses amend — R10(c) at `expr::to_dyn`, R11's linear element
+        // at `wf::linear_elements`, R23 at `wf::copyable_impl`, R24 at
+        // `wf::marker_traits`, R50 at `pat::check_pat` — were already
+        // `Implemented` and keep their sites.
+        //
+        // R58 stays unimplemented, for one site:
         //  - R58's `lower::brand_as_type` site is in
         //    (`brand-param-as-value-type-rejected`, reported with ch01
         //    R15d's own code as §8's row 58 requires), but
@@ -725,7 +740,7 @@ mod tests {
             vec![
                 1, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24,
                 25, 26, 27, 28, 29, 30, 31, 32, 33, 34, 35, 36, 37, 38, 39, 40, 41, 42, 43, 44, 45,
-                46, 47, 48, 49, 50, 51, 53, 54, 55, 59, 60, 61, 62
+                46, 47, 48, 49, 50, 51, 53, 54, 55, 57, 59, 60, 61, 62
             ]
         );
         // NoCode rows, exactly as design §8 marks them.

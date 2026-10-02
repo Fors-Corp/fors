@@ -883,7 +883,12 @@ tape following the CST's structured control flow: R3 (moves out of `let`),
 R4a(a) use after move, (b) move inside a loop of an outer place unless
 re-initialised on every path to the loop head (the R8 merge), (c) partial
 move, (d) `let`/`inout` parameter, (e) capture; `spawn x.run()` is the
-`move` capture. An event whose place has type `TY_ERROR` is skipped. Codes
+`move` capture. **Amended 2026-10-02 (I8's verifier):** the R8 merge is
+not only the loop head — it applies at every `if`/`match` JOIN and at
+every LOOP EXIT too, because the corpus requires all three (a place moved
+on one branch and live on the other, and a place moved on a `break` path
+and live when the loop ends another way, are the same disagreement), and
+it stays the one two-valued state R8's round-6 note allows. An event whose place has type `TY_ERROR` is skipped. Codes
 are `Code::O(4)` etc. with the clause letter in the message. R46's
 mandatory message is built from `Cause::ImplicitReceiver`'s non-optional
 fields: "`x` was moved by the call `x.finish()` at L:C, because
@@ -985,6 +990,7 @@ statement.
 |---|---|---|---|
 | ch01 R2 | convention markers at call sites (`&x`, `move x`, `&out x`); receiver exception | `call::conv_marker` (O0002) | yes |
 | ch01 R3, R4a(a)-(e), R8 (loop-head merge for moves) | moves and liveness | `flow.rs` (O0003, O0004) | yes (moves only) |
+| ch01 R8 (amended 2026-10-02, I8's verifier) | the two-valued merge applies at `if`/`match` JOINS and at LOOP EXITS as well as at the loop head — the corpus requires it (`merge-liveness-disagreement-rejected` is a join, and a place moved on a `break` path and live when the loop ends another way is the same disagreement), and `flow.rs` implements all three in `flow::merge`/`flow::loop_head` with the one two-valued state R8's round-6 note allows | `flow::merge`, `flow::loop_head` (O0008) | yes |
 | ch01 R4, R5 | sink moved on every path; set initialised on every return | `flow.rs` | **not in v0.1 M1**: M3 (needs definite-init dataflow) |
 | ch01 R6, R7, R9 | exclusivity, overlap, varying stores | FMIR race checker | not in v0.1 M1 (M3) |
 | ch01 R10-R13 | `iso`/`imm` conversions, deep `imm`, `iso` extraction, sendability | `expr::field` (imm propagation); the rest FMIR | partial: R11 only |

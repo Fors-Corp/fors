@@ -790,6 +790,312 @@ impl TyStore {
     }
 }
 
+// --------------------------------------------------------- ch01 R22a-R22c
+
+/// The facts [`lin`] cannot read out of the type store: which heads were
+/// DECLARED linear, and which rigid leaves this build has decided are
+/// `Droppable`.
+///
+/// Every field is a SORTED slice, so each probe is a binary search and the
+/// descent costs what ch09 R20's shape costs (ch01 R22a's "Cost and
+/// termination"). The caller owns the rigid set because deciding a rigid
+/// leaf's `Droppable`-ness needs the bound tables, which are the checker's,
+/// not this crate's: [`open_leaves`] enumerates the leaves of a type so the
+/// caller can answer them all before asking [`lin`].
+pub struct LinEnv<'a> {
+    /// Nominal heads with an `impl Linear` (R22a(a)), sorted by `DefId`.
+    pub roots: &'a [DefId],
+    /// Built-in generic heads whose FIRST argument is held by value —
+    /// `Array`, `vector`, `atomic`, `Option` (R22a(b), R22b) — sorted.
+    pub by_value: &'a [DefId],
+    /// Built-in heads that are linear with no written `impl` and WITHOUT
+    /// descending into their arguments: `Own[T, A]` (R22). Sorted.
+    pub own: &'a [DefId],
+    /// Built-in heads `lin` must never descend into and that are never
+    /// linear: `Slice`, `Ref`, `Arena`, `Range`, `RangeIncl`, `mask`
+    /// (R22a's finiteness argument). Sorted.
+    pub opaque: &'a [DefId],
+    /// R22c: the rigid parameters and neutral projections this build has
+    /// decided are NOT `Droppable`, and which are therefore linear. Sorted
+    /// by `TyId`; a `Param`/`Proj` absent from it is `Droppable`.
+    pub rigid_linear: &'a [TyId],
+}
+
+impl LinEnv<'_> {
+    fn is_root(&self, d: DefId) -> bool {
+        self.roots.binary_search_by_key(&d.0, |x| x.0).is_ok()
+    }
+    fn is_by_value(&self, d: DefId) -> bool {
+        self.by_value.binary_search_by_key(&d.0, |x| x.0).is_ok()
+    }
+    fn is_own(&self, d: DefId) -> bool {
+        self.own.binary_search_by_key(&d.0, |x| x.0).is_ok()
+    }
+    fn is_opaque(&self, d: DefId) -> bool {
+        self.opaque.binary_search_by_key(&d.0, |x| x.0).is_ok()
+    }
+    fn is_rigid_linear(&self, t: TyId) -> bool {
+        self.rigid_linear
+            .binary_search_by_key(&t.0, |x| x.0)
+            .is_ok()
+    }
+}
+
+/// ch01 R22a: `lin(T)`, memoised per `TyId` — which interns `(head,
+/// substituted arguments)`, so the memo IS R22a's "memoised per (head,
+/// arguments)".
+///
+/// True iff one of: (a) `T`'s head has an `impl Linear`, or is `Own`;
+/// (b) `T` is a struct, enum or tuple and some field, payload or tuple
+/// component, WITH `T`'s ARGUMENTS SUBSTITUTED, has `lin` true; (c) `T` is
+/// a rigid parameter or neutral projection that is not `Droppable`.
+///
+/// It never descends into `Own`, `Ref`, `Arena`, `Slice`, `rawptr`, `fn`
+/// or `dyn`, which is what bounds it: ch09 R14 forbids an infinite type
+/// except through exactly those indirections.
+pub fn lin(
+    tys: &mut TyStore,
+    sigs: &crate::sig::SigStore,
+    env: &LinEnv,
+    memo: &mut std::collections::HashMap<TyId, bool>,
+    ty: TyId,
+) -> bool {
+    lin_uncached(tys, sigs, env, memo, ty, 0)
+}
+
+/// ch01 R22c: `X: Droppable` holds iff `lin(X)` is false. There are no
+/// impls (R22c, ch09 R24), so this is the whole rule.
+pub fn droppable(
+    tys: &mut TyStore,
+    sigs: &crate::sig::SigStore,
+    env: &LinEnv,
+    memo: &mut std::collections::HashMap<TyId, bool>,
+    ty: TyId,
+) -> bool {
+    !lin(tys, sigs, env, memo, ty)
+}
+
+/// `T`'s by-value components with `T`'s arguments substituted: every
+/// struct field and every enum-variant payload component (R22a(b)).
+fn components(tys: &mut TyStore, sigs: &crate::sig::SigStore, ty: TyId) -> Vec<TyId> {
+    use crate::sig::{MemberKind, PayloadKind};
+    let def = DefId(tys.a(ty));
+    if def.index() >= sigs.len() {
+        return Vec::new();
+    }
+    let mut raw: Vec<TyId> = Vec::new();
+    let ms = sigs.members(def);
+    for i in 0..sigs.member_store.count(ms) {
+        let m = sigs.member_store.get(ms, i);
+        match m.kind {
+            MemberKind::Field => raw.push(m.ty),
+            MemberKind::Variant => match m.payload {
+                PayloadKind::Tuple => raw.extend(tys.args(m.args).iter().copied()),
+                PayloadKind::Record => {
+                    for j in 0..sigs.member_store.count(m.sub) {
+                        raw.push(sigs.member_store.get(m.sub, j).ty);
+                    }
+                }
+                PayloadKind::None => {}
+            },
+            MemberKind::Item => {}
+        }
+    }
+    let args = tys.args_vec(ArgsId(tys.b(ty)));
+    if args.is_empty() {
+        return raw;
+    }
+    let g = sigs.generics(def);
+    let n = sigs.generics_store.count(g) as u16;
+    let mut b = crate::subst::Binding::new(&[(def, n)]);
+    for (i, &a) in args.iter().enumerate() {
+        if (i as u16) < n {
+            b.bind(def, i as u16, a);
+        }
+    }
+    raw.into_iter()
+        .map(|t| crate::subst::subst_norm(tys, t, &b).unwrap_or(t))
+        .collect()
+}
+
+fn lin_uncached(
+    tys: &mut TyStore,
+    sigs: &crate::sig::SigStore,
+    env: &LinEnv,
+    memo: &mut std::collections::HashMap<TyId, bool>,
+    ty: TyId,
+    depth: u32,
+) -> bool {
+    if depth > 64 || ty == TY_ERROR || ty == NO_TY {
+        return false;
+    }
+    let ty = tys.unqual(ty); // a qualifier does not change `lin` (R22a)
+    // R22a's "memoised per (head, arguments)" — which is what a `TyId`
+    // interns. A rigid leaf is NOT memoised: its answer is the (c) clause
+    // only at the top, so one entry could not serve both readings.
+    let cacheable = matches!(tys.tag(ty), TyTag::Nominal | TyTag::Tuple);
+    if cacheable {
+        if let Some(&v) = memo.get(&ty) {
+            return v;
+        }
+        // A cycle is broken as NOT linear: a type that is linear only
+        // because it contains itself is ch09 R14's infinite type,
+        // reported there.
+        memo.insert(ty, false);
+        let v = lin_body(tys, sigs, env, memo, ty, depth);
+        memo.insert(ty, v);
+        return v;
+    }
+    lin_body(tys, sigs, env, memo, ty, depth)
+}
+
+/// ch01 R22a(b) ALONE: whether some by-value component of `ty` — a field,
+/// a payload component, a tuple component, the element of a by-value
+/// built-in — is linear, ignoring whether `ty`'s own head is declared
+/// linear. This is what a `sink self` receiver of a declared-linear head
+/// still owes (ch01 R22d): the method IS R22i's consumer of the head, but
+/// a linear field inside it is consumed only by a move or a destructuring.
+pub fn lin_components(
+    tys: &mut TyStore,
+    sigs: &crate::sig::SigStore,
+    env: &LinEnv,
+    memo: &mut std::collections::HashMap<TyId, bool>,
+    ty: TyId,
+) -> bool {
+    let ty = tys.unqual(ty);
+    match tys.tag(ty) {
+        TyTag::Nominal => {
+            let def = DefId(tys.a(ty));
+            if env.is_own(def) || env.is_opaque(def) {
+                return false;
+            }
+            if env.is_by_value(def) {
+                let first = tys.args(ArgsId(tys.b(ty))).first().copied();
+                return first.is_some_and(|x| lin_uncached(tys, sigs, env, memo, x, 1));
+            }
+            components(tys, sigs, ty)
+                .into_iter()
+                .any(|c| lin_uncached(tys, sigs, env, memo, c, 1))
+        }
+        TyTag::Tuple => tys
+            .args_vec(ArgsId(tys.b(ty)))
+            .into_iter()
+            .any(|x| lin_uncached(tys, sigs, env, memo, x, 1)),
+        _ => false,
+    }
+}
+
+fn lin_body(
+    tys: &mut TyStore,
+    sigs: &crate::sig::SigStore,
+    env: &LinEnv,
+    memo: &mut std::collections::HashMap<TyId, bool>,
+    ty: TyId,
+    depth: u32,
+) -> bool {
+    match tys.tag(ty) {
+        // (c) the conservative assumption, and R22c's own scope: it is
+        // about an OPERATION on a value "of rigid type" — letting it go
+        // out of scope, `discard`ing it, matching it with `_`, evaluating
+        // it as an expression statement. A rigid leaf reached by descent
+        // from a containing type does NOT make that type linear (`let
+        // first: Option[Self.Item] = self.pull();` is ch09's
+        // `assoc-type-in-provided-body-accepted`, a well-formed program);
+        // only the rigid type itself carries the conservative answer.
+        TyTag::Param | TyTag::Proj => depth == 0 && env.is_rigid_linear(ty),
+        TyTag::Nominal => {
+            let def = DefId(tys.a(ty));
+            if env.is_root(def) || env.is_own(def) {
+                return true; // (a)
+            }
+            if env.is_opaque(def) {
+                return false;
+            }
+            if env.is_by_value(def) {
+                let first = tys.args(ArgsId(tys.b(ty))).first().copied();
+                return match first {
+                    Some(x) => lin_uncached(tys, sigs, env, memo, x, depth + 1),
+                    None => false,
+                };
+            }
+            // (b) a user struct or enum: every field and payload component.
+            for c in components(tys, sigs, ty) {
+                if lin_uncached(tys, sigs, env, memo, c, depth + 1) {
+                    return true;
+                }
+            }
+            false
+        }
+        TyTag::Tuple => {
+            for x in tys.args_vec(ArgsId(tys.b(ty))) {
+                if lin_uncached(tys, sigs, env, memo, x, depth + 1) {
+                    return true;
+                }
+            }
+            false
+        }
+        _ => false,
+    }
+}
+
+/// Every rigid leaf (`Param`, `Proj`) [`lin`] would consult inside `ty`,
+/// collected with the SAME descent and the same stopping rules. The caller
+/// decides each one's `Droppable`-ness — which needs the bound tables —
+/// and hands the answers back in [`LinEnv::rigid_linear`].
+pub fn open_leaves(
+    tys: &mut TyStore,
+    sigs: &crate::sig::SigStore,
+    env: &LinEnv,
+    ty: TyId,
+) -> Vec<TyId> {
+    let mut out = Vec::new();
+    let mut seen: Vec<TyId> = Vec::new();
+    leaves_into(tys, sigs, env, ty, 0, &mut seen, &mut out);
+    out.sort_unstable_by_key(|t| t.0);
+    out.dedup();
+    out
+}
+
+fn leaves_into(
+    tys: &mut TyStore,
+    sigs: &crate::sig::SigStore,
+    env: &LinEnv,
+    ty: TyId,
+    depth: u32,
+    seen: &mut Vec<TyId>,
+    out: &mut Vec<TyId>,
+) {
+    if depth > 64 || ty == TY_ERROR || ty == NO_TY || seen.contains(&ty) {
+        return;
+    }
+    seen.push(ty);
+    let ty = tys.unqual(ty);
+    match tys.tag(ty) {
+        TyTag::Param | TyTag::Proj => out.push(ty),
+        TyTag::Nominal => {
+            let def = DefId(tys.a(ty));
+            if env.is_root(def) || env.is_own(def) || env.is_opaque(def) {
+                return;
+            }
+            if env.is_by_value(def) {
+                if let Some(x) = tys.args(ArgsId(tys.b(ty))).first().copied() {
+                    leaves_into(tys, sigs, env, x, depth + 1, seen, out);
+                }
+                return;
+            }
+            for c in components(tys, sigs, ty) {
+                leaves_into(tys, sigs, env, c, depth + 1, seen, out);
+            }
+        }
+        TyTag::Tuple => {
+            for x in tys.args_vec(ArgsId(tys.b(ty))) {
+                leaves_into(tys, sigs, env, x, depth + 1, seen, out);
+            }
+        }
+        _ => {}
+    }
+}
+
 #[cfg(test)]
 mod tests {
     /// The three reserved rows exist in EVERY build profile. This is the

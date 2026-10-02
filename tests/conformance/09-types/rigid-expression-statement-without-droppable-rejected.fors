@@ -5,6 +5,6 @@
 
 needs { };
 
-fn make[T](let t: T) -> T { return t; }
+fn make[T](sink t: T) -> T { return move t; }
 
-fn f[T](sink x: T) { make(x); }
+fn f[T](sink x: T) { make(move x); }
