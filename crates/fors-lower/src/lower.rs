@@ -35,7 +35,7 @@ use fors_check::defs::DefTable;
 use fors_check::facts::{BodyFacts, FactCallee, MemberTarget};
 use fors_fir::Fir;
 use fors_fir::sig::Conv;
-use fors_fir::ty::{NO_TY, PrimKind, TY_ERROR, TY_UNIT, TyId, TyTag};
+use fors_fir::ty::{ArgsId, ConstId, NO_TY, PrimKind, TY_ERROR, TY_UNIT, TyId, TyTag};
 use fors_index::decl::DeclKind;
 use fors_index::ids::DefId;
 use fors_index::{Interner, Symbol};
@@ -46,8 +46,8 @@ use fors_syntax::{NodeKind, Tree};
 use fors_fmir::alias::AliasSeed;
 use fors_fmir::block::BlockRow;
 use fors_fmir::decl::DeclFmir;
-use fors_fmir::ids::{BlockId, PlaceId, ScopeId, SiteId, ValId};
-use fors_fmir::inst::{CallRow, Callee, InstRow};
+use fors_fmir::ids::{ABSENT, BlockId, PlaceId, ScopeId, SiteId, ValId};
+use fors_fmir::inst::{CallRow, Callee, InstRow, ReduceRow};
 use fors_fmir::op::{ArithMode, CmpPred, NO_OPERAND, Op, Policy};
 use fors_fmir::place::Seg;
 use fors_fmir::value::{ValDef, ValRow};
@@ -190,7 +190,8 @@ fn prescan(
     // Real `Buffer`/`Slice` bodies are F7's; this bypasses `facts`
     // entirely for exactly those statements (see `buffer_stub_ranges`),
     // never for anything else.
-    let stub_ranges = buffer_stub_ranges(file, decl_node);
+    let mut stub_ranges = buffer_stub_ranges(file, decl_node);
+    stub_ranges.extend(reduce_stub_ranges(file, decl_node));
     'scan: for n in start..end {
         for &(s, e) in &stub_ranges {
             if n >= s && n < e {
@@ -277,6 +278,79 @@ fn buffer_stub_ranges(file: &FileInput<'_>, decl_node: usize) -> Vec<(u32, u32)>
     out
 }
 
+/// Every `reduce(...)` call in the declaration, as `(start, end)` node
+/// ranges `prescan` holds out of its `TY_ERROR` scan.
+///
+/// **[HOLE-7]** (design §11.3): *no checker increment types ch03 R11's
+/// `reduce`* — it is a language primitive, not a function, and neither I3's
+/// gate list nor I10's rule list claims it. So the checker leaves the call
+/// poisoned and F5 hard-codes the typing in lowering, exactly as F2 did for
+/// `Buffer.fixed` (design §5.8's "minimal intrinsic-backed stub"). The
+/// hard-coding is deliberately confined to three places, all named here so
+/// the adopting increment can find them in one grep for `HOLE-7`:
+///   1. this hold-out (so `prescan` does not reject the body),
+///   2. [`FnLower::lower_reduce`] (the element type comes from the operand,
+///      the `op` from the declared binary operator, the optional identity
+///      from the `identity:` argument), and
+///   3. `fors-interp::reduce`'s `ReduceOp::resolve` (the executor end of
+///      the opcode-name convention `reduce_op_name` writes).
+///
+/// The cheapest fix design §11.3 names is one line in I10's rule list: add
+/// ch03 R11. When that lands, (1) and (2) delete and (3) stays.
+fn reduce_stub_ranges(file: &FileInput<'_>, decl_node: usize) -> Vec<(u32, u32)> {
+    let mut out = Vec::new();
+    if decl_node >= file.tree.len() {
+        return out;
+    }
+    let end = file.tree.subtree_end(decl_node).min(file.tree.len());
+    for n in decl_node..end {
+        if call_names_reduce(file.tree, file.tokens, file.source, n) {
+            out.push((n as u32, file.tree.subtree_end(n) as u32));
+        }
+    }
+    out
+}
+
+/// Is `call` a `CallExpr` whose callee is the bare prelude value `reduce`
+/// (ch08 R17's `PRELUDE_VALUES`)? Matched by shape and spelling, like the
+/// F2 `Buffer` stand-in, because there is no checker fact to read.
+fn call_names_reduce(tree: &Tree, tokens: &Tokens, source: &[u8], call: usize) -> bool {
+    if call >= tree.len() || tree.kinds[call] != NodeKind::CallExpr {
+        return false;
+    }
+    let Some(callee) = tree.children(call).next() else {
+        return false;
+    };
+    if tree.kinds[callee] != NodeKind::NameExpr {
+        return false;
+    }
+    let (a, b) = tree.token_range(callee);
+    let idents: Vec<&[u8]> = (a..b)
+        .filter(|&t| tokens.kinds[t as usize] == TokenKind::Ident)
+        .map(|t| tokens.text(t as usize, source))
+        .collect();
+    idents == [b"reduce".as_slice()]
+}
+
+/// The FMIR opcode spelling `fors-interp::reduce::ReduceOp::resolve` reads
+/// back. The two ends of this convention are the whole of `reduce`'s
+/// "which function does it apply" story in F5 ([HOLE-7]).
+fn reduce_op_name(op: Op) -> Option<&'static str> {
+    Some(match op {
+        Op::Add(_) => "add",
+        Op::Sub(_) => "sub",
+        Op::Mul(_) => "mul",
+        Op::Div(_) => "div",
+        Op::Rem(_) => "rem",
+        Op::Fadd(_) => "fadd",
+        Op::Fsub(_) => "fsub",
+        Op::Fmul(_) => "fmul",
+        Op::Fdiv(_) => "fdiv",
+        Op::Frem(_) => "frem",
+        _ => return None,
+    })
+}
+
 /// Significant `Ident` token texts `node` owns directly (not its
 /// children's) — a free-function twin of `FnLower::own_tokens`/
 /// `path_segments` for use where there is no `&mut Interner` (`prescan`
@@ -359,9 +433,15 @@ fn has_generic_params(file: &FileInput<'_>, decl: usize) -> bool {
     false
 }
 
-/// One block under construction: its sealed length and its terminator.
-// Starts are prefix sums over sealed lengths, fixed at `finish` time.
+/// One block under construction: where its instructions start, its sealed
+/// length and its terminator. `first` is recorded at `seal` time because
+/// instructions are laid down in SEAL order, which is not block-id order
+/// once control flow nests: an `if` inside a then-branch seals its own
+/// three blocks before the enclosing else-block is even entered, so a
+/// prefix sum over ids would hand the else-block the inner then-block's
+/// instructions.
 struct BlockDraft {
+    first: usize,
     len: usize,
     term: Option<InstRow>,
 }
@@ -412,6 +492,15 @@ struct FnLower<'a> {
     buffer_stub_locals: HashSet<Symbol>,
 }
 
+/// The three argument positions of a `reduce(...)` call, found by shape
+/// (ch03 R11/R11a: a bare binary operator, the operand sequence, and the
+/// optional `identity:`).
+struct ReduceArgs {
+    op_tok: Option<TokenKind>,
+    xs: Option<usize>,
+    identity: Option<usize>,
+}
+
 /// Which contract clause a `Contract` CST node spells — read off its own
 /// leading keyword token, never inferred (design §3.6: `check_pre`/
 /// `check_post`/`check_inv` are separate instructions).
@@ -452,7 +541,11 @@ impl<'a> FnLower<'a> {
             strings: Vec::new(),
             intrinsics: Vec::new(),
             insts: Vec::new(),
-            blocks: vec![BlockDraft { len: 0, term: None }],
+            blocks: vec![BlockDraft {
+                first: 0,
+                len: 0,
+                term: None,
+            }],
             cur: 0,
             emitted: 0,
             scopes: vec![HashMap::new()],
@@ -472,9 +565,11 @@ impl<'a> FnLower<'a> {
             self.decl.push_inst(row, seed);
         }
         // Drop `DeclFmir::empty`'s sentinel block: drafts are the whole
-        // CFG, in creation (= emission) order, so ids need no remap.
+        // CFG in creation order, so ids need no remap; each draft carries
+        // its own `first` (recorded at `seal`), because emission order is
+        // seal order, not id order (see `BlockDraft`).
         let mut blocks = fors_fmir::block::BlockPool::new();
-        let mut start = 0u32;
+        let mut covered = 0usize;
         for draft in std::mem::take(&mut self.blocks) {
             let term = draft.term.unwrap_or(InstRow {
                 op: Op::Unreachable,
@@ -485,14 +580,14 @@ impl<'a> FnLower<'a> {
                 site: SITE,
             });
             blocks.push(BlockRow {
-                first_inst: start,
+                first_inst: draft.first as u32,
                 inst_len: draft.len as u32,
                 term,
                 scope: ROOT_SCOPE,
             });
-            start += draft.len as u32;
+            covered += draft.len;
         }
-        debug_assert_eq!(start as usize, self.decl.insts.len());
+        debug_assert_eq!(covered, self.decl.insts.len());
         self.decl.blocks = blocks;
         self.decl.entry = BlockId(0);
         LoweredFn {
@@ -625,6 +720,14 @@ impl<'a> FnLower<'a> {
         id
     }
 
+    /// [`FnLower::emit`] for a memory-producing op, which `verify()`
+    /// requires to carry an alias seed (design §3.4a).
+    fn emit_seeded(&mut self, op: Op, a: u32, b: u32, c: u32, ty: TyId, seed: AliasSeed) -> u32 {
+        let id = self.emit(op, a, b, c, ty);
+        self.insts[id as usize].1 = seed;
+        id
+    }
+
     fn fresh(&mut self, ty: TyId, inst: u32) -> ValId {
         self.decl.push_val(ValRow::new(
             ty,
@@ -642,6 +745,7 @@ impl<'a> FnLower<'a> {
     fn seal(&mut self, term: InstRow) {
         let cur = self.cur;
         let len = self.insts.len() - self.emitted;
+        self.blocks[cur].first = self.emitted;
         self.blocks[cur].len = len;
         self.blocks[cur].term = Some(term);
         self.emitted += len;
@@ -656,7 +760,11 @@ impl<'a> FnLower<'a> {
     /// over sealed lengths); creation order is emission order.
     fn new_block(&mut self) -> BlockId {
         let id = self.blocks.len() as u32;
-        self.blocks.push(BlockDraft { len: 0, term: None });
+        self.blocks.push(BlockDraft {
+            first: 0,
+            len: 0,
+            term: None,
+        });
         self.cur = id as usize;
         BlockId(id)
     }
@@ -984,7 +1092,7 @@ impl<'a> FnLower<'a> {
         // placeholder is harmless, since the interpreter never reads a
         // place's declared type, only its current value).
         let bind_ty = match init {
-            Some(e) => self.ty_of(e),
+            Some(e) => self.initialiser_ty(e),
             None => {
                 let t = self.ty_of(node);
                 if t == NO_TY { TY_UNIT } else { t }
@@ -993,9 +1101,24 @@ impl<'a> FnLower<'a> {
         let root = self.bind(sym, bind_ty);
         if let Some(e) = init {
             let v = self.lower_expr(e)?;
-            self.write_place(root, &[], self.ty_of(e), v);
+            self.write_place(root, &[], bind_ty, v);
         }
         Ok(())
+    }
+
+    /// The type an initialiser produces. Normally the checker's answer; for
+    /// a `reduce(...)` call the checker has none ([HOLE-7]), so the operand
+    /// decides.
+    fn initialiser_ty(&mut self, e: usize) -> TyId {
+        if call_names_reduce(self.tree, self.tokens, self.source, e) {
+            return self.reduce_elem_ty(e).unwrap_or(TY_UNIT);
+        }
+        let t = self.ty_of(e);
+        if t == TY_ERROR || t == NO_TY {
+            TY_UNIT
+        } else {
+            t
+        }
     }
 
     fn lower_assign(&mut self, node: usize) -> Result<(), LowerError> {
@@ -1125,6 +1248,12 @@ impl<'a> FnLower<'a> {
     // -- expressions ----------------------------------------------------------
 
     fn lower_expr(&mut self, node: usize) -> Result<ValId, LowerError> {
+        // [HOLE-7]: a `reduce(...)` call is poisoned by the checker, so it
+        // is intercepted before the `TY_ERROR` gate (see
+        // `reduce_stub_ranges` for the whole hard-coding).
+        if call_names_reduce(self.tree, self.tokens, self.source, node) {
+            return self.lower_reduce(node);
+        }
         let ty = self.ty_of(node);
         if ty == TY_ERROR {
             return Err(LowerError::CheckErrors);
@@ -1164,9 +1293,327 @@ impl<'a> FnLower<'a> {
             NodeKind::MatchExpr => Err(LowerError::Match),
             NodeKind::Closure => Err(LowerError::Closure),
             NodeKind::TryExpr | NodeKind::Handler | NodeKind::RaiseStmt => Err(LowerError::Failure),
-            NodeKind::Bracket => Err(LowerError::Unsupported("indexing".into())),
+            NodeKind::ArrayLit => self.lower_array_lit(node, ty),
+            NodeKind::Bracket => self.lower_slice_range(node, ty),
             NodeKind::RangeExpr => Err(LowerError::Unsupported("range".into())),
             _ => Err(LowerError::Unsupported(kind_name(self.kind(node)).into())),
+        }
+    }
+
+    // -- sequences: array literals, slices, `reduce` ------------------------
+
+    /// The element type of `Array[T, N]` / `Slice[T]` — both are `Nominal`
+    /// with `T` first in the argument list (ch09's prelude generic types).
+    fn seq_elem_ty(&self, ty: TyId) -> Option<TyId> {
+        let bare = self.fir.tys.unqual(ty);
+        if self.fir.tys.tag(bare) != TyTag::Nominal {
+            return None;
+        }
+        let args = self.fir.tys.args(ArgsId(self.fir.tys.b(bare)));
+        args.first().copied()
+    }
+
+    /// The comptime length of `Array[T, N]`, which is `N` as a closed const
+    /// argument (ch09 R13). `Slice[T]` has no second argument and therefore
+    /// no comptime length — that distinction is exactly ch03 R12's
+    /// "where `n` is comptime-known" (owner decision Q3, 2026-10-02).
+    fn seq_const_len(&self, ty: TyId) -> Option<u32> {
+        let bare = self.fir.tys.unqual(ty);
+        if self.fir.tys.tag(bare) != TyTag::Nominal {
+            return None;
+        }
+        let args = self.fir.tys.args(ArgsId(self.fir.tys.b(bare)));
+        let c = *args.get(1)?;
+        if self.fir.tys.tag(c) != TyTag::ConstVal {
+            return None;
+        }
+        let v = self
+            .fir
+            .tys
+            .const_value(ConstId(self.fir.tys.a(c)))
+            .as_int()?;
+        u32::try_from(v).ok()
+    }
+
+    /// One element of an array literal: the checked type when there is one,
+    /// otherwise the sequence's element type (the literal under a `reduce`
+    /// stand-in may carry none).
+    fn lower_elem(&mut self, node: usize, elem_ty: TyId) -> Result<ValId, LowerError> {
+        let t = self.ty_of(node);
+        if t != NO_TY && t != TY_ERROR {
+            return self.lower_expr(node);
+        }
+        if self.kind(node) == NodeKind::Literal {
+            return self.lower_literal(node, elem_ty);
+        }
+        Err(LowerError::Unresolved("array element".into()))
+    }
+
+    /// `[a, b, c]` and the repeat form `[v; n]` (ch07's `array_lit`) lower
+    /// to one `agg_new` over the element values — the same cell aggregate
+    /// `fors-interp` already runs for a struct literal. The repeat form
+    /// evaluates `v` ONCE and names the resulting value `n` times, which is
+    /// what the surface means and keeps `[1.0; 257]` at one instruction
+    /// rather than 257.
+    fn lower_array_lit(&mut self, node: usize, ty: TyId) -> Result<ValId, LowerError> {
+        let kids = self.kids(node);
+        let elem_ty = self.seq_elem_ty(ty).unwrap_or(TY_UNIT);
+        let repeat = self
+            .own_tokens(node)
+            .iter()
+            .any(|&(_, k)| k == TokenKind::Semi);
+        let vals: Vec<ValId> = if repeat {
+            let [v_node, n_node] = kids.as_slice() else {
+                return Err(LowerError::Unsupported("array repeat literal".into()));
+            };
+            let n = self
+                .seq_const_len(ty)
+                .or_else(|| {
+                    self.literal_int(*n_node)
+                        .and_then(|v| u32::try_from(v).ok())
+                })
+                .ok_or_else(|| LowerError::Comptime("array repeat length".into()))?;
+            let v = self.lower_elem(*v_node, elem_ty)?;
+            vec![v; n as usize]
+        } else {
+            let mut out = Vec::with_capacity(kids.len());
+            for &c in &kids {
+                out.push(self.lower_elem(c, elem_ty)?);
+            }
+            out
+        };
+        let range = self.decl.insts.push_plain_operands(&vals);
+        let inst = self.emit(Op::AggNew, range.start, range.end, NO_OPERAND, ty);
+        Ok(self.fresh(ty, inst))
+    }
+
+    /// `base[lo ..< hi]` (ch03 Rule 24) → `slice_range`, carrying the
+    /// split-token alias seed design §3.4a requires of every
+    /// memory-producing instruction. Plain `base[i]` indexing stays
+    /// unsupported: nothing in F5's gate reads one, and the place-shaped
+    /// form `lower_assign` already has covers the F2 `Buffer` stand-in.
+    fn lower_slice_range(&mut self, node: usize, ty: TyId) -> Result<ValId, LowerError> {
+        let kids = self.kids(node);
+        let [base_node, idx_node] = kids.as_slice() else {
+            return Err(LowerError::Unsupported("indexing".into()));
+        };
+        if self.kind(*idx_node) != NodeKind::RangeExpr {
+            return Err(LowerError::Unsupported("indexing".into()));
+        }
+        // The seed names a PLACE (ch01 R19b's split provenance), so the
+        // sliced base must be a local, not a temporary.
+        if self.kind(*base_node) != NodeKind::NameExpr {
+            return Err(LowerError::Unsupported("slice of a temporary".into()));
+        }
+        let segs = self.path_segments(*base_node);
+        let [base_sym] = segs.as_slice() else {
+            return Err(LowerError::Unsupported("long projection".into()));
+        };
+        let (root, base_ty) = self.resolve_name(*base_sym)?;
+        let base_val = self.read_root(root, base_ty, base_ty);
+        let parent = self.intern_place(root, &[], base_ty);
+        let rkids = self.kids(*idx_node);
+        let [lo_node, hi_node] = rkids.as_slice() else {
+            return Err(LowerError::Unsupported("open range".into()));
+        };
+        if !self.gap_ops(&rkids).contains(&TokenKind::DotDotLt) {
+            return Err(LowerError::Unsupported("inclusive range".into()));
+        }
+        let lo = self.lower_range_bound(*lo_node)?;
+        let hi = self.lower_range_bound(*hi_node)?;
+        let result_ty = if ty == NO_TY || ty == TY_ERROR {
+            TY_UNIT
+        } else {
+            ty
+        };
+        let inst = self.emit_seeded(
+            Op::SliceRange,
+            base_val.0,
+            lo.0,
+            hi.0,
+            result_ty,
+            AliasSeed::Split { parent, side: 0 },
+        );
+        Ok(self.fresh(result_ty, inst))
+    }
+
+    fn lower_range_bound(&mut self, node: usize) -> Result<ValId, LowerError> {
+        let t = self.ty_of(node);
+        if t != NO_TY && t != TY_ERROR {
+            return self.lower_expr(node);
+        }
+        let v = self
+            .literal_int(node)
+            .ok_or_else(|| LowerError::Unsupported("range bound".into()))?;
+        let inst = self.emit(
+            Op::ConstInt,
+            v as u32,
+            (v >> 32) as u32,
+            NO_OPERAND,
+            TY_UNIT,
+        );
+        Ok(self.fresh(TY_UNIT, inst))
+    }
+
+    /// The three argument positions ch03 R11/R11a give `reduce`: the binary
+    /// `op` (a bare operator token), the operand sequence, and the optional
+    /// `identity:`.
+    fn reduce_args(&mut self, node: usize) -> Result<ReduceArgs, LowerError> {
+        let kids = self.kids(node);
+        let mut out = ReduceArgs {
+            op_tok: None,
+            xs: None,
+            identity: None,
+        };
+        for &a in kids.iter().skip(1) {
+            match self.kind(a) {
+                NodeKind::BareOp => {
+                    let (t, _) = self
+                        .leaf_token(a)
+                        .ok_or_else(|| LowerError::Unresolved("reduce op".into()))?;
+                    out.op_tok = Some(t);
+                }
+                NodeKind::NamedArg => {
+                    let named = self
+                        .own_tokens(a)
+                        .into_iter()
+                        .find(|&(_, k)| k == TokenKind::Ident)
+                        .map(|(t, _)| self.tokens.text(t, self.source).to_vec());
+                    if named.as_deref() != Some(b"identity".as_slice()) {
+                        return Err(LowerError::Unsupported("reduce named argument".into()));
+                    }
+                    out.identity = self.kids(a).into_iter().next();
+                }
+                NodeKind::Closure => return Err(LowerError::Closure),
+                _ => {
+                    if out.xs.is_some() {
+                        return Err(LowerError::Unsupported("reduce arity".into()));
+                    }
+                    out.xs = Some(a);
+                }
+            }
+        }
+        Ok(out)
+    }
+
+    /// The element type a `reduce(...)` call produces — read off the
+    /// operand's own type, never from a checker fact ([HOLE-7]).
+    fn reduce_elem_ty(&mut self, node: usize) -> Option<TyId> {
+        let args = self.reduce_args(node).ok()?;
+        let xs = args.xs?;
+        if self.kind(xs) != NodeKind::NameExpr {
+            return None;
+        }
+        let segs = self.path_segments(xs);
+        let [base] = segs.as_slice() else {
+            return None;
+        };
+        let (_, base_ty) = self.lookup(*base)?;
+        self.seq_elem_ty(base_ty)
+    }
+
+    /// **[HOLE-7], site 2 of 3** (see [`reduce_stub_ranges`]): `reduce`'s
+    /// whole typing, hard-coded here because no checker increment claims
+    /// ch03 R11 — the element type is the operand's, the `op` is the
+    /// declared binary operator, and the `identity:` is optional.
+    ///
+    /// Shape, per ch03 R12 as reworded by owner decision Q3 (2026-10-02):
+    /// *"`reduce` MUST be given its final shape in FMIR, as a function of
+    /// `(n, B, L)`, before parallel lowering; where `n` is comptime-known
+    /// the tree MUST be explicit."* Both halves are here:
+    /// - operand typed `Array[T, N]`: `n = N` is comptime-known, so the
+    ///   EXPLICIT tree is emitted — a chain of `field` reads and binary ops
+    ///   in exactly `fors_fmir::reduce::unrolled`'s order;
+    /// - operand typed `Slice[T]`: `n` is a runtime value as far as FMIR is
+    ///   concerned (design §3.9's [HOLE-3] case, and what every corpus
+    ///   `reduce-n*` test is), so one `reduce_tree` instruction carries the
+    ///   shape as a function of `(n, B, L)` with `B`/`L` as LITERAL
+    ///   operands. The shape is fixed before parallel lowering either way,
+    ///   which is what R12 buys.
+    fn lower_reduce(&mut self, node: usize) -> Result<ValId, LowerError> {
+        let args = self.reduce_args(node)?;
+        let (Some(op_tok), Some(xs_node)) = (args.op_tok, args.xs) else {
+            return Err(LowerError::Unsupported("reduce arguments".into()));
+        };
+        if self.kind(xs_node) != NodeKind::NameExpr {
+            return Err(LowerError::Unsupported("reduce over a temporary".into()));
+        }
+        let segs = self.path_segments(xs_node);
+        let [base_sym] = segs.as_slice() else {
+            return Err(LowerError::Unsupported("long projection".into()));
+        };
+        let (root, base_ty) = self.resolve_name(*base_sym)?;
+        let elem_ty = self
+            .seq_elem_ty(base_ty)
+            .ok_or_else(|| LowerError::Unsupported("reduce over a non-sequence".into()))?;
+        let binop = binop_for(op_tok, self.is_float_ty(elem_ty))
+            .ok_or_else(|| LowerError::Unsupported("reduce operator".into()))?;
+        let name = reduce_op_name(binop)
+            .ok_or_else(|| LowerError::Unsupported("reduce operator".into()))?;
+        let xs_val = self.read_root(root, base_ty, base_ty);
+        let identity = match args.identity {
+            Some(e) => Some(self.lower_elem(e, elem_ty)?),
+            None => None,
+        };
+
+        // Comptime-known `n`: the explicit tree (ch03 R12 / Q3).
+        if let Some(n) = self.seq_const_len(base_ty) {
+            if n == 0 {
+                // R11a with a statically empty operand: the identity IS the
+                // answer, and without one the program traps.
+                return match identity {
+                    Some(v) => Ok(v),
+                    None => Err(LowerError::Unsupported(
+                        "comptime-empty reduce without an identity".into(),
+                    )),
+                };
+            }
+            let tree = fors_fmir::reduce::unrolled(
+                n,
+                fors_fmir::reduce::REDUCE_BLOCK,
+                fors_fmir::reduce::REDUCE_LANES,
+            )
+            .expect("n >= 1 has an explicit tree");
+            return Ok(self.emit_explicit_tree(&tree, xs_val, elem_ty, binop));
+        }
+
+        // Runtime `n`: the shape as a function of `(n, B, L)`.
+        let sym = self.interner.intern(name.as_bytes());
+        if !self.intrinsics.iter().any(|(id, _)| *id == sym.0) {
+            self.intrinsics.push((sym.0, name.to_string()));
+        }
+        let red = self.decl.insts.push_reduce(ReduceRow {
+            op: Callee::Intrinsic(sym),
+            xs: xs_val,
+            identity: identity.unwrap_or(ValId(ABSENT)),
+            b: fors_fmir::reduce::REDUCE_BLOCK,
+            l: fors_fmir::reduce::REDUCE_LANES,
+        });
+        let inst = self.emit(Op::ReduceTree, red, NO_OPERAND, NO_OPERAND, elem_ty);
+        Ok(self.fresh(elem_ty, inst))
+    }
+
+    /// Emits `fors_fmir::reduce`'s explicit tree as straight-line FMIR:
+    /// `Elem(i)` is a `field` read of the aggregate, `Op(l, r)` is one
+    /// binary instruction with `l` on the LEFT (ch03 R11's operand order).
+    fn emit_explicit_tree(
+        &mut self,
+        e: &fors_fmir::reduce::Expr,
+        base: ValId,
+        elem_ty: TyId,
+        binop: Op,
+    ) -> ValId {
+        match e {
+            fors_fmir::reduce::Expr::Elem(i) => {
+                let inst = self.emit(Op::Field, base.0, *i, NO_OPERAND, elem_ty);
+                self.fresh(elem_ty, inst)
+            }
+            fors_fmir::reduce::Expr::Op(l, r) => {
+                let a = self.emit_explicit_tree(l, base, elem_ty, binop);
+                let b = self.emit_explicit_tree(r, base, elem_ty, binop);
+                let inst = self.emit(binop, a.0, b.0, NO_OPERAND, elem_ty);
+                self.fresh(elem_ty, inst)
+            }
         }
     }
 

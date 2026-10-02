@@ -5,7 +5,7 @@ regenerate. Source: `docs/spec/*.md` (normative), `tests/conformance/`
 (corpus) and `std/**/*.fors` (standard library).
 
 Language version: 0.5.1 (`docs/spec/VERSION`)
-Inputs SHA-256: a6734443b449d693497dfbf0a01846e06c6639a5a9f3b977a2d8ab445f234922
+Inputs SHA-256: f47a2eb103f1704160df7266207f1dc7601972ddcac9ef6c060f7ffa4d7a6d4c
 
 This pack exists because no model has seen Fors before: guessing from
 Rust/Zig/Swift/C is wrong more often than it is right. Read section 1 first.
@@ -469,7 +469,7 @@ D0009  `comptime_int`/`comptime_float` are arbitrary-precision, comptime-only; e
 D0010  Default determinism is D1: bit pattern MUST NOT change with thread count, steal pattern, core class mix, or locale count alone.
 D0011  `reduce(op, xs)` is a distinct primitive.
 D0011a  For `n = 0`: `reduce(op, xs)` MUST trap (kind: empty-reduce, ch02); `reduce(op, xs, identity: e)` MUST return `e`.
-D0012  `reduce` MUST lower to this explicit tree in FMIR **before** parallel lowering, so `--serial-elide` is bit-exact against any parallel execution of the same tree.
+D0012  `reduce` MUST be given its final shape in FMIR, as a function of `(n, B, L)`, **before** parallel lowering; where `n` is comptime-known the tree MUST be explicit.
 D0013  Tail rules: (a) no identity-padding — a partial block uses the same 8-lane shape over only its present elements; a lane shorter than its neighbours simply stops, and an empty lane contributes nothing: it is skipped in...
 D0014  `reduce.serial`/`reduce.fast`/`reduce.exact` are separate named primitives, never selected implicitly by optimization level; only unqualified `reduce` carries D1.
 D0015  A scalar accumulator loop MUST NOT be auto-parallelized or auto-`reduce`d at any level; the compiler MUST emit a diagnostic naming the loop and stating that explicit `reduce` is required.

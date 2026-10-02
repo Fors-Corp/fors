@@ -17,6 +17,9 @@
 //! - [`encode`] — canonical byte encoding, decoding, and [`encode::fmir_hash`].
 //! - [`dump`] / [`parse`] — the textual form (see `dump.rs`'s module docs
 //!   for its scope).
+//! - [`reduce`] — the ONE normative statement of `reduce`'s tree shape
+//!   (design §3.9, ch03 R11/R11a/R12/R13), shared by `fors-lower`'s
+//!   explicit-tree emission and `fors-interp`'s execution.
 //! - [`verify`] — the structural verifier, [`verify::verify`].
 //! - [`diag`] — [`diag::Diagnostic`], `verify()`'s output type.
 
@@ -33,6 +36,7 @@ pub mod inst;
 pub mod op;
 pub mod parse;
 pub mod place;
+pub mod reduce;
 pub mod region;
 pub mod scope;
 pub mod site;
