@@ -156,6 +156,13 @@ comment. `matmul`'s comment in particular works out the naive i-k-j loop's arith
 (≈0.25 FLOP/byte in the worst case - deep in the bandwidth-bound regime by the roofline model) as a caveat on
 the frozen "compute-bound" label, without overriding it (ch06 rule 3: kernels are added, never re-tuned).
 
+**Tuned companions (ch06 rule 3: added, never re-tuned).** `matmul-blocked` is the cache-blocked (BLOCK = 64)
+companion to the naive `matmul`: same matrices, same thread decomposition, same integer output, so the two
+kernels' `expected/*.txt` are byte-identical and the only axis that moves is memory locality. `langs/java-stream.toml`
+is the parallel-streams companion to the hand-rolled `java` column; a kernel opts in by adding `java/MainStream.java`
+(today: `matmul`, `matmul-blocked`), and `report.py` labels the column partial-coverage until every kernel has one.
+Both carry no results file yet: a tuned-vs-naive claim is made only by a committed harness run on a quiet machine.
+
 Every parallel kernel also declares `deterministic = true`: checked, not assumed, by reading each language's
 source for how per-thread partial results are combined (bench/kernels/<k>/<lang>/main.*). All four kernels
 follow the same pattern in every implemented language (c, rust, go, swift, zig, js, python where present):
