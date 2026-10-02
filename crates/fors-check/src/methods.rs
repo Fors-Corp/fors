@@ -34,42 +34,6 @@ use crate::body::BodyCx;
 use crate::facts::MemberTarget;
 use crate::wf::{Holds, Wf};
 
-/// ch03's language-known methods of the numeric primitives, declared by no
-/// file: Rule 4's `wrap_`/`sat_`/`unchecked_` counterpart of each of Rule
-/// 2's trapping operators (`+ - * / %`, both shifts, and unary `-`), plus
-/// Rule 6's three lossy conversions. The stand-in for ch03's surface until
-/// I10 declares it ([`Wf::prim_table_incomplete`]); a name outside this
-/// list is an ordinary R43 miss on a primitive.
-const CH03_PRIM_METHODS: &[&[u8]] = &[
-    b"wrap_add",
-    b"wrap_sub",
-    b"wrap_mul",
-    b"wrap_div",
-    b"wrap_rem",
-    b"wrap_shl",
-    b"wrap_shr",
-    b"wrap_neg",
-    b"sat_add",
-    b"sat_sub",
-    b"sat_mul",
-    b"sat_div",
-    b"sat_rem",
-    b"sat_shl",
-    b"sat_shr",
-    b"sat_neg",
-    b"unchecked_add",
-    b"unchecked_sub",
-    b"unchecked_mul",
-    b"unchecked_div",
-    b"unchecked_rem",
-    b"unchecked_shl",
-    b"unchecked_shr",
-    b"unchecked_neg",
-    b"wrap_as",
-    b"sat_as",
-    b"trunc_as",
-];
-
 /// A resolved method call: the method, where it was found, and the
 /// receiver convention R46 reads.
 #[derive(Clone, Copy, Debug)]
@@ -333,7 +297,7 @@ impl Wf<'_> {
             // are the whole table (`neutral-projection-does-not-match-
             // concrete-impl-rejected`).
             if saw_generic
-                || self.prim_table_incomplete(recv, name)
+                || self.prim_table_incomplete(recv)
                 || self.prelude_head_table_incomplete(recv, name)
             {
                 return Err(LookupError::Silent);
@@ -459,21 +423,19 @@ impl Wf<'_> {
     /// Whether a MISS on a primitive head is an artifact of a surface this
     /// increment does not model, rather than R43's "no candidate".
     ///
-    /// A primitive's method table has three contributors, and only one of
-    /// them is in a checker build: the prelude traits and the in-scope
-    /// trait impls (tier (2), consulted above). The other two are not:
+    /// A primitive's method table has three contributors: the prelude
+    /// traits and the in-scope trait impls (tier (2)), the prelude's own
+    /// inherent impls (tier (1)), and `std`'s inherent impls, which a build
+    /// without `std` does not have:
     ///
-    /// - **ch03 Rules 4 and 6's family.** `wrap_<op>`, `sat_<op>` and
-    ///   `unchecked_<op>` for each of Rule 2's trapping operators, and
-    ///   Rule 6's `wrap_as`/`sat_as`/`trunc_as`, are LANGUAGE-known
-    ///   methods of every numeric primitive, declared by no file at all;
-    ///   §13 reaches ch03 at I10. The family is FINITE and listed in
-    ///   [`CH03_PRIM_METHODS`]: exactly those names are an absence this
-    ///   increment cannot prove (`03-numerics/{sat-add-saturates,wrap-add-
-    ///   no-trap}` call them in a build with no `std`); `wrap_foo` is not
-    ///   in the family and reports like any other miss. I10 replaces the
-    ///   table with the real declarations.
-    /// - **`std`'s inherent impls.** Of the 15 primitives only `Str`
+    /// - **ch03 Rules 4 and 6's family** used to be a second carve-out:
+    ///   `wrap_<op>`/`sat_<op>`/`unchecked_<op>` and `wrap_as`/`sat_as`/
+    ///   `trunc_as`, language-known and declared by no file. Since I10 they
+    ///   ARE declared — every numeric primitive's prelude inherent impl
+    ///   (`fors_fir::prelude::build`) — so tier (1) answers for them and a
+    ///   miss on a numeric primitive is an ordinary R43 miss.
+    /// - **`std`'s inherent impls** remain the one carve-out. Of the 15
+    ///   primitives only `Str`
     ///   carries one in `std` (`impl Str`, `std/mem/text.fors`, ch10 Rule
     ///   26), and a build without `std` sources does not have it
     ///   (`10-std/str-{index-is-bytes,slice-non-boundary-raises}`). The
@@ -483,7 +445,7 @@ impl Wf<'_> {
     ///   `impl Str` is in the build the tiers above are the whole table
     ///   and R43 reports. Every other primitive has no inherent impl
     ///   anywhere, so for those the tiers always are the whole table.
-    fn prim_table_incomplete(&self, recv: TyId, name: Symbol) -> bool {
+    fn prim_table_incomplete(&self, recv: TyId) -> bool {
         use fors_fir::ty::PrimKind;
         if self.fir.tys.tag(recv) != TyTag::Prim {
             return false;
@@ -493,8 +455,7 @@ impl Wf<'_> {
             let key = self.fir.tys.head_key(recv);
             return self.impls.inherent(key).is_empty();
         }
-        let n = self.names.resolve(name);
-        CH03_PRIM_METHODS.contains(&n)
+        false
     }
 
     /// ch10 R2's counterpart of [`Self::prim_table_incomplete`] for a

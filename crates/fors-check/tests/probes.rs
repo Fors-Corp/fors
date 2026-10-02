@@ -267,27 +267,27 @@ const PROBES: &[Probe] = &[
     },
     Probe {
         name: "r36_question_on_non_raising_call",
-        want: &["T0036"],
+        want: &["F0002"],
         src: "fn g() -> i32 { return 1; }\nfn f() -> i32 { return g()?; }",
     },
     Probe {
         name: "r36_handler_on_non_raising_call",
-        want: &["T0036"],
+        want: &["F0005"],
         src: "fn g() -> i32 { return 1; }\nfn f() -> i32 { return g() else |e| { 0 }; }",
     },
     Probe {
         name: "r36_question_in_non_raising_fn",
-        want: &["T0036"],
+        want: &["F0001"],
         src: "enum E { a }\nfn g() -> i32 raises E { return 1; }\nfn f() -> i32 { return g()?; }",
     },
     Probe {
         name: "r36_raise_in_non_raising_fn",
-        want: &["T0036"],
+        want: &["F0001"],
         src: "enum E { a }\nfn f() { raise E.a; }",
     },
     Probe {
         name: "r36_question_on_a_local",
-        want: &["T0036"],
+        want: &["F0002"],
         src: "fn f(let x: i32) -> i32 { return x?; }",
     },
     Probe {
@@ -385,7 +385,8 @@ fn fresh_violations_are_enforced_for_their_own_reason() {
     for p in PROBES {
         let got: Vec<String> = check_source(p.src)
             .into_iter()
-            .filter(|c| c.starts_with('T'))
+            // I10: ch02 (`F`) and ch03 (`D`) codes are the checker's too.
+            .filter(|c| c.starts_with('T') || c.starts_with('F') || c.starts_with('D'))
             .collect();
         if got != p.want {
             failures.push(format!("{}: want {:?}, got {:?}", p.name, p.want, got));
@@ -503,22 +504,41 @@ fn a_primitive_receiver_reports_only_what_no_surface_can_declare() {
         check_source("fn f(let n: usize) -> usize { return n.count(); }"),
         vec!["T0043"]
     );
-    // ch03 R4's family is language-known and declared by no file (I10).
-    for name in [
-        "wrap_add",
-        "sat_add",
-        "unchecked_add",
-        "wrap_rem",
-        "sat_shr",
-    ] {
+    // ch03 R4's family is language-known: since I10 every numeric
+    // primitive's prelude inherent impl DECLARES it, so the call is typed.
+    for name in ["wrap_add", "sat_add", "wrap_rem", "sat_shr", "sat_mul"] {
         assert!(
             check_source(&format!(
                 "fn f(let n: i32) -> i32 {{ return n.{name}(1); }}"
             ))
             .is_empty(),
-            "ch03 R4's `{name}` must stay silent in a build with no ch03 surface"
+            "ch03 R4's `{name}` is declared on `i32` and must type"
         );
     }
+    // ... and typed for real: the argument faces the receiver's type.
+    assert_eq!(
+        check_source("fn f(let n: i32) -> i32 { return n.wrap_add(true); }"),
+        vec!["T0026"],
+        "`wrap_add`'s right operand is the receiver's type"
+    );
+    // `unchecked_` is legal only in an `@unsafe(invariant: ..)` declaration.
+    assert_eq!(
+        check_source("fn f(let n: i32) -> i32 { return n.unchecked_add(1); }"),
+        vec!["D0004"]
+    );
+    assert!(
+        check_source(
+            "@unsafe(invariant: \"no overflow\")\nfn f(let n: i32) -> i32 { return n.unchecked_add(1); }"
+        )
+        .is_empty(),
+        "`unchecked_add` inside an `@unsafe` declaration is accepted"
+    );
+    // Rule 2's trapping operators are the INTEGER ones: a float has no
+    // explicit-arithmetic family (R43's ordinary miss).
+    assert_eq!(
+        check_source("fn f(let x: f64) -> f64 { return x.wrap_add(1.0); }"),
+        vec!["T0043"]
+    );
     // The family is FINITE (ch03 R2's operators), not a name prefix: a
     // `wrap_` spelling of no trapping operator is an ordinary R43 miss.
     // (I4b verification: the first cut matched by prefix, so `wrap_foo`
@@ -2899,14 +2919,14 @@ fn f7_trait_ref_lowers_each_argument_by_its_declared_kind() {
          impl Tr[i64] for Plain {{ fn id(let self: Self) -> i64 {{ return self.v; }} }}"
     ));
     // ch01 R15d's "passing a non-brand type for [a brand parameter] MUST
-    // be rejected" is not yet a diagnostic anywhere: `brand_arg` leaves
-    // the slot open (`TY_ERROR`, silently) for a nominal head and, now, a
-    // trait reference alike, and the impl header stays open with it. What
-    // this fix guarantees is only that the type never reaches `param_ty`
-    // as a brand-used-as-type.
-    assert!(
-        !got.contains(&"O0015".to_string()),
-        "a type in a brand slot is not a brand-used-as-type: {got:?}"
+    // be rejected": since I10's verification `brand_arg` reports the type
+    // in the brand slot under R15d's code (it used to leave the slot a
+    // SILENT `TY_ERROR`), once, at the argument — never as `param_ty`'s
+    // brand-used-as-type, which this fix guarantees the type never reaches.
+    assert_eq!(
+        got,
+        vec!["O0015".to_string()],
+        "a type in a brand slot is R15d's own error, once"
     );
 }
 
@@ -3950,7 +3970,7 @@ fn i10a_a_generic_impl_associated_function_is_typed_not_silently_absorbed() {
 
     const SRC: &str = "\
 struct Buf9[T, N: usize] { len: usize, d: Array[T, N] }
-impl[T, N: usize] Buf9[T, N] {
+impl[T: Copyable, N: usize] Buf9[T, N] {
     pub fn empty(let z: T) -> Buf9[T, N] { return Buf9 { len: 0, d: [z; N] }; }
     pub fn cap(let self: Self) -> usize { return N; }
 }
@@ -4809,4 +4829,462 @@ fn i10b_v_indexmut_before_index_is_legal() {
         )
         .contains(&"T0026".to_string())
     );
+}
+
+// ------------------------------------------------- increment I10, half A
+
+/// One I10 rule, as a pair of programs that differ by the token the rule
+/// turns on: the rejected one reports exactly `code`, the accepted one is
+/// silent.
+struct Pair {
+    rule: &'static str,
+    code: &'static str,
+    rejected: &'static str,
+    accepted: &'static str,
+}
+
+const ERR: &str = "enum E { a }\nfn g() raises E { raise E.a; }\n";
+
+const I10_PAIRS: &[Pair] = &[
+    // ---- ch02
+    Pair {
+        rule: "ch02 R1: a raising call is followed by `?` or `else`",
+        code: "F0001",
+        rejected: "fn f() raises E { g(); }",
+        accepted: "fn f() raises E { g()?; }",
+    },
+    Pair {
+        rule: "ch02 R1: `?` only in a function that declares `raises`",
+        code: "F0001",
+        rejected: "fn f() { g()?; }",
+        accepted: "fn f() raises E { g()?; }",
+    },
+    Pair {
+        rule: "ch02 R1: `raise` only in a function that declares `raises`",
+        code: "F0001",
+        rejected: "fn f() { raise E.a; }",
+        accepted: "fn f() raises E { raise E.a; }",
+    },
+    Pair {
+        rule: "ch02 R1: the raised value is of the declared `raises` type",
+        code: "F0001",
+        rejected: "fn f() raises E { raise 1; }",
+        accepted: "fn f() raises E { raise E.a; }",
+    },
+    Pair {
+        rule: "ch02 R2: `?` only on a raising call",
+        code: "F0002",
+        rejected: "fn h() -> i32 { return 1; }\nfn f() -> i32 raises E { return h()?; }",
+        accepted: "fn h() -> i32 { return 1; }\nfn f() -> i32 raises E { return h(); }",
+    },
+    Pair {
+        rule: "ch02 R3: one `ErrorFrom[E]` impl bridges two error types",
+        code: "F0003",
+        rejected: "enum F { b }\nfn f() raises F { g()?; }",
+        accepted: "enum F { b }\nimpl ErrorFrom[E] for F { fn from(let e: E) -> F { return F.b; } }\nfn f() raises F { g()?; }",
+    },
+    Pair {
+        rule: "ch02 R5: a handler only after a raising call",
+        code: "F0005",
+        rejected: "fn h() { }\nfn f() { h() else |e| { }; }",
+        accepted: "fn h() { }\nfn f() { g() else |e| { }; }",
+    },
+    Pair {
+        rule: "ch02 R9: no `secret` subexpression in a contract",
+        code: "F0009",
+        rejected: "fn c(let k: secret i64)\n    pre k > 0\n{ }",
+        accepted: "fn c(let k: i64)\n    pre k > 0\n{ }",
+    },
+    Pair {
+        rule: "ch02 R13: an `extern \"c\"` function declares no `raises`",
+        code: "F0013",
+        rejected: "extern \"c\" fn x(let n: i32) raises E;",
+        accepted: "extern \"c\" fn x(let n: i32);",
+    },
+    // ---- ch03
+    Pair {
+        rule: "ch03 R1: no 128-bit integer",
+        code: "D0001",
+        rejected: "fn f(let x: i128) { }",
+        accepted: "fn f(let x: i64) { }",
+    },
+    Pair {
+        rule: "ch03 R4: `unchecked_` only inside `@unsafe(invariant: ..)`",
+        code: "D0004",
+        rejected: "fn f(let x: i32) -> i32 { return x.unchecked_mul(2); }",
+        accepted: "@unsafe(invariant: \"x is small\")\nfn f(let x: i32) -> i32 { return x.unchecked_mul(2); }",
+    },
+    Pair {
+        rule: "ch03 R5: no implicit widening",
+        code: "D0005",
+        rejected: "fn f(let x: u8) -> u32 { var y: u32 = x; return y; }",
+        accepted: "fn f(let x: u8) -> u32 { var y: u32 = x as u32; return y; }",
+    },
+    Pair {
+        rule: "ch03 R6: a lossy conversion targets a numeric primitive",
+        code: "D0006",
+        rejected: "fn f(let x: i32) -> bool { return x.wrap_as[bool](); }",
+        accepted: "fn f(let x: i32) -> u8 { return x.wrap_as[u8](); }",
+    },
+    Pair {
+        rule: "ch03 R8: the closed `@fastmath` flag set",
+        code: "D0008",
+        rejected: "fn f(let a: f64) -> f64 { var r: f64 = 0.0; @fastmath(fused) { r = a * a; } return r; }",
+        accepted: "fn f(let a: f64) -> f64 { var r: f64 = 0.0; @fastmath(nsz) { r = a * a; } return r; }",
+    },
+    Pair {
+        rule: "ch03 R9: a comptime value escapes only by an explicit conversion",
+        code: "D0009",
+        rejected: "const N: comptime_int = 5;\nfn f() -> i32 { var x: i32 = N; return x; }",
+        accepted: "const N: comptime_int = 5;\nfn f() -> i32 { var x: i32 = N as i32; return x; }",
+    },
+    Pair {
+        rule: "ch03 R11a: `reduce` takes `identity:` and nothing else by name",
+        code: "D0011",
+        rejected: "fn f(let xs: Slice[f64]) -> f64 { return reduce(+, xs, ident: 0.0); }",
+        accepted: "fn f(let xs: Slice[f64]) -> f64 { return reduce(+, xs, identity: 0.0); }",
+    },
+    Pair {
+        rule: "ch03 R15: no scalar accumulator in a `parallel for`",
+        code: "D0015",
+        rejected: "fn f(let xs: Slice[f64]) -> f64 { var acc: f64 = 0.0; parallel for x in xs { acc += x; } return acc; }",
+        accepted: "fn f(let xs: Slice[f64]) -> f64 { var acc: f64 = 0.0; for x in xs { acc += x; } return acc; }",
+    },
+    Pair {
+        rule: "ch03 R18: `@specialize` inside a `simd` body",
+        code: "D0018",
+        rejected: "fn id[T: Copyable](let a: T) -> T { return a; }\nfn f() { simd for i in 0 ..< 8 { var r: i32 = id(i); } }",
+        accepted: "@specialize\nfn id[T: Copyable](let a: T) -> T { return a; }\nfn f() { simd for i in 0 ..< 8 { var r: i32 = id(i); } }",
+    },
+    Pair {
+        rule: "ch03 R19: a lane count is a power of two",
+        code: "D0019",
+        rejected: "fn f(let v: vector[f32, 6]) { }",
+        accepted: "fn f(let v: vector[f32, 8]) { }",
+    },
+    Pair {
+        rule: "ch03 R20: `SVec[T]` is reserved",
+        code: "D0020",
+        rejected: "struct B { d: SVec[f64] }",
+        accepted: "struct B { d: vector[f64, 4] }",
+    },
+    Pair {
+        rule: "ch03 R21: the literal's count is `N`",
+        code: "D0021",
+        rejected: "fn f() { let v: vector[f32, 4] = [1.0, 2.0, 3.0]; }",
+        accepted: "fn f() { let v: vector[f32, 4] = [1.0, 2.0, 3.0, 4.0]; }",
+    },
+    Pair {
+        rule: "ch03 R22: `[]` needs an expected type",
+        code: "D0022",
+        rejected: "fn f() { let xs = []; }",
+        accepted: "fn f() { let xs: Array[i32, 0] = []; }",
+    },
+    Pair {
+        rule: "ch03 R24: an array literal never checks against `Slice[T]`",
+        code: "D0024",
+        rejected: "fn f() { let s: Slice[f64] = [1.0]; }",
+        accepted: "fn f() { let s: Array[f64, 1] = [1.0]; }",
+    },
+    Pair {
+        rule: "ch03 R24a: a repeat count is comptime",
+        code: "D0024",
+        rejected: "fn f(let n: usize) { let a = [0; n]; }",
+        accepted: "fn f(let n: usize) { let a = [0; 4]; }",
+    },
+    Pair {
+        rule: "ch03 R25: a SYNTH literal's later rows check against the first",
+        code: "D0025",
+        rejected: "fn f() { let xs = [[1, 2], [3]]; }",
+        accepted: "fn f() { let xs = [[1, 2], [3, 4]]; }",
+    },
+    // ---- I10 verification: the escapes the mutation set found
+    Pair {
+        rule: "ch03 R9: a comptime-only type is not a parameter's, field's or result's type",
+        code: "D0009",
+        rejected: "struct S { n: comptime_int }",
+        accepted: "const N: comptime_int = 5;\nstruct S { n: i32 }",
+    },
+    Pair {
+        rule: "ch03 R9: a comptime value does not escape through a generic parameter",
+        code: "D0009",
+        rejected: "const N: comptime_int = 5;\nfn id[T: Copyable](let x: T) -> T { return x; }\nfn f() -> i32 { return id(N) as i32; }",
+        accepted: "const N: comptime_int = 5;\nfn id[T: Copyable](let x: T) -> T { return x; }\nfn f() -> i32 { return id(N as i32); }",
+    },
+    Pair {
+        rule: "ch01 R15d: a type is not a brand argument",
+        code: "O0015",
+        rejected: "struct Node[A: brand] { val: i64 }\nfn f(let n: Node[i32]) -> i64 { return n.val; }",
+        accepted: "struct Node[A: brand] { val: i64 }\nfn f[A: brand](let n: Node[A]) -> i64 { return n.val; }",
+    },
+];
+
+#[test]
+fn i10_each_rule_turns_on_its_token() {
+    let mut failures = Vec::new();
+    for p in I10_PAIRS {
+        let rej = check_source(&format!("{ERR}{}", p.rejected));
+        if rej != [p.code] {
+            failures.push(format!(
+                "{} — rejected: want [{}], got {rej:?}",
+                p.rule, p.code
+            ));
+        }
+        let acc = check_source(&format!("{ERR}{}", p.accepted));
+        if !acc.is_empty() {
+            failures.push(format!("{} — accepted: want [], got {acc:?}", p.rule));
+        }
+    }
+    assert!(
+        failures.is_empty(),
+        "I10 pairs ({}):\n{}",
+        failures.len(),
+        failures.join("\n")
+    );
+}
+
+/// ch02 R10: under `.proved`, with no proof engine in this compiler, every
+/// contract is the compile error; `.runtime` checks it at run time.
+#[test]
+fn i10_proved_contract_policy_is_a_compile_error() {
+    let src = |policy: &str| {
+        format!("contracts: .{policy};\nneeds {{ }};\nfn w(let i: usize)\n    pre i < 4\n{{ }}\n")
+    };
+    let codes = |policy: &str| -> Vec<String> {
+        check_modules(&[("m", &src(policy))])
+            .into_iter()
+            .map(|(c, _)| c)
+            .filter(|c| !c.starts_with('N'))
+            .collect()
+    };
+    assert_eq!(codes("proved"), vec!["F0010"]);
+    assert!(codes("runtime").is_empty());
+}
+
+// ------------------------------------------- I10, half B: chapters 4 and 1
+
+/// The checker's codes for one module `m` whose header (after `module m;`)
+/// the probe writes itself — ch04's rules key on `needs`/`inputs`/`use`.
+fn check_header(src: &str) -> Vec<String> {
+    check_modules(&[("m", src)])
+        .into_iter()
+        .map(|(c, _)| c)
+        .collect()
+}
+
+/// The I10 half-B pairs: complete module bodies (header included).
+const I10B_PAIRS: &[Pair] = &[
+    // ---- ch04
+    Pair {
+        rule: "ch04 R2a: inline asm is a sealed operation, never in a generic function",
+        code: "A0002",
+        rejected: "needs { asm };\n@unsafe(invariant: \"nop\")\nfn f[T](let x: T) { asm(aarch64) { \"nop\" }; }\n",
+        accepted: "needs { asm };\n@unsafe(invariant: \"nop\")\nfn f(let x: i32) { asm(aarch64) { \"nop\" }; }\n",
+    },
+    Pair {
+        rule: "ch04 R2a: a call to an extern function is never in a generic function",
+        code: "A0002",
+        rejected: "needs { ffi };\nfn c[T](let n: i32) { probe(n); }\n@unsafe(invariant: \"none\")\nextern \"c\" fn probe(let n: i32);\n",
+        accepted: "needs { ffi };\nfn c(let n: i32) { probe(n); }\n@unsafe(invariant: \"none\")\nextern \"c\" fn probe(let n: i32);\n",
+    },
+    Pair {
+        rule: "ch04 R2a/R12: comptime never reaches a sealed operation",
+        code: "A0002",
+        rejected: "needs { ffi };\nfn s() { comptime { probe(1); } }\n@unsafe(invariant: \"none\")\nextern \"c\" fn probe(let n: i32);\n",
+        accepted: "needs { ffi };\nfn s() { probe(1); }\n@unsafe(invariant: \"none\")\nextern \"c\" fn probe(let n: i32);\n",
+    },
+    Pair {
+        rule: "ch04 R2a/R1: calling an extern function is a use of `ffi` by the caller",
+        code: "A0002",
+        rejected: "needs { };\nfn s() { probe(1); }\n@unsafe(invariant: \"none\")\nextern \"c\" fn probe(let n: i32);\n",
+        accepted: "needs { ffi };\nfn s() { probe(1); }\n@unsafe(invariant: \"none\")\nextern \"c\" fn probe(let n: i32);\n",
+    },
+    Pair {
+        rule: "ch04 R7: a root-capability type has no struct literal",
+        code: "A0007",
+        rejected: "needs { io.stdout };\nuse std.io;\nfn s() { var o: io.Stdout = io.Stdout { }; }\n",
+        accepted: "needs { io.stdout };\nuse std.io;\nfn s(inout o: io.Stdout) { }\n",
+    },
+    Pair {
+        rule: "ch04 R7: the aliased import names the same root-capability type",
+        code: "A0007",
+        rejected: "needs { net };\nuse std.net as w;\nfn s() { var n: w.Net = w.Net { }; }\n",
+        accepted: "needs { net };\nuse std.net as w;\nfn s(inout n: w.Net) { }\n",
+    },
+    Pair {
+        rule: "ch04 R10: `@unsafe` names a non-empty invariant",
+        code: "A0010",
+        rejected: "needs { };\n@unsafe\nfn f() { }\n",
+        accepted: "needs { };\n@unsafe(invariant: \"nothing to uphold\")\nfn f() { }\n",
+    },
+    Pair {
+        rule: "ch04 R10 closes ch03 R4's hook: a malformed `@unsafe` is A0010, once, not D0004",
+        code: "A0010",
+        rejected: "needs { };\n@unsafe\nfn g(let x: i32) -> i32 { return x.unchecked_add(1); }\n",
+        accepted: "needs { };\n@unsafe(invariant: \"x < MAX\")\nfn g(let x: i32) -> i32 { return x.unchecked_add(1); }\n",
+    },
+    Pair {
+        rule: "ch04 R10: the invariant string is not empty",
+        code: "A0010",
+        rejected: "needs { };\n@unsafe(invariant: \"\")\nfn f() { }\n",
+        accepted: "needs { };\n@unsafe(invariant: \"x\")\nfn f() { }\n",
+    },
+    Pair {
+        rule: "ch04 R10: there is no `unsafe { }` block",
+        code: "A0010",
+        rejected: "needs { };\nfn f() { unsafe { }; }\n",
+        accepted: "needs { };\nfn f() { }\n",
+    },
+    Pair {
+        rule: "ch04 R10: `@unsafe` is never a block attribute",
+        code: "A0010",
+        rejected: "needs { };\nfn f() { @unsafe(invariant: \"x\") { } }\n",
+        accepted: "needs { };\nfn f() { @fastmath(reassoc) { } }\n",
+    },
+    Pair {
+        rule: "ch04 R12: comptime reaches no run-time binding",
+        code: "A0012",
+        rejected: "needs { };\nfn s(let c: i64) { comptime { let t: i64 = c; } }\n",
+        accepted: "needs { };\nfn s(let c: i64) { comptime { let t: i64 = 1; } }\n",
+    },
+    Pair {
+        rule: "ch04 R13: a comptime file read is listed in `inputs`",
+        code: "A0013",
+        rejected: "needs { };\nuse std.fs;\nfn s() { comptime { let d: Str = fs.read_to_string(\"a.json\"); } }\n",
+        accepted: "needs { };\ninputs { \"a.json\" };\nuse std.fs;\nfn s() { comptime { let d: Str = fs.read_to_string(\"a.json\"); } }\n",
+    },
+    Pair {
+        rule: "ch04 R22: inline asm needs `asm` in the module's own needs",
+        code: "A0022",
+        rejected: "needs { };\n@unsafe(invariant: \"nop\")\nfn f() { asm(aarch64) { \"nop\" }; }\n",
+        accepted: "needs { asm };\n@unsafe(invariant: \"nop\")\nfn f() { asm(aarch64) { \"nop\" }; }\n",
+    },
+    Pair {
+        rule: "ch04 R22: inline asm only inside an `@unsafe` declaration",
+        code: "A0022",
+        rejected: "needs { asm };\nfn f() { asm(aarch64) { \"nop\" }; }\n",
+        accepted: "needs { asm };\n@unsafe(invariant: \"nop\")\nfn f() { asm(aarch64) { \"nop\" }; }\n",
+    },
+    Pair {
+        rule: "ch04 R23: a syscall-class instruction needs `syscall` too",
+        code: "A0023",
+        rejected: "needs { asm };\n@unsafe(invariant: \"one call\")\nfn f() { asm(aarch64) { \"svc #0\" }; }\n",
+        accepted: "needs { asm, syscall };\n@unsafe(invariant: \"one call\")\nfn f() { asm(aarch64) { \"svc #0\" }; }\n",
+    },
+    Pair {
+        rule: "ch04 R27: an asm expression in SYNTH position",
+        code: "A0027",
+        rejected: "needs { asm };\n@unsafe(invariant: \"x0 is 1\")\nfn f() { let x = asm(aarch64) { out(x0), \"mov x0, #1\" }; }\n",
+        accepted: "needs { asm };\n@unsafe(invariant: \"x0 is 1\")\nfn f() { let x: i64 = asm(aarch64) { out(x0), \"mov x0, #1\" }; }\n",
+    },
+    Pair {
+        rule: "ch04 R27: no `out` item means the expected type is `()`",
+        code: "A0027",
+        rejected: "needs { asm };\n@unsafe(invariant: \"nop\")\nfn f() { let x: i64 = asm(aarch64) { \"nop\" }; }\n",
+        accepted: "needs { asm };\n@unsafe(invariant: \"nop\")\nfn f() { let x: () = asm(aarch64) { \"nop\" }; }\n",
+    },
+    Pair {
+        rule: "ch04 R27: two `out` items need a two-component tuple",
+        code: "A0027",
+        rejected: "needs { asm };\n@unsafe(invariant: \"two outs\")\nfn f() { let x: i64 = asm(aarch64) { out(x0), out(x1), \"nop\" }; }\n",
+        accepted: "needs { asm };\n@unsafe(invariant: \"two outs\")\nfn f() { let x: (i64, u32) = asm(aarch64) { out(x0), out(x1), \"nop\" }; }\n",
+    },
+    // ---- ch01
+    Pair {
+        rule: "ch01 R15a: an arena has no constructor",
+        code: "O0015",
+        rejected: "needs { };\nstruct Node[A: brand] { val: i64 }\nfn f[A: brand](inout a: Arena[Node[A], A]) { let b: Arena[Node[A], A] = Arena[Node[A], A] { }; }\n",
+        accepted: "needs { };\nstruct Node[A: brand] { val: i64 }\nfn f[A: brand](inout a: Arena[Node[A], A]) { }\n",
+    },
+    Pair {
+        rule: "ch01 R15a: the arena binding is never moved as a whole",
+        code: "O0015",
+        rejected: "needs { };\nstruct Node[A: brand] { val: i64 }\nfn f() { with arena n: Arena[Node[n]] { let o: Arena[Node[n], n] = move n; } }\n",
+        accepted: "needs { };\nstruct Node[A: brand] { val: i64 }\nfn f() { with arena n: Arena[Node[n]] { } }\n",
+    },
+    Pair {
+        rule: "ch01 R16: a `Ref` subscripts only an arena of its own brand",
+        code: "O0016",
+        rejected: "needs { };\nstruct Node[A: brand] { val: i64 }\nfn f() { with arena one: Arena[Node[one]] { let x: Ref[Node[one], one] = one.alloc(Node { val: 1 }); with arena two: Arena[Node[two]] { let v: i64 = two[x].val; } } }\n",
+        accepted: "needs { };\nstruct Node[A: brand] { val: i64 }\nfn f() { with arena one: Arena[Node[one]] { let x: Ref[Node[one], one] = one.alloc(Node { val: 1 }); with arena two: Arena[Node[two]] { let v: i64 = one[x].val; } } }\n",
+    },
+    Pair {
+        rule: "ch01 R18: `deinit` through the allocator whose brand the `Own` records",
+        code: "O0018",
+        rejected: "needs { };\nfn f(let n: i64) { with allocator one: PageAllocator { var b: Own[i64, one] = one.create(n); with allocator two: PageAllocator { two.deinit(move b); } } }\n",
+        accepted: "needs { };\nfn f(let n: i64) { with allocator one: PageAllocator { var b: Own[i64, one] = one.create(n); with allocator two: PageAllocator { one.deinit(move b); } } }\n",
+    },
+    Pair {
+        rule: "ch01 R21: an `atomic` field only in a type implementing `Shared`",
+        code: "O0021",
+        rejected: "needs { };\nstruct C { n: atomic[i64] }\n",
+        accepted: "needs { };\nstruct C { n: atomic[i64] }\nimpl Shared for C {}\n",
+    },
+    Pair {
+        rule: "ch01 R21a: `impl Shared` is checked field-wise",
+        code: "O0021",
+        rejected: "needs { };\nstruct L { s: i64 }\nstruct C { n: atomic[i64], l: L }\nimpl Shared for C {}\n",
+        accepted: "needs { };\nstruct L { s: i64 }\nstruct C { n: atomic[i64], l: atomic[u64] }\nimpl Shared for C {}\n",
+    },
+    Pair {
+        rule: "ch01 R21a: a parameter-typed field needs `P: Shared` on the impl",
+        code: "O0021",
+        rejected: "needs { };\nstruct Cell[P] { n: atomic[u64], v: P }\nimpl[P] Shared for Cell[P] {}\n",
+        accepted: "needs { };\nstruct Cell[P] { n: atomic[u64], v: P }\nimpl[P: Shared] Shared for Cell[P] {}\n",
+    },
+    Pair {
+        rule: "ch01 R21c: `@unsafe(invariant: ..)` on the impl skips the field-wise check",
+        code: "O0021",
+        rejected: "needs { };\nstruct H { p: rawptr[i64] }\nimpl Shared for H {}\n",
+        accepted: "needs { };\nstruct H { p: rawptr[i64] }\n@unsafe(invariant: \"p is only touched under a lock\")\nimpl Shared for H {}\n",
+    },
+];
+
+#[test]
+fn i10b_each_rule_turns_on_its_token() {
+    let mut failures = Vec::new();
+    for p in I10B_PAIRS {
+        let rej = check_header(p.rejected);
+        if rej != [p.code] {
+            failures.push(format!(
+                "{} — rejected: want [{}], got {rej:?}",
+                p.rule, p.code
+            ));
+        }
+        let acc = check_header(p.accepted);
+        if !acc.is_empty() {
+            failures.push(format!("{} — accepted: want [], got {acc:?}", p.rule));
+        }
+    }
+    assert!(
+        failures.is_empty(),
+        "I10 half-B pairs ({}):\n{}",
+        failures.len(),
+        failures.join("\n")
+    );
+}
+
+/// ch04 R2a across modules: "calling a re-exported or `pub` `extern`
+/// function from another module is a use of `ffi` by the CALLING module"
+/// (the rule `sealed-extern-reexport-needs-ffi` tests, whose own layout the
+/// resolver rejects first — see `PENDING_04`).
+#[test]
+fn i10b_sealed_extern_call_needs_ffi_in_the_caller() {
+    let holder = "needs { ffi };\n@unsafe(invariant: \"n is the buffer length\")\n\
+                  pub extern \"c\" fn dgemm(let n: i32);\n";
+    let caller = |needs: &str| {
+        format!(
+            "needs {{ {needs} }};\nuse vendor;\nfn call_it(let n: i32) {{ vendor.dgemm(n); }}\n"
+        )
+    };
+    let without = caller("");
+    let got = check_modules(&[("app", &without), ("vendor", holder)]);
+    assert_eq!(
+        got,
+        vec![("A0002".to_string(), "app".to_string())],
+        "the CALLER is the module that uses ffi"
+    );
+    let with = caller("ffi");
+    let got = check_modules(&[("app", &with), ("vendor", holder)]);
+    assert!(got.is_empty(), "declared in the caller: {got:?}");
 }

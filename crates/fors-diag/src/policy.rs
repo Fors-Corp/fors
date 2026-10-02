@@ -24,6 +24,12 @@ pub fn applicability(kind: FixKind) -> Applicability {
         FixKind::InsertStdImport => Applicability::MachineApplicable,
         FixKind::ReplaceIdentifier => Applicability::MaybeIncorrect,
         FixKind::CallMethod => Applicability::MaybeIncorrect,
+        // I10: an explicit conversion is what ch03 Rules 5 and 9 ask for,
+        // but whether the author meant to convert THIS value (rather than to
+        // declare the binding with the other type) is intent, which the
+        // compiler does not know. A narrowing `as` also traps where the
+        // implicit form was rejected.
+        FixKind::ConvertWithAs => Applicability::MaybeIncorrect,
     }
 }
 
@@ -50,7 +56,11 @@ mod tests {
                 "{kind:?} is a fix the compiler knows, not one it guesses"
             );
         }
-        for kind in [FixKind::ReplaceIdentifier, FixKind::CallMethod] {
+        for kind in [
+            FixKind::ReplaceIdentifier,
+            FixKind::CallMethod,
+            FixKind::ConvertWithAs,
+        ] {
             assert_eq!(
                 applicability(kind),
                 Applicability::MaybeIncorrect,

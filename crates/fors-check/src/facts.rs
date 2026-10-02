@@ -449,6 +449,189 @@ impl PatternFacts {
     }
 }
 
+// ------------------------------------------------- I10: D10 (ch02), D11 (ch03)
+
+/// D10: how one `?` sends the callee's error to the enclosing function's
+/// `raises` type (ch02 R2, R3). Decided once, here; `fors-lower` builds the
+/// propagation edge from it and never re-runs R12's lookup.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum Propagation {
+    /// ch02 R2: the two error types are equal; the error passes unmodified.
+    Same,
+    /// ch02 R3: exactly one `ErrorFrom[E]` impl for `F`. `from_fn` is that
+    /// impl's `from` method (the function the edge calls on the error
+    /// value before raising it); `impl_def` the impl itself.
+    ErrorFrom { impl_def: DefId, from_fn: DefId },
+    /// ch02 R3 on a RIGID target: `F` is a type parameter whose declared
+    /// bounds include `ErrorFrom[E]`; the impl is the instantiation's,
+    /// chosen when the body is monomorphised (`fors-lower`'s F-mono), and
+    /// `ErrorFrom.from` is called through it.
+    ErrorFromBound,
+}
+
+/// D10: one `call?` site.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub struct TryRow {
+    /// The `TryExpr` node.
+    pub node: u32,
+    /// The `CallExpr` it applies to.
+    pub call: u32,
+    /// The callee's `raises` type `E`, after the call's arguments were
+    /// determined (R38).
+    pub callee_raises: TyId,
+    /// The enclosing function's (or `fn`-typed closure's) `raises` type `F`.
+    pub target: TyId,
+    pub edge: Propagation,
+}
+
+/// D10: one `call else |e| { .. }` handler (ch02 R5).
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub struct HandlerRow {
+    /// The `Handler` node, which is also the binding's slot in the body's
+    /// local table (`e` is bound at the handler node).
+    pub node: u32,
+    /// The `CallExpr` the handler is attached to.
+    pub call: u32,
+    /// `e`'s type: the callee's `raises` type `E`.
+    pub binding: TyId,
+    /// The handler's `Block`.
+    pub block: u32,
+    /// The call's success type, which the block yields when it does not
+    /// diverge.
+    pub success: TyId,
+    /// Whether the block diverges (`return`, `raise`, trap: its type is
+    /// `never`), in which case the handler makes no value.
+    pub diverges: bool,
+}
+
+/// D10: one `raise e;` statement (ch02 R1).
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub struct RaiseRow {
+    /// The `RaiseStmt` node.
+    pub node: u32,
+    /// Its operand.
+    pub value: u32,
+    /// The type raised: the enclosing `raises` type the operand was
+    /// checked against.
+    pub ty: TyId,
+    /// The variant raised, when the operand names one directly (`E.a`,
+    /// `.a`, `E.b(x)`): `(enum, member index)`. `None` for any other
+    /// operand (a local, a call), whose variant is a runtime value.
+    pub variant: Option<(DefId, u32)>,
+}
+
+/// D10 — the failure surface (ch02 R1-R5), what FMIR increment F3 lowers
+/// `?`, `else |e|` and `raise` from.
+#[derive(Default, Debug)]
+pub struct FailureFacts {
+    pub tries: Vec<TryRow>,
+    pub handlers: Vec<HandlerRow>,
+    pub raises: Vec<RaiseRow>,
+}
+
+impl FailureFacts {
+    /// The `?` row of a `TryExpr` node.
+    pub fn try_of(&self, node: u32) -> Option<&TryRow> {
+        self.tries.iter().find(|r| r.node == node)
+    }
+
+    /// The handler row of a `CallExpr` node, when it has one.
+    pub fn handler_of_call(&self, call: u32) -> Option<&HandlerRow> {
+        self.handlers.iter().find(|r| r.call == call)
+    }
+
+    /// The row of a `RaiseStmt` node.
+    pub fn raise_of(&self, node: u32) -> Option<&RaiseRow> {
+        self.raises.iter().find(|r| r.node == node)
+    }
+}
+
+/// D11: one of ch03 Rule 2's trapping operators, as the explicit-arithmetic
+/// methods of Rule 4 name it.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum ArithOp {
+    Add,
+    Sub,
+    Mul,
+    Div,
+    Rem,
+    Shl,
+    Shr,
+    Neg,
+}
+
+/// D11: which language-known numeric method a call resolved to (ch03 Rules
+/// 4 and 6).
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum NumericMethod {
+    /// `wrap_<op>`: two's-complement wrapping.
+    Wrap(ArithOp),
+    /// `sat_<op>`: clamps to the type's range.
+    Sat(ArithOp),
+    /// `unchecked_<op>`: no check; legal only inside an `@unsafe`
+    /// declaration (ch03 R4, ch04 R10), which the checker enforced.
+    Unchecked(ArithOp),
+    /// `wrap_as[U]`: keeps the low bits.
+    WrapAs,
+    /// `sat_as[U]`: clamps to `U`'s range.
+    SatAs,
+    /// `trunc_as[U]`: truncates toward zero.
+    TruncAs,
+}
+
+/// D11: one call of a ch03 Rule 4 / Rule 6 method. `method`/`owner` are
+/// the prelude declarations the lookup resolved (an inherent impl of the
+/// numeric primitive, `fors_fir::prelude::push_builtin_impls`).
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub struct NumericCallRow {
+    pub call: u32,
+    pub method: DefId,
+    pub owner: DefId,
+    pub kind: NumericMethod,
+    /// The receiver's (primitive) type.
+    pub recv: TyId,
+    /// The call's result: the receiver's type for Rule 4, `U` for Rule 6.
+    pub result: TyId,
+}
+
+/// D11: one `reduce(op, xs [, identity: e])` call (ch03 R11-R14).
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub struct ReduceRow {
+    pub call: u32,
+    /// The `op` argument node (a bare operator, a `fn` value or a closure).
+    pub op: u32,
+    /// The `fn(let T, let T) -> T` type `op` was checked against. A BARE
+    /// operator's node is not given this type in D1: `fors-lower`'s prescan
+    /// refuses any `fn`-typed node as a closure, and the operator is lowered
+    /// from this row (its token is the operator).
+    pub op_fn: TyId,
+    /// The sequence argument node.
+    pub xs: u32,
+    /// The `identity:` argument's value node, when written (R11a).
+    pub identity: Option<u32>,
+    /// The element type `T`; the call's type.
+    pub elem: TyId,
+}
+
+/// D11 — ch03's language-known numeric surface, decided by the checker.
+#[derive(Default, Debug)]
+pub struct NumericFacts {
+    pub calls: Vec<NumericCallRow>,
+    pub reduces: Vec<ReduceRow>,
+}
+
+impl NumericFacts {
+    /// The explicit-arithmetic / conversion row of a call node.
+    pub fn call_of(&self, call: u32) -> Option<&NumericCallRow> {
+        self.calls.iter().find(|r| r.call == call)
+    }
+
+    /// The `reduce` row of a call node.
+    pub fn reduce_of(&self, call: u32) -> Option<&ReduceRow> {
+        self.reduces.iter().find(|r| r.call == call)
+    }
+}
+
 /// D9 — scoped sources (ch01 R19c(d), R19d): per value, the source place
 /// ROOTS its accesses extend. R19a's extents stay M3; this is the source
 /// SETS only, which is what R19c and R19d decide.
@@ -524,6 +707,12 @@ pub struct BodyFacts {
     /// D5/D6 (I10a): the decided patterns, per `match` and per `let`
     /// destructuring.
     pub patterns: PatternFacts,
+    /// D10 (I10, ch02 R1-R5): every `?`, handler and `raise`, with the
+    /// propagation edge and the handler binding decided.
+    pub failure: FailureFacts,
+    /// D11 (I10, ch03 R4/R6/R11): the explicit-arithmetic, conversion and
+    /// `reduce` calls, resolved.
+    pub numeric: NumericFacts,
 }
 
 impl BodyFacts {
@@ -544,6 +733,8 @@ impl BodyFacts {
             linear_obligations: LinearObligations::default(),
             scoped_sources: ScopedSources::default(),
             patterns: PatternFacts::default(),
+            failure: FailureFacts::default(),
+            numeric: NumericFacts::default(),
         }
     }
 

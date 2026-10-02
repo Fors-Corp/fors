@@ -450,7 +450,7 @@ fn head_is_trait(f: &FileCtx, defs: &DefTable, prelude: &PreludeDefs, node: usiz
             Some(PreludeEntity::Ty(_)) | Some(PreludeEntity::Generic { .. }) => Some(false),
             // A prelude name with no declaration in this build (ch10 R2's std
             // types): neither answer is known, so R15 stays silent.
-            Some(PreludeEntity::Opaque) | None => None,
+            Some(PreludeEntity::Opaque) | Some(PreludeEntity::RejectedWidth) | None => None,
         },
         _ => None,
     }
@@ -547,6 +547,18 @@ pub struct Cx<'f, 'a> {
     /// block's own fresh brand. Outside the header the slot stays open
     /// (`type_args` leaves the type `TY_ERROR` rather than inventing one).
     header_brand: Option<TyId>,
+    /// I10 (ch03 R20): the one type node where `SVec[T]` is legal — the
+    /// top of a local's annotation inside a `simd` body. `u32::MAX`
+    /// everywhere else.
+    pub svec_local: u32,
+    /// I10 verification (ch03 R9): where a comptime-only type
+    /// (`comptime_int`, `comptime_float`) may be WRITTEN as a type — a
+    /// `const` item's declared type, and a body's own annotations (the body
+    /// checker decides a runtime binding, `numerics::comptime_binding`). In
+    /// every other declared position — a parameter, a result, a field, a
+    /// payload, a generic argument — the value would escape to runtime by
+    /// construction, so `type_app` reports D0009 there.
+    pub comptime_ok: bool,
 }
 
 impl<'f, 'a> Cx<'f, 'a> {
@@ -565,6 +577,8 @@ impl<'f, 'a> Cx<'f, 'a> {
             fresh_brands: Vec::new(),
             fresh_brands_opened: 0,
             header_brand: None,
+            svec_local: u32::MAX,
+            comptime_ok: false,
         }
     }
 
@@ -592,7 +606,7 @@ impl<'f, 'a> Cx<'f, 'a> {
         o
     }
 
-    fn fresh_brand(&self, node: u32) -> Option<TyId> {
+    pub(crate) fn fresh_brand(&self, node: u32) -> Option<TyId> {
         self.fresh_brands
             .iter()
             .rev()
@@ -665,6 +679,8 @@ enum Head {
     Value((u32, u32), Symbol),
     /// Already diagnosed, or deliberately deferred: silent `TY_ERROR`.
     Silent,
+    /// I10 (ch03 R1): `i128`/`u128`, a width v1 does not have.
+    RejectedWidth((u32, u32), Symbol),
 }
 
 impl Lowerer<'_> {
@@ -849,6 +865,7 @@ impl Lowerer<'_> {
                 }
                 TY_ERROR
             }
+            Head::RejectedWidth(r, s) => self.rejected_width(cx, r, s),
             Head::Value(r, s) => {
                 if pos == Pos::OpaqueArg {
                     return TY_ERROR;
@@ -886,8 +903,19 @@ impl Lowerer<'_> {
                 }
                 TY_ERROR
             }
+            Head::Nominal(def) if self.svec_misuse(cx, def, node, range) => {
+                for &c in args {
+                    if is_type_node(cx.f.kind(c)) {
+                        self.ty(cx, c, Pos::Value);
+                    }
+                }
+                TY_ERROR
+            }
             Head::Nominal(def) => match self.type_args(cx, args, def, range) {
                 Some(xs) => {
+                    if self.bad_lane_count(cx, def, &xs, range) {
+                        return TY_ERROR;
+                    }
                     if let Some(g) = self.prelude.generic_index(def) {
                         use fors_fir::prelude::gty;
                         if matches!(g, gty::ARRAY | gty::VECTOR | gty::ATOMIC) && !xs.is_empty() {
@@ -981,6 +1009,9 @@ impl Lowerer<'_> {
                     Some(PreludeEntity::Generic { def, .. }) => Head::Nominal(def),
                     Some(PreludeEntity::Trait { def, .. }) => Head::Trait(def),
                     Some(PreludeEntity::Opaque) | None => Head::Opaque,
+                    Some(PreludeEntity::RejectedWidth) => {
+                        Head::RejectedWidth(cx.f.range(node), sym)
+                    }
                 },
                 Entity::Variant { .. } | Entity::PreludeValue(_) => {
                     match self.last_own_ident(cx, node) {
@@ -1023,6 +1054,7 @@ impl Lowerer<'_> {
                 }
                 TY_ERROR
             }
+            Head::RejectedWidth(r, s) => self.rejected_width(cx, r, s),
             Head::Value(r, s) => {
                 if pos == Pos::OpaqueArg {
                     return TY_ERROR;
@@ -1072,10 +1104,30 @@ impl Lowerer<'_> {
                 TY_ERROR
             }
             Head::Nominal(def) => {
+                // I10 (ch03 R20): `SVec[T]` is reserved — legal only as a
+                // local inside a `simd` body (and only with hardware support,
+                // which this compiler never assumes away: the rule's "never a
+                // silent scalar fallback"). Anywhere else, including as a
+                // type argument, a field, a parameter or a result, it is a
+                // compile error.
+                if self.comptime_misuse(cx, def, range) {
+                    return TY_ERROR;
+                }
+                if self.svec_misuse(cx, def, node, range) {
+                    for (c, k) in cx.f.child_kinds(node) {
+                        if is_type_node(k) {
+                            self.ty(cx, c, Pos::Value);
+                        }
+                    }
+                    return TY_ERROR;
+                }
                 let kids: Vec<usize> = cx.f.tree.children(node).collect();
                 let args = self.type_args(cx, &kids, def, range);
                 match args {
                     Some(xs) => {
+                        if self.bad_lane_count(cx, def, &xs, range) {
+                            return TY_ERROR;
+                        }
                         // R11 (ch01 R22b): a CONCRETE `Array[X, N]`,
                         // `vector[X, N]` or `atomic[X]` whose element type is
                         // linear. Linearity is only known once every `impl
@@ -1268,6 +1320,30 @@ impl Lowerer<'_> {
                 owner,
                 ordinal: ord,
             }),
+            // I10 verification (ch01 R15d): "passing a non-brand type for
+            // it ... MUST be rejected". A type, a trait, `Self` or a
+            // parameter of another kind in a brand slot lowered to a SILENT
+            // `TY_ERROR`; it is the writer's error and reports under R15d's
+            // code. A value head (an `Arena`-typed binding, which the ch08
+            // corpus writes), an opaque or an already-diagnosed head stays
+            // silent, as before.
+            Head::Prim(_)
+            | Head::Nominal(_)
+            | Head::Trait(_)
+            | Head::SelfTy
+            | Head::RejectedWidth(..)
+            | Head::GParam(_, _, GKind::Type | GKind::Const | GKind::Callable) => {
+                let range = cx.f.range(node);
+                self.emit_code(
+                    cx,
+                    range,
+                    fors_index::diag::Code::O(15),
+                    58,
+                    "a brand argument must be a brand: this slot's declared kind is `brand`, and a type is not one (ch01 R15d)"
+                        .to_string(),
+                );
+                TY_ERROR
+            }
             _ => TY_ERROR,
         }
     }
@@ -1311,6 +1387,7 @@ impl Lowerer<'_> {
                     // A prelude name with no declaration in this build, or a
                     // head the resolver already diagnosed: silent.
                     Head::Opaque | Head::Silent => TY_ERROR,
+                    Head::RejectedWidth(r, s) => self.rejected_width(cx, r, s),
                     // A `const` declaration used as a const argument: its
                     // value is the const's, which I2 folds only for literals
                     // (a closed constant expression by ch04 R11-14, left open
@@ -1504,6 +1581,7 @@ impl Lowerer<'_> {
         };
         match head {
             Head::Silent | Head::Opaque => TY_ERROR,
+            Head::RejectedWidth(r, s) => self.rejected_width(cx, r, s),
             Head::Value(r, s) => {
                 let n = String::from_utf8_lossy(self.names.resolve(s)).into_owned();
                 self.emit(cx, r, 11, 11, format!("`{n}` is a binding, not a type"));
@@ -1872,6 +1950,87 @@ impl Lowerer<'_> {
         Some(self.fir.tys.intern_trait_ref(def, a))
     }
 
+    /// I10 (ch03 R1): `i128`/`u128` named as a type.
+    fn rejected_width(&mut self, cx: &Cx, r: (u32, u32), s: Symbol) -> TyId {
+        let n = String::from_utf8_lossy(self.names.resolve(s)).into_owned();
+        self.emit_code(
+            cx,
+            r,
+            fors_index::diag::Code::D(1),
+            3,
+            format!("`{n}` is not an integer type: v1's integers are fixed-width `i8`..`i64` and `u8`..`u64`, with no 128-bit width (ch03 R1)"),
+        );
+        TY_ERROR
+    }
+
+    /// I10 (ch03 R19): `vector[T, N]`'s and `mask[N]`'s lane count is a
+    /// comptime power of two. Reports and answers `true` when it is not.
+    fn bad_lane_count(&mut self, cx: &Cx, def: DefId, xs: &[TyId], range: (u32, u32)) -> bool {
+        use fors_fir::prelude::gty;
+        let lanes = match self.prelude.generic_index(def) {
+            Some(gty::VECTOR) => xs.get(1).copied(),
+            Some(gty::MASK) => xs.first().copied(),
+            _ => None,
+        };
+        let Some(n) = lanes.and_then(|t| const_int(self.fir, t)) else {
+            return false;
+        };
+        if n > 0 && n & (n - 1) == 0 {
+            return false;
+        }
+        self.emit_code(
+            cx,
+            range,
+            fors_index::diag::Code::D(19),
+            5,
+            format!("a `vector`/`mask` lane count must be a comptime power of two; {n} is not (ch03 R19)"),
+        );
+        true
+    }
+
+    /// I10 (ch03 R20): reports `SVec[T]` written anywhere but the one legal
+    /// node, and answers whether it did.
+    fn svec_misuse(&mut self, cx: &Cx, def: DefId, node: usize, range: (u32, u32)) -> bool {
+        if def != self.prelude.svec || cx.svec_local == node as u32 {
+            return false;
+        }
+        self.emit_code(
+            cx,
+            range,
+            fors_index::diag::Code::D(20),
+            5,
+            "`SVec[T]` is reserved: it is legal only as the type of a local inside a `simd` body, never as a field, a parameter, a result, an element or a generic argument (ch03 R20)".to_string(),
+        );
+        true
+    }
+
+    /// I10 verification (ch03 R9): `comptime_int`/`comptime_float` written
+    /// as the type of a parameter, a result, a field, a payload or a generic
+    /// argument. Such a value escapes to runtime by construction, with no
+    /// conversion site to write `as` at, so the TYPE is the error; a
+    /// `const` item's type and a body's own annotations are the two places
+    /// the type may be written (`Cx::comptime_ok`).
+    fn comptime_misuse(&mut self, cx: &Cx, def: DefId, range: (u32, u32)) -> bool {
+        if cx.comptime_ok
+            || (def != self.prelude.comptime_int && def != self.prelude.comptime_float)
+        {
+            return false;
+        }
+        let name = if def == self.prelude.comptime_int {
+            "comptime_int"
+        } else {
+            "comptime_float"
+        };
+        self.emit_code(
+            cx,
+            range,
+            fors_index::diag::Code::D(9),
+            31,
+            format!("`{name}` is comptime-only and cannot be the type of a parameter, a result, a field, a payload or a generic argument: a value of it would escape to runtime with no explicit conversion; declare a fixed-width type and convert with `as` (ch03 R9)"),
+        );
+        true
+    }
+
     fn emit(&mut self, cx: &Cx, range: (u32, u32), code: u16, site: u16, msg: String) {
         self.sink.emit(cx.f.file, range, t(code), site, msg);
     }
@@ -1888,6 +2047,49 @@ impl Lowerer<'_> {
     ) {
         self.sink.emit(cx.f.file, range, code, site, msg);
     }
+}
+
+/// The integer a const-argument type row carries, if any.
+pub(crate) fn const_int(fir: &Fir, t: TyId) -> Option<i128> {
+    if t == NO_TY || t == TY_ERROR || fir.tys.tag(t) != fors_fir::ty::TyTag::ConstVal {
+        return None;
+    }
+    fir.tys
+        .const_value(fors_fir::ty::ConstId(fir.tys.a(t)))
+        .as_int()
+}
+
+/// Whether an `extern` declaration's ABI string is `"c"` (ch02 R13).
+fn extern_abi_is_c(f: &FileCtx, node: usize) -> bool {
+    // The ABI string sits between the leading attributes and the `FnSig`.
+    let (a, end) = f.tree.token_range(node);
+    let b = f
+        .tree
+        .children(node)
+        .find(|&c| f.tree.kinds[c] == NodeKind::FnSig)
+        .map_or(end, |c| f.tree.token_range(c).0);
+    (a as usize..(b as usize).min(f.tokens.kinds.len())).any(|i| {
+        let k = f.tokens.kinds[i];
+        k == TokenKind::Str && str_contents(k, f.tokens.text(i, f.source)) == b"c"
+    })
+}
+
+/// Whether the file's `contracts:` clause names `policy` (ch02's
+/// `.runtime`/`.proved`/`.off`; absent means `.runtime`).
+pub(crate) fn contracts_policy_is(f: &FileCtx, policy: &[u8]) -> bool {
+    if f.tree.is_empty() {
+        return false;
+    }
+    for c in f.tree.children(0) {
+        if f.tree.kinds[c] != NodeKind::ContractsClause {
+            continue;
+        }
+        let (a, b) = f.tree.token_range(c);
+        return (a as usize..(b as usize).min(f.tokens.kinds.len())).any(|i| {
+            f.tokens.kinds[i] == TokenKind::Ident && f.tokens.text(i, f.source) == policy
+        });
+    }
+    false
 }
 
 fn is_type_node(k: NodeKind) -> bool {
@@ -2428,10 +2630,33 @@ impl Lowerer<'_> {
         Some((subject, id))
     }
 
+    /// ch02 R10 (I10, F0010): under the module policy `.proved` a contract
+    /// the proof engine cannot discharge MUST be a compile error, with no
+    /// silent runtime fallback. The proof engine is the future verification
+    /// chapter's; this compiler has none, so it discharges nothing and every
+    /// contract of a `.proved` module is reported, at the clause.
+    fn contract_policy(&mut self, cx: &Cx, clause: usize) {
+        if !contracts_policy_is(cx.f, b"proved") {
+            return;
+        }
+        let r = cx.f.range(clause);
+        self.emit_code(
+            cx,
+            r,
+            fors_index::diag::Code::F(10),
+            49,
+            "this contract cannot be discharged: the module's contract policy is `.proved`, and no proof engine is available to discharge it, so it is a compile error rather than a runtime check (ch02 R10); use `.runtime` to check it at run time".to_string(),
+        );
+    }
+
     fn lower_struct(&mut self, cx: &mut Cx, def: DefId, node: usize) {
         self.lower_generics(cx, def, false);
         let mut ms: Vec<Member> = Vec::new();
         for (c, k) in cx.f.child_kinds(node) {
+            if k == NodeKind::Contract {
+                self.contract_policy(cx, c);
+                continue;
+            }
             if k != NodeKind::Field {
                 continue;
             }
@@ -2887,7 +3112,21 @@ impl Lowerer<'_> {
                         Some(x) => self.ty(cx, x, Pos::Value),
                         None => TY_ERROR,
                     };
+                    // ch02 R13: "An `extern "c"` function MUST NOT declare
+                    // `raises`" — the C ABI boundary cannot carry a Fors
+                    // error (I10, F0013).
+                    if cx.f.kind(node) == NodeKind::ExternFnDecl && extern_abi_is_c(cx.f, node) {
+                        let r = cx.f.range(c);
+                        self.emit_code(
+                            cx,
+                            r,
+                            fors_index::diag::Code::F(13),
+                            60,
+                            "an `extern \"c\"` function must not declare `raises`: a Fors error cannot cross the C ABI boundary (ch02 R13)".to_string(),
+                        );
+                    }
                 }
+                NodeKind::Contract => self.contract_policy(cx, c),
                 NodeKind::ScopedType => {
                     result = self.ty(cx, c, Pos::Value);
                     // MARC: verification of I2 (2026-09-20). The designated
@@ -2905,7 +3144,7 @@ impl Lowerer<'_> {
                         .filter(|&i| i != NO_SLOT)
                         .unwrap_or(0);
                 }
-                NodeKind::Contract | NodeKind::Block | NodeKind::Attribute | NodeKind::Error => {}
+                NodeKind::Block | NodeKind::Attribute | NodeKind::Error => {}
                 _ if seen_params && is_type_node(k) => result = self.ty(cx, c, Pos::Value),
                 _ => {}
             }
@@ -2921,6 +3160,18 @@ impl Lowerer<'_> {
             );
             params.truncate(MAX_PARAMS);
         }
+        // I10 (ch02 R9): `pre`/`post`/`invariant` are "part of the
+        // declaration they annotate" — design §8's "token hash of clauses",
+        // which the canonical encoding already carries a slot for. Zero for a
+        // function with no contract, so every other signature is unchanged.
+        let mut contract_hash = 0u128;
+        for (c, k) in cx.f.child_kinds(sig_node) {
+            if k == NodeKind::Contract {
+                let (a, b) = cx.f.tree.token_range(c);
+                let h = fors_index::fingerprint::hash_tokens(cx.f.tokens, cx.f.source, a, b);
+                contract_hash = contract_hash.rotate_left(13) ^ h;
+            }
+        }
         let id = self.fir.sigs.fn_sigs.push(
             &params,
             result,
@@ -2928,18 +3179,27 @@ impl Lowerer<'_> {
             scoped,
             receiver,
             (u32::MAX, u32::MAX),
-            0,
+            contract_hash,
         );
         self.fir.sigs.set_fn_sig(def, id);
+        // I10 (ch03 R18): `@specialize` is part of the signature.
+        if crate::numerics::decl_has_attr(cx.f, node, b"specialize") {
+            self.fir.sigs.set_specialize(def, true);
+        }
     }
 
     fn lower_const(&mut self, cx: &mut Cx, def: DefId, node: usize) {
         let kids: Vec<(usize, NodeKind)> = cx.f.child_kinds(node);
+        // ch03 R9: a `const` is the one declaration whose type may be
+        // `comptime_int`/`comptime_float`.
+        let was = cx.comptime_ok;
+        cx.comptime_ok = true;
         let ty = kids
             .iter()
             .find(|&&(_, k)| is_type_node(k))
             .map(|&(c, _)| self.ty(cx, c, Pos::Value))
             .unwrap_or(TY_ERROR);
+        cx.comptime_ok = was;
         let val = kids
             .iter()
             .find_map(|&(c, k)| self.const_init_value(cx, c, k))

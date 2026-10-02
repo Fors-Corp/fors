@@ -215,7 +215,11 @@ impl Wf<'_> {
         };
         match target {
             ResolvedTarget::Local { node: intro } => match cx.local(intro) {
-                Some((t, _)) => PathHead::Value(t),
+                Some((t, _)) => {
+                    // I10 (ch04 R12): nothing of the run time from comptime.
+                    self.comptime_reach(cx, node, intro);
+                    PathHead::Value(t)
+                }
                 // I10b (R58): "A const parameter is a constant of its type in
                 // the body." Nothing read `LocalKind::ConstParam` before, so
                 // SYNTH of `N` answered `TY_ERROR`: CHECK hid it (§7.10's
@@ -821,6 +825,10 @@ impl Wf<'_> {
             if let Some(g) = self.prelude.generic_index(def) {
                 use fors_fir::prelude::gty;
                 let args = self.fir.tys.args(ArgsId(self.fir.tys.b(bare))).to_vec();
+                // I10 (ch01 R16): an arena subscript by a `Ref` of its brand.
+                if g == gty::ARENA {
+                    return self.arena_index(cx, node, &args, index);
+                }
                 if matches!(g, gty::ARRAY | gty::SLICE | gty::VECTOR) {
                     let elem = args.first().copied().unwrap_or(TY_ERROR);
                     if let Some(i) = index {
