@@ -505,6 +505,7 @@ impl Wf<'_> {
         let idx_trait = self.prelude.traits[fors_fir::prelude::tr::INDEX];
         let head = self.fir.tys.head_key(s);
         self.impl_scans += 1;
+        self.note_bucket(idx_trait, head);
         let rows = self.impls.bucket(idx_trait, head);
         if rows.len() > 1 {
             return self.index_several(cx, _node, s, index, idx_trait, &rows);
@@ -568,6 +569,7 @@ impl Wf<'_> {
         let at = self.index_method_def(r.def, b"at");
         let at_mut = {
             let idx_mut_trait = self.prelude.traits[fors_fir::prelude::tr::INDEXMUT];
+            self.note_bucket(idx_mut_trait, head);
             let mut_rows = self.impls.bucket(idx_mut_trait, head);
             if mut_rows.len() == 1 {
                 let rm = self.impls.row(mut_rows[0]);

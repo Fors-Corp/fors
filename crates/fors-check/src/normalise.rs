@@ -62,6 +62,9 @@ pub const NORMALISE_BUDGET_MAX: u32 = 4096;
 /// when `TraitWorldRevision` bumps (design §9.1) — the cost of which is I6's
 /// second MEASUREMENT.
 pub struct NormState {
+    /// Impl buckets R20's lookup probed, parked for `Wf::close_query` to hand
+    /// to the body's `check_body` in-edge set (design §9.1's `impls_for`).
+    pub probed: Vec<(u32, u64)>,
     /// §7.5's memo, negative entries included.
     memo: HashMap<(TyId, TraitRefId, Symbol), Option<TyId>>,
     /// Every projection question asked of the solver.
@@ -93,6 +96,7 @@ pub struct NormState {
 impl Default for NormState {
     fn default() -> NormState {
         NormState {
+            probed: Vec::new(),
             memo: HashMap::new(),
             proj_queries: 0,
             memo_misses: 0,
@@ -189,6 +193,9 @@ impl Normaliser<'_> {
         if trait_def == NO_DEF {
             return;
         }
+        self.state
+            .probed
+            .push((trait_def.0, store.head_key(head).as_u64()));
         if !self
             .impls
             .bucket(trait_def, store.head_key(head))
@@ -251,6 +258,7 @@ impl Normaliser<'_> {
             }
         }
         let hk = store.head_key(head);
+        self.state.probed.push((trait_def.0, hk.as_u64()));
         for r in self.impls.bucket(trait_def, hk) {
             let row = self.impls.row(r);
             let arity = self.arity(row.def);
@@ -357,6 +365,13 @@ impl Wf<'_> {
 
     fn close_query(&mut self) {
         self.norm.budget_peak = self.norm.budget_peak.max(self.norm.budget_used);
+        // R20's own impl-bucket probes belong to whoever asked: hand them to
+        // the body's `check_body` in-edge set (design §9.1). `Normaliser`
+        // cannot reach `Wf`, so it parks them here and this is the drain.
+        let probed = std::mem::take(&mut self.norm.probed);
+        for (tr, head) in probed {
+            self.note_bucket_raw(tr, head);
+        }
     }
 
     /// `subst_norm` with R20's normalisation: design §7.4's

@@ -288,9 +288,17 @@ fn run_check(args: &[String]) -> ExitCode {
     // are a property of a check, not a separate operation, and the gate
     // wants them for the same run whose diagnostics it is reading.
     let count = args.iter().any(|a| a == "--count");
+    // MARC: design §9 asks the query engine for `--stats`. It is a flag on
+    // `fors check` for the same reason `--count` is: the numbers describe a
+    // check, not a separate operation. It runs the same package through
+    // `fors_check::queries::QueryBuild` — the content-hash DAG — and prints
+    // what the engine did. The diagnostic LINES above it are still the frozen
+    // text baseline produced by `check_build`; `query_path_agrees_with_check_build`
+    // in this file's tests is the assertion that the two never disagree.
+    let stats = args.iter().any(|a| a == "--stats");
     let args: Vec<String> = args
         .iter()
-        .filter(|a| a.as_str() != "--count")
+        .filter(|a| a.as_str() != "--count" && a.as_str() != "--stats")
         .cloned()
         .collect();
     let (format, args) = match take_format(&args) {
@@ -438,6 +446,39 @@ fn run_check(args: &[String]) -> ExitCode {
         let _ = writeln!(out, "{}", l.text);
     }
 
+    if stats {
+        for arg in &args {
+            let path = Path::new(arg);
+            let mut interner = Interner::new();
+            let Some((files, root)) = build_package(path, &mut interner) else {
+                continue;
+            };
+            let package = std::path::Path::new(path)
+                .file_name()
+                .map(|n| n.as_encoded_bytes().to_vec());
+            let mut qb = fors_check::queries::QueryBuild::new();
+            qb.set_root(root);
+            qb.set_package(package);
+            for f in &files {
+                let segs: Vec<fors_index::Symbol> = f
+                    .name
+                    .iter()
+                    .map(|s| qb.interner_mut().intern(interner.resolve(*s)))
+                    .collect();
+                qb.add_file(&f.display, segs, f.source.clone());
+            }
+            match qb.recheck() {
+                Ok(()) => {
+                    let _ = writeln!(out, "--- {arg}: query DAG");
+                    let _ = write!(out, "{}", qb.render_stats());
+                }
+                Err(_) => {
+                    let _ = writeln!(out, "--- {arg}: query DAG cancelled");
+                }
+            }
+        }
+    }
+
     let t = &totals;
     let counters: [(&str, u64); 11] = [
         ("bodies_checked", t.bodies_checked),
@@ -572,7 +613,7 @@ fn main() -> ExitCode {
         _ => {
             eprintln!(
                 "usage: fors parse [--tree] <file>...\n\
-                 \x20      fors check [--format json|text] [--count] <path>...\n\
+                 \x20      fors check [--format json|text] [--count] [--stats] <path>...\n\
                  \x20      fors explain [--format json|text] <CODE>\n\
                  \x20      fors explain [--format json|text] --list\n\
                  \x20      fors --version"

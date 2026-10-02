@@ -12,6 +12,9 @@ fors-syntax = { path = "../fors-syntax" }
 fors-index = { path = "../fors-index" }
 fors-resolve = { path = "../fors-resolve" }
 fors-fir = { path = "../fors-fir" }
+# §4.3: `fors-query` is the engine and depends on `std` only; the Fors query
+# set (§9.1's node set) lives here, so the edge runs this way and never back.
+fors-query = { path = "../fors-query" }
 
 [dev-dependencies]
 # D7's per-exit multiset is asserted against FMIR F4's own oracle,
