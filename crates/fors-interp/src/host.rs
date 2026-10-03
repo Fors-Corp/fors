@@ -73,7 +73,7 @@ impl HostEvent {
         }
     }
 
-    fn line(self) -> String {
+    pub(crate) fn line(self) -> String {
         match self {
             HostEvent::Mono(v) => format!("mono {v}\n"),
             HostEvent::Wall(v) => format!("wall {v}\n"),
@@ -214,6 +214,18 @@ impl Oracle {
             last_mono: None,
             counters: HostCounters::default(),
         })
+    }
+
+    /// F10: responses replayed from already-parsed events (an
+    /// [`crate::oracle::OracleRecord`]'s host section) — the same mode as
+    /// [`Oracle::replay`], without a round trip through the text format.
+    pub fn replay_events(events: Vec<HostEvent>) -> Oracle {
+        Oracle {
+            mode: Mode::Replay { events, at: 0 },
+            log: Vec::new(),
+            last_mono: None,
+            counters: HostCounters::default(),
+        }
     }
 
     /// F9's comptime oracle (design §6: "comptime mode starts with an empty

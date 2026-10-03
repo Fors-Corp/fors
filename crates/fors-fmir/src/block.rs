@@ -64,6 +64,12 @@ impl BlockPool {
         self.rows[id.index()]
     }
 
+    /// F10's reducer: overwrites one block row in place (a new terminator,
+    /// a shrunk instruction window). The caller re-verifies.
+    pub fn set_row(&mut self, id: BlockId, row: BlockRow) {
+        self.rows[id.index()] = row;
+    }
+
     /// [`BlockPool::row`] for a `BlockId` read out of a terminator's operand
     /// slot rather than out of this pool's own iteration — arbitrary FMIR may
     /// branch to a block that does not exist, and `verify()` must report that

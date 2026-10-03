@@ -147,6 +147,37 @@ impl InstPool {
         self.rows[id.index()]
     }
 
+    /// F10's reducer: overwrites one row in place (operand narrowing,
+    /// opcode-preserving edits). The alias seed and every side table are
+    /// untouched; the caller re-verifies.
+    pub fn set_row(&mut self, id: InstId, row: InstRow) {
+        self.rows[id.index()] = row;
+    }
+
+    /// F10's reducer: drops every row whose `keep` entry is `false` (rows
+    /// past `keep`'s end are kept), keeping each survivor's alias seed in
+    /// lockstep and leaving the side tables (`operands`, `calls`, ...) as
+    /// they are, since kept rows still index them. Returns the old-index ->
+    /// new-`InstId` map (`None` for a dropped row); the caller remaps block
+    /// windows, `ValDef::Inst` and `try_br` operands.
+    pub fn retain_rows(&mut self, keep: &[bool]) -> Vec<Option<InstId>> {
+        let mut map = Vec::with_capacity(self.rows.len());
+        let mut rows = Vec::with_capacity(self.rows.len());
+        let mut seeds = Vec::with_capacity(self.rows.len());
+        for (i, row) in self.rows.iter().enumerate() {
+            if keep.get(i).copied().unwrap_or(true) {
+                map.push(Some(InstId(rows.len() as u32)));
+                rows.push(*row);
+                seeds.push(self.aliases.get(i));
+            } else {
+                map.push(None);
+            }
+        }
+        self.rows = rows;
+        self.aliases = AliasSeedPool::from_raw(seeds);
+        map
+    }
+
     /// [`InstPool::row`] for an `InstId` derived from a `BlockRow`'s
     /// `first_inst`/`inst_len` (or any other row's data), which arbitrary FMIR
     /// may leave pointing past the end.

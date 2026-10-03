@@ -37,6 +37,9 @@
 pub mod diag;
 pub mod lower;
 pub mod mono;
+/// F10's test-only seeded-miscompile hook; see the module docs.
+#[cfg(feature = "seeded-miscompile")]
+pub mod seeded;
 
 pub use diag::{LowerDiag, LowerError};
 pub use lower::{ComptimeThunk, LoweredBuild, LoweredFn, lower_build};

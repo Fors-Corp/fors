@@ -3,7 +3,8 @@
 //! F8).
 //!
 //! ```text
-//! fors run [--std <dir>] [--oracle-record <file> | --oracle-replay <file>] <file.fors>
+//! fors run [--std <dir>] [--oracle-record <file> | --oracle-replay <file>]
+//!          [--oracle-run-record <file>] <file.fors>
 //! ```
 //!
 //! **Oracle flags (design §7.2).** `--oracle-record <file>` writes the run's
@@ -14,6 +15,15 @@
 //! status are byte-identical to the recorded run's. A run that diverges from
 //! the record (asks for a different response, more responses, or fewer) is
 //! the named oracle error, exit [`EXIT_INTERP`], never a silent divergence.
+//!
+//! **F10's full record.** `--oracle-run-record <file>` writes the run's
+//! complete [`fors_interp::OracleRecord`] (design §7.1: program digest, every
+//! host observation, exact stdout/stderr bytes, exit, step count) after the
+//! run, whatever its exit. `--oracle-replay` accepts such a record as well as
+//! an F8 response log (told apart by the first line): it serves the record's
+//! host section and, after the run, compares the new run's record with it —
+//! any field that differs is `oracle: record mismatch: <field>`, exit
+//! [`EXIT_INTERP`].
 //!
 //! **Exit status.** The program's own: 0 / 1 (an error left `main`, ch02
 //! R17) / 2 (`Stdout` latched, ch10 R40(d)) / a `SIGTRAP` signal status for a
@@ -42,7 +52,7 @@ enum OracleFlag {
 fn usage(msg: &str) -> ExitCode {
     eprintln!(
         "fors run: {msg}\nusage: fors run [--std <dir>] [--oracle-record <file> | \
-         --oracle-replay <file>] <file.fors>"
+         --oracle-replay <file>] [--oracle-run-record <file>] <file.fors>"
     );
     ExitCode::from(EXIT_USAGE)
 }
@@ -93,6 +103,7 @@ pub(crate) fn std_modules(dir: &Path) -> std::io::Result<Vec<(Vec<Vec<u8>>, Vec<
 pub fn run_run(args: &[String]) -> ExitCode {
     let mut std_dir: Option<PathBuf> = None;
     let mut oracle_flag = OracleFlag::None;
+    let mut run_record: Option<PathBuf> = None;
     let mut file: Option<PathBuf> = None;
     let mut it = args.iter();
     while let Some(a) = it.next() {
@@ -100,6 +111,11 @@ pub fn run_run(args: &[String]) -> ExitCode {
             "--std" => match it.next() {
                 Some(d) => std_dir = Some(PathBuf::from(d)),
                 None => return usage("`--std` needs a directory"),
+            },
+            "--oracle-run-record" => match it.next() {
+                Some(f) if run_record.is_none() => run_record = Some(PathBuf::from(f)),
+                Some(_) => return usage("`--oracle-run-record` given twice"),
+                None => return usage("`--oracle-run-record` needs a file"),
             },
             "--oracle-record" | "--oracle-replay" => {
                 let Some(f) = it.next() else {
@@ -129,7 +145,9 @@ pub fn run_run(args: &[String]) -> ExitCode {
     let std_dir = std_dir.unwrap_or_else(default_std_dir);
 
     // The oracle first: a replay log that cannot be read or parsed is
-    // refused before anything runs.
+    // refused before anything runs. A full F10 record replays its host
+    // section and is kept for the after-run comparison.
+    let mut replayed_record: Option<fors_interp::OracleRecord> = None;
     let mut oracle = match &oracle_flag {
         OracleFlag::Replay(p) => {
             let bytes = match std::fs::read(p) {
@@ -139,11 +157,25 @@ pub fn run_run(args: &[String]) -> ExitCode {
                     return ExitCode::from(EXIT_IO);
                 }
             };
-            match fors_interp::Oracle::replay(&bytes) {
-                Ok(o) => o,
-                Err(e) => {
-                    eprintln!("fors run: {}: oracle: {e}", p.display());
-                    return ExitCode::from(EXIT_INTERP);
+            if bytes.starts_with(fors_interp::RUN_RECORD_HEADER.as_bytes()) {
+                match fors_interp::OracleRecord::from_bytes(&bytes) {
+                    Ok(r) => {
+                        let o = fors_interp::Oracle::replay_events(r.host.clone());
+                        replayed_record = Some(r);
+                        o
+                    }
+                    Err(e) => {
+                        eprintln!("fors run: {}: oracle: {e}", p.display());
+                        return ExitCode::from(EXIT_INTERP);
+                    }
+                }
+            } else {
+                match fors_interp::Oracle::replay(&bytes) {
+                    Ok(o) => o,
+                    Err(e) => {
+                        eprintln!("fors run: {}: oracle: {e}", p.display());
+                        return ExitCode::from(EXIT_INTERP);
+                    }
                 }
             }
         }
@@ -198,6 +230,24 @@ pub fn run_run(args: &[String]) -> ExitCode {
             return ExitCode::from(EXIT_INTERP);
         }
     };
+    let record = fors_interp::OracleRecord::of(&prog, &outcome, oracle.events());
+    if let Some(p) = &run_record
+        && let Err(e) = std::fs::write(p, record.to_bytes())
+    {
+        eprintln!("fors run: cannot write {}: {e}", p.display());
+        return ExitCode::from(EXIT_IO);
+    }
+    if let Some(want) = &replayed_record
+        && let Some(field) = want.first_difference(&record)
+    {
+        eprintln!(
+            "fors run: oracle: record mismatch: `{field}` differs from the replayed record \
+             (recorded {}, replayed {})",
+            want.id(),
+            record.id()
+        );
+        return ExitCode::from(EXIT_INTERP);
+    }
     match fors_interp::entry_exit(&outcome) {
         fors_interp::ExitStatus::Status(code) => {
             if let (fors_interp::Exit::Ub(_), Some(report)) = (outcome.exit, &outcome.ub) {

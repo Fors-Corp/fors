@@ -1,0 +1,57 @@
+module m;
+needs { io.stdout };
+use std.io;
+
+struct Pair { a: i64, b: i64 }
+
+fn mix(let h: u64, let v: u64) -> u64 {
+    return h.wrap_mul(1099511628211u64) ^ v;
+}
+
+fn diff(let x: i64, let y: i64) -> i64 {
+    return x - y;
+}
+
+fn below(let x: i64, let limit: i64) -> bool {
+    return x < limit;
+}
+
+fn scale(let p: Pair) -> i64 {
+    return p.a * 3 + p.b;
+}
+
+fn tri(let n: i64) -> i64 {
+    var s: i64 = 0;
+    var i: i64 = 0;
+    while i < n {
+        s = s + i;
+        i = i + 1;
+    }
+    return s;
+}
+
+fn main(inout out: io.Stdout) {
+    var h: u64 = 14695981039346656037u64;
+    let p: Pair = Pair { a: 250, b: 17 };
+    let d: i64 = diff(p.a, p.b);
+    h = mix(h, d.wrap_as[u64]());
+    if below(d, 1000) {
+        h = mix(h, 1u64);
+    } else {
+        h = mix(h, 2u64);
+    }
+    let t: i64 = tri(12);
+    h = mix(h, t.wrap_as[u64]());
+    let k: u64 = 9223372036854775807u64;
+    let w: u64 = k.wrap_add(9223372036854775809u64);
+    h = mix(h, w);
+    let x: u64 = 6u64 ^ 3u64;
+    h = mix(h, x);
+    let s: i64 = scale(p);
+    h = mix(h, s.wrap_as[u64]());
+    for j in 0 ..< 4 {
+        h = mix(h, j.wrap_as[u64]());
+    }
+    out.write_uint(h);
+    out.write_line("");
+}

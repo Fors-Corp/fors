@@ -312,7 +312,7 @@ impl MemoKey {
 /// The program's functions reachable from `prog.entry` by `call_direct`, in
 /// breadth-first reach order (deterministic: call rows are visited in pool
 /// order). Unknown keys (an `extern`) are skipped — they have no FMIR.
-fn reach(prog: &Program) -> Vec<usize> {
+pub(crate) fn reach(prog: &Program) -> Vec<usize> {
     let mut order = vec![prog.entry];
     let mut i = 0;
     while i < order.len() {
@@ -330,7 +330,7 @@ fn reach(prog: &Program) -> Vec<usize> {
     order
 }
 
-fn put_bytes(out: &mut Vec<u8>, b: &[u8]) {
+pub(crate) fn put_bytes(out: &mut Vec<u8>, b: &[u8]) {
     out.extend_from_slice(&(b.len() as u64).to_le_bytes());
     out.extend_from_slice(b);
 }

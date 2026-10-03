@@ -142,6 +142,12 @@ impl ValPool {
         self.rows[id.index()]
     }
 
+    /// F10's reducer: overwrites one value row in place (a remapped or
+    /// retired `def` after instructions were dropped).
+    pub fn set_row(&mut self, id: crate::ids::ValId, row: ValRow) {
+        self.rows[id.index()] = row;
+    }
+
     /// [`ValPool::row`] for an id that came out of an instruction slot rather
     /// than out of this pool's own iteration: an `InstRow.a` is a raw `u32`,
     /// and arbitrary FMIR (hand-written, decoded, fuzzed) may name a value

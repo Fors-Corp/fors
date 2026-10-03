@@ -255,6 +255,7 @@ mod tests {
             site: None,
             ub: None,
             backtrace: Vec::new(),
+            steps: 0,
         }
     }
 

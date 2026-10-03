@@ -84,7 +84,17 @@ pub struct Outcome {
     /// host write ([`crate::shim::HostEnv::stderr_fd`]) succeeded, because
     /// R17(c) makes the status 1 either way and the conformance runner
     /// compares this line (design §7.2a: `run-error`'s last stderr line).
+    ///
+    /// F10: also every byte the PROGRAM wrote through `io.Stderr` (the
+    /// `stderr_write_line` door), in order, before that line — the full
+    /// stderr image design §7.1's `OracleRecord` carries, so a `defer` that
+    /// writes to `Stderr` on `main`'s error exit precedes the `error: ` line
+    /// here exactly as it does on the descriptor (§7.2a's "last line").
     pub stderr: Vec<u8>,
+    /// F10: the deterministic step counter (design §7.1: recorded, never
+    /// compared across engines; two runs of one program that differ here
+    /// have a nondeterminism bug even if their outputs match, §7.2).
+    pub steps: u64,
 }
 
 impl Outcome {
@@ -244,6 +254,8 @@ const MAX_FRAMES: usize = 1024;
 // no trailing newline (ch10 R39's "base 10, no locale"), so it cannot
 // reuse `stdout_write_line`'s intrinsic.
 // (`stdout_write_uint`: [`crate::intrinsic::STDOUT_WRITE_UINT`])
+// F10: `io.Stderr.write_line`'s door, to the standard ERROR descriptor.
+// (`stderr_write_line`: [`crate::intrinsic::STDERR_WRITE_LINE`])
 // F7's §5.8 "byte length"/"byte at" primitives for `Str` (ch10 R26:
 // indexing is by byte). `Str.len`/`Str.at`'s real Fors bodies
 // (`std/mem/text.fors`) bottom out in these.
@@ -476,11 +488,17 @@ struct Machine<'a> {
     strs: Vec<Vec<u8>>,
     stdout: Vec<u8>,
     stdout_latched: bool,
+    /// F10: the program's own `io.Stderr` bytes (unbuffered, ch10 R40(b)),
+    /// then ch02 R17's line on an error exit — [`Outcome::stderr`].
+    stderr: Vec<u8>,
     host: crate::shim::HostEnv,
     /// F8: every clock read and entropy draw goes through here (design
     /// §7.2's recorded/replayable capability responses).
     oracle: &'a mut crate::host::Oracle,
     steps: u64,
+    /// Run mode's runaway guard: [`STEP_BUDGET`], or a caller's tighter cap
+    /// ([`run_with_oracle_capped`], F10's reducer and differential runner).
+    step_cap: u64,
     /// design §5.1's allocation objects. Index 0 is a placeholder so that
     /// [`crate::mem::PROV_NONE`] names no real row.
     allocs: Vec<crate::mem::Alloc>,
@@ -599,7 +617,7 @@ impl<'a> Machine<'a> {
                 .step()
                 .map_err(|e| InterpError::Comptime(crate::comptime::ComptimeFault::Budget(e)));
         }
-        if self.steps > STEP_BUDGET {
+        if self.steps > self.step_cap {
             return Err(InterpError::StepBudget);
         }
         Ok(())
@@ -859,7 +877,23 @@ pub fn run_with_oracle(
     host: &crate::shim::HostEnv,
     oracle: &mut crate::host::Oracle,
 ) -> Result<Outcome, InterpError> {
-    let out = run_machine(prog, tys, host, oracle)?;
+    run_with_oracle_capped(prog, tys, host, oracle, STEP_BUDGET)
+}
+
+/// As [`run_with_oracle`], with the runaway guard lowered to `max_steps`
+/// (never raised past [`STEP_BUDGET`]): past it the run is
+/// [`InterpError::StepBudget`]. F10's minimiser asks thousands of
+/// candidates, some of which a deletion turned into an endless loop; the
+/// cap keeps each question cheap without changing what any terminating run
+/// observes (the step counter is the same either way).
+pub fn run_with_oracle_capped(
+    prog: &Program,
+    tys: &TyStore,
+    host: &crate::shim::HostEnv,
+    oracle: &mut crate::host::Oracle,
+    max_steps: u64,
+) -> Result<Outcome, InterpError> {
+    let out = run_machine(prog, tys, host, oracle, max_steps.min(STEP_BUDGET))?;
     oracle.finish().map_err(InterpError::Oracle)?;
     Ok(out)
 }
@@ -880,9 +914,11 @@ fn new_machine<'a>(
         strs: Vec::new(),
         stdout: Vec::new(),
         stdout_latched: false,
+        stderr: Vec::new(),
         host,
         oracle,
         steps: 0,
+        step_cap: STEP_BUDGET,
         // Row 0 of each table is the `PROV_NONE` / "no allocation"
         // placeholder, so a zeroed `Slot.prov` can never name a real object.
         allocs: vec![crate::mem::Alloc::new(
@@ -910,11 +946,13 @@ fn run_machine(
     tys: &TyStore,
     host: &crate::shim::HostEnv,
     oracle: &mut crate::host::Oracle,
+    max_steps: u64,
 ) -> Result<Outcome, InterpError> {
     if prog.entry >= prog.fns.len() {
         return Err(InterpError::NoEntry(format!("entry {}", prog.entry)));
     }
     let mut m = new_machine(prog, tys, *host, oracle, None);
+    m.step_cap = max_steps;
     let args = entry_args(&mut m)?;
     call(prog.entry, None, args, &mut m)?;
     drive(&mut m).map(|(o, _)| o)
@@ -1225,7 +1263,8 @@ fn settle(
         site,
         ub,
         backtrace,
-        stderr: Vec::new(),
+        stderr: std::mem::take(&mut m.stderr),
+        steps: m.steps,
     }
 }
 
@@ -1265,9 +1304,8 @@ fn error_exit(
         let _ = crate::shim::host_write(fd, &line);
     }
     // Step 5.
-    let mut out = settle(m, Exit::Raise, site, None);
-    out.stderr = line;
-    Ok(out)
+    m.stderr.extend_from_slice(&line);
+    Ok(settle(m, Exit::Raise, site, None))
 }
 
 /// Is frame `fr` stopped right after a call whose block ends in the
@@ -1603,11 +1641,16 @@ fn exec_inst(fr: usize, inst: u32, inst_row: InstRow, m: &mut Machine<'_>) -> Re
         Op::Not => {
             let a = val_operand(m, fr, inst, inst_row.site, inst_row.a)?;
             let ty = val_ty(m, fr, inst, inst_row.a)?;
-            // `!b` on a `bool` is logical; on an integer it is bitwise.
+            // `!b` on a `bool` is logical; on an integer it is bitwise, over
+            // the operand's own WIDTH: the slot carries the raw low `width`
+            // bits (`IntKind::narrow`), so the complement is narrowed back
+            // (F10: a bare `!bits` set the 56 bits above a `u8`, and
+            // `write_uint` printed them — `not_narrows_to_the_operand_width`).
             let r = if is_bool(m, ty) {
                 (a.bits == 0) as u64
             } else {
-                !a.bits
+                let k = m.int_kind(ty)?;
+                k.narrow(u128::from(!a.bits))
             };
             define(dest, m, fr, Slot::val(r));
         }
@@ -2894,6 +2937,27 @@ fn exec_intrinsic(
                 m.stdout.extend_from_slice(&bytes);
             } else {
                 m.stdout_latched = true;
+            }
+            define(dest, m, fr, Slot::unit());
+            Ok(())
+        }
+        intrinsic::STDERR_WRITE_LINE => {
+            // F10: `io.Stderr.write_line(text)` (ch10 R39, R40(b)): the same
+            // total, never-trapping write as `stdout_write_line`, to the
+            // standard ERROR descriptor, and UNBUFFERED — which is what makes
+            // §7.2a's "the lines before the trap line" observable at all
+            // (`trap-runs-no-defer`). A failed host write is dropped, not
+            // retried and not a trap; ch10 R40(d)'s status table reads only
+            // `Stdout`'s latch, so there is no `Stderr` latch to set.
+            let text = args.get(1).copied().unwrap_or_else(Slot::unit);
+            let mut bytes = str_bytes(m, text)?.to_vec();
+            bytes.push(b'\n');
+            let arrived = match m.host.stderr_fd {
+                Some(fd) => crate::shim::host_write(fd, &bytes).is_ok(),
+                None => true,
+            };
+            if arrived {
+                m.stderr.extend_from_slice(&bytes);
             }
             define(dest, m, fr, Slot::unit());
             Ok(())

@@ -308,8 +308,9 @@ fn check_source(label: &str, stem: &str, src: &str, host: &HostEnv) -> Run {
 /// - otherwise (ch02 R17, F3): the status is 1 and the LAST line of the
 ///   process's stderr equals `detail` — "last", because `main`'s own deferred
 ///   bodies may write to `Stderr` first (`main-raises-after-defer-run-error`).
-///   The runtime's line is the whole of [`Run::stderr`], so it must also be
-///   exactly ONE line.
+///   As of F10 [`Run::stderr`] is the whole stderr image — the program's own
+///   `io.Stderr` lines, then the runtime's — so the runtime's `error: ` line
+///   must be the LAST line and the only one the runtime wrote.
 fn assert_run_error(label: &str, d: &Directive, run: &Run) {
     let Observed::Status(code, _) = run.observed else {
         panic!("{label}: expected run-error, got {:?}", run.observed);
@@ -325,8 +326,8 @@ fn assert_run_error(label: &str, d: &Directive, run: &Run) {
     );
     let text = String::from_utf8_lossy(&run.stderr);
     assert!(
-        text.ends_with('\n') && text.matches('\n').count() == 1,
-        "{label}: ch02 R17(b) writes exactly ONE line, got {text:?}"
+        text.ends_with('\n') && text.lines().filter(|l| l.starts_with("error: ")).count() == 1,
+        "{label}: ch02 R17(b) writes exactly ONE `error: ` line, got {text:?}"
     );
     let last = text
         .trim_end_matches('\n')
@@ -1454,7 +1455,16 @@ fn gate_errdefer_skipped_on_return_run_ok() {
 
 #[test]
 fn gate_main_raises_after_defer_run_error() {
-    gate_test("02-failure/main-raises-after-defer-run-error.fors");
+    let run = check_corpus_file(
+        "02-failure/main-raises-after-defer-run-error.fors",
+        &HostEnv::default(),
+    );
+    // F10: the deferred `err.write_line("deferred")` reaches the STDERR
+    // image (the `stderr_write_line` door), before ch02 R17's line — the
+    // exact shape design §7.2a's "last line" rule exists for — and nothing
+    // reaches stdout.
+    assert_eq!(run.stderr, b"deferred\nerror: main.Error.boom\n");
+    assert_eq!(run.written, b"");
 }
 
 #[test]
@@ -1490,7 +1500,8 @@ fn gate_defer_result_evaluated_first_run_ok() {
 fn gate_trap_runs_no_defer() {
     let run = check_corpus_file("02-failure/trap-runs-no-defer.fors", &HostEnv::default());
     assert!(
-        !String::from_utf8_lossy(&run.written).contains("cleanup"),
+        !String::from_utf8_lossy(&run.written).contains("cleanup")
+            && !String::from_utf8_lossy(&run.stderr).contains("cleanup"),
         "a trap runs no deferred body (ch02 R7), so `cleanup` must not have been written: {:?}",
         String::from_utf8_lossy(&run.written)
     );
@@ -1500,7 +1511,8 @@ fn gate_trap_runs_no_defer() {
 fn gate_defer_not_run_on_trap() {
     let run = check_corpus_file("10-std/defer-not-run-on-trap.fors", &HostEnv::default());
     assert!(
-        !String::from_utf8_lossy(&run.written).contains("cleanup"),
+        !String::from_utf8_lossy(&run.written).contains("cleanup")
+            && !String::from_utf8_lossy(&run.stderr).contains("cleanup"),
         "ch10 R40(b), ch02 R7: no deferred body runs on the trap path: {:?}",
         String::from_utf8_lossy(&run.written)
     );

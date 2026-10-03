@@ -50,6 +50,7 @@ pub struct IntrinsicRow {
 
 pub(crate) const STDOUT_WRITE_LINE: &str = "stdout_write_line";
 pub(crate) const STDOUT_WRITE_UINT: &str = "stdout_write_uint";
+pub(crate) const STDERR_WRITE_LINE: &str = "stderr_write_line";
 pub(crate) const STR_BYTE_LEN: &str = "str_byte_len";
 pub(crate) const STR_BYTE_AT: &str = "str_byte_at";
 pub(crate) const STR_BYTE_SLICE: &str = "str_byte_slice";
@@ -78,6 +79,15 @@ pub const TABLE: &[IntrinsicRow] = &[
     },
     IntrinsicRow {
         name: STDOUT_WRITE_UINT,
+        design: "@fd_write",
+        run: Allowed,
+        comptime: Forbidden,
+    },
+    // F10: `io.Stderr.write_line` to the standard ERROR descriptor (design
+    // §7.1's record carries `stderr` bytes; §7.2a's trap tests observe the
+    // lines before the trap line there). Ambient I/O like its two twins.
+    IntrinsicRow {
+        name: STDERR_WRITE_LINE,
         design: "@fd_write",
         run: Allowed,
         comptime: Forbidden,
@@ -193,6 +203,7 @@ mod tests {
         for name in [
             STDOUT_WRITE_LINE,
             STDOUT_WRITE_UINT,
+            STDERR_WRITE_LINE,
             CLOCK_MONO,
             CLOCK_WALL,
             CLOCK_SLEEP,
