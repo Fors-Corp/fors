@@ -14,7 +14,7 @@
 //! `path:line:col: error[CODE]: message`, sorted by file then byte
 //! offset; exit 0 when every given path is clean.
 //!
-//! `fors run [--oracle-record <file> | --oracle-replay <file>] <file>`
+//! `fors run [--oracle-record <file> | --oracle-replay <file>] [--oracle-run-record <file>] <file>`
 //! builds one program with `std`, lowers it and runs it under the FMIR
 //! interpreter; see [`run`].
 //!
@@ -629,7 +629,8 @@ fn main() -> ExitCode {
                  \x20      fors check [--format json|text] [--count] [--stats] <path>...\n\
                  \x20      fors explain [--format json|text] <CODE>\n\
                  \x20      fors explain [--format json|text] --list\n\
-                 \x20      fors run [--oracle-record <file> | --oracle-replay <file>] <file>\n\
+                 \x20      fors run [--oracle-record <file> | --oracle-replay <file>]\n\
+                 \x20               [--oracle-run-record <file>] <file>\n\
                  \x20      fors build [--memo-dir <dir>] [--counters] <file>\n\
                  \x20      fors --version"
             );

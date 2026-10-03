@@ -20,8 +20,9 @@
 //! - A method named `write_line` lowers to the `stdout_write_line`
 //!   intrinsic (design §5.8, mechanism 2): until std exists with
 //!   Fors-written `write_*` bodies over `@fd_write`, this is the one host
-//!   door F1 programs can observe. Any other method lowers to
-//!   `call_direct` on its `DeclKeyId`.
+//!   door F1 programs can observe (F10: on an `io.Stderr` receiver it is
+//!   `stderr_write_line`, the standard error descriptor's door). Any other
+//!   method lowers to `call_direct` on its `DeclKeyId`.
 //!
 //! Aggregates are reference-shared in F1: reading a struct-typed local
 //! copies its cell handle, so an `inout` method mutating `self` is visible
@@ -6604,8 +6605,14 @@ impl<'a> FnLower<'a> {
             }
             .filter(|_| self.is_self_recursive_stub(def))
         };
+        // F10: `io.Stderr`'s `write_line` is the standard ERROR descriptor's
+        // door (design §7.1's record carries `stderr` bytes, and §7.2a's
+        // trap tests observe the lines before the trap line THERE); scoped to
+        // the owner's root-capability identity, like the host doors above.
+        let owner_is_stderr = self.owner_root_cap(def) == Some(fors_fmir::caps::RootCap::Stderr);
         let intrinsic_name = match self.interner.resolve(method) {
             _ if host_door.is_some() => host_door,
+            b"write_line" if owner_is_stderr => Some("stderr_write_line"),
             b"write_line" => Some("stdout_write_line"),
             b"write_uint" => Some("stdout_write_uint"),
             // F7's §5.8 byte-length/byte-at/byte-slice stand-ins for `Str`

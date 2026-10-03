@@ -39,6 +39,12 @@
 //! `comptime` column consulted before any door opens, synthetic addresses
 //! and the ch04 R15 observation flag, and the content-addressed memo.
 //!
+//! **F10** (design §7.1, §7.2) adds [`oracle`]'s `OracleRecord`: the
+//! complete, content-addressed record of one run (program digest, every
+//! host observation, exact `stdout`/`stderr` bytes, the exit, the step
+//! count), and record/replay over it. `Stderr` gets its own door
+//! (`stderr_write_line`), so the record's `stderr` is the real image.
+//!
 //! What is explicitly NOT here: the LOWERING halves of F4 and F6. They need
 //! checker increment I8b's `D7`/`D8` side tables, which do not exist yet
 //! ([HOLE-11]), so both halves are built and tested against hand-written
@@ -64,6 +70,7 @@ pub mod exec;
 pub mod host;
 pub mod intrinsic;
 pub mod mem;
+pub mod oracle;
 pub mod program;
 pub mod reduce;
 pub mod render;
@@ -80,9 +87,15 @@ pub use comptime::{
     ComptimeEnv, ComptimeError, DeclaredInputs, Evaluation, Memo, MemoEntry, MemoKey, evaluate,
     evaluate_memoized, memo_key, target_hash,
 };
-pub use exec::{Env, Exit, InterpError, Outcome, run, run_with_host, run_with_oracle};
+pub use exec::{
+    Env, Exit, InterpError, Outcome, run, run_with_host, run_with_oracle, run_with_oracle_capped,
+};
 pub use host::{HostCounters, HostEvent, Oracle, OracleError};
 pub use mem::{AllocKind, AllocState, AllocatorId, ArenaId, ArenaVal, RefVal, next_generation};
+pub use oracle::{
+    OracleRecord, RUN_RECORD_HEADER, RecordError, RecordExit, program_digest, replay_recorded,
+    replay_recorded_capped, run_recorded, run_recorded_capped,
+};
 pub use program::{Config, Endian, ProgFn, Program};
 pub use shim::{
     EntryArg, ExitStatus, HostEnv, entry_exit, install_sigpipe_ignore, plan_entry_args,

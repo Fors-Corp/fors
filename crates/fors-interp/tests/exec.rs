@@ -507,3 +507,41 @@ fn no_fma_or_libm_float_rem() {
         }
     }
 }
+
+/// F10 probe: bitwise `not` on an integer narrower than 64 bits complements
+/// only the operand's own width. The slot carries the raw low `width` bits
+/// (`IntKind::narrow`); a bare `!bits` set the bits above the width, which
+/// `write_uint` then printed (`!0u8` as 18446744073709551615 instead of
+/// 255). Found reading the dispatch loop while building F10's generator.
+#[test]
+fn not_narrows_to_the_operand_width() {
+    for (prim, want) in [
+        (PrimKind::U8, "255"),
+        (PrimKind::U32, "4294967295"),
+        (PrimKind::I32, "4294967295"),
+        (PrimKind::U64, "18446744073709551615"),
+    ] {
+        let mut b = B::new();
+        let t = b.ty(prim);
+        let sym = Symbol(4);
+        let zero = b.const_int(0, t);
+        let n = b.emit(Op::Not, zero.0, NO_OPERAND, NO_OPERAND, t);
+        let recv = b.emit(
+            Op::ConstUnit,
+            NO_OPERAND,
+            NO_OPERAND,
+            NO_OPERAND,
+            fors_fir::ty::TY_UNIT,
+        );
+        call_intrinsic(&mut b, sym, &[recv, n], fors_fir::ty::TY_UNIT);
+        b.term(Op::Ret, NO_OPERAND, NO_OPERAND, NO_OPERAND);
+        let (decl, tys) = b.finish();
+        let prog = prog_of(decl, vec![], vec![(sym.0, "stdout_write_uint".into())]);
+        let out = run(&prog, &tys).unwrap();
+        assert_eq!(out.exit, Exit::Return);
+        // `write_uint` prints the slot's bits as an unsigned decimal; for a
+        // signed kind that is the raw low-width pattern, which is exactly
+        // what the slot form promises.
+        assert_eq!(String::from_utf8_lossy(&out.stdout), want, "{prim:?}");
+    }
+}

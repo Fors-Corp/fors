@@ -23,6 +23,13 @@ fors-resolve = { path = "../fors-resolve" }
 fors-index = { path = "../fors-index" }
 fors-lex = { path = "../fors-lex" }
 
+# F10: the seeded-miscompile hook (`src/seeded.rs`). Test-only: the default
+# set is empty and no crate enables it outside `[dev-dependencies]`
+# (`fors-oracle/tests/seeded.rs` asserts that over every manifest).
+[features]
+default = []
+seeded-miscompile = []
+
 [dev-dependencies]
 fors-interp = { path = "../fors-interp" }
 

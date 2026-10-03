@@ -120,6 +120,21 @@ dependencies = [
 ]
 
 [[package]]
+name = "fors-oracle"
+version = "0.20.0"
+dependencies = [
+ "fors-check",
+ "fors-fir",
+ "fors-fmir",
+ "fors-index",
+ "fors-interp",
+ "fors-lex",
+ "fors-lower",
+ "fors-resolve",
+ "fors-syntax",
+]
+
+[[package]]
 name = "fors-query"
 version = "0.20.0"
 
