@@ -1833,7 +1833,14 @@ impl QueryBuild {
                         .sigs
                         .defs
                         .get(def)
-                        .is_some_and(|r| r.kind == fors_index::DeclKind::Fn)
+                        // I11: a `const`'s initialiser is a body too
+                        // (design §7.1 phase 6; `Wf::bodies_selected`).
+                        .is_some_and(|r| {
+                            matches!(
+                                r.kind,
+                                fors_index::DeclKind::Fn | fors_index::DeclKind::Const
+                            )
+                        })
             })
             .collect();
         let mut red: Vec<u32> = Vec::new();

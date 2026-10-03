@@ -377,6 +377,104 @@ const PROBES: &[Probe] = &[
         want: &["T0026"],
         src: "struct Box71[T] { v: T }\nfn id71[T](let x: T) -> T { return x; }\nfn f(let b: Box71[i64]) -> bool { return id71[Box71[i64]](b); }",
     },
+    // ---------------------------------------------------------------- I11
+    // The generator's findings G1-G4 (`tests/gen/gaps.rs`), each accepted
+    // with a silent `TY_ERROR` (or never typed) before I11.
+    Probe {
+        name: "i11_g1_struct_literal_with_explicit_arguments_types",
+        want: &[],
+        src: "struct S1[T] { a: T }\nfn f() -> i32 { let s: S1[i32] = S1[i32] { a: 1 }; return s.a; }",
+    },
+    Probe {
+        name: "i11_g1_explicit_argument_binds_the_field_type",
+        want: &["T0026"],
+        src: "struct S1[T] { a: T }\nfn f() -> i32 { let s = S1[i32] { a: true }; return 0; }",
+    },
+    Probe {
+        name: "i11_g1_explicit_argument_count_is_r38a",
+        want: &["T0039"],
+        src: "struct S1[T] { a: T }\nfn f() -> i32 { let s = S1[i32, bool] { a: 1 }; return 0; }",
+    },
+    Probe {
+        name: "i11_g1_explicit_argument_on_a_monomorphic_struct_is_r38a",
+        want: &["T0039"],
+        src: "struct S2 { a: i32 }\nfn f() -> i32 { let s = S2[i32] { a: 1 }; return 0; }",
+    },
+    Probe {
+        name: "i11_g2_record_variant_literal_types",
+        want: &[],
+        src: "enum E0 { va, vc { a: i32, b: bool } }\nfn f() -> E0 { let x = E0.vc { a: 1, b: true }; return E0.vc { a: 2, b: false }; }",
+    },
+    Probe {
+        name: "i11_g2_generic_record_variant_literal_binds_from_fields_and_expected",
+        want: &[],
+        src: "enum E1[T] { wa, wc { a: T, b: bool } }\nfn f() -> E1[i64] { let y = E1.wc { a: 1u8, b: true }; return E1.wc { a: 2, b: false }; }",
+    },
+    Probe {
+        name: "i11_g2_record_variant_field_type_is_checked",
+        want: &["T0026"],
+        src: "enum E0 { va, vc { a: i32, b: bool } }\nfn f() -> E0 { return E0.vc { a: 1, b: 2 }; }",
+    },
+    Probe {
+        name: "i11_g2_record_variant_missing_field_is_r34",
+        want: &["T0034"],
+        src: "enum E0 { va, vc { a: i32, b: bool } }\nfn f() -> E0 { return E0.vc { a: 1 }; }",
+    },
+    Probe {
+        name: "i11_g2_record_variant_unknown_field_is_r34",
+        want: &["T0034"],
+        src: "enum E0 { va, vc { a: i32, b: bool } }\nfn f() -> E0 { return E0.vc { a: 1, b: true, z: 3 }; }",
+    },
+    Probe {
+        name: "i11_g2_record_variant_literal_is_the_enum_type",
+        want: &["T0026"],
+        src: "enum E0 { va, vc { a: i32, b: bool } }\nfn f() -> i32 { let x: i32 = E0.vc { a: 1, b: true }; return x; }",
+    },
+    Probe {
+        name: "i11_g3_lossy_conversion_on_a_const_receiver_types",
+        want: &[],
+        src: "const K0: i32 = 5;\nfn f() -> i64 { return K0.wrap_as[i64](); }",
+    },
+    Probe {
+        name: "i11_g3_lossy_conversion_on_a_const_receiver_is_checked",
+        want: &["D0006"],
+        src: "const K0: i32 = 5;\nfn f() -> i64 { return K0.wrap_as[bool](); }",
+    },
+    Probe {
+        name: "i11_g4_const_initialiser_is_checked",
+        want: &["T0026"],
+        src: "const K1: i32 = true;",
+    },
+    Probe {
+        name: "i11_g4_const_float_literal_against_an_integer_type",
+        want: &["T0027"],
+        src: "const K2: i32 = 2.5;",
+    },
+    Probe {
+        name: "i11_g4_const_integer_literal_against_a_float_type",
+        want: &["T0027"],
+        src: "const K3: f64 = 1;",
+    },
+    Probe {
+        name: "i11_g4_const_numeric_width_mismatch_is_d0005_like_an_annotated_let",
+        want: &["D0005"],
+        src: "const M: i64 = 1 + 2;",
+    },
+    Probe {
+        name: "i11_g4_const_suffixed_literal_width_mismatch_is_d0005",
+        want: &["D0005"],
+        src: "const M: u16 = 7u8;",
+    },
+    Probe {
+        name: "i11_g4_const_comptime_escape_is_d0009",
+        want: &["D0009"],
+        src: "const N: comptime_int = 5;\nconst K: i32 = N;",
+    },
+    Probe {
+        name: "i11_g4_well_typed_consts_stay_accepted",
+        want: &[],
+        src: "const N: comptime_int = 5;\nconst F: comptime_float = 2.5;\nconst K5: bool = false;\nconst K6: i64 = -3;\nconst K7: i32 = N as i32;\nfn f() -> i32 { return K7; }",
+    },
 ];
 
 #[test]

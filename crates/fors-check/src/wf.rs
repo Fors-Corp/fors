@@ -942,7 +942,7 @@ fn is_operator_trait(p: &PreludeDefs, def: DefId) -> bool {
     OPS.iter().any(|&i| p.traits[i] == def)
 }
 
-fn is_marker_trait(p: &PreludeDefs, def: DefId) -> bool {
+pub(crate) fn is_marker_trait(p: &PreludeDefs, def: DefId) -> bool {
     [tr::SHARED, tr::COPYABLE, tr::LINEAR, tr::DROPPABLE]
         .iter()
         .any(|&i| p.traits[i] == def)

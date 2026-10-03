@@ -99,6 +99,14 @@ pub const CHECK_SITES: &[CheckSiteRow] = &[
         rule: 31,
         corpus: true,
     },
+    // I11: a `const`'s initialiser, ch03 R25's "annotated `const`" (design
+    // §7.1 phase 6 types it as a body).
+    CheckSiteRow {
+        parent: NodeKind::ConstDecl,
+        slot: Slot::AnnotatedInit,
+        rule: 31,
+        corpus: true,
+    },
     CheckSiteRow {
         parent: NodeKind::AssignStmt,
         slot: Slot::AssignRhs,
@@ -623,7 +631,11 @@ impl Wf<'_> {
         let user: Vec<DefId> = self.defs.user_defs().map(|(d, _)| d).collect();
         for def in user {
             let row = *self.defs.get(def).expect("user def has a row");
-            if row.kind != DeclKind::Fn {
+            // I11 (the generator's G4): design §7.1 phase 6 lists `const`
+            // among the bodies. Its initialiser is checked against its
+            // declared type exactly as a `let` value is; skipped, `const K:
+            // i32 = true;` was accepted.
+            if row.kind != DeclKind::Fn && row.kind != DeclKind::Const {
                 continue;
             }
             if !which.selects(def) {
@@ -635,11 +647,16 @@ impl Wf<'_> {
             }
             let f = &files[row.file.index()];
             let decl = row.node as usize;
-            let Some(block) = f
-                .tree
-                .children(decl)
-                .find(|&c| f.tree.kinds[c] == NodeKind::Block)
-            else {
+            let root = if row.kind == DeclKind::Const {
+                f.tree
+                    .children(decl)
+                    .find(|&c| is_expr_kind(f.tree.kinds[c]))
+            } else {
+                f.tree
+                    .children(decl)
+                    .find(|&c| f.tree.kinds[c] == NodeKind::Block)
+            };
+            let Some(block) = root else {
                 continue;
             };
             self.sink.open();
@@ -651,12 +668,35 @@ impl Wf<'_> {
             lcx.home = def;
             self.build_body_scope(&mut lcx, def, low);
             let mut cx = BodyCx::new(f, def, row.file, row.node, lcx);
-            self.prepare_signature(&mut cx, decl);
-            self.check_contracts(&mut cx, decl);
-            let want = cx.result;
-            self.dep(def);
-            self.cur_scope = def;
-            self.check_block(&mut cx, block, want);
+            if row.kind == DeclKind::Const {
+                let want = self.fir.sigs.const_ty(def);
+                self.dep(def);
+                self.cur_scope = def;
+                if want != TY_ERROR && want != NO_TY {
+                    cx.site(NodeKind::ConstDecl, Slot::AnnotatedInit);
+                    // I11 verification: an annotated `const` is an annotated
+                    // initializer like `let`'s, so a numeric-width mismatch
+                    // in its value positions is ch03 R5's D0005 there too
+                    // (`const M: i64 = 1 + 2;` was T0026 while `let m: i64 =
+                    // 1 + 2;` is D0005); see `Wf::numeric_mismatch`.
+                    let mark = cx.r5_sites.len();
+                    let mut vp = Vec::new();
+                    crate::failure::value_positions(&cx, block, &mut vp);
+                    cx.r5_sites.extend(vp);
+                    self.check(&mut cx, block, want);
+                    cx.r5_sites.truncate(mark);
+                    self.use_value(&mut cx, block, want, Cause::Explicit(decl as u32));
+                } else {
+                    self.synth(&mut cx, block);
+                }
+            } else {
+                self.prepare_signature(&mut cx, decl);
+                self.check_contracts(&mut cx, decl);
+                let want = cx.result;
+                self.dep(def);
+                self.cur_scope = def;
+                self.check_block(&mut cx, block, want);
+            }
             self.cur_scope = fors_fir::NO_DEF;
             let set = self.cur_deps.take();
             self.deps.push((def, set));
@@ -684,7 +724,13 @@ impl Wf<'_> {
                     self.check_sites.push(*s);
                 }
             }
-            self.facts.push((def, cx.finish()));
+            // A `const`'s initialiser is typed (its diagnostics, `DepSet`
+            // and buckets are the query DAG's `check_body`), but it is no
+            // FMIR body: lowering evaluates a `const` at comptime and reads
+            // no `BodyFacts` row for it, so none is handed over.
+            if row.kind != DeclKind::Const {
+                self.facts.push((def, cx.finish()));
+            }
         }
     }
 
@@ -863,15 +909,18 @@ impl Wf<'_> {
         // that no `Binding` is live". A `Binding` is a stack local of
         // `call::type_call`, so a live one here would mean inference state
         // outlived the call that created it.
-        debug_assert_eq!(
-            self.live_bindings,
-            crate::call::BINDINGS_LIVE_AT_A_STATEMENT_BOUNDARY,
-            "a call's `Binding` outlived the call"
-        );
+        //
+        // I11 (the generator, `tests/gen`): a statement can sit INSIDE a call —
+        // in a block that is an argument (`f(if c { let x = 1; x } else { 2 })`)
+        // — and then the enclosing call's `Binding` is legitimately live when
+        // the statement begins. The invariant is that the statement itself
+        // leaks none: the count on exit equals the count on entry (and is
+        // `BINDINGS_LIVE_AT_A_STATEMENT_BOUNDARY` for a statement of a function
+        // body, which no call encloses).
+        let live_before = self.live_bindings;
         let out = self.stmt_inner(cx, node);
         debug_assert_eq!(
-            self.live_bindings,
-            crate::call::BINDINGS_LIVE_AT_A_STATEMENT_BOUNDARY,
+            self.live_bindings, live_before,
             "a call's `Binding` outlived the statement"
         );
         out
