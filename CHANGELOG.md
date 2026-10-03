@@ -7,7 +7,8 @@ commit history, which predates the Conventional Commits convention.
 
 | Language | Compiler | Meaning |
 |---|---|---|
-| `lang-v0.5.3` | `compiler-v0.20.0` | current |
+| `lang-v0.5.3` | `compiler-v0.21.0` | current |
+| `lang-v0.5.3` | `compiler-v0.20.0` | FMIR F9, comptime mode |
 | `lang-v0.5.3` | `compiler-v0.19.0` | FMIR F8, the capability host surface and oracle replay |
 | `lang-v0.5.3` | `compiler-v0.18.0` | FMIR F3, failure lowering and the exit sequence |
 | `lang-v0.5.3` | `compiler-v0.17.0` | checker I10c, the prelude names bind to std |
@@ -107,6 +108,40 @@ measurement, the grammar, names and visibility), with a conformance corpus and
 an independent reference parser.
 
 ## Compiler
+
+### compiler-v0.21.0 — 2026-10-03
+
+FMIR increment **F10**, the M1 exit, produced by one agent and
+independently verified by another. Implements `lang-v0.5.3`; still no
+code generator.
+
+- **The conformance runner.** Every runtime test (64: 36 run-ok, 9
+  run-error of which 2 with status 2, 19 trap) runs through the real
+  `fors` binary under design §7.2a's rules — stdout bytes, the last
+  stderr line, the exit status or trap kind — with the counts asserted
+  against the README and the files. 59 pass; 5 are pinned with an exact
+  assertion each (four checker gaps, one corpus/README disagreement).
+- **Run records.** `fors run --oracle-run-record F` writes a
+  content-addressed record of a run (digests, exit, steps, host log,
+  stdout, stderr); replaying against a full record compares field by
+  field and names the first difference. 100 runs give byte-identical
+  records. `io.Stderr.write_line` now really writes to stderr.
+- **The reducer.** A three-stage minimiser (source, FMIR, values) that
+  shrinks seven seeded miscompiles — injected through a test-only
+  feature the release binary cannot carry — from 135 to 6–26 FMIR
+  instructions, reproducibly from a seed.
+- **The generator.** UB-free, trap-free FMIR programs by construction,
+  run live and replayed from their own record: 10⁵ programs, zero
+  panics, zero UB reports, zero mismatches, 36 s; guard mutations prove
+  the detectors are live. A `not` on a narrow type set the high bits —
+  fixed with a probe.
+- **Coverage.** New `fors-oracle` crate (workspace-only dependencies);
+  1055 Rust tests (17 held out with a stated reason).
+- **For the owner.** README totals drift from the files (945/944,
+  210/209); `str-index-is-bytes-run-ok` prints no final newline where the
+  README's rule requires one; two trap tests build only on the prelude
+  path (`Buffer[i64]` vs std's `Buffer[T, N]`, `Arena` has no `reset`);
+  unsigned `neg` wraps in trap mode and `sat_neg` delegates to wrap.
 
 ### compiler-v0.20.0 — 2026-10-03
 
