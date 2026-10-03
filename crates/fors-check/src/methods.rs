@@ -373,7 +373,18 @@ impl Wf<'_> {
                 table_incomplete = true;
                 continue;
             }
-            if self.prelude.trait_index(trait_def).is_some() {
+            // I11: on a PARAMETER a MARKER bound (`Copyable`, `Shared`,
+            // `Linear`, `Droppable`) has no methods at all (ch09 R24), so it
+            // makes no table incomplete however opaque the prelude's other
+            // rows are. Without this carve-out `[T: Copyable + Tr]`'s
+            // `p.undeclared()` was silent: a `TY_ERROR` call node in an
+            // accepted body. A neutral projection's bounds keep the old
+            // reading (`I.Item` of a prelude `Iterator` is opaque as a whole,
+            // `i6_the_method_memo_separates_scopes_for_a_projection_receiver`).
+            if self.prelude.trait_index(trait_def).is_some()
+                && !(self.fir.tys.tag(recv) == TyTag::Param
+                    && crate::wf::is_marker_trait(self.prelude, trait_def))
+            {
                 table_incomplete = true;
             }
             self.dep(trait_def);

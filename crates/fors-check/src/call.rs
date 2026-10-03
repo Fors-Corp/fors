@@ -171,7 +171,16 @@ impl Wf<'_> {
             self.handler(cx, handler, node, t, NO_TY, true);
             return t;
         }
-        let (callee, explicit) = self.classify_callee(cx, callee_node);
+        // I11 (the generator, `tests/gen`): `.v(args)`, ch09 R26's "`dot_lit`
+        // `.v`, `.v(args)`" and R34's tuple variant named by a dot literal,
+        // takes its enum from the expected type exactly as `.v` does. Before
+        // this the callee dot literal was synthesised and rejected (T0034) in
+        // every CHECK position.
+        let dot = self.dot_variant_callee(cx, callee_node, expected);
+        let (callee, explicit) = match dot {
+            Some(c) => (c, Vec::new()),
+            None => self.classify_callee(cx, callee_node),
+        };
         // I10 (ch04 R2a, R13; ch01 R18): sealed operations, comptime file
         // reads, `deinit` through another brand's allocator.
         let callee_fn = match &callee {
@@ -631,7 +640,7 @@ impl Wf<'_> {
         }
 
         // (d) the arguments, left to right.
-        let mut pending: Vec<(usize, usize, TyId)> = Vec::new();
+        let mut pending: Vec<(usize, usize, TyId, bool)> = Vec::new();
         for (i, &arg) in args.iter().enumerate() {
             let Some(&(name, conv, p)) = shape.params.get(i) else {
                 // R39's argument count is reported once, below; the extra
@@ -694,7 +703,21 @@ impl Wf<'_> {
                     if s != TY_NEVER {
                         self.match_n(p, s, &mut b);
                     }
-                    pending.push((i, value, s));
+                    // I11 (the generator, `tests/gen`): the tape event of a
+                    // PLACE argument is recorded NOW, left to right, not at
+                    // (e). Deferred, a later argument's move (`g(v.a,
+                    // v.eat())`) preceded this argument's read on the tape,
+                    // and the flow pass reported a use after a move that
+                    // happens after it (O0004). The parameter type is final
+                    // once the argument's own slots are bound.
+                    let mut taped = false;
+                    if s != TY_NEVER
+                        && let Some(t0) = self.subst_now(p, &b)
+                    {
+                        self.arg_tape(cx, node, value, (i, conv, t0), shape.marked);
+                        taped = true;
+                    }
+                    pending.push((i, value, s, taped));
                 }
             }
         }
@@ -716,7 +739,7 @@ impl Wf<'_> {
 
         // (e) every synthesised argument's parameter type, substituted in
         // full, compared once; then R12's bounds and constraint entries.
-        for (i, value, s) in pending {
+        for (i, value, s, taped) in pending {
             let p = shape.params[i].2;
             match self.subst_now(p, &b) {
                 Some(t) => {
@@ -726,7 +749,7 @@ impl Wf<'_> {
                     let got = self.subsume(cx, value, s, t);
                     if got == TY_ERROR && t != TY_ERROR {
                         bad = true;
-                    } else {
+                    } else if !taped {
                         self.arg_tape(cx, node, value, (i, shape.params[i].1, t), shape.marked);
                     }
                 }
@@ -1472,13 +1495,25 @@ impl Wf<'_> {
     /// of R45/R47's method instantiation `x.m[T](..)` (`x.sat_as[u8]()`,
     /// ch03 R6). A `FieldExpr` operand is `is_instantiation`'s.
     fn is_method_path(&mut self, cx: &mut BodyCx, node: usize) -> bool {
-        cx.kind(node) == NodeKind::NameExpr
-            && crate::member::path_segments(cx, node)
-                > crate::member::path_consumed(cx, node).max(1) as usize
-            && matches!(
-                cx.f.uses.target_of(node as u32),
-                Some(ResolvedTarget::Local { .. })
-            )
+        if cx.kind(node) != NodeKind::NameExpr
+            || crate::member::path_segments(cx, node)
+                <= crate::member::path_consumed(cx, node).max(1) as usize
+        {
+            return false;
+        }
+        match cx.f.uses.target_of(node as u32) {
+            Some(ResolvedTarget::Local { .. }) => true,
+            // I11 (the generator's G3): a `const` item is a value head
+            // exactly as a local is (`path_head`'s `SigKind::Const` arm), so
+            // `K0.wrap_as[i64]()` instantiates the method. Refused here, the
+            // bracket was synthesised as a whole and the call node, its
+            // callee and the head all ended `TY_ERROR` with nothing said.
+            Some(ResolvedTarget::Entity(Entity::Item { file, decl })) => {
+                let def = self.defs.def_of(file, decl);
+                def != fors_fir::NO_DEF && self.fir.sigs.kind(def) == SigKind::Const
+            }
+            _ => false,
+        }
     }
 
     /// Whether the callee is the bare prelude value `reduce` (ch03 R11).
@@ -2017,7 +2052,31 @@ impl Wf<'_> {
             }
             return TY_ERROR;
         }
-        let def = match self.struct_head(cx, head) {
+        // I11 (the generator's G1): `S[i32] { a: 1 }` — ch07's `path [args]
+        // {` — carries R38(a)'s explicit arguments on a bracketed head. The
+        // head was refused outright before, so the literal ended `TY_ERROR`
+        // with nothing said.
+        let (head, explicit): (usize, Vec<usize>) = if cx.kind(head) == NodeKind::Bracket {
+            let hk = cx.kids(head);
+            match hk.first() {
+                Some(&op) => (op, hk[1..].to_vec()),
+                None => (head, Vec::new()),
+            }
+        } else {
+            (head, Vec::new())
+        };
+        // I11 (the generator's G2): R34's "a struct-form variant by a struct
+        // literal on its path" — `E.v { a: 1 }`. The enum's parameters are
+        // the literal's slots and the variant's record fields its fields.
+        let record = if explicit.is_empty() {
+            self.record_variant_head(cx, head)
+        } else {
+            None
+        };
+        let def = match record
+            .map(|(d, ..)| d)
+            .or_else(|| self.struct_head(cx, head))
+        {
             Some(d) => d,
             None => {
                 for &i in &inits {
@@ -2044,6 +2103,40 @@ impl Wf<'_> {
         };
         let mut b = Binding::new(&owners);
         self.live_bindings += 1;
+        let mut bad = false;
+        // A slot this increment does not determine (an unbound BRAND, see
+        // `unbound_slot`; a projection R20 would normalise; a field whose
+        // value already failed): the literal's type is left open rather
+        // than guessed, and nothing is reported.
+        let mut open = false;
+        // R38(a): explicit arguments are all of the struct's own
+        // parameters, in order, each of its declared kind.
+        if !explicit.is_empty() {
+            if arity == 0 || arity as usize != explicit.len() {
+                let h = self.head_name(def);
+                self.bemit(
+                    cx,
+                    node,
+                    39,
+                    39,
+                    format!(
+                        "`{h}` declares {arity} generic argument(s), {} written",
+                        explicit.len()
+                    ),
+                );
+                bad = true;
+            } else {
+                for (o, &arg) in explicit.iter().enumerate() {
+                    let t = self.explicit_arg(cx, arg, def, o);
+                    cx.facts.record(arg as u32, t);
+                    if t == TY_ERROR || t == NO_TY {
+                        open = true;
+                        continue;
+                    }
+                    b.bind(def, o as u16, t);
+                }
+            }
+        }
         if arity > 0 {
             self.bindings_created += 1;
             let xs = self.own_args(def);
@@ -2058,28 +2151,34 @@ impl Wf<'_> {
                 }
             }
         }
-        let ms = self.fir.sigs.members(def);
-        let count = self.fir.sigs.member_store.count(ms);
-        let mut fields: Vec<(Symbol, u8, TyId)> = Vec::with_capacity(count);
-        for i in 0..count {
-            let m = self.fir.sigs.member_store.get(ms, i);
-            if m.kind == MemberKind::Field {
-                fields.push((m.name, m.vis, m.ty));
+        let mut fields: Vec<(Symbol, u8, TyId)> = Vec::new();
+        match record {
+            // A variant's record fields carry no `pub` of their own (ch08
+            // N0011 rejects one): they are as visible as the variant.
+            Some((_, _, sub)) => {
+                for i in 0..self.fir.sigs.member_store.count(sub) {
+                    let m = self.fir.sigs.member_store.get(sub, i);
+                    fields.push((m.name, fors_fir::sig::VIS_PUBLIC, m.ty));
+                }
+            }
+            None => {
+                let ms = self.fir.sigs.members(def);
+                let count = self.fir.sigs.member_store.count(ms);
+                for i in 0..count {
+                    let m = self.fir.sigs.member_store.get(ms, i);
+                    if m.kind == MemberKind::Field {
+                        fields.push((m.name, m.vis, m.ty));
+                    }
+                }
             }
         }
         let mut seen = vec![false; fields.len()];
-        let mut bad = false;
-        // A slot this increment does not determine (an unbound BRAND, see
-        // `unbound_slot`; a projection R20 would normalise; a field whose
-        // value already failed): the literal's type is left open rather
-        // than guessed, and nothing is reported.
-        let mut open = false;
         // R38(d)'s SYNTH half for the literal: a field whose type is not
         // yet complete is synthesised and the field type matched one-way
         // against the result, then compared in full at (e) once every
         // field has been visited (`Pair { a: 1u8, b: true }` is T0026 at
         // `true`, with or without an expected type).
-        let mut pending: Vec<(usize, TyId, TyId)> = Vec::new();
+        let mut pending: Vec<(usize, TyId, TyId, bool)> = Vec::new();
         for &init in &inits {
             let Some(name) = self.field_name_of_init(cx, init) else {
                 continue;
@@ -2137,7 +2236,22 @@ impl Wf<'_> {
                                 if s != TY_NEVER {
                                     self.match_n(fields[k].2, s, &mut b);
                                 }
-                                pending.push((v, fields[k].2, s));
+                                // I11 (the generator, `tests/gen`): the use of a
+                                // PLACE is recorded NOW, where the field is
+                                // written, not at (e) below. Deferred, a later
+                                // field's move (`S { f0: v.a, f2: v.eat() }`)
+                                // preceded this field's read on the tape, and
+                                // the flow pass reported a use after a move
+                                // that happens after it (O0004). The type is
+                                // final once the field's own slots are bound.
+                                let mut used = false;
+                                if s != TY_NEVER
+                                    && let Some(t0) = self.subst_now(fields[k].2, &b)
+                                {
+                                    self.use_value(cx, v, t0, Cause::Explicit(node as u32));
+                                    used = true;
+                                }
+                                pending.push((v, fields[k].2, s, used));
                             }
                         }
                     }
@@ -2168,7 +2282,7 @@ impl Wf<'_> {
         // (e) for the literal: every synthesised field's type, substituted
         // in full, compared once; then every slot determined; then R12's
         // bounds on the struct's own parameters.
-        for (v, fty, s) in pending {
+        for (v, fty, s, used) in pending {
             match self.subst_now(fty, &b) {
                 Some(t) => {
                     if bad || open {
@@ -2177,7 +2291,7 @@ impl Wf<'_> {
                     let got = self.subsume(cx, v, s, t);
                     if got == TY_ERROR && t != TY_ERROR {
                         bad = true;
-                    } else {
+                    } else if !used {
                         self.use_value(cx, v, t, Cause::Explicit(node as u32));
                     }
                 }
@@ -2222,7 +2336,13 @@ impl Wf<'_> {
         // the fields in written order. It is not a function call, so the
         // callee marks visited-but-not-a-call; each field init checks like
         // a `let` value.
-        cx.facts.set_callee(node as u32, FactCallee::Undecided);
+        cx.facts.set_callee(
+            node as u32,
+            match record {
+                Some((en, index, _)) => FactCallee::Variant { en, index },
+                None => FactCallee::Undecided,
+            },
+        );
         cx.facts.set_arg_convs(
             node as u32,
             inits
@@ -2247,6 +2367,40 @@ impl Wf<'_> {
             Some(w) => self.subsume(cx, node, ty, w),
             None => ty,
         }
+    }
+
+    /// I11: a struct literal's head naming a struct-form variant (R34),
+    /// as `(enum def, member index, the variant's record fields)`.
+    fn record_variant_head(
+        &mut self,
+        cx: &mut BodyCx,
+        head: usize,
+    ) -> Option<(DefId, u32, fors_fir::sig::MemberListId)> {
+        if cx.kind(head) != NodeKind::NameExpr {
+            return None;
+        }
+        let Some(ResolvedTarget::Entity(Entity::Variant { file, decl, index })) =
+            cx.f.uses.target_of(head as u32)
+        else {
+            return None;
+        };
+        let def = self.defs.def_of(file, decl);
+        if def == fors_fir::NO_DEF || self.fir.sigs.kind(def) != SigKind::Enum {
+            return None;
+        }
+        let ms = self.fir.sigs.members(def);
+        let mut seen = 0u32;
+        for i in 0..self.fir.sigs.member_store.count(ms) {
+            let m = self.fir.sigs.member_store.get(ms, i);
+            if m.kind != MemberKind::Variant {
+                continue;
+            }
+            if seen == index {
+                return (m.payload == PayloadKind::Record).then_some((def, i as u32, m.sub));
+            }
+            seen += 1;
+        }
+        None
     }
 
     /// The struct a literal's head names, if this increment can decide it.
@@ -2349,6 +2503,39 @@ impl Wf<'_> {
         let h = self.head_name(def);
         self.bemit(cx, node, 34, 34, format!("`{h}` has no variant `{v}`"));
         TY_ERROR
+    }
+
+    /// R34: the callee `.v` of `.v(args)` against the expected enum type
+    /// `want`: the enum's tuple variant `v`, or `None` when the callee is not
+    /// a dot literal or `want` names no such variant (the caller then
+    /// classifies the callee as before, and the dot literal's own R34
+    /// diagnostic stands).
+    fn dot_variant_callee(
+        &mut self,
+        cx: &mut BodyCx,
+        callee: usize,
+        expected: Option<TyId>,
+    ) -> Option<Callee> {
+        if cx.kind(callee) != NodeKind::DotLit {
+            return None;
+        }
+        let want = expected?;
+        if want == TY_ERROR || want == NO_TY {
+            return None;
+        }
+        let bare = self.fir.tys.unqual(want);
+        if self.fir.tys.tag(bare) != TyTag::Nominal {
+            return None;
+        }
+        let def = DefId(self.fir.tys.a(bare));
+        if self.fir.sigs.kind(def) != SigKind::Enum {
+            return None;
+        }
+        let name = self.dot_name(cx, callee)?;
+        let i = self.variant_named(def, name)?;
+        self.dep(def);
+        cx.facts.record(callee as u32, want);
+        Some(Callee::Variant(def, i, NO_TY))
     }
 
     fn dot_name(&mut self, cx: &BodyCx, node: usize) -> Option<Symbol> {

@@ -1422,9 +1422,19 @@ impl Wf<'_> {
 
 // ------------------------------------------------------------- helpers
 
+/// Whether the `TupleOrParen` `node` has a comma of its OWN, i.e. one after
+/// its first element: `(e,)` is a 1-tuple, `(e)` is `e`. A comma INSIDE the
+/// first element (a call's arguments, a struct literal's fields) belongs to
+/// that element, so `(f(a, b))` is a parenthesised call. I11 (the generator,
+/// `tests/gen`) found the whole-span scan this replaces typing `(f(a, b))` as
+/// `(R,)`.
 fn has_comma(cx: &BodyCx, node: usize) -> bool {
     let (a, b) = cx.f.tree.token_range(node);
-    (a as usize..(b as usize).min(cx.f.tokens.kinds.len()))
+    let from = match cx.f.tree.children(node).next() {
+        Some(first) => cx.f.tree.token_range(first).1,
+        None => a,
+    };
+    (from as usize..(b as usize).min(cx.f.tokens.kinds.len()))
         .any(|i| cx.f.tokens.kinds[i] == TokenKind::Comma)
 }
 
