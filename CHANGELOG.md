@@ -7,7 +7,8 @@ commit history, which predates the Conventional Commits convention.
 
 | Language | Compiler | Meaning |
 |---|---|---|
-| `lang-v0.5.3` | `compiler-v0.21.0` | current |
+| `lang-v0.5.3` | `compiler-v0.22.0` | current |
+| `lang-v0.5.3` | `compiler-v0.21.0` | FMIR F10, the M1 exit |
 | `lang-v0.5.3` | `compiler-v0.20.0` | FMIR F9, comptime mode |
 | `lang-v0.5.3` | `compiler-v0.19.0` | FMIR F8, the capability host surface and oracle replay |
 | `lang-v0.5.3` | `compiler-v0.18.0` | FMIR F3, failure lowering and the exit sequence |
@@ -108,6 +109,42 @@ measurement, the grammar, names and visibility), with a conformance corpus and
 an independent reference parser.
 
 ## Compiler
+
+### compiler-v0.22.0 — 2026-10-03
+
+Type checker increment **I11**, soundness at scale, produced by two
+agents (generator, triage) and independently verified by a third.
+Implements `lang-v0.5.3`; still no code generator. With this and F10,
+every increment of milestone M1 (I0–I11, F0–F10) is on `main`.
+
+- **A type-directed program generator** that inverts the typing rules,
+  so every program it emits is accepted by construction and carries its
+  own typing: generics with bounds, traits with provided methods,
+  conventions and moves, exhaustive `match`, loops, `defer`/`errdefer`,
+  raising functions with `?` and handlers, the numeric method family,
+  `@unsafe`, consts. A **typed mutation engine** of 270 rows, each
+  bound to one rule with its expected code and site; 82 of the 96
+  diagnostic rows are reached and flip, the rest named with reasons.
+- **One million programs**: 1,000,000 accepted and 1,000,000 mutants
+  rejected with the expected code at the expected site; zero false
+  rejections, wrong codes, wrong sites, misses, panics, silent
+  `TY_ERROR`s or query-DAG disagreements. The default suite runs 10⁴;
+  the 10⁶ run is a release-mode ignored test (~7.5 min).
+- **Checker bugs it exposed, fixed with probes.** Six at the first run
+  (a debug assertion in call arguments, dot-form variant callees, a
+  parenthesised call typed as a 1-tuple, a silent undeclared method on
+  a doubly-bounded receiver, two move-ordering faults giving false
+  O0004) and four silent `TY_ERROR`s on accepted programs: struct
+  literals with explicit type arguments, record-variant literals,
+  numeric methods on a `const` receiver, and `const` initialisers,
+  which were never type-checked at all.
+- **Verification found and fixed before merge.** The new `const` path
+  reported T0026 where `let` reports ch03's D0005; two sabotages prove
+  the generator's self-check is not tautological. 1065 Rust tests (18 held out with a stated reason).
+- **For the owner.** Out-of-range integer literals are accepted (ch03
+  has no literal-range rule); `Box.mk()` on an uninstantiated generic
+  head is T0043 when the impl is for `Box[i32]`; a wrong explicit
+  argument count on a struct literal reports T0039 like calls do.
 
 ### compiler-v0.21.0 — 2026-10-03
 
