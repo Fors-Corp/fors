@@ -7,7 +7,8 @@ commit history, which predates the Conventional Commits convention.
 
 | Language | Compiler | Meaning |
 |---|---|---|
-| `lang-v0.5.3` | `compiler-v0.22.0` | current |
+| `lang-v0.5.3` | `compiler-v0.23.0` | current |
+| `lang-v0.5.3` | `compiler-v0.22.0` | type checker I11, soundness at scale |
 | `lang-v0.5.3` | `compiler-v0.21.0` | FMIR F10, the M1 exit |
 | `lang-v0.5.3` | `compiler-v0.20.0` | FMIR F9, comptime mode |
 | `lang-v0.5.3` | `compiler-v0.19.0` | FMIR F8, the capability host surface and oracle replay |
@@ -109,6 +110,33 @@ measurement, the grammar, names and visibility), with a conformance corpus and
 an independent reference parser.
 
 ## Compiler
+
+### compiler-v0.23.0 — 2026-10-04
+
+Two owner decisions on top of M1, produced by one agent and independently
+verified by a second. Implements `lang-v0.5.3`; still no code generator.
+
+- **Std is always in the build** (owner item 47a). The conformance
+  runner, the oracle build, the checker harness and `fors check` load std
+  for every package, so prelude names (`Vec`, `Buffer`, ...) denote std's
+  items with or without a `use std...;`. `buffer-index-past-len-trap` now
+  runs and traps. The two corpus tests that only passed against opaque
+  prelude rows are pinned as exact corpus/std disagreements, and the
+  checker allow-lists moved to exact-code pins.
+- **`IndexMut::at_mut` is inlined as a place computation** (owner item
+  23). `buf[10] = 1` through a user `IndexMut` lowers with the bounds
+  check at the original index; FMIR stays value-only, with no
+  place-returning call. Bodies that are not `return <place>;` are a
+  precise lowering refusal, never a miscompile.
+- **Verification found and fixed before merge.** A store inside a
+  generic caller was refused because the receiver type was not
+  substituted; four waiver rows were blanket and are now pinned to exact
+  codes; a false N0011 on `@unsafe(..) pub fn` members is fixed. 1088 Rust tests (17 held out with a stated reason).
+- **For the owner.** Seven corpus tests disagree with std or with ch10
+  (`Buffer[i64]` vs `Buffer[T, N]`, `Arena.reset` missing, `write_line`
+  is total, trait-as-type without `dyn`, `Counting[N, A]`, `Own` has no
+  `alloc`, `create` raises); `buf.push(5)` then `buf[0]` fails in the
+  interpreter with "call to unknown declaration key".
 
 ### compiler-v0.22.0 — 2026-10-03
 
