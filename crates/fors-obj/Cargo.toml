@@ -1,0 +1,15 @@
+[package]
+name = "fors-obj"
+version.workspace = true
+license.workspace = true
+edition = "2024"
+publish = false
+description = "Mach-O writer for the Fors dev backend: MH_EXECUTE, exports trie, ad-hoc signature, in-house SHA-256 (docs/design/m2-dev-backend.md §4)."
+
+# Zero dependencies (design §2.2). Also the home of `Atom`, the unit the
+# backend emits and the linker places, so neither of those two depends on
+# the other.
+[dependencies]
+
+[lints]
+workspace = true

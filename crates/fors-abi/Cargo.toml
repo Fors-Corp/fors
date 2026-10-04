@@ -1,0 +1,14 @@
+[package]
+name = "fors-abi"
+version.workspace = true
+license.workspace = true
+edition = "2024"
+publish = false
+description = "The aarch64-apple Fors calling convention as data (M2 dev backend, docs/design/m2-dev-backend.md §3)."
+
+# M2-0: constants only. `fors-layout` (the design's §2.2 dependency) joins
+# when the aggregate classifier lands (M2-4/M2-5); nothing here reads it yet.
+[dependencies]
+
+[lints]
+workspace = true

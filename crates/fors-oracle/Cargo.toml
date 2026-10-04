@@ -19,11 +19,20 @@ fors-check = { path = "../fors-check" }
 fors-resolve = { path = "../fors-resolve" }
 fors-syntax = { path = "../fors-syntax" }
 fors-lex = { path = "../fors-lex" }
+# M2-0 (docs/design/m2-dev-backend.md §5): the native engine of the
+# differential — FMIR -> OIR -> stencils -> signed Mach-O -> spawn.
+fors-oir = { path = "../fors-oir" }
+fors-codegen-dev = { path = "../fors-codegen-dev" }
+fors-link = { path = "../fors-link" }
+fors-obj = { path = "../fors-obj" }
 
 # The seeded-miscompile hook is enabled HERE ONLY, and only for this crate's
 # tests (`tests/seeded.rs` asserts no other manifest enables it).
 [dev-dependencies]
 fors-lower = { path = "../fors-lower", features = ["seeded-miscompile"] }
+# M2-0's vacuity check (`tests/native_mutation.rs`): test-only stencil
+# miscompiles, enabled HERE ONLY (`tests/native_mutation.rs` asserts it).
+fors-codegen-dev = { path = "../fors-codegen-dev", features = ["inject-miscompile"] }
 
 [lints]
 workspace = true

@@ -208,7 +208,12 @@ pub fn trap_binop(
     } else {
         let (_, hi) = k.bounds();
         let r = uop(k.as_unsigned(a), k.as_unsigned(b)).ok_or(TrapKind::Overflow)?;
-        if r as i128 > hi {
+        // Compare in `u128`: a `u64 * u64` product can reach `2^128 - 2^65 +
+        // 1`, and `r as i128` turns every product `>= 2^127` NEGATIVE, which
+        // let `(2^63 + 1) * u64::MAX` through untrapped (found by M2-0's
+        // native edge table, `docs/design/m2-dev-backend.md` R5 triage:
+        // ch03 R2 says it traps).
+        if r > hi as u128 {
             return Err(TrapKind::Overflow);
         }
         Ok(k.narrow(r))

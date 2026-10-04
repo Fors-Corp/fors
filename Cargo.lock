@@ -3,6 +3,10 @@
 version = 4
 
 [[package]]
+name = "fors-abi"
+version = "0.23.0"
+
+[[package]]
 name = "fors-asm"
 version = "0.23.0"
 
@@ -35,6 +39,19 @@ dependencies = [
  "fors-query",
  "fors-resolve",
  "fors-syntax",
+]
+
+[[package]]
+name = "fors-codegen-dev"
+version = "0.23.0"
+dependencies = [
+ "fors-abi",
+ "fors-asm",
+ "fors-fir",
+ "fors-fmir",
+ "fors-index",
+ "fors-obj",
+ "fors-oir",
 ]
 
 [[package]]
@@ -93,6 +110,14 @@ name = "fors-lex"
 version = "0.23.0"
 
 [[package]]
+name = "fors-link"
+version = "0.23.0"
+dependencies = [
+ "fors-codegen-dev",
+ "fors-obj",
+]
+
+[[package]]
 name = "fors-lower"
 version = "0.23.0"
 dependencies = [
@@ -120,16 +145,33 @@ dependencies = [
 ]
 
 [[package]]
+name = "fors-obj"
+version = "0.23.0"
+
+[[package]]
+name = "fors-oir"
+version = "0.23.0"
+dependencies = [
+ "fors-fir",
+ "fors-fmir",
+ "fors-index",
+]
+
+[[package]]
 name = "fors-oracle"
 version = "0.23.0"
 dependencies = [
  "fors-check",
+ "fors-codegen-dev",
  "fors-fir",
  "fors-fmir",
  "fors-index",
  "fors-interp",
  "fors-lex",
+ "fors-link",
  "fors-lower",
+ "fors-obj",
+ "fors-oir",
  "fors-resolve",
  "fors-syntax",
 ]

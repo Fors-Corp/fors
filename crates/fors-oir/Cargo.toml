@@ -1,0 +1,20 @@
+[package]
+name = "fors-oir"
+version.workspace = true
+license.workspace = true
+edition = "2024"
+publish = false
+description = "OIR: the dev backend's level between FMIR and LIR-dev (docs/design/m2-dev-backend.md §2.1)."
+
+# ch05 R1: FMIR -> OIR -> LIR -> atoms. OIR reads FMIR (`fors-fmir`) and the
+# type store (`fors-fir`). `fors-layout`/`fors-abi` (design §2.2) join when
+# aggregates and calls lower (M2-2/M2-4); M2-0's scalar surface needs neither.
+[dependencies]
+fors-fmir = { path = "../fors-fmir" }
+fors-fir = { path = "../fors-fir" }
+
+[dev-dependencies]
+fors-index = { path = "../fors-index" }
+
+[lints]
+workspace = true

@@ -633,6 +633,49 @@ them through `Profile::STRAIGHT_LINE.ops`; they then move to M2-2. Nothing else 
 {generate,native,native_diff}.rs`, `fors-oracle/Cargo.toml`, `fors-oracle/tests/native*.rs`,
 workspace nothing (members are `crates/*`).
 
+**M2-0 as built (verifier's note, 2026-10-04).** Deviations from the text above, each kept
+deliberately; none changes a semantic promise, and the two marked (*) need a one-line edit elsewhere
+in this document when their increment lands.
+
+- `Atom`, `Reloc` and `TrapRow` live in `fors-obj` (`atom.rs`), not in `fors-codegen-dev` or
+  `fors-link`, so the emitter and the linker share the type without depending on each other;
+  `fors-codegen-dev` therefore depends on `fors-obj` (§2.2's table does not list it). `fors-oracle`
+  also depends on `fors-oir` and `fors-obj` directly.
+- Stencils are keyed per integer **type** (`Key::Bin { op, mode, ty: IntTy }`, eight types), not
+  per width class: with every slot in canonical extended form (E5) the narrow stencils differ by
+  their extend instruction (`sxtb`/`sxth`/`sxtw`/`uxtb`/`uxth`/`mov w`), so a 32-and-narrower class
+  would need per-type holes anyway. 569 stencils, all covered by `stencils_match_fors_asm`.
+- (*) `TrapRow.line` is the site's **absolute** line, and `__fors_dir`'s `decl_line_row` is 0:
+  §4.1's "line relative to the declaration" is M2-3's to make true when the handler that reads the
+  rows and the `__fors_lines` tables land. Until then nothing reads either field.
+- `fors-codegen-dev` depends on neither `fors-fir` nor `fors-layout`, and `fors-oir`/`fors-abi` not
+  on `fors-layout`: M2-0's scalar surface needs no layout queries (§2.2 lists them for M2-4/M2-5).
+- The trap-kind fixtures of `native_trap_exits_by_sigtrap_per_kind` are built through the FMIR
+  pool API (`tests/native_support`), not `.fmir` text: the text format has no constants by design.
+- `edge_table_matches_arith_rs` runs the ~450 (type, op, mode) cases **batched** into ~55 native
+  programs (`edge_batches`), each case still attributed on failure, and every integer result is
+  printed twice — raw bits, then its canonical 64-bit slot via `wrap_as` — so a stencil whose low
+  bits are right but whose upper half is not the E5 extension fails the table, not only a later
+  consumer of the slot. The per-case programs remain the interpreter half (runs on Linux).
+- One file outside the list above: `fors-interp/src/arith.rs` (`trap_binop`'s unsigned bound
+  check compared a `u128` product as `i128`, letting `u64` products ≥ 2^127 through untrapped;
+  found by the edge table, R5 triage: ch03 R2 says it traps). Regression:
+  `trap_mul_u64_products_above_2_pow_127_overflow`.
+- The native differential compares the interpreter's stderr **minus its trailing `trap: …` line**
+  until M2-3's handler prints it natively (`native_diff.rs` module docs).
+- Default-suite cost: a native exec costs ~0.35 s of serialised first-exec checking on macOS
+  regardless of worker count, so the default suite runs `straight_line_native_diff_200` (seeds
+  0..200), the batched edge table, `native_hand_edges` (104 spec-derived values + 26 traps), and
+  20-seed mutation runs; `straight_line_native_diff_1k` (200..1000), `_10k` and `trap_edges_native`
+  are `#[ignore]` with their commands in the doc comments. Measured: 200 seeds 68 s; edge table
+  ~10 s; trap edges 162 programs 35 s; 10³ and 10⁴ reported by the producer as all `ok`.
+- Additional gates beyond the table: `edge_batches_cover_every_case`,
+  `hand_edges_{interp,native}_matches_spec`, `image_is_identical_across_processes` (child process),
+  `compiled_image_is_signed_and_hermetic` now also runs `codesign --verify --strict` and checks
+  `otool -l`/`-tv` (LC_MAIN, content-derived LC_UUID, chained fixups, 16 KiB segment alignment,
+  `brk` immediates in `0x4600..0x4608`, exactly one `svc`), `compare_classifies_every_exit_shape`,
+  and `image_contains_no_svc` (the allowlist form; M2-3 makes it strict).
+
 ### M2-1 — risk probes (haiku for (a); sonnet for (b); ~300 lines + two results files)
 
 (a) Run `incremental.py`'s Go and Zig adapters at the §6.1 shape (`M = 200`, `F` to be fixed so a

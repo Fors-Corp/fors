@@ -1,0 +1,32 @@
+[package]
+name = "fors-codegen-dev"
+version.workspace = true
+license.workspace = true
+edition = "2024"
+publish = false
+description = "The Fors dev-tier code generator: copy-and-patch stencils over fors-asm, OIR -> LIR-dev -> atoms (docs/design/m2-dev-backend.md §2)."
+
+# ch05 R1: consumes OIR only (`codegen_dev_consumes_only_oir`). `fors-obj`
+# supplies the `Atom` type it emits.
+[dependencies]
+fors-oir = { path = "../fors-oir" }
+fors-abi = { path = "../fors-abi" }
+fors-asm = { path = "../fors-asm" }
+fors-obj = { path = "../fors-obj" }
+
+# FMIR inputs for the refusal and determinism tests are built through
+# `fors-oir::from_fmir`.
+[dev-dependencies]
+fors-fmir = { path = "../fors-fmir" }
+fors-fir = { path = "../fors-fir" }
+fors-index = { path = "../fors-index" }
+
+[features]
+# Test-only stencil miscompiles for the native differential's vacuity check
+# (design §5, "inject-miscompile"). Enabled ONLY from fors-oracle's
+# [dev-dependencies]; `tests/inject.rs` in fors-oracle asserts no other
+# manifest enables it. Off at runtime unless a test arms it.
+inject-miscompile = []
+
+[lints]
+workspace = true
