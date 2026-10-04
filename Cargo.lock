@@ -4,15 +4,15 @@ version = 4
 
 [[package]]
 name = "fors-abi"
-version = "0.23.0"
+version = "0.24.0"
 
 [[package]]
 name = "fors-asm"
-version = "0.23.0"
+version = "0.24.0"
 
 [[package]]
 name = "fors-check"
-version = "0.23.0"
+version = "0.24.0"
 dependencies = [
  "fors-diag",
  "fors-fir",
@@ -26,7 +26,7 @@ dependencies = [
 
 [[package]]
 name = "fors-cli"
-version = "0.23.0"
+version = "0.24.0"
 dependencies = [
  "fors-check",
  "fors-diag",
@@ -43,7 +43,7 @@ dependencies = [
 
 [[package]]
 name = "fors-codegen-dev"
-version = "0.23.0"
+version = "0.24.0"
 dependencies = [
  "fors-abi",
  "fors-asm",
@@ -56,18 +56,18 @@ dependencies = [
 
 [[package]]
 name = "fors-diag"
-version = "0.23.0"
+version = "0.24.0"
 
 [[package]]
 name = "fors-fir"
-version = "0.23.0"
+version = "0.24.0"
 dependencies = [
  "fors-index",
 ]
 
 [[package]]
 name = "fors-fmir"
-version = "0.23.0"
+version = "0.24.0"
 dependencies = [
  "fors-fir",
  "fors-index",
@@ -75,7 +75,7 @@ dependencies = [
 
 [[package]]
 name = "fors-fmt"
-version = "0.23.0"
+version = "0.24.0"
 dependencies = [
  "fors-index",
  "fors-lex",
@@ -85,7 +85,7 @@ dependencies = [
 
 [[package]]
 name = "fors-index"
-version = "0.23.0"
+version = "0.24.0"
 dependencies = [
  "fors-diag",
  "fors-lex",
@@ -94,7 +94,7 @@ dependencies = [
 
 [[package]]
 name = "fors-interp"
-version = "0.23.0"
+version = "0.24.0"
 dependencies = [
  "fors-fir",
  "fors-fmir",
@@ -103,15 +103,15 @@ dependencies = [
 
 [[package]]
 name = "fors-layout"
-version = "0.23.0"
+version = "0.24.0"
 
 [[package]]
 name = "fors-lex"
-version = "0.23.0"
+version = "0.24.0"
 
 [[package]]
 name = "fors-link"
-version = "0.23.0"
+version = "0.24.0"
 dependencies = [
  "fors-codegen-dev",
  "fors-obj",
@@ -119,7 +119,7 @@ dependencies = [
 
 [[package]]
 name = "fors-lower"
-version = "0.23.0"
+version = "0.24.0"
 dependencies = [
  "fors-check",
  "fors-fir",
@@ -134,7 +134,7 @@ dependencies = [
 
 [[package]]
 name = "fors-lsp"
-version = "0.23.0"
+version = "0.24.0"
 dependencies = [
  "fors-diag",
  "fors-fmt",
@@ -146,11 +146,11 @@ dependencies = [
 
 [[package]]
 name = "fors-obj"
-version = "0.23.0"
+version = "0.24.0"
 
 [[package]]
 name = "fors-oir"
-version = "0.23.0"
+version = "0.24.0"
 dependencies = [
  "fors-fir",
  "fors-fmir",
@@ -159,7 +159,7 @@ dependencies = [
 
 [[package]]
 name = "fors-oracle"
-version = "0.23.0"
+version = "0.24.0"
 dependencies = [
  "fors-check",
  "fors-codegen-dev",
@@ -178,11 +178,11 @@ dependencies = [
 
 [[package]]
 name = "fors-query"
-version = "0.23.0"
+version = "0.24.0"
 
 [[package]]
 name = "fors-resolve"
-version = "0.23.0"
+version = "0.24.0"
 dependencies = [
  "fors-diag",
  "fors-index",
@@ -192,7 +192,7 @@ dependencies = [
 
 [[package]]
 name = "fors-syntax"
-version = "0.23.0"
+version = "0.24.0"
 dependencies = [
  "fors-diag",
  "fors-lex",
