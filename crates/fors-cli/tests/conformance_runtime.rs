@@ -18,15 +18,13 @@
 //! lowered instructions carry `SiteId(0)` today, so every site renders
 //! `0:0`, and §7.2a compares the KIND.
 //!
-//! **The build.** `fors run` with the `std` package when the program imports
-//! a `std` module; otherwise with an EMPTY `std` directory, so ch08 R17's
-//! "a build that contains no `std` source" path — the prelude's synthetic
-//! names — is the one taken, exactly as the program wrote it. (Two such
-//! tests, `trap-bounds` and `arena-generation-trap`, name prelude types
-//! whose `std` declarations disagree with them: `Buffer[i64]` against
-//! `std`'s two-parameter `Buffer`, T0011, and an `Arena` with no `reset`,
-//! T0043. They pass on the prelude path, as their source asks.)
-//!
+//! **The build.** `fors run` ALWAYS builds with the `std` package (item
+//! 47(a)): ch08 R17's prelude names (`Vec`, `Buffer`, `Arena`, ...) denote
+//! `std`'s items whether or not the program wrote `use std...;`, so no test
+//! is run against an empty `std`, and the runner does not decide per file
+//! whether `std` is in the build. A test that disagrees with the real `std`
+//! is pinned below with that exact disagreement; none is hidden.
+
 //! **A status-2 test** runs with its standard OUTPUT a real pipe whose read
 //! end the runner closed before spawning (README: "the harness's only way
 //! to make the final flush fail deterministically"); the entry shim ignores
@@ -90,24 +88,38 @@ struct Pin {
 
 const PINS: &[Pin] = &[
     Pin {
+        rel: "01-ownership/arena-generation-trap.fors",
+        class: "std gap",
+        reason: "`a.reset()` on `Arena[Node[a], a]`: ch10 S0019 specifies `Arena`'s `reset`, but \
+                 `std/mem.fors` declares no `impl Arena`, so with `std` in every build the \
+                 checker reports T0043 (no method `reset`); the trap itself is ch01 R17's",
+        expect: PinExpect::BuildRefused(
+            "error[T0043]: `Arena[Node[<fresh brand>], <fresh brand>]` has no method `reset`",
+        ),
+    },
+    Pin {
         rel: "02-failure/main-raises-std-error-run-error.fors",
-        class: "checker gap",
-        reason: "`Vec[i32, A]` in `fill` is reported T0011 (a type where a constant argument \
-                 is expected): fors-check does not see `Vec`'s second parameter as a brand \
-                 through `use std.mem;` (see fors-lower's gate_main_raises_std_error_run_error)",
+        class: "corpus/std disagreement",
+        reason: "the file writes `mem.Counting[mem.Fixed[8]]` while `std/mem.fors` declares \
+                 `Counting[N: usize, A: brand]` (standalone, ch01 R15a), so the checker reports \
+                 T0011 (a type where a constant argument is expected) at the `with allocator` \
+                 type; behind it `fill`'s `raises AllocError` and `Vec.new()` are further checker \
+                 gaps (see fors-lower's gate_main_raises_std_error_run_error)",
         expect: PinExpect::BuildRefused(
             "error[T0011]: a type where a constant argument is expected",
         ),
     },
     Pin {
-        rel: "10-std/buffer-index-past-len-trap.fors",
-        class: "checker gap",
-        reason: "`Buffer.empty()` is R45's qualified call on the PRELUDE type name `Buffer`; \
-                 fors-check's qualified-callee path requires an `Entity::Item`, so the call is \
-                 a silent TY_ERROR and lowering refuses `main` with CheckErrors (with the std \
-                 package in the build the next blocker is FMIR's: `buf[10] = 1` through \
-                 `IndexMut::at_mut`, a place-returning call no call opcode has)",
-        expect: PinExpect::BuildRefused("`main` does not lower: CheckErrors"),
+        rel: "02-failure/trap-bounds.fors",
+        class: "corpus/std disagreement",
+        reason: "the file writes `Buffer[i64]`, `Buffer.fixed(4)` and `.slice[10]`, and `std`'s \
+                 `Buffer` is `Buffer[T, N: usize]` with `empty`/`filled` and `items()` (ch10 \
+                 S0023), so the checker reports T0011 (two type arguments declared, one \
+                 supplied); ch10 S0002's own prelude table cites `Buffer[i64]`, so the spec and \
+                 its corpus disagree",
+        expect: PinExpect::BuildRefused(
+            "error[T0011]: `Buffer` declares 2 type argument(s), 1 supplied",
+        ),
     },
     Pin {
         rel: "10-std/try-for-each-error-propagates-run-ok.fors",
@@ -120,8 +132,11 @@ const PINS: &[Pin] = &[
     Pin {
         rel: "10-std/vec-deinit-empty-nonempty-trap.fors",
         class: "checker gap",
-        reason: "`Vec.new()` is R45's qualified call on the PRELUDE type name `Vec`: the same \
-                 silent TY_ERROR as `Buffer.empty()`, so lowering refuses `main` with CheckErrors",
+        reason: "`Vec.new()` against `Vec[Own[i64, heap], heap]`, where `heap` is the `main(inout \
+                 heap: mem.Heap)` PARAMETER used as the brand, is a silent TY_ERROR (the \
+                 heap-brand-named-by-parameter gap listed in fors-check's silent.rs), so \
+                 lowering refuses `main` with CheckErrors; the same with `std` in the build, \
+                 and not the prelude-name path an earlier pin blamed",
         expect: PinExpect::BuildRefused("`main` does not lower: CheckErrors"),
     },
     Pin {
@@ -281,17 +296,9 @@ fn readme_counts() -> (usize, usize, usize, usize) {
     (total, col("run-ok"), col("run-error"), col("trap"))
 }
 
-fn spawn(t: &Test, empty_std: &Path) -> Output {
-    let src = std::fs::read_to_string(&t.file).expect("source");
-    let uses_std = src.lines().any(|l| {
-        let l = l.trim_start();
-        (l.starts_with("use ") || l.starts_with("pub use ")) && l.contains("std.")
-    });
+fn spawn(t: &Test) -> Output {
     let mut cmd = Command::new(env!("CARGO_BIN_EXE_fors"));
     cmd.arg("run");
-    if !uses_std {
-        cmd.arg("--std").arg(empty_std);
-    }
     cmd.arg(&t.file)
         .current_dir(repo_root())
         .env_remove("FORS_BACKTRACE")
@@ -426,16 +433,11 @@ fn judge_pin(p: &Pin, o: &Output) -> Result<(), String> {
 #[test]
 fn every_runtime_conformance_test_under_the_7_2a_runner() {
     let (tests, unclassified, all) = corpus();
-    let scratch = std::env::temp_dir().join(format!("fors-runtime-{}", std::process::id()));
-    let empty_std = scratch.join("empty-std");
-    let _ = std::fs::remove_dir_all(&scratch);
-    std::fs::create_dir_all(&empty_std).expect("scratch");
-
     let mut pass = [0usize; 4];
     let mut pinned = Vec::new();
     let mut failed = Vec::new();
     for t in &tests {
-        let o = spawn(t, &empty_std);
+        let o = spawn(t);
         let pin = PINS.iter().find(|p| p.rel == t.rel);
         let verdict = match pin {
             Some(p) => match judge_pin(p, &o) {
@@ -461,8 +463,6 @@ fn every_runtime_conformance_test_under_the_7_2a_runner() {
         };
         println!("{:<20} {:<70} {verdict}", t.kind.name(), t.rel);
     }
-    let _ = std::fs::remove_dir_all(&scratch);
-
     let count = |k: Kind| tests.iter().filter(|t| t.kind == k).count();
     let (readme_total, readme_ok, readme_err, readme_trap) = readme_counts();
     println!(

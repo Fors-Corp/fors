@@ -26,6 +26,14 @@ fn repo_root() -> PathBuf {
         .expect("the repository root is two levels above this crate")
 }
 
+/// Corpus entries whose one machine-applicable fix is right about ITS error
+/// and exposes a second, already-present one that only a build with the real
+/// `std` can see: `(entry, the exact code that remains)`. See the use site.
+const FIX_EXPOSES_MASKED_ERROR: &[(&str, &str)] = &[(
+    "tests/conformance/08-names/std-module-without-use-mem-rejected.fors",
+    "T0011",
+)];
+
 fn corpus_entries() -> Vec<String> {
     let root = repo_root();
     let mut out = Vec::new();
@@ -277,6 +285,28 @@ fn every_fix_survives_the_compiler() {
                             "machine-applicable `{}` left {} at byte {} of {} in place",
                             fix.kind, rec.code, moved, rec.path
                         );
+                        // Item 47(a): `std` is in every build, so a program that
+                        // names a std TRAIT as a type (`mem.Allocator` in type
+                        // position) is a ch09 T0011 error once its import
+                        // resolves. The fix removed its own N0014 and exposed
+                        // the program's other fault, which a build without
+                        // `std` could not see. That is pinned exactly, not
+                        // waived: the fix must have removed ITS diagnostic and
+                        // the one that remains must be exactly that T0011.
+                        if let Some(&(_, code)) = FIX_EXPOSES_MASKED_ERROR
+                            .iter()
+                            .find(|&&(e, _)| e == entry.as_str())
+                        {
+                            let codes: Vec<&str> = after.iter().map(|r| r.code.as_str()).collect();
+                            assert_eq!(
+                                codes,
+                                [code],
+                                "`{}` on {}: the pinned masked error changed",
+                                fix.kind,
+                                rec.path
+                            );
+                            continue;
+                        }
                         assert!(
                             after.len() < recs.len(),
                             "machine-applicable `{}` on {} did not lower the error count ({} -> {}): \

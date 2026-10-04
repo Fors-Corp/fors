@@ -1686,6 +1686,73 @@ struct FnLower<'a> {
     thunk_mode: bool,
 }
 
+/// The per-body state of an [`FnLower`] that expanding ANOTHER body in place
+/// replaces (item 23's `at_mut`, [`FnLower::inline_at_mut_store`]): the
+/// substitution, the node-type column, the facts, the CST and its source,
+/// and every table keyed by names or node numbers of the body being walked.
+/// The output side — `decl`, the instruction and block drafts, the root
+/// counter, the type store, the instance table — is shared, so what the
+/// callee emits lands in the caller's FMIR.
+struct BodyScope<'a> {
+    subst: Binding,
+    owners: Vec<(DefId, u16)>,
+    node_ty: Vec<TyId>,
+    facts: &'a BodyFacts,
+    tree: &'a Tree,
+    tokens: &'a Tokens,
+    source: &'a [u8],
+    file_idx: u32,
+    policy: Policy,
+    scopes: Vec<HashMap<Symbol, (u32, TyId)>>,
+    loops: Vec<LoopTargets>,
+    with_regions: Vec<WithRegion>,
+    buffer_stub_locals: HashSet<Symbol>,
+    node_inst: Vec<(u32, fors_fmir::ids::InstId)>,
+    exit_node: Option<u32>,
+    unsafe_decl: bool,
+}
+
+/// The expression an `IndexMut::at_mut` returns, when its body is exactly
+/// the one statement `return <expr>;` over a signature with no contract
+/// clause and no `raises`: the only shape lowering expands into a place
+/// ([`FnLower::inline_at_mut_store`]). `Err` is the reason it is not.
+fn at_mut_return_place(file: &FileInput<'_>, decl_node: usize) -> Result<usize, &'static str> {
+    let tree = file.tree;
+    let mut body = None;
+    for c in tree.children(decl_node) {
+        match tree.kinds[c] {
+            NodeKind::FnSig => {
+                for s in tree.children(c) {
+                    match tree.kinds[s] {
+                        NodeKind::Contract => {
+                            return Err("its signature carries a contract clause");
+                        }
+                        NodeKind::Raises => return Err("it declares `raises`"),
+                        _ => {}
+                    }
+                }
+            }
+            NodeKind::Block => body = Some(c),
+            _ => {}
+        }
+    }
+    let Some(block) = body else {
+        return Err("it has no body");
+    };
+    let stmts: Vec<usize> = tree.children(block).collect();
+    let [stmt] = stmts.as_slice() else {
+        return Err("its body is not exactly one statement");
+    };
+    if tree.kinds[*stmt] != NodeKind::ReturnStmt {
+        return Err("its body is not `return <place>;`");
+    }
+    let vals: Vec<usize> = tree.children(*stmt).collect();
+    match vals.as_slice() {
+        [e] => Ok(*e),
+        _ => Err("its `return` has no single operand"),
+    }
+}
+
 /// F6: one open `with arena` / `with allocator` block (ch01 R15, R18).
 #[derive(Clone, Copy)]
 struct WithRegion {
@@ -2321,6 +2388,29 @@ impl<'a> FnLower<'a> {
     /// Binds the parameters of the `FnDecl` at `decl_node` and returns its
     /// contract clauses.
     fn bind_params(&mut self, decl_node: usize) -> Result<Vec<(ContractKind, usize)>, LowerError> {
+        let (params, contracts) = self.collect_params(decl_node)?;
+        let sig = self.fir.sigs.fn_sig(self.facts.owner);
+        for (i, (sym, _)) in params.iter().enumerate() {
+            let param = self.fir.sigs.fn_sigs.param(sig, i);
+            let ty = param.ty;
+            self.fresh_param(ty, i as u16);
+            let root = self.bind(*sym, ty);
+            // F6: a scalar `inout`/`set` parameter arrives as the caller's
+            // `borrow_mut`/`borrow_out` pointer; see `indirect_roots`.
+            if matches!(param.conv, Conv::Inout | Conv::Set) && self.by_pointer(ty)? {
+                self.indirect_roots.push(root);
+            }
+        }
+        Ok(contracts)
+    }
+
+    /// The parameter names (with their CST nodes) and contract clauses of
+    /// the `FnDecl` at `decl_node`, checked against the signature's arity.
+    #[allow(clippy::type_complexity)]
+    fn collect_params(
+        &mut self,
+        decl_node: usize,
+    ) -> Result<(Vec<(Symbol, usize)>, Vec<(ContractKind, usize)>), LowerError> {
         // Params: names from the CST in order, types from the signature in
         // order. A mismatch is a diagnostic, never an index panic. Contract
         // clauses (`pre`/`post`/`invariant`) live on the same `FnSig`.
@@ -2376,18 +2466,7 @@ impl<'a> FnLower<'a> {
                 params.len()
             )));
         }
-        for (i, (sym, _)) in params.iter().enumerate() {
-            let param = self.fir.sigs.fn_sigs.param(sig, i);
-            let ty = param.ty;
-            self.fresh_param(ty, i as u16);
-            let root = self.bind(*sym, ty);
-            // F6: a scalar `inout`/`set` parameter arrives as the caller's
-            // `borrow_mut`/`borrow_out` pointer; see `indirect_roots`.
-            if matches!(param.conv, Conv::Inout | Conv::Set) && self.by_pointer(ty)? {
-                self.indirect_roots.push(root);
-            }
-        }
-        Ok(contracts)
+        Ok((params, contracts))
     }
 
     fn lower_fn_body(
@@ -3528,7 +3607,9 @@ impl<'a> FnLower<'a> {
     /// ch09 R29 routes it to the resolved `IndexMut::at_mut`, whose result
     /// is `scoped(self) Self.Output` — a PLACE, which no FMIR call opcode
     /// returns (design §3.10's four call forms all produce a value). That
-    /// case reports rather than dropping the store.
+    /// case EXPANDS `at_mut`'s body at the use site
+    /// ([`FnLower::inline_at_mut_store`], item 23), or reports precisely why
+    /// it cannot; it never calls `at_mut` and stores into the result.
     fn lower_index_assign(&mut self, lhs: usize, rhs: usize) -> Result<(), LowerError> {
         let kids = self.kids(lhs);
         let [base_node, idx_node] = kids.as_slice() else {
@@ -3539,20 +3620,18 @@ impl<'a> FnLower<'a> {
                 "assignment to a slice range".into(),
             ));
         }
-        if matches!(
-            self.facts.member_of(lhs as u32),
-            MemberTarget::IndexImpl { .. }
-        ) {
-            return Err(LowerError::Unsupported(
-                "`a[i] = v` through an `IndexMut` impl: `at_mut` returns a place \
-                 (`scoped(self) Self.Output`), and no FMIR call opcode returns a \
-                 place for the store to go through"
-                    .into(),
-            ));
-        }
+        let user_index = match self.facts.member_of(lhs as u32) {
+            MemberTarget::IndexImpl { at_mut, .. } => Some(at_mut),
+            _ => None,
+        };
         if self.kind(*base_node) != NodeKind::NameExpr {
             return Err(LowerError::Unsupported(
-                "index assignment to a temporary".into(),
+                if user_index.is_some() {
+                    "`a[i] = v` through an `IndexMut` impl on a temporary: the store needs a place to go through"
+                } else {
+                    "index assignment to a temporary"
+                }
+                .into(),
             ));
         }
         let segs = self.path_segments(*base_node);
@@ -3576,6 +3655,9 @@ impl<'a> FnLower<'a> {
             }
             _ => return Err(LowerError::Unsupported("long projection".into())),
         };
+        if let Some(at_mut) = user_index {
+            return self.inline_at_mut_store(at_mut, root, base_ty, prefix, *idx_node, rhs);
+        }
         let elem_ty = self
             .seq_elem_ty(base_ty)
             .ok_or_else(|| LowerError::Unsupported("index assignment to a non-sequence".into()))?;
@@ -3586,6 +3668,268 @@ impl<'a> FnLower<'a> {
         segs.push(Seg::Index(idx));
         self.write_place(root, &segs, elem_ty, v);
         Ok(())
+    }
+
+    /// `base[i] = v` through a user `IndexMut` impl (item 23): the call to
+    /// `at_mut` is EXPANDED at the use site into the place its body denotes,
+    /// and the store goes into that place.
+    ///
+    /// Why not a call: `at_mut` returns `scoped(self) Self.Output`, a PLACE,
+    /// and every FMIR call form produces a value (design §3.10). The owner
+    /// decision is to add no opcode, so the callee's body is lowered HERE,
+    /// not called: when it is the one statement `return <place>;` — a
+    /// `Bracket` over a field, a local, or a `Slice`-valued call
+    /// (`return self.items_mut()[i];`), or a bare field (`return self.v;`) —
+    /// the caller's `self` and index are bound to the callee's parameter
+    /// names in a fresh scope, the callee's own facts and instantiation
+    /// replace this body's ([`BodyScope`]), and
+    /// [`FnLower::inline_place`] computes the place exactly as a plain
+    /// `base[i] = v` computes its own: the interpreter's bounds check at the
+    /// ORIGINAL index (`trap bounds`) is the one a `Seg::Index` write already
+    /// carries. Any other body shape is a precise [`LowerError::Unsupported`]
+    /// ([`at_mut_return_place`]), never a value-returning call whose store
+    /// would land in a temporary.
+    fn inline_at_mut_store(
+        &mut self,
+        at_mut: Option<DefId>,
+        root: u32,
+        base_ty: TyId,
+        prefix: Vec<Seg>,
+        idx_node: usize,
+        rhs: usize,
+    ) -> Result<(), LowerError> {
+        let refuse = |why: &str| {
+            LowerError::Unsupported(format!(
+                "`a[i] = v` through an `IndexMut` impl: its `at_mut` is not inlinable as a \
+                 place ({why}); lowering expands `at_mut` at the use site into the place its \
+                 single `return <place>;` body denotes, and no FMIR call form returns a place"
+            ))
+        };
+        let Some(at_mut) = at_mut else {
+            return Err(refuse(
+                "the checker resolved no `IndexMut` impl for this receiver",
+            ));
+        };
+        let (inputs, defs, fir, facts_all): (_, &'a DefTable, &'a Fir, &'a [(DefId, BodyFacts)]) =
+            (self.inputs, self.defs, self.fir, self.facts_all);
+        let inputs: &'a [FileInput<'a>] = inputs;
+        let row = defs
+            .get(at_mut)
+            .ok_or_else(|| LowerError::Unresolved(format!("def{}", at_mut.0)))?;
+        let file = inputs
+            .get(row.file.0 as usize)
+            .ok_or_else(|| LowerError::Unresolved(format!("file{}", row.file.0)))?;
+        let decl_node = row.node as usize;
+        let ret_expr = at_mut_return_place(file, decl_node).map_err(refuse)?;
+        let facts = facts_all
+            .iter()
+            .find(|(d, _)| *d == at_mut)
+            .map(|(_, f)| f)
+            .ok_or_else(|| {
+                LowerError::Unresolved(format!("no checked body for `at_mut` def{}", at_mut.0))
+            })?;
+        if self.by_pointer(base_ty)? {
+            return Err(refuse("the receiver is a scalar, passed by pointer"));
+        }
+        // The caller's side, in the caller's own body: the index, the stored
+        // value, and the receiver the callee's `self` names.
+        let idx_ty = self.index_ty()?;
+        let idx_v = self.lenient_operand(idx_node, idx_ty)?;
+        let v = self.lower_expr(rhs)?;
+        let recv_root = if prefix.is_empty() {
+            root
+        } else {
+            // A field of a local: its cell is shared by handle, so a new
+            // slot holding that handle is the same `self`.
+            let pid = self.intern_place(root, &prefix, base_ty);
+            let inst = self.emit(Op::CopyFrom, pid.0, NO_OPERAND, NO_OPERAND, base_ty);
+            let handle = self.fresh(base_ty, inst);
+            let slot = self.fresh_root();
+            self.write_place(slot, &[], base_ty, handle);
+            slot
+        };
+        // The callee's side: its instantiation, node types and facts. The
+        // receiver's type is read from the caller's SCOPE (a declared type,
+        // not a substituted node type), so inside a generic caller it can
+        // still name the caller's rigid parameters (`inout g: G[T]`): it is
+        // instantiated through the caller's substitution first, or the
+        // callee would be bound at `T` itself.
+        let recv_ty = self.subst_ty(base_ty, "the `IndexMut` receiver's type")?;
+        let args = self.container_args(at_mut, recv_ty)?;
+        let binding = binding_for(fir, defs, at_mut, &args)?;
+        let env = Env {
+            inputs,
+            fir,
+            defs,
+            facts_all,
+        };
+        let node_ty = substituted_node_tys(&env, self.tys, facts, &binding)?;
+        prescan(file, decl_node, facts, self.tys, &node_ty, true)?;
+        let callee = BodyScope {
+            subst: binding,
+            owners: generic_owners(fir, defs, at_mut),
+            node_ty,
+            facts,
+            tree: file.tree,
+            tokens: file.tokens,
+            source: file.source,
+            file_idx: row.file.0,
+            policy: module_contract_policy(file),
+            scopes: vec![HashMap::new()],
+            loops: Vec::new(),
+            with_regions: Vec::new(),
+            buffer_stub_locals: HashSet::new(),
+            node_inst: Vec::new(),
+            exit_node: None,
+            unsafe_decl: false,
+        };
+        let saved = self.swap_body(callee);
+        let placed = self.inline_callee_place(decl_node, ret_expr, recv_root, recv_ty, idx_v);
+        self.swap_body(saved);
+        let (proot, psegs, pty) = placed?;
+        self.write_place(proot, &psegs, pty, v);
+        Ok(())
+    }
+
+    /// Inside the callee's [`BodyScope`]: binds `self` to the caller's
+    /// receiver slot and the index parameter to a slot holding the caller's
+    /// index, then computes the place `ret_expr` denotes.
+    fn inline_callee_place(
+        &mut self,
+        decl_node: usize,
+        ret_expr: usize,
+        recv_root: u32,
+        recv_ty: TyId,
+        idx_v: ValId,
+    ) -> Result<(u32, Vec<Seg>, TyId), LowerError> {
+        let (params, _contracts) = self.collect_params(decl_node)?;
+        let [(self_sym, _), (idx_sym, _)] = params.as_slice() else {
+            return Err(LowerError::Unsupported(
+                "`a[i] = v` through an `IndexMut` impl: its `at_mut` does not take exactly \
+                 `(self, index)`"
+                    .into(),
+            ));
+        };
+        let sig = self.fir.sigs.fn_sig(self.facts.owner);
+        let idx_decl_ty = self.fir.sigs.fn_sigs.param(sig, 1).ty;
+        let idx_ty = self.subst_ty(idx_decl_ty, "`at_mut`'s index parameter")?;
+        self.scopes
+            .last_mut()
+            .expect("lowering always has a scope")
+            .insert(*self_sym, (recv_root, recv_ty));
+        let slot = self.bind(*idx_sym, idx_ty);
+        self.write_place(slot, &[], idx_ty, idx_v);
+        self.inline_place(ret_expr)
+    }
+
+    /// The place the inlined `at_mut`'s returned expression denotes:
+    /// `(root, projections, element type)`. A `Bracket` is `base` then one
+    /// `Seg::Index`; a bare `self.field` is one `Seg::Field`.
+    fn inline_place(&mut self, e: usize) -> Result<(u32, Vec<Seg>, TyId), LowerError> {
+        let not_a_place = |what: &str| {
+            LowerError::Unsupported(format!(
+                "`a[i] = v` through an `IndexMut` impl: its `at_mut` returns {what}, which is not \
+                 a place lowering can compute (a field, an element of a field or of a `Slice`)"
+            ))
+        };
+        match self.kind(e) {
+            NodeKind::Bracket => {
+                let kids = self.kids(e);
+                let [base_node, idx_node] = kids.as_slice() else {
+                    return Err(not_a_place("a malformed index"));
+                };
+                if self.kind(*idx_node) == NodeKind::RangeExpr {
+                    return Err(not_a_place("a range"));
+                }
+                if matches!(
+                    self.facts.member_of(e as u32),
+                    MemberTarget::IndexImpl { .. }
+                ) {
+                    return Err(not_a_place("another user `Index` (nested expansion)"));
+                }
+                let (root, base_ty, mut segs) = self.inline_base(*base_node)?;
+                let elem_ty = self
+                    .seq_elem_ty(base_ty)
+                    .ok_or_else(|| not_a_place("an index of a non-sequence"))?;
+                let idx_ty = self.index_ty()?;
+                let idx = self.lenient_operand(*idx_node, idx_ty)?;
+                segs.push(Seg::Index(idx));
+                Ok((root, segs, elem_ty))
+            }
+            NodeKind::NameExpr => {
+                let segs = self.path_segments(e);
+                let [base, _field] = segs.as_slice() else {
+                    return Err(not_a_place("a path that is not `self.field`"));
+                };
+                let (root, outer_ty) = self.resolve_name(*base)?;
+                let MemberTarget::Field { head, index } = self.facts.member_of(e as u32) else {
+                    return Err(not_a_place("a path that is not a field"));
+                };
+                let field_ty = self.field_ty(outer_ty, head, index)?;
+                Ok((root, vec![Seg::Field(index as u16)], field_ty))
+            }
+            _ => Err(not_a_place("an expression that is not an index or a field")),
+        }
+    }
+
+    /// The sequence an inlined `Bracket` indexes: a local, one field of a
+    /// local (both PLACES), or a `Slice`-valued expression (a view, which
+    /// aliases its source, held in a fresh slot so the element store goes
+    /// through it). An `Array`-valued expression is refused: its value is a
+    /// copy, and a store into a copy would be silently lost.
+    fn inline_base(&mut self, b: usize) -> Result<(u32, TyId, Vec<Seg>), LowerError> {
+        if self.kind(b) == NodeKind::NameExpr {
+            let segs = self.path_segments(b);
+            return match segs.as_slice() {
+                [p] => {
+                    let (root, ty) = self.resolve_name(*p)?;
+                    Ok((root, ty, Vec::new()))
+                }
+                [p, _field] => {
+                    let (root, outer_ty) = self.resolve_name(*p)?;
+                    let MemberTarget::Field { head, index } = self.facts.member_of(b as u32) else {
+                        return Err(LowerError::Unresolved("index base".into()));
+                    };
+                    let field_ty = self.field_ty(outer_ty, head, index)?;
+                    Ok((root, field_ty, vec![Seg::Field(index as u16)]))
+                }
+                _ => Err(LowerError::Unsupported("long projection".into())),
+            };
+        }
+        let ty = self.ty_of(b);
+        if self.seq_elem_ty(ty).is_none() || self.seq_const_len(ty).is_some() {
+            return Err(LowerError::Unsupported(
+                "`a[i] = v` through an `IndexMut` impl: its `at_mut` indexes a value that is \
+                 not a `Slice` view (a store into a copy would be lost)"
+                    .into(),
+            ));
+        }
+        let v = self.lower_expr(b)?;
+        let slot = self.fresh_root();
+        self.write_place(slot, &[], ty, v);
+        Ok((slot, ty, Vec::new()))
+    }
+
+    /// Swaps the per-body state of this walk with `body`'s, returning the
+    /// previous one. See [`BodyScope`].
+    fn swap_body(&mut self, mut body: BodyScope<'a>) -> BodyScope<'a> {
+        std::mem::swap(&mut self.subst, &mut body.subst);
+        std::mem::swap(&mut self.owners, &mut body.owners);
+        std::mem::swap(&mut self.node_ty, &mut body.node_ty);
+        std::mem::swap(&mut self.facts, &mut body.facts);
+        std::mem::swap(&mut self.tree, &mut body.tree);
+        std::mem::swap(&mut self.tokens, &mut body.tokens);
+        std::mem::swap(&mut self.source, &mut body.source);
+        std::mem::swap(&mut self.file_idx, &mut body.file_idx);
+        std::mem::swap(&mut self.policy, &mut body.policy);
+        std::mem::swap(&mut self.scopes, &mut body.scopes);
+        std::mem::swap(&mut self.loops, &mut body.loops);
+        std::mem::swap(&mut self.with_regions, &mut body.with_regions);
+        std::mem::swap(&mut self.buffer_stub_locals, &mut body.buffer_stub_locals);
+        std::mem::swap(&mut self.node_inst, &mut body.node_inst);
+        std::mem::swap(&mut self.exit_node, &mut body.exit_node);
+        std::mem::swap(&mut self.unsafe_decl, &mut body.unsafe_decl);
+        body
     }
 
     /// The declared type of field `index` of the struct `head`, from the
@@ -6164,14 +6508,27 @@ impl<'a> FnLower<'a> {
         def: DefId,
         recv_ty: TyId,
     ) -> Result<fors_fir::DeclKeyId, LowerError> {
-        let owners = generic_owners(self.fir, self.defs, def);
-        let want: usize = owners.iter().map(|&(_, n)| n as usize).sum();
-        if want == 0 {
+        let args = self.container_args(def, recv_ty)?;
+        if args.is_empty() {
             return self
                 .defs
                 .get(def)
                 .map(|r| r.key)
                 .ok_or_else(|| LowerError::Unresolved(format!("def{}", def.0)));
+        }
+        let base = self.def_name(def);
+        Ok(self.mono.request(def, &args, &base))
+    }
+
+    /// The impl parameters of `def`'s container, determined from the
+    /// receiver type `recv_ty` (empty when nothing is generic): the
+    /// arguments [`FnLower::container_key`] instantiates at, and what
+    /// [`FnLower::inline_at_mut_store`] binds the inlined body under.
+    fn container_args(&mut self, def: DefId, recv_ty: TyId) -> Result<Vec<TyId>, LowerError> {
+        let owners = generic_owners(self.fir, self.defs, def);
+        let want: usize = owners.iter().map(|&(_, n)| n as usize).sum();
+        if want == 0 {
+            return Ok(Vec::new());
         }
         let [(container, n)] = owners.as_slice() else {
             return Err(LowerError::Generic(format!(
@@ -6198,9 +6555,7 @@ impl<'a> FnLower<'a> {
                 container.0
             )));
         }
-        let args = b.slots().to_vec();
-        let base = self.def_name(def);
-        Ok(self.mono.request(def, &args, &base))
+        Ok(b.slots().to_vec())
     }
 
     /// `BodyFacts::generic_args` for `node`, substituted through this body and

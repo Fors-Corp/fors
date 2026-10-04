@@ -3024,19 +3024,23 @@ impl Lowerer<'_> {
                     .first()
                     .map(|&(s, _)| s)
                     .unwrap_or(Symbol(0));
-            let vis = match inherit {
-                Some(v) => v,
-                None => {
-                    if cx.f.own_has_kind(c, TokenKind::KwPub) {
-                        VIS_PUBLIC
-                    } else {
-                        VIS_PRIVATE
-                    }
-                }
-            };
             // A `TraitItem` has no `DeclTable` row of its own unless the
             // index gave it one; `def_of` answers `NO_DEF` otherwise.
             let mdef = self.member_def(cx, c);
+            let vis = match inherit {
+                Some(v) => v,
+                // The declaration index reads `pub` past any leading
+                // attributes (`@unsafe(..) pub fn as_str`), which a scan of
+                // the node's own tokens does not: an `Attribute` child ends
+                // that span before the `pub` it precedes. The row is the
+                // authority; the scan stays for a member with no row.
+                None => match self.defs.get(mdef) {
+                    Some(r) if r.vis == fors_index::decl::Visibility::Public => VIS_PUBLIC,
+                    Some(_) => VIS_PRIVATE,
+                    None if cx.f.own_has_kind(c, TokenKind::KwPub) => VIS_PUBLIC,
+                    None => VIS_PRIVATE,
+                },
+            };
             ms.push(Member::item(name, vis, mdef));
         }
         let l = self.fir.sigs.member_store.push(&ms);
