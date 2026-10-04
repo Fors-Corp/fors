@@ -7,7 +7,8 @@ commit history, which predates the Conventional Commits convention.
 
 | Language | Compiler | Meaning |
 |---|---|---|
-| `lang-v0.5.3` | `compiler-v0.23.0` | current |
+| `lang-v0.5.3` | `compiler-v0.24.0` | current |
+| `lang-v0.5.3` | `compiler-v0.23.0` | std always in the build and at_mut inlined |
 | `lang-v0.5.3` | `compiler-v0.22.0` | type checker I11, soundness at scale |
 | `lang-v0.5.3` | `compiler-v0.21.0` | FMIR F10, the M1 exit |
 | `lang-v0.5.3` | `compiler-v0.20.0` | FMIR F9, comptime mode |
@@ -110,6 +111,37 @@ measurement, the grammar, names and visibility), with a conformance corpus and
 an independent reference parser.
 
 ## Compiler
+
+### compiler-v0.24.0 — 2026-10-04
+
+Milestone **M2, increment M2-0**: the first native code. One agent
+produced it, a second independently verified it. Implements
+`lang-v0.5.3`. The design is `docs/design/m2-dev-backend.md`.
+
+- **The straight-line native slice.** A single `main` over the integer
+  types (`Trap`/`Wrap`/`Sat` arithmetic, shifts, comparisons,
+  conversions, `stdout_write_uint` and `stdout_write_line`) now compiles
+  FMIR → OIR → dev codegen → a signed `MH_EXECUTE` and **runs** on
+  aarch64 macOS, with stdout, stderr and exit status equal to the
+  interpreter's. Five new crates: `fors-abi`, `fors-oir`,
+  `fors-codegen-dev`, `fors-obj`, `fors-link`. Everything outside the
+  slice is a precise, named refusal; nothing is miscompiled.
+- **Evidence.** 10,000 generated programs run natively with zero
+  mismatches, refusals, panics, signals or timeouts; a deliberately
+  wrong stencil turns the same run into mismatches, so the runner is
+  not vacuous. Two compiles, in separate processes, are byte-identical,
+  and `codesign --verify --strict` accepts every image.
+- **A real interpreter bug, found by the native edge table.** A
+  trapping `u64` multiply was accepted when the exact product was at
+  least 2^127. Fixed in `arith.rs` with a regression test.
+- **Verification found and fixed before merge.** The edge table only
+  caught a signed-shift mutation on `i64`, so every integer result now
+  also prints its canonical 64-bit slot; 104 value and 26 trap cases
+  were written by hand from ch03. The default suite dropped from 12 to
+  3.5 minutes. 1144 Rust tests (20 held out with a stated reason).
+- **For the owner.** Unsigned `neg` in `Trap`/`Sat` mode is still open
+  (refused by name); trap-table line semantics are settled in M2-3; a
+  macOS runner is needed for the native gate to run in CI.
 
 ### compiler-v0.23.0 — 2026-10-04
 
