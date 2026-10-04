@@ -76,6 +76,72 @@ const INT_PRIMS: [PrimKind; 7] = [
 /// The checksum's multiplier (FNV-1a's 64-bit prime).
 const MIX_MUL: u64 = 0x0000_0100_0000_01b3;
 
+/// Op families a [`Profile`] can switch off (design
+/// `docs/design/m2-dev-backend.md` §5 "`Profile`").
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct OpSet(u32);
+
+impl OpSet {
+    /// `neg` in `sat` mode on an UNSIGNED type: the interpreter wraps it
+    /// (`arith.rs::sat_neg` delegates to `wrap_neg`); owner Q6 is open, so
+    /// the dev backend refuses it by name and the native profile leaves it
+    /// out.
+    pub const NEG_SAT_UNSIGNED: u32 = 1 << 0;
+    pub const ALL: OpSet = OpSet(Self::NEG_SAT_UNSIGNED);
+
+    pub const fn has(self, bits: u32) -> bool {
+        self.0 & bits == bits
+    }
+
+    pub const fn without(self, bits: u32) -> OpSet {
+        OpSet(self.0 & !bits)
+    }
+}
+
+/// The generator's switches. [`Profile::FULL`] IS [`generate`]: with it,
+/// [`generate_with`] draws exactly the random stream `generate` always drew
+/// (`generate_default_profile_is_unchanged` pins the bytes of seeds
+/// `0..1000` to the pre-`Profile` generator).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Profile {
+    /// `if` statements (`CondBr` + join).
+    pub branches: bool,
+    /// Bounded counted loops.
+    pub loops: bool,
+    /// Helper functions and `CallDirect`.
+    pub helpers: bool,
+    /// Aggregate/memory shapes. The generator has none yet (M2-4 adds
+    /// them); both settings generate the same programs today.
+    pub aggregates: bool,
+    /// Float shapes. None yet (M2-6); both settings agree today.
+    pub floats: bool,
+    pub ops: OpSet,
+}
+
+impl Profile {
+    /// Today's generator, unchanged.
+    pub const FULL: Profile = Profile {
+        branches: true,
+        loops: true,
+        helpers: true,
+        aggregates: false,
+        floats: false,
+        ops: OpSet::ALL,
+    };
+
+    /// M2-0's native surface: one function `main`, one block — no `if`, no
+    /// loops, no helpers; everything else as [`Profile::FULL`] except
+    /// unsigned `sat` `neg` (owner Q6).
+    pub const STRAIGHT_LINE: Profile = Profile {
+        branches: false,
+        loops: false,
+        helpers: false,
+        aggregates: false,
+        floats: false,
+        ops: OpSet::ALL.without(OpSet::NEG_SAT_UNSIGNED),
+    };
+}
+
 /// A generated program and the type store its ids point into.
 pub struct Generated {
     pub seed: u64,
@@ -182,6 +248,7 @@ struct Staged {
 /// Builds one function's [`DeclFmir`].
 struct FnGen<'a> {
     t: &'a Types,
+    p: &'a Profile,
     rng: &'a mut Rng,
     decl: DeclFmir,
     insts: Vec<InstRow>,
@@ -205,6 +272,7 @@ struct FnGen<'a> {
 impl<'a> FnGen<'a> {
     fn new(
         t: &'a Types,
+        p: &'a Profile,
         rng: &'a mut Rng,
         key: DeclKeyId,
         params: &[IntTy],
@@ -220,6 +288,7 @@ impl<'a> FnGen<'a> {
         }
         FnGen {
             t,
+            p,
             rng,
             decl,
             insts: Vec::new(),
@@ -489,6 +558,9 @@ impl<'a> FnGen<'a> {
             17 => {
                 let op = match self.rng.below(3) {
                     0 => Op::Neg(ArithMode::Wrap),
+                    1 if !t.signed && !self.p.ops.has(OpSet::NEG_SAT_UNSIGNED) => {
+                        Op::Neg(ArithMode::Wrap)
+                    }
                     1 => Op::Neg(ArithMode::Sat),
                     _ => Op::Not,
                 };
@@ -580,8 +652,8 @@ impl<'a> FnGen<'a> {
                 let v = self.expr(t, 3);
                 self.mix(v, t);
             }
-            5 if depth > 0 => self.if_stmt(depth),
-            6 if depth > 0 && self.loop_depth < 2 => self.loop_stmt(depth),
+            5 if depth > 0 && self.p.branches => self.if_stmt(depth),
+            6 if depth > 0 && self.loop_depth < 2 && self.p.loops => self.loop_stmt(depth),
             7 if !self.helpers.is_empty() => self.call_stmt(),
             8 if self.prints_left > 0 => {
                 self.prints_left -= 1;
@@ -684,6 +756,7 @@ impl<'a> FnGen<'a> {
 /// The program [`generate`] builds for `seed`, before it is wrapped.
 fn gen_fn(
     t: &Types,
+    p: &Profile,
     rng: &mut Rng,
     key: DeclKeyId,
     params: &[IntTy],
@@ -691,7 +764,7 @@ fn gen_fn(
     helpers: &[HelperSig],
 ) -> DeclFmir {
     let prints = if ret.is_none() { 2 } else { 0 };
-    let mut g = FnGen::new(t, rng, key, params, helpers, prints);
+    let mut g = FnGen::new(t, p, rng, key, params, helpers, prints);
     // Statement budget: `main` is the larger body (it is what runs), a
     // helper a smaller one (it may run inside `main`'s loops).
     g.budget = if ret.is_none() {
@@ -736,10 +809,17 @@ fn gen_fn(
 
 /// Generates the program for `seed`: `main` plus up to three helpers.
 pub fn generate(seed: u64) -> Generated {
+    generate_with(seed, &Profile::FULL)
+}
+
+/// Generates the program for `seed` under profile `p`.
+pub fn generate_with(seed: u64, p: &Profile) -> Generated {
     let mut rng = Rng::new(seed);
     let mut tys = TyStore::new();
     let t = Types::new(&mut tys);
+    // The draw is made under every profile, so FULL's stream is unchanged.
     let n_helpers = rng.below(4) as u32;
+    let n_helpers = if p.helpers { n_helpers } else { 0 };
     let mut sigs: Vec<HelperSig> = Vec::new();
     let mut fns: Vec<ProgFn> = Vec::new();
     let intrinsics = vec![
@@ -755,7 +835,7 @@ pub fn generate(seed: u64) -> Generated {
         let ret = t.ints[rng.below(t.ints.len() as u64) as usize];
         let key = DeclKeyId(HELPER_BASE + i);
         // Helper `i` may call helpers `0..i` only: no recursion.
-        let decl = gen_fn(&t, &mut rng, key, &params, Some(ret), &sigs);
+        let decl = gen_fn(&t, p, &mut rng, key, &params, Some(ret), &sigs);
         sigs.push(HelperSig { key, params, ret });
         fns.push(ProgFn {
             name: format!("h{i}"),
@@ -764,7 +844,7 @@ pub fn generate(seed: u64) -> Generated {
             intrinsics: intrinsics.clone(),
         });
     }
-    let main = gen_fn(&t, &mut rng, DeclKeyId(MAIN_KEY), &[], None, &sigs);
+    let main = gen_fn(&t, p, &mut rng, DeclKeyId(MAIN_KEY), &[], None, &sigs);
     fns.insert(
         0,
         ProgFn {

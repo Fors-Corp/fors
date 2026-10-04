@@ -15,12 +15,17 @@
 //!   blocks, instructions), value level (constants), the predicate re-checked
 //!   after every step, the order of attempts drawn from a seed.
 //! - [`build`]: source to runnable FMIR through a caller-chosen lowering.
+//! - [`native`] / [`native_diff`] (M2-0, `docs/design/m2-dev-backend.md`
+//!   §5): the dev backend as a second engine — compile, link, sign, spawn —
+//!   and the interpreter-vs-native differential with its per-class tally.
 //!
 //! Nothing in the compiler depends on this crate.
 
 pub mod build;
 pub mod diff;
 pub mod generate;
+pub mod native;
+pub mod native_diff;
 pub mod reduce;
 pub mod rng;
 
@@ -82,7 +87,7 @@ pub fn run_capped(c: &Candidate, replay: Option<&OracleRecord>, cap: u64) -> Run
     }
 }
 
-fn panic_text(p: &(dyn std::any::Any + Send)) -> String {
+pub(crate) fn panic_text(p: &(dyn std::any::Any + Send)) -> String {
     if let Some(s) = p.downcast_ref::<&str>() {
         (*s).to_string()
     } else if let Some(s) = p.downcast_ref::<String>() {

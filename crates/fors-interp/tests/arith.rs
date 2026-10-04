@@ -80,6 +80,33 @@ fn trap_sub_mul_overflow() {
     );
 }
 
+/// A `u64` product at or above `2^127` is an overflow too (it was let
+/// through when the bound check compared `r as i128`, negative there).
+#[test]
+fn trap_mul_u64_products_above_2_pow_127_overflow() {
+    let u64k = ik(PrimKind::U64);
+    for (a, b) in [
+        (0x8000_0000_0000_0001u64, u64::MAX),
+        (u64::MAX, u64::MAX),
+        (1 << 63, 1 << 63),
+        (1 << 63, 2),
+    ] {
+        assert_eq!(
+            int_binop("mul", ArithMode::Trap, a, b, u64k),
+            Err(TrapKind::Overflow),
+            "{a:#x} * {b:#x}"
+        );
+    }
+    assert_eq!(
+        int_binop("mul", ArithMode::Trap, 1 << 63, 1, u64k),
+        Ok(1 << 63)
+    );
+    assert_eq!(
+        int_binop("mul", ArithMode::Trap, u64::MAX, 1, u64k),
+        Ok(u64::MAX)
+    );
+}
+
 #[test]
 fn div_zero_traps_in_every_mode() {
     for mode in [

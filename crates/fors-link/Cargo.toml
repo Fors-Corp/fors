@@ -1,0 +1,17 @@
+[package]
+name = "fors-link"
+version.workspace = true
+license.workspace = true
+edition = "2024"
+publish = false
+description = "Atom placement and image building for the Fors dev backend (docs/design/m2-dev-backend.md §4). M2-0: link_once only."
+
+[dependencies]
+fors-obj = { path = "../fors-obj" }
+
+# The svc scan over a real image needs the runtime atoms.
+[dev-dependencies]
+fors-codegen-dev = { path = "../fors-codegen-dev" }
+
+[lints]
+workspace = true
