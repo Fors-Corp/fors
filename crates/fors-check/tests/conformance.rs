@@ -109,7 +109,15 @@ fn check_target(path: &Path) -> (Vec<String>, Vec<String>) {
 /// [`check_target`] plus the whole `CheckOutput`, for the tests that read
 /// the store and the CHECK-position trace rather than the diagnostics.
 fn check_target_full(path: &Path) -> (Vec<String>, Vec<String>, fors_check::CheckOutput) {
-    check_target_in(path, false)
+    check_target_in(path, !is_std_package(path))
+}
+
+/// The `std/` source root itself: the one target that is checked WITHOUT a
+/// second copy of `std` beside it. Every other target is built with package
+/// `std` in the build (item 47(a): ch08 R17's prelude names always denote
+/// std's items, so `std` is never absent from a program's build).
+fn is_std_package(path: &Path) -> bool {
+    path.is_dir() && path.file_name().is_some_and(|n| n == "std")
 }
 
 /// Every `std/*.fors` module under the name ch08 R17's synthetic table gives
@@ -242,44 +250,16 @@ fn check_target_in(
         .flat_map(|f| f.diagnostics.iter())
         .map(|d| d.code.as_string())
         .collect();
-    let out = fors_check::check_build(&inputs, &resolved, &mut interner);
-    let checker: Vec<String> = out
-        .diagnostics
-        .iter()
-        .filter(|d| d.file.index() < own)
-        .map(|d| d.code.as_string())
-        .collect();
+    let mut out = fors_check::check_build(&inputs, &resolved, &mut interner);
+    // The TARGET's diagnostics only, for every consumer of the output: std's
+    // own are `no_new_diagnostics_outside_ch09`'s business (item 47(a)).
+    out.diagnostics.retain(|d| d.file.index() < own);
+    if let Some(defs) = out.defs.as_ref() {
+        out.facts
+            .retain(|(def, _)| defs.get(*def).is_some_and(|r| r.file.index() < own));
+    }
+    let checker: Vec<String> = out.diagnostics.iter().map(|d| d.code.as_string()).collect();
     (checker, resolver, out)
-}
-
-/// ch10 R2's eight prelude names.
-const R2_NAMES: [&str; 8] = [
-    "Allocator",
-    "AllocError",
-    "PageAllocator",
-    "Buffer",
-    "Vec",
-    "Map",
-    "String",
-    "Utf8Error",
-];
-
-/// I10c's harness mode: a `09-types` file is checked WITH `std` in the build
-/// exactly when its subject is std's surface — an `adaptor-*` file (the
-/// corpus of `Iterator`'s PROVIDED methods, which only `std/mem/seq.fors`
-/// declares), or a file that names one of ch10 R2's prelude names or calls
-/// `.iter()`. Every other file is checked alone, as before: the corpus is
-/// not edited, and a file that does not need std is not given it.
-fn ch09_needs_std(key: &str, src: &str) -> bool {
-    let is_ident = |c: u8| c.is_ascii_alphanumeric() || c == b'_';
-    let b = src.as_bytes();
-    let word = |w: &str| {
-        src.match_indices(w).any(|(i, _)| {
-            let j = i + w.len();
-            (i == 0 || !is_ident(b[i - 1])) && (j >= b.len() || !is_ident(b[j]))
-        })
-    };
-    key.starts_with("adaptor-") || src.contains(".iter()") || R2_NAMES.iter().any(|w| word(w))
 }
 
 fn corpus_targets(dir: &Path) -> Vec<PathBuf> {
@@ -323,7 +303,6 @@ fn ch09_types_corpus_checker_view() {
     let mut failures = Vec::new();
     let mut on = 0usize;
     let mut pending = 0usize;
-    let mut with_std_count = 0usize;
     for target in &targets {
         let src = directive_source(target);
         let case = parse_directives(&src);
@@ -333,10 +312,6 @@ fn ch09_types_corpus_checker_view() {
             case.name
         );
         let key = case.name.replace('_', "-");
-        let with_std = ch09_needs_std(&key, &src);
-        if with_std {
-            with_std_count += 1;
-        }
         if PENDING_09.iter().any(|&(n, _)| n == key) {
             pending += 1;
             // A pending test must still be SILENT: an increment that has not
@@ -344,7 +319,7 @@ fn ch09_types_corpus_checker_view() {
             // file whose OTHER declarations break a rule the checker has
             // reached, listed with its reason in `PENDING_SPEAKS`; there the
             // obligation is that the test's OWN code is still unreported.
-            let (got, _, _) = check_target_in(target, with_std);
+            let (got, _, _) = check_target_full(target);
             let want = expected_code(&case.detail).map(|(c, n)| format!("{c}{n:04}"));
             match PENDING_SPEAKS.iter().find(|&&(n, _)| n == key) {
                 Some(_) => {
@@ -369,7 +344,7 @@ fn ch09_types_corpus_checker_view() {
             continue;
         }
         on += 1;
-        let (got, _, _) = check_target_in(target, with_std);
+        let (got, _, _) = check_target_full(target);
         match case.expect.as_str() {
             "check-ok" => {
                 if !got.is_empty() {
@@ -383,7 +358,7 @@ fn ch09_types_corpus_checker_view() {
                 // phase's to report; the checker's obligation is silence.
                 if matches!(expected_code(&case.detail), Some(('N', _)) | Some(('A', _))) {
                     let w = want.unwrap();
-                    let (_, res, _) = check_target_in(target, with_std);
+                    let (_, res, _) = check_target_full(target);
                     if !got.is_empty() || res.len() != 1 || res[0] != w {
                         failures.push(format!("{key}: expected the resolver alone to say {w}; resolver {res:?}, checker {got:?}"));
                     }
@@ -411,7 +386,7 @@ fn ch09_types_corpus_checker_view() {
         }
     }
     eprintln!(
-        "ch09 checker view: {on} on, {pending} pending, {} total, {with_std_count} checked with std",
+        "ch09 checker view: {on} on, {pending} pending, {} total, every one checked with std",
         targets.len()
     );
     assert!(
@@ -547,6 +522,25 @@ const CH02_ALSO_SPEAKS: &[(&str, &str, usize, &str)] = &[
         1,
         "ch01 R3: `fn from(let e: NetError) -> AppError { return AppError.wrapped(e); }` moves the \
          `let` parameter `e`; `NetError` is not `Copyable`",
+    ),
+    (
+        "trap-bounds",
+        "T0011",
+        1,
+        "item 47(a) (`std` is in every build): the program writes `Buffer[i64]` and `Buffer.fixed(4)`, \
+         and `std`'s `Buffer` is `Buffer[T, N: usize]` with `empty`/`filled` (ch10 S0023), so ch09 \
+         reports T0011 (one type argument supplied, two declared). ch10 S0002's own table cites \
+         `Buffer[i64]` for the prelude; the corpus and S0023 disagree",
+    ),
+    (
+        "main-raises-std-error-run-error",
+        "T0011",
+        1,
+        "item 47(a): the `with allocator` header writes `mem.Counting[mem.Fixed[8]]`, and `std`'s \
+         `Counting` is `Counting[N: usize, A: brand]` (ch10 S0021, standalone by ch01 R15a), so ch09 \
+         reports T0011 (a type where a constant argument is expected) at that type; with it \
+         spelled `mem.Counting[8]` the file checks clean (see fors-lower's \
+         `gate_main_raises_std_error_run_error`)",
     ),
 ];
 const CH03_ALSO_SPEAKS: &[(&str, &str, usize, &str)] = &[
@@ -985,6 +979,22 @@ const CROSS_CHAPTER: &[(&str, &str)] = &[
         "same clause as the row above: ch08 asserts the brand's visibility in a nested block, a closure and a          sibling `with`, and all three bodies `discard` an `Own`, which ch01 R22d rejects",
     ),
     (
+        "scoped_parameter_accepted",
+        "ch08 R19/R20 asserts only that `scoped(x)` names the parameter `x`; the body writes `Own.alloc(x, 1)`, and `std`'s `impl Own` (ch10 S0022; `std.mem` is `Own`'s defining module, S0002) declares no `alloc`, so ch09 T0043 reports the missing associated function once `std` is in the build (item 47(a))",
+    ),
+    (
+        "use_std_item_path_accepted",
+        "ch08 R3/R12 asserts only that `use std.io.Writer;` binds the item `Writer`; the body writes `let w: Writer` in type position, and `Writer` is a TRAIT, which ch09 R11 allows as a type only after `dyn`, in a bound or in an `impl` header (T0011) — visible only once `std.io` is in the build (item 47(a))",
+    ),
+    (
+        "use_std_mem_accepted",
+        "same clause as the row above: ch08 asserts the `use std.mem;` binding, and the body writes `mem.Allocator` in type position, a trait, which ch09 R11 rejects (T0011) with `std` in the build (item 47(a))",
+    ),
+    (
+        "use_std_module_accepted",
+        "ch08 R3 asserts only that `use std.io;` binds the module; the body writes `out.write_line(\"x\")?`, and `std`'s `Stdout.write_line` is total and latching (ch10 Rule 39) and declares no `raises`, so ch02 R2's F0002 (`?` on a call that does not raise) is reported once `std.io` is in the build (item 47(a))",
+    ),
+    (
         "pattern_variant_through_alias_accepted",
         "ch08 R25 asserts only that the two-segment path through the alias reaches the variant as a reference; its          `Color` has exactly two variants (`Red`, `Rgb`), both matched, so ch09 R53/R54 (I7) find the trailing          `let other` arm unreachable — the SAME clause `unreachable-arm-rejected` asserts for a non-aliased enum",
     ),
@@ -1139,37 +1149,65 @@ fn cross_chapter_conflicts_are_live() {
     }
 }
 
-/// The ch09 rows I10c deleted from `PENDING_09` by checking them with
-/// `std` in the build ([`ch09_needs_std`]).
+/// The [`CROSS_CHAPTER`] rows item 47(a) added (`std` in every build), each
+/// pinned to the EXACT codes the checker reports on it, so the row cannot
+/// quietly excuse a different diagnostic: [`cross_chapter_conflicts_are_live`]
+/// only asks that the checker speak at all.
+const CROSS_CHAPTER_STD_PINS: &[(&str, &str, &[&str])] = &[
+    ("08-names", "scoped_parameter_accepted", &["T0043"]),
+    ("08-names", "use_std_item_path_accepted", &["T0011"]),
+    ("08-names", "use_std_mem_accepted", &["T0011"]),
+    ("08-names", "use_std_module_accepted", &["F0002"]),
+];
+
+#[test]
+fn cross_chapter_std_rows_report_exactly_their_pinned_codes() {
+    let root = repo_root();
+    let mut failures = Vec::new();
+    for &(dir, name, want) in CROSS_CHAPTER_STD_PINS {
+        assert!(
+            CROSS_CHAPTER.iter().any(|&(n, _)| n == name),
+            "{name} is pinned here but not listed in CROSS_CHAPTER"
+        );
+        let target = corpus_targets(&root.join("tests/conformance").join(dir))
+            .into_iter()
+            .find(|t| parse_directives(&directive_source(t)).name == name)
+            .unwrap_or_else(|| panic!("{dir}/{name} is not in the corpus"));
+        let (got, _) = check_target(&target);
+        if got != want {
+            failures.push(format!("{name}: pinned to {want:?}, got {got:?}"));
+        }
+    }
+    assert!(
+        failures.is_empty(),
+        "item 47(a) CROSS_CHAPTER pins ({}):\n{}",
+        failures.len(),
+        failures.join("\n")
+    );
+}
+
+/// The ch09 rows I10c deleted from `PENDING_09` by checking them with `std`
+/// in the build. Item 47(a) made that the only build there is, so these are
+/// ordinary rows now; the list stays as the names whose reported code needs
+/// `Iterator`'s provided methods from `std/mem/seq.fors`.
 const CH09_ON_ONLY_WITH_STD: &[&str] = &[
     "adaptor-annotated-binding-mismatch-rejected",
     "adaptor-map-closure-returns-linear-rejected",
 ];
 
-/// I10c: the std mode is what turns these on, not a change of judgement on
-/// the file alone. Checked ALONE each is silent — `Iterator`'s provided
-/// `map`/`take` and `Mapped`/`Taken` exist only in `std/mem/seq.fors`, so
-/// nothing in the body types — and checked WITH std each reports exactly
-/// its own code, which is the harness mode the corpus view uses for it.
+/// These two report exactly their own code, because `std` is always in the
+/// build (`Iterator`'s provided `map`/`take` and `Mapped`/`Taken` exist only
+/// in `std/mem/seq.fors`, so a build without it could not type their
+/// bodies — and no such build exists, item 47(a)).
 #[test]
 fn ch09_std_mode_is_what_turns_them_on() {
     let dir = repo_root().join("tests/conformance/09-types");
     let mut failures = Vec::new();
     for &name in CH09_ON_ONLY_WITH_STD {
         let target = dir.join(format!("{name}.fors"));
-        let src = directive_source(&target);
-        let case = parse_directives(&src);
+        let case = parse_directives(&directive_source(&target));
         let want = expected_code(&case.detail).map(|(c, n)| format!("{c}{n:04}"));
-        if !ch09_needs_std(name, &src) {
-            failures.push(format!("{name}: the harness does not check it with std"));
-        }
-        let (alone, _, _) = check_target_in(&target, false);
-        if !alone.is_empty() {
-            failures.push(format!(
-                "{name}: alone the checker already speaks: {alone:?}"
-            ));
-        }
-        let (with, _, _) = check_target_in(&target, true);
+        let (with, _, _) = check_target_full(&target);
         if want.is_none() || with.len() != 1 || Some(&with[0]) != want.as_ref() {
             failures.push(format!(
                 "{name}: with std expected exactly {want:?}, got {with:?}"
@@ -1305,8 +1343,7 @@ fn every_check_error_test_yields_exactly_one_diagnostic() {
         if matches!(expected_code(&case.detail), Some(('N', _)) | Some(('A', _))) {
             continue;
         }
-        let with_std = ch09_needs_std(&key, &directive_source(&target));
-        let (got, _, _) = check_target_in(&target, with_std);
+        let (got, _, _) = check_target_full(&target);
         if got.len() != 1 {
             failures.push(format!("{key}: {} diagnostics {got:?}", got.len()));
         }
@@ -1793,7 +1830,6 @@ const I10_CH01_CODED: &[(&str, &str, &str)] = &[
     ("brand-kind-closed", "O0015", "R15d"),
     ("brand-param-two-arenas-rejected", "T0026", "R15d"),
     ("arena-brand-mismatch-rejected", "O0016", "R16"),
-    ("with-allocator-brand", "O0018", "R18"),
     ("atomic-outside-shared-rejected", "O0021", "R21"),
     (
         "shared-atomic-field-without-shared-impl-rejected",
@@ -1811,12 +1847,35 @@ const I10_CH01_ACCEPTED: &[&str] = &[
     "arena-brand-match-accepted",
     "brand-param-helper-accepted",
     "brand-field-requires-param-accepted",
-    "with-allocator-brand-match-accepted",
     "shared-fieldwise-check-accepted",
     "shared-impl-generic-field-with-bound",
     "shared-unsafe-impl-form-accepted",
     "shared-generic-bound-accepted",
-    "secret-iso-composition-accepted",
+];
+
+/// The three ch01 tests whose programs disagree with the real `std`, which is
+/// in every build (item 47(a): ch08 R17's prelude names always denote std's
+/// items). Alone, each was checked against OPAQUE prelude rows and was
+/// silent; against `std`'s declarations each reports exactly the listed
+/// code, and that exact observation is the pin (it fails the moment the
+/// disagreement is resolved, so the row must then move back to
+/// [`I10_CH01_CODED`] / [`I10_CH01_ACCEPTED`]):
+///
+/// * `with-allocator-brand` (`O0018` expected) and
+///   `with-allocator-brand-match-accepted`: both write `heap.create(n)`
+///   bare, and `std`'s `Allocator.create` is `raises AllocError` (ch10 S0012), so ch02
+///   R1's `F0001` is reported first and (in the first) is the one
+///   diagnostic, masking the brand mismatch;
+/// * `secret-iso-composition-accepted`: `Buffer[u8]`, the one-argument
+///   spelling ch10 S0002's own table cites for `Buffer`, against ch10
+///   S0023's `Buffer[T, N: usize]`: `T0011`, two type arguments declared.
+///
+/// The corpus and ch10 disagree with each other here; neither is the
+/// checker's to change.
+const I10_CH01_STD_CONFLICTS: &[(&str, &str)] = &[
+    ("with-allocator-brand", "F0001"),
+    ("with-allocator-brand-match-accepted", "F0001"),
+    ("secret-iso-composition-accepted", "T0011"),
 ];
 
 /// The in-scope (R14-R18, R21-R21d) `check-error` tests this increment does
@@ -1901,6 +1960,14 @@ fn i10_ch01_brand_and_shared_tests_assert_their_code_and_clause() {
             failures.push(format!("{name}: expected silence, got {got:?}"));
         }
     }
+    for &(name, code) in I10_CH01_STD_CONFLICTS {
+        let got = check_target_messages(&target_named("01-ownership", name));
+        if got.len() != 1 || got[0].0 != code {
+            failures.push(format!(
+                "{name}: pinned to exactly one {code} (a std conflict), got {got:?}"
+            ));
+        }
+    }
     for &(name, _) in I10_CH01_WAITING {
         let target = target_named("01-ownership", name);
         assert_eq!(
@@ -1976,14 +2043,16 @@ const I8B_CH01_REJECTED: &[(&str, &str)] = &[
         "linear-enum-payload-one-arm-unconsumed-rejected",
         "R22d(ii)",
     ),
-    // R19c/R19d, the clause decidable without `std`
+    // R19c/R19d: the first needs no `std`; the second's adaptor chain needs
+    // it, and item 47(a) put it in every build.
     ("closure-returned-with-local-capture-rejected", "R19d"),
+    ("closure-capture-in-chain-returned-rejected", "R19d"),
 ];
 
 /// The `check-ok` halves of the same groups: the programs round 6 calls
 /// well-formed, which the new machinery must not reject. Together with the
 /// list above these are design §13's I8b GATE minus the files whose rules
-/// need `std` in the harness (listed in `I8B_NEEDS_STD`).
+/// still silent with `std` (listed in `I8B_R19C_GAPS`).
 const I8B_CH01_ACCEPTED: &[&str] = &[
     "linear-consumed-by-sink-call-accepted",
     "linear-consumed-by-return-accepted",
@@ -2003,33 +2072,41 @@ const I8B_CH01_ACCEPTED: &[&str] = &[
     "defer-in-closure-body-accepted",
     "defer-nested-body-accepted",
     "errdefer-and-defer-interleaved-reverse-order-accepted",
-];
-
-/// design §13's I8b GATE, R19c/R19d group: the files whose subject needs
-/// `Vec`, `String` or `std.mem`'s adaptors. The ch01 harness builds one
-/// file at a time, where those are prelude OPAQUE rows (`Vec` and
-/// `String` are declared in package `std`, ch10 R2), so `v.iter()`,
-/// `.map`, `.zip`, `.take`, `.count` and `as_str` resolve to nothing and
-/// there is no call for R19c to judge. The mechanism is implemented and
-/// proved by probes (`probes.rs`'s I8b block); these rows are listed, with
-/// the reason, rather than silently skipped, and the assertion below is
-/// the honest one: the checker must not GUESS on them.
-const I8B_NEEDS_STD: &[&str] = &[
-    "scoped-through-generic-sink-result-scoped-rejected",
+    // The R19c/R19d `check-ok` rows that were `I8B_NEEDS_STD` while the
+    // harness built one file alone (item 47(a): `std` is in every build).
     "scoped-through-generic-sink-consumed-accepted",
-    "scoped-through-generic-inout-param-rejected",
-    "scoped-through-generic-raises-rejected",
     "scoped-through-generic-sink-returned-under-scoped-accepted",
-    "scoped-into-concrete-sink-rejected",
-    "scoped-copy-into-field-via-let-param-rejected",
     "scoped-rvalue-extent-is-the-statement-accepted",
     "scoped-rvalue-extent-is-the-for-accepted",
-    "zip-two-scoped-sources-rejected",
     "zip-two-scoped-sources-local-accepted",
     "zip-scoped-and-owned-accepted",
-    "adaptor-chain-for-mutates-source-rejected",
     "closure-capture-keeps-local-in-chain-accepted",
-    "closure-capture-in-chain-returned-rejected",
+];
+
+/// design §13's I8b GATE, R19c/R19d group: the `check-error` files whose
+/// subject is a call that returns a value keeping a `scoped` argument
+/// (`v.iter().zip(..)`, `keep(v.as_str())`, a generic `sink`). These were
+/// listed as "needs `std`" while the harness built one file alone, where
+/// `Vec`, `String` and `.iter()` were prelude OPAQUE rows. Item 47(a)
+/// puts `std` in every build, so that reason is gone and the harness now
+/// builds them with it: the `-accepted` rows moved to `I8B_CH01_ACCEPTED`
+/// and `closure-capture-in-chain-returned-rejected` to `I8B_CH01_REJECTED`,
+/// each now ordinary. What stays here is what is STILL silent with `std` in
+/// the build: R19c's rejection of a scoped argument kept by the result of a
+/// generic or concrete `sink`, `inout` or `raises` call is not yet reported
+/// by the checker (a checker gap, not a missing `std`). Each row is listed,
+/// with its file, rather than skipped, and the assertion below is the
+/// honest one: the checker must stay silent on it exactly until the gap
+/// closes, and a row whose file starts producing a diagnostic must leave
+/// this list for `I8B_CH01_REJECTED`.
+const I8B_R19C_GAPS: &[&str] = &[
+    "scoped-through-generic-sink-result-scoped-rejected",
+    "scoped-through-generic-inout-param-rejected",
+    "scoped-through-generic-raises-rejected",
+    "scoped-into-concrete-sink-rejected",
+    "scoped-copy-into-field-via-let-param-rejected",
+    "zip-two-scoped-sources-rejected",
+    "adaptor-chain-for-mutates-source-rejected",
 ];
 
 #[test]
@@ -2098,24 +2175,27 @@ fn i8b_round6_ch01_accepted_files_are_silent() {
     );
 }
 
-/// The R19c/R19d files the single-file harness cannot build: the checker
-/// must be SILENT on them, because an increment that cannot see the call
-/// must not guess at it (design §7.10). This is the assertion that keeps
-/// `I8B_NEEDS_STD` honest — a row whose file starts producing a
-/// diagnostic has either been fixed or broken, and either way must leave
-/// the list.
+/// The R19c/R19d `check-error` files the checker is still silent on, with
+/// `std` in the build (see [`I8B_R19C_GAPS`]): each is a ch01 `check-error`
+/// test, and a row whose file starts producing a diagnostic has been fixed
+/// and must leave the list.
 #[test]
-fn i8b_r19c_files_that_need_std_are_not_guessed_at() {
+fn i8b_r19c_gap_rows_are_still_silent_with_std() {
     let mut failures = Vec::new();
-    for &name in I8B_NEEDS_STD {
-        let got = check_target_messages(&target_named("01-ownership", name));
+    for &name in I8B_R19C_GAPS {
+        let target = target_named("01-ownership", name);
+        let case = parse_directives(&directive_source(&target));
+        if case.expect != "check-error" {
+            failures.push(format!("{name}: a gap row must be a check-error file"));
+        }
+        let got = check_target_messages(&target);
         if !got.is_empty() {
             failures.push(format!("{name}: expected silence, got {got:?}"));
         }
     }
     assert!(
         failures.is_empty(),
-        "I8b's std-blocked R19c rows ({}):\n{}",
+        "I8b's R19c gap rows ({}):\n{}",
         failures.len(),
         failures.join("\n")
     );

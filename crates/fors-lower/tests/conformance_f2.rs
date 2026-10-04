@@ -724,76 +724,40 @@ fn gate_str_slice_non_boundary_raises_run_ok() {
     gate_test_std("10-std/str-slice-non-boundary-raises-run-ok.fors");
 }
 
+/// Ran as of item 23: `Buffer.empty()` types with `std` in the build (the
+/// prelude name is bound to `std`'s item), and `buf[10] = 1` — a store
+/// through `IndexMut::at_mut`, whose result is a PLACE no FMIR call form
+/// returns — is lowered by EXPANDING `at_mut`'s body at the use site
+/// (`return self.items_mut()[i];`: a `Slice` view over the first `len`
+/// cells, indexed) into the place computation, so the interpreter's bounds
+/// check against the view's length is the `trap bounds` the file expects.
+/// See `gate.rs`'s `item23_*` tests for the expansion and its refusals.
 #[test]
-#[ignore = "HELD OUT, with the F-mono reasons REPLACED by two narrower ones \
-            (both verified by un-ignoring this test). Monomorphisation is no \
-            longer a blocker: F-mono instantiates generic callees, and with \
-            it `std`'s own generic bodies lower — `Buffer.empty`, \
-            `Buffer.push`, `Buffer.pop`, `Buffer.cap`, `Buffer.into_iter`, \
-            `Buffer`'s and `Vec`'s `Index`/`IndexMut` `at`/`at_mut`, \
-            `Option.is_some`/`unwrap_or`, `slice.fill`/`swap`/`sort`, \
-            `Vec.push`/`pop`/`deinit` and the rest no longer report at all \
-            (the std diagnostic list dropped from ~160 rows to the ~44 that \
-            were F3's `?`/`raise`, and F3 took it to ONE: `from_utf8`'s \
-            value-position `if`). `Buffer.empty`'s self-recursive stand-in \
-            is GONE too: `std/mem.fors` now has a real body over the \
-            uninitialised-aggregate primitive `buffer_uninit_data`, which \
-            lowers to `fors-interp`'s `agg_uninit` (a read before write is \
-            `ub: uninit-read` with its site — see `gate.rs`'s \
-            `gate_buffer_empty_cells_are_uninitialised_not_zero`, and \
-            `gate_buffer_push_pop_index_at_two_instantiations` for \
-            push/pop/index on a `Buffer`-shaped type at `[i64, 4]` and \
-            `[Str, 2]`). \
-            What still blocks this test, both OUTSIDE this increment's \
-            editable crates: \
-            (1) `Buffer` is a ch08 R17 PRELUDE type name, so \
-            `fors-resolve` answers `Entity::PreludeType` for it, and \
-            `fors-check`'s R45 qualified-call path (`call.rs`'s \
-            `qualified_callee`) and its struct-literal path both require an \
-            `Entity::Item`. So `Buffer.empty()` is a silent `TY_ERROR` with \
-            NO diagnostic even though `std`'s declaration is in the build, \
-            and `prescan` refuses `main` with `CheckErrors` before any \
-            instantiation question is reached. Verified minimally: a \
-            fixture-declared `Vault[T, N]` of the same shape, reached as \
-            `Vault.empty()`, lowers and runs; renaming it to `Buffer` makes \
-            the same program `CheckErrors`. The fix is one arm in \
-            `fors-check`/`fors-resolve`, a parallel increment's crates. \
-            (2) `buf[10] = 1` goes through `IndexMut::at_mut`, which \
-            returns `scoped(self) Self.Output` — a PLACE — while all four \
-            FMIR call opcodes produce a value (design §3.10), so \
-            `fors-lower::lower_index_assign` still reports that case by \
-            name rather than dropping the store. That is an FMIR surface \
-            question (a place-returning call form), not a monomorphisation \
-            one."]
 fn gate_buffer_index_past_len_trap() {
     gate_test_std("10-std/buffer-index-past-len-trap.fors");
 }
 
 #[test]
-#[ignore = "HELD OUT on CHECKER defects (re-verified by un-ignoring after \
-            F3, which lowers `?`/`else |e|`/`raise` and is no longer a \
-            reason): (1) `step`'s `raise AllocError.out_of_memory;` through \
-            `use std.mem;` leaves a node `TY_ERROR` with no diagnostic \
-            (`fors-lower` refuses `step` with `CheckErrors`) — the same \
-            prelude-opaque `AllocError` path that makes a signature's \
-            `raises AllocError` lower to `TY_ERROR` (see \
-            `gate_main_raises_std_error_run_error`); (2) the handler on \
-            `mem.iter(xs).try_for_each(step) else |e| { .. }` gets no D10 \
-            `HandlerRow`, so `main` is refused with the named \
-            `LowerError::Failure(\"an `else |e|` handler the checker \
-            published no D10 row for\")`. Both are fors-check's."]
+#[ignore = "HELD OUT on CHECKER defects (re-verified by un-ignoring with `std` in every \
+            build, item 47(a); the file already imported `std`, so that decision changed \
+            nothing here): `main` is refused with the named \
+            `LowerError::Unresolved(\"method target\")` — the checker publishes no method \
+            target for `mem.iter(xs).try_for_each(step)` and no D10 `HandlerRow` for its \
+            `else |e| { .. }`. Both are fors-check's."]
 fn gate_try_for_each_error_propagates_run_ok() {
     gate_test_std("10-std/try-for-each-error-propagates-run-ok.fors");
 }
 
 #[test]
-#[ignore = "HELD OUT on a CHECKER defect (re-verified by un-ignoring after \
-            F3): `main` is `CheckErrors` — `Vec.new()` is R45's qualified \
-            form on the PRELUDE type name `Vec`, the silent `TY_ERROR` \
-            described on `gate_buffer_index_past_len_trap`. The older \
-            reasons are gone: `?`/`try_br` lower as of F3, the allocator \
-            obligation machinery is F6's and in, monomorphisation exists, \
-            and `&x` arguments lower (F6)."]
+#[ignore = "HELD OUT on a CHECKER defect (re-verified by un-ignoring with `std` in every \
+            build, item 47(a); the file already imported `std`): `main` is `CheckErrors` — \
+            `Vec.new()` against `Vec[Own[i64, heap], heap]`, where `heap` is the `main(inout \
+            heap: mem.Heap)` PARAMETER used as the brand, is a silent `TY_ERROR` (the \
+            heap-brand-named-by-parameter gap in fors-check's `silent.rs`). It is NOT the \
+            prelude-name path an earlier note blamed: `Vec.new()` types with `std` in the \
+            build. The older reasons are gone: `?`/`try_br` lower as of F3, the allocator \
+            obligation machinery is F6's and in, monomorphisation exists, and `&x` \
+            arguments lower (F6)."]
 fn gate_vec_deinit_empty_nonempty_trap() {
     gate_test_std("10-std/vec-deinit-empty-nonempty-trap.fors");
 }
@@ -1978,23 +1942,21 @@ fn gate_main_raises_nested_payload_run_error() {
     gate_test("02-failure/main-raises-nested-payload-run-error.fors");
 }
 
-/// PINNED, not run: the row cannot reach lowering, and the three reasons are
-/// all outside F3's crates (verified by running it, and by running a copy
-/// with reason (1) corrected):
+/// PINNED, not run: the row cannot reach lowering, and the reasons are all
+/// outside F3's crates (verified by running it, and by running a copy with
+/// reason (1) corrected):
 /// 1. a CORPUS/STD disagreement — the file writes `mem.Counting[mem.Fixed[8]]`
 ///    while `std/mem.fors` declares `Counting[N: usize, A: brand]` ("Standalone,
 ///    not a wrapper: ch01 R15a forbids holding a parent allocator in a field"),
 ///    so the checker correctly reports T0011 ("a type where a constant argument
 ///    is expected") at the `with allocator` type;
 /// 2. with that corrected to `mem.Counting[8]`, `fill`'s signature `raises
-///    AllocError` (the prelude-opaque std name, reached through `use std.mem;`)
-///    lowers to `TY_ERROR` with NO diagnostic, so `fill(&counting)?` gets no
-///    D10 `TryRow` and `fors-lower` refuses `main` with the named
-///    `LowerError::Failure("a `?` the checker published no D10 row for")` —
-///    a fors-check defect;
-/// 3. `fill`'s own body is `TY_ERROR` throughout (`Vec.new()` is R45's
-///    qualified call on the PRELUDE type name `Vec`, the silent `TY_ERROR`
-///    `gate_vec_deinit_empty_nonempty_trap` documents).
+///    AllocError` (reached through `use std.mem;`) is not carried into a D10
+///    `TryRow` for `fill(&counting)?`, so `fors-lower` refuses `main` with the
+///    named `LowerError::Failure("a `?` the checker published no D10 row for")`
+///    — a fors-check defect;
+/// 3. `fill`'s own body: `Vec.new()` against `Vec[i32, A]` is typed with `std`
+///    in the build, so that part no longer blocks.
 ///
 /// The rendering this row pins — a std error by its fully-qualified path — is
 /// covered at source level by `f3_std_error_renders_by_its_fully_qualified_path`.

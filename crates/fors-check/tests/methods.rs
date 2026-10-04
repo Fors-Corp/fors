@@ -329,3 +329,36 @@ fn method_lookup_memo_is_module_keyed() {
         }
     }
 }
+
+/// A `pub` method behind a leading attribute (`@unsafe(..) pub fn`, the
+/// shape of `std`'s `String.as_str`) is PUBLIC: the visibility is read from
+/// the declaration index's row, which sees the `pub` past the attribute,
+/// not from a scan of the member node's own tokens, which an `Attribute`
+/// child cuts short. The control without `pub` stays private (R49).
+#[test]
+fn attributed_pub_method_is_visible_from_another_module() {
+    const LIB_PUB: &str = "pub struct W { pub n: i64 }\n\
+         impl W {\n\
+           @unsafe(invariant: \"probe\")\n\
+           pub fn get(let self: Self) -> i64 { return self.n; }\n\
+         }";
+    const LIB_PRIV: &str = "pub struct W { pub n: i64 }\n\
+         impl W {\n\
+           @unsafe(invariant: \"probe\")\n\
+           fn get(let self: Self) -> i64 { return self.n; }\n\
+         }";
+    const A: &str = "use lib.W;\n\
+         @unsafe(invariant: \"caller\")\n\
+         pub fn f(let w: W) -> i64 { return w.get(); }";
+    let public = check_modules(&[("lib", LIB_PUB), ("a", A)]);
+    assert!(
+        public.is_empty(),
+        "`@unsafe(..) pub fn` must be public: {public:?}"
+    );
+    let private = check_modules(&[("lib", LIB_PRIV), ("a", A)]);
+    assert_eq!(
+        private.iter().filter(|(_, m)| m == "a").count(),
+        1,
+        "the control (no `pub`) must be refused in `a`: {private:?}"
+    );
+}

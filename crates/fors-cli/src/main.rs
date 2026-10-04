@@ -12,7 +12,11 @@
 //! module package (the conformance corpus's convention — see
 //! `tests/conformance/README.md`). Prints every diagnostic as
 //! `path:line:col: error[CODE]: message`, sorted by file then byte
-//! offset; exit 0 when every given path is clean.
+//! offset; exit 0 when every given path is clean. `std` is always in the
+//! build (ch08 R17's prelude names denote `std`'s items whether or not the
+//! program wrote `use std...;`): every package but `std` itself is checked
+//! with the `std` source root beside it, and only the package's own
+//! diagnostics are printed.
 //!
 //! `fors run [--oracle-record <file> | --oracle-replay <file>] [--oracle-run-record <file>] <file>`
 //! builds one program with `std`, lowers it and runs it under the FMIR
@@ -214,6 +218,40 @@ fn build_package(path: &Path, interner: &mut Interner) -> Option<(Vec<PkgFile>, 
     }
 }
 
+/// Item 47(a): `std` is ALWAYS in a build. ch08 R17's prelude names
+/// (`Vec`, `Buffer`, ...) denote `std`'s items whether or not the program
+/// wrote `use std...;`, so every package but `std` itself is checked with
+/// the `std` source root beside it. The std files come AFTER the package's
+/// own (`files[..own]`) and are never printed: `std`'s own diagnostics are
+/// `std`'s, not the program's. Returns the number of the package's own files.
+fn append_std(
+    path: &Path,
+    files: &mut Vec<PkgFile>,
+    interner: &mut Interner,
+) -> Result<usize, String> {
+    let own = files.len();
+    if path.is_dir() && path.file_name().is_some_and(|n| n == "std") {
+        return Ok(own);
+    }
+    let dir = run::default_std_dir();
+    let srcs =
+        run::std_modules(&dir).map_err(|e| format!("cannot read std at {}: {e}", dir.display()))?;
+    for (segs, source) in srcs {
+        let name: Segments = segs.iter().map(|s| interner.intern(s)).collect();
+        let dotted: Vec<String> = segs
+            .iter()
+            .map(|s| String::from_utf8_lossy(s).into_owned())
+            .collect();
+        files.push(PkgFile {
+            display: format!("<{}>", dotted.join(".")),
+            source,
+            name,
+            extra: Vec::new(),
+        });
+    }
+    Ok(own)
+}
+
 /// One rendered diagnostic plus the sort key `fors check` has always
 /// sorted by: the file's display path, then the byte offset the
 /// diagnostic starts at. The rendering is done eagerly, in the format
@@ -331,12 +369,20 @@ fn run_check(args: &[String]) -> ExitCode {
     for arg in &args {
         let path = Path::new(arg);
         let mut interner = Interner::new();
-        let Some((files, root)) = build_package(path, &mut interner) else {
+        let Some((mut files, root)) = build_package(path, &mut interner) else {
             eprintln!("{arg}: error: could not read package");
             any = true;
             continue;
         };
-        file_count += files.len();
+        let own = match append_std(path, &mut files, &mut interner) {
+            Ok(n) => n,
+            Err(e) => {
+                eprintln!("{arg}: error: {e}");
+                any = true;
+                continue;
+            }
+        };
+        file_count += own;
         let parsed: Vec<fors_syntax::Parse> = files
             .iter()
             .map(|f| fors_syntax::parse_file(&f.source))
@@ -373,7 +419,7 @@ fn run_check(args: &[String]) -> ExitCode {
             files.iter().map(|_| std::cell::OnceCell::new()).collect();
         let index_of = |i: usize| indexes[i].get_or_init(|| LineIndex::new(&files[i].source));
 
-        for (i, f) in files.iter().enumerate() {
+        for (i, f) in files.iter().enumerate().take(own) {
             for d in &parsed[i].diags {
                 any = true;
                 push_line(
@@ -420,7 +466,7 @@ fn run_check(args: &[String]) -> ExitCode {
             }
         }
         for d in &checked.diagnostics {
-            let Some(f) = files.get(d.file.index()) else {
+            let Some(f) = files.get(d.file.index()).filter(|_| d.file.index() < own) else {
                 continue;
             };
             any = true;
@@ -461,9 +507,12 @@ fn run_check(args: &[String]) -> ExitCode {
         for arg in &args {
             let path = Path::new(arg);
             let mut interner = Interner::new();
-            let Some((files, root)) = build_package(path, &mut interner) else {
+            let Some((mut files, root)) = build_package(path, &mut interner) else {
                 continue;
             };
+            if append_std(path, &mut files, &mut interner).is_err() {
+                continue;
+            }
             let package = std::path::Path::new(path)
                 .file_name()
                 .map(|n| n.as_encoded_bytes().to_vec());

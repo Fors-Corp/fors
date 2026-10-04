@@ -1349,14 +1349,12 @@ fn gate_lowering_leaves_the_frozen_fir_type_store_byte_identical() {
 /// primitive `buffer_uninit_data`, and `push`/`pop`/indexing checked against
 /// `len` rather than `N` (ch10 S23).
 ///
-/// Why a fixture copy and not `std`'s own `Buffer`: `Buffer` is a ch08 R17
-/// PRELUDE type name, and `fors-resolve` answers `Entity::PreludeType` for it,
-/// which `fors-check`'s R45 qualified-call and struct-literal paths both
-/// require to be an `Entity::Item` — so `Buffer.empty()` and `Buffer { .. }`
-/// are silently `TY_ERROR` even with the real `std` sources in the build (see
-/// the hold-out note on `conformance_f2.rs`'s
-/// `gate_buffer_index_past_len_trap`). The primitive, the instantiation and
-/// the `ub: uninit-read` are all exercised here regardless.
+/// Why a fixture copy and not `std`'s own `Buffer`: the gate is of the
+/// uninitialised-aggregate primitive and the instantiation, independent of
+/// `std`'s declarations (and of the prelude-name binding, which item 47(a) now
+/// makes the only path: `std`'s `Buffer` is exercised by the corpus's
+/// `buffer-index-past-len-trap`). The primitive, the instantiation and the
+/// `ub: uninit-read` are all exercised here regardless.
 const VAULT: &str = "struct Vault[T, N: usize] { len: usize, data: Array[T, N] }\n\
 impl[T: Copyable, N: usize] Vault[T, N] {\n\
   fn empty() -> Vault[T, N] { return Vault { len: 0, data: Vault.buffer_uninit_data() }; }\n\
@@ -2101,4 +2099,366 @@ fn f9_comptime_block_in_a_const_initialiser_is_a_named_thunk_row() {
         Some(LowerError::Comptime(w)) => assert!(w.contains("`const` initialiser"), "{w}"),
         other => panic!("a const-initialiser block must be a named row, got {other:?}"),
     }
+}
+
+// -- item 23: `a[i] = v` through a user `IndexMut` (at_mut inlined as a place) --
+
+/// A user `Index`/`IndexMut` over one array field: `at_mut`'s body is the
+/// single statement `return self.data[i];`, which lowering expands at the use
+/// site into the place `data[i]` of the receiver (no FMIR call returns a
+/// place, so `at_mut` is never CALLED for a store; the reads still call `at`).
+const CELLS: &str = "struct Cells { data: Array[i64, 4] }\n\
+impl Index[usize] for Cells {\n\
+  type Output = i64;\n\
+  fn at(let self: Self, let i: usize) -> scoped(self) Self.Output { return self.data[i]; }\n\
+}\n\
+impl IndexMut[usize] for Cells {\n\
+  fn at_mut(inout self: Self, let i: usize) -> scoped(self) Self.Output { return self.data[i]; }\n\
+}\n";
+
+#[test]
+fn item23_user_index_mut_store_lands_in_the_receiver() {
+    // The stores are visible to later reads through `at`, in the right cells,
+    // and the untouched cell keeps its value.
+    let src = format!(
+        "{CELLS}fn main(inout out: Out) {{ var c: Cells = Cells {{ data: [0; 4] }}; c[2] = 7; c[3] = 9; \
+         c[2] = c[2] + 1; if c[2] == 8 and c[3] == 9 and c[0] == 0 and c[1] == 0 {{ \
+         out.write_line(\"ok\"); }} }}\n"
+    );
+    run_ok(&src);
+}
+
+#[test]
+fn item23_user_index_mut_store_traps_at_the_original_index() {
+    let src = format!(
+        "{CELLS}fn main(inout out: Out) {{ var c: Cells = Cells {{ data: [0; 4] }}; c[10] = 1; \
+         out.write_line(\"unreached\"); }}\n"
+    );
+    run_trap(&src, fors_fmir::op::TrapKind::Bounds);
+}
+
+#[test]
+fn item23_user_index_mut_field_place_body_is_inlined() {
+    // `return self.v;` — the place is one field, whatever the index.
+    let src = "struct Box { v: i64 }\n\
+impl Index[usize] for Box {\n\
+  type Output = i64;\n\
+  fn at(let self: Self, let i: usize) -> scoped(self) Self.Output { return self.v; }\n\
+}\n\
+impl IndexMut[usize] for Box {\n\
+  fn at_mut(inout self: Self, let i: usize) -> scoped(self) Self.Output { return self.v; }\n\
+}\n\
+fn put(inout b: Box) { b[0] = 5; }\n\
+fn main(inout out: Out) { var b: Box = Box { v: 1 }; put(&b); if b[0] == 5 { out.write_line(\"ok\"); } }\n";
+    run_ok(src);
+}
+
+/// `at_mut` indexes a `Slice` VIEW over the first `n` cells, the shape of
+/// `std`'s `Buffer` (`return self.items_mut()[i];`): the inlined store goes
+/// through the view, so the bounds check is against the VIEW's length, not
+/// the array's.
+const WINDOW: &str = "struct Win { n: usize, data: Array[i64, 4] }\n\
+impl Win {\n\
+  fn view(inout self: Self) -> scoped(self) Slice[i64] { return self.data[0..<self.n]; }\n\
+}\n\
+impl Index[usize] for Win {\n\
+  type Output = i64;\n\
+  fn at(let self: Self, let i: usize) -> scoped(self) Self.Output { return self.data[i]; }\n\
+}\n\
+impl IndexMut[usize] for Win {\n\
+  fn at_mut(inout self: Self, let i: usize) -> scoped(self) Self.Output { return self.view()[i]; }\n\
+}\n";
+
+#[test]
+fn item23_user_index_mut_through_a_slice_view_is_inlined() {
+    let src = format!(
+        "{WINDOW}fn main(inout out: Out) {{ var w: Win = Win {{ n: 2, data: [0; 4] }}; w[1] = 8; \
+         if w[1] == 8 and w[0] == 0 {{ out.write_line(\"ok\"); }} }}\n"
+    );
+    run_ok(&src);
+}
+
+#[test]
+fn item23_slice_view_store_is_checked_against_the_view_not_the_array() {
+    // Index 3 is inside `data` (4 cells) but past the view (`n` = 2).
+    let src = format!(
+        "{WINDOW}fn main(inout out: Out) {{ var w: Win = Win {{ n: 2, data: [0; 4] }}; w[3] = 1; \
+         out.write_line(\"unreached\"); }}\n"
+    );
+    run_trap(&src, fors_fmir::op::TrapKind::Bounds);
+}
+
+#[test]
+fn item23_a_non_inlinable_at_mut_is_a_precise_refusal() {
+    // Two statements: the body is not `return <place>;`, and a value-
+    // returning call would store into a temporary. The refusal names the
+    // reason and `main` does not lower; nothing panics, nothing miscompiles.
+    let src = "struct Box { v: i64 }\n\
+impl Index[usize] for Box {\n\
+  type Output = i64;\n\
+  fn at(let self: Self, let i: usize) -> scoped(self) Self.Output { return self.v; }\n\
+}\n\
+impl IndexMut[usize] for Box {\n\
+  fn at_mut(inout self: Self, let i: usize) -> scoped(self) Self.Output {\n\
+    let j: usize = i;\n\
+    return self.v;\n\
+  }\n\
+}\n\
+fn main(inout out: Out) { var b: Box = Box { v: 1 }; b[0] = 5; out.write_line(\"ok\"); }\n";
+    match lower_error(src) {
+        LowerError::Unsupported(w) => {
+            assert!(w.contains("`at_mut` is not inlinable as a place"), "{w}");
+            assert!(w.contains("not exactly one statement"), "{w}");
+        }
+        other => panic!("expected the documented refusal, got {other:?}"),
+    }
+}
+
+#[test]
+fn item23_an_at_mut_over_an_array_value_is_refused_not_stored_into_a_copy() {
+    // `self.row()` returns an ARRAY, a copy: storing into it would be lost,
+    // so the expansion refuses rather than miscompiles.
+    let src = "struct Box { data: Array[i64, 2] }\n\
+impl Box {\n\
+  fn row(inout self: Self) -> Array[i64, 2] { return self.data; }\n\
+}\n\
+impl Index[usize] for Box {\n\
+  type Output = i64;\n\
+  fn at(let self: Self, let i: usize) -> scoped(self) Self.Output { return self.data[i]; }\n\
+}\n\
+impl IndexMut[usize] for Box {\n\
+  fn at_mut(inout self: Self, let i: usize) -> scoped(self) Self.Output { return self.row()[i]; }\n\
+}\n\
+fn main(inout out: Out) { var b: Box = Box { data: [0; 2] }; b[0] = 5; out.write_line(\"ok\"); }\n";
+    match lower_error(src) {
+        LowerError::Unsupported(w) => assert!(w.contains("not a `Slice` view"), "{w}"),
+        other => panic!("expected the documented refusal, got {other:?}"),
+    }
+}
+
+// -- item 23 verifier attacks (adversarial `at_mut` expansions) --
+
+#[test]
+fn item23v_store_through_a_field_receiver_lands_in_the_outer_struct() {
+    // `o.c[1] = v`: the receiver is a FIELD of a local; the store must land
+    // in `o.c`, not in a copy of it.
+    let src = format!(
+        "{CELLS}struct Outer {{ k: i64, c: Cells }}\n\
+         fn cget(let c: Cells, let i: usize) -> i64 {{ return c.data[i]; }}\n\
+         fn main(inout out: Out) {{ var o: Outer = Outer {{ k: 3, c: Cells {{ data: [0; 4] }} }}; \
+         o.c[1] = 5; if cget(o.c, 1) == 5 and cget(o.c, 0) == 0 and o.k == 3 {{ out.write_line(\"ok\"); }} }}\n"
+    );
+    run_ok(&src);
+}
+
+#[test]
+fn item23v_store_through_an_inout_field_receiver_reaches_the_caller() {
+    let src = format!(
+        "{CELLS}struct Outer {{ k: i64, c: Cells }}\n\
+         fn cget(let c: Cells, let i: usize) -> i64 {{ return c.data[i]; }}\n\
+         fn put(inout o: Outer) {{ o.c[2] = 6; }}\n\
+         fn main(inout out: Out) {{ var o: Outer = Outer {{ k: 3, c: Cells {{ data: [0; 4] }} }}; \
+         put(&o); if cget(o.c, 2) == 6 {{ out.write_line(\"ok\"); }} }}\n"
+    );
+    run_ok(&src);
+}
+
+#[test]
+fn item23v_names_do_not_leak_between_caller_and_inlined_callee() {
+    // The caller has its own `i`, `self`-free locals and a `data`; the
+    // callee's `i` is the caller's INDEX, and after the expansion the
+    // caller's `i` is unchanged.
+    let src = format!(
+        "{CELLS}fn main(inout out: Out) {{ let i: usize = 3; let data: i64 = 40; \
+         var c: Cells = Cells {{ data: [0; 4] }}; c[i - 2] = data + 2; let j: usize = i; \
+         if c[1] == 42 and c[3] == 0 and j == 3 {{ out.write_line(\"ok\"); }} }}\n"
+    );
+    run_ok(&src);
+}
+
+/// A generic container instantiated at two element types: the expansion
+/// binds the impl parameter from the receiver type each time.
+const GEN: &str = "struct G[T] { data: Array[T, 2] }\n\
+impl[T: Copyable] Index[usize] for G[T] {\n\
+  type Output = T;\n\
+  fn at(let self: Self, let i: usize) -> scoped(self) Self.Output { return self.data[i]; }\n\
+}\n\
+impl[T: Copyable] IndexMut[usize] for G[T] {\n\
+  fn at_mut(inout self: Self, let i: usize) -> scoped(self) Self.Output { return self.data[i]; }\n\
+}\n";
+
+#[test]
+fn item23v_generic_impl_at_two_types() {
+    let src = format!(
+        "{GEN}fn main(inout out: Out) {{ var a: G[i64] = G {{ data: [0; 2] }}; \
+         var b: G[bool] = G {{ data: [false; 2] }}; a[1] = 9; b[0] = true; \
+         if a[1] == 9 and a[0] == 0 and b[0] and not b[1] {{ out.write_line(\"ok\"); }} }}\n"
+    );
+    run_ok(&src);
+}
+
+#[test]
+fn item23v_generic_caller_instantiated_twice() {
+    let src = format!(
+        "{GEN}fn put[T: Copyable](inout g: G[T], let v: T) {{ g[1] = v; }}\n\
+         fn main(inout out: Out) {{ var a: G[i64] = G {{ data: [0; 2] }}; \
+         var b: G[bool] = G {{ data: [false; 2] }}; put(&a, 7); put(&b, true); \
+         if a[1] == 7 and b[1] and not b[0] {{ out.write_line(\"ok\"); }} }}\n"
+    );
+    run_ok(&src);
+}
+
+#[test]
+fn item23v_evaluation_order_matches_a_plain_array_store() {
+    // `x[f()] = g()`: the user-`IndexMut` expansion must order the index's
+    // and the value's side effects exactly as a built-in array store does.
+    let fns = "fn ix(inout out: Out) -> usize { out.write_line(\"i\"); return 1; }\n\
+               fn val(inout out: Out) -> i64 { out.write_line(\"v\"); return 5; }\n";
+    let plain = format!(
+        "{CELLS}{fns}fn main(inout out: Out) {{ var a: Array[i64, 4] = [0; 4]; \
+         a[ix(&out)] = val(&out); if a[1] == 5 {{ out.write_line(\"ok\"); }} }}\n"
+    );
+    let user = format!(
+        "{CELLS}{fns}fn main(inout out: Out) {{ var c: Cells = Cells {{ data: [0; 4] }}; \
+         c[ix(&out)] = val(&out); if c[1] == 5 {{ out.write_line(\"ok\"); }} }}\n"
+    );
+    let p = run_main(&plain);
+    let u = run_main(&user);
+    assert_eq!(p.exit, Exit::Return);
+    assert_eq!(u.exit, Exit::Return);
+    assert_eq!(
+        String::from_utf8_lossy(&u.stdout),
+        String::from_utf8_lossy(&p.stdout),
+        "the index and the value must be evaluated once each, in the same order"
+    );
+}
+
+#[test]
+fn item23v_trap_index_is_the_callees_computed_index() {
+    // `at_mut` offsets the index: `c[2]` touches `data[3]` (in range) and
+    // `c[3]` touches `data[4]` (out of range) — the bounds check is the one
+    // the body's own place carries.
+    let off = "struct Off { data: Array[i64, 4] }\n\
+impl Index[usize] for Off {\n\
+  type Output = i64;\n\
+  fn at(let self: Self, let i: usize) -> scoped(self) Self.Output { return self.data[i + 1]; }\n\
+}\n\
+impl IndexMut[usize] for Off {\n\
+  fn at_mut(inout self: Self, let i: usize) -> scoped(self) Self.Output { return self.data[i + 1]; }\n\
+}\n";
+    run_ok(&format!(
+        "{off}fn main(inout out: Out) {{ var c: Off = Off {{ data: [0; 4] }}; c[2] = 4; \
+         if c[2] == 4 and c[1] == 0 {{ out.write_line(\"ok\"); }} }}\n"
+    ));
+    run_trap(
+        &format!(
+            "{off}fn main(inout out: Out) {{ var c: Off = Off {{ data: [0; 4] }}; c[3] = 4; \
+             out.write_line(\"unreached\"); }}\n"
+        ),
+        fors_fmir::op::TrapKind::Bounds,
+    );
+}
+
+#[test]
+fn item23v_index_of_a_struct_key_type() {
+    // The index parameter is a user struct, not `usize`.
+    let src = "struct Key { x: usize }\n\
+struct Grid { cells: Array[i64, 3] }\n\
+impl Index[Key] for Grid {\n\
+  type Output = i64;\n\
+  fn at(let self: Self, let i: Key) -> scoped(self) Self.Output { return self.cells[i.x]; }\n\
+}\n\
+impl IndexMut[Key] for Grid {\n\
+  fn at_mut(inout self: Self, let i: Key) -> scoped(self) Self.Output { return self.cells[i.x]; }\n\
+}\n\
+fn main(inout out: Out) { var g: Grid = Grid { cells: [0; 3] }; let k: Key = Key { x: 2 }; \
+g[k] = 11; if g[Key { x: 2 }] == 11 and g[Key { x: 0 }] == 0 { out.write_line(\"ok\"); } }\n";
+    run_ok(src);
+}
+
+#[test]
+fn item23v_nested_user_index_is_refused_not_miscompiled() {
+    let src = format!(
+        "{CELLS}struct Wrap {{ inner: Cells }}\n\
+impl Index[usize] for Wrap {{\n\
+  type Output = i64;\n\
+  fn at(let self: Self, let i: usize) -> scoped(self) Self.Output {{ return self.inner[i]; }}\n\
+}}\n\
+impl IndexMut[usize] for Wrap {{\n\
+  fn at_mut(inout self: Self, let i: usize) -> scoped(self) Self.Output {{ return self.inner[i]; }}\n\
+}}\n\
+fn main(inout out: Out) {{ var w: Wrap = Wrap {{ inner: Cells {{ data: [0; 4] }} }}; w[0] = 1; out.write_line(\"ok\"); }}\n"
+    );
+    // (`at`'s own nested read is a separate, pre-existing refusal; what
+    // matters here is that `main`'s store is refused, never lowered.)
+    let b = build(&src);
+    assert!(b.check_diags.is_empty(), "{:?}", b.check_diags);
+    let main = b
+        .lower_diags
+        .iter()
+        .find(|d| d.name == "main")
+        .expect("main's store must be refused");
+    match &main.error {
+        LowerError::Unsupported(w) => assert!(w.contains("nested expansion"), "{w}"),
+        other => panic!("expected the documented refusal, got {other:?}"),
+    }
+}
+
+#[test]
+fn item23v_contract_on_at_mut_is_refused() {
+    let src = "struct Box { data: Array[i64, 2] }\n\
+impl Index[usize] for Box {\n\
+  type Output = i64;\n\
+  fn at(let self: Self, let i: usize) -> scoped(self) Self.Output { return self.data[i]; }\n\
+}\n\
+impl IndexMut[usize] for Box {\n\
+  fn at_mut(inout self: Self, let i: usize) -> scoped(self) Self.Output pre i < 1 { return self.data[i]; }\n\
+}\n\
+fn main(inout out: Out) { var b: Box = Box { data: [0; 2] }; b[1] = 5; out.write_line(\"ok\"); }\n";
+    match lower_error(src) {
+        LowerError::Unsupported(w) => assert!(w.contains("contract clause"), "{w}"),
+        other => panic!("expected the documented refusal, got {other:?}"),
+    }
+}
+
+#[test]
+fn item23v_bool_index_and_field_place_bodies() {
+    let src = "struct Two { a: i64, b: i64 }\n\
+impl Index[bool] for Two {\n\
+  type Output = i64;\n\
+  fn at(let self: Self, let i: bool) -> scoped(self) Self.Output { return self.a; }\n\
+}\n\
+impl IndexMut[bool] for Two {\n\
+  fn at_mut(inout self: Self, let i: bool) -> scoped(self) Self.Output { return self.b; }\n\
+}\n\
+fn main(inout out: Out) { var t: Two = Two { a: 1, b: 2 }; let f: bool = false; t[f] = 7; t[true] = 8; if t.b == 8 and t.a == 1 { out.write_line(\"ok\"); } }\n";
+    run_ok(src);
+}
+#[test]
+fn item23v_u8_index_converted_inside_the_body() {
+    let src = "struct Arr { d: Array[i64, 4] }\n\
+impl Index[u8] for Arr {\n\
+  type Output = i64;\n\
+  fn at(let self: Self, let i: u8) -> scoped(self) Self.Output { return self.d[0]; }\n\
+}\n\
+impl IndexMut[u8] for Arr {\n\
+  fn at_mut(inout self: Self, let i: u8) -> scoped(self) Self.Output { return self.d[i.wrap_as[usize]()]; }\n\
+}\n\
+fn main(inout out: Out) { var t: Arr = Arr { d: [0; 4] }; t[2] = 7; let k: u8 = 3; t[k] = 9; if t.d[2] == 7 and t.d[3] == 9 { out.write_line(\"ok\"); } }\n";
+    run_ok(src);
+}
+
+#[test]
+fn item23v_caller_method_self_and_index_named_like_the_callees() {
+    // The CALLER is itself a method with a `self` and an `i`: `self.c[i + 1]`
+    // expands `at_mut`'s `self`/`i` in a fresh scope, so the callee's `i` is
+    // the caller's `i + 1` and the callee's `self` is the caller's `self.c`.
+    let src = format!(
+        "{CELLS}struct Outer {{ k: i64, c: Cells }}\n\
+         impl Outer {{ fn set(inout self: Self, let i: usize) {{ self.c[i + 1] = self.k; }} }}\n\
+         fn cget(let c: Cells, let i: usize) -> i64 {{ return c.data[i]; }}\n\
+         fn main(inout out: Out) {{ var o: Outer = Outer {{ k: 3, c: Cells {{ data: [0; 4] }} }}; \
+         o.set(2); if cget(o.c, 3) == 3 and cget(o.c, 2) == 0 {{ out.write_line(\"ok\"); }} }}\n"
+    );
+    run_ok(&src);
 }
